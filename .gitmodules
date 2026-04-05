@@ -1,0 +1,8 @@
+[submodule "projects/ttpos-flutter"]
+	path = projects/ttpos-flutter
+	url = git@github.com:ZonEaseTech/ttpos-flutter.git
+	branch = v2.20.0-ai-rebuild
+[submodule "projects/ttpos-server-go"]
+	path = projects/ttpos-server-go
+	url = git@github.com:ZonEaseTech/ttpos-server-go.git
+	branch = v2.20.0-ai-rebuild

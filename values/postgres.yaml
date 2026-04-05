@@ -1,0 +1,9 @@
+# PostgreSQL (bitnami) Helm values
+auth:
+  postgresPassword: devops
+  database: devops
+
+primary:
+  persistence:
+    enabled: true
+    size: 5Gi

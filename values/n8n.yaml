@@ -1,0 +1,83 @@
+# n8n Helm Chart Values
+# 使用外部 PostgreSQL 数据库，禁用内置依赖
+
+# 镜像配置
+image:
+  repository: n8nio/n8n
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# 禁用内置 PostgreSQL
+postgresql:
+  enabled: false
+
+# 禁用内置 Redis (我们不使用 queue 模式)
+redis:
+  enabled: false
+
+# 使用外部 PostgreSQL
+db:
+  type: postgresdb
+  postgresdb:
+    poolSize: 5
+    connectionTimeout: 20000
+
+externalPostgresql:
+  host: postgres-shared-postgresql.sisyphus.svc.cluster.local
+  port: 5432
+  username: postgres
+  password: devops
+  database: n8n
+  # 如果要使用已有的 secret，取消下面注释并提供 secret 名称
+  # existingSecret: n8n-postgres-secret
+
+# 主节点配置
+main:
+  # 启用持久化
+  persistence:
+    enabled: true
+    size: 5Gi
+    accessMode: ReadWriteOnce
+  
+  # 额外环境变量
+  extraEnvVars:
+    N8N_BASIC_AUTH_ACTIVE: "true"
+    N8N_BASIC_AUTH_USER: "admin"
+    N8N_BASIC_AUTH_PASSWORD: "admin123"
+    WEBHOOK_URL: "http://localhost:5678/"
+  
+  # 资源限制（可选，根据实际需要调整）
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# 服务模式（使用 ClusterIP，通过 telepresence 访问）
+service:
+  type: ClusterIP
+  port: 5678
+
+# 禁用 ingress（我们使用 telepresence）
+ingress:
+  enabled: false
+
+# 日志配置
+log:
+  level: info
+  output:
+    - console
+
+# 安全上下文
+podSecurityContext:
+  fsGroup: 1000
+  fsGroupChangePolicy: "OnRootMismatch"
+
+securityContext:
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  readOnlyRootFilesystem: false
