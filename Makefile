@@ -105,9 +105,9 @@ deploy-n8n: ## 部署 n8n
 		--namespace $(NAMESPACE) --values $(SCRIPT_DIR)/values/n8n.yaml --wait
 	@echo "✅ n8n 就绪"
 
-deploy-vibe-kanban: ## 部署 Vibe Kanban（需要先构建镜像）
+deploy-vibe-kanban: ## 部署 Vibe Kanban（使用预构建镜像）
 	@echo "📦 部署 Vibe Kanban..."
-	@echo "⚠️  提示: 如果镜像不存在，请先执行 'make build-vibe-kanban-local'"
+	@echo "⚠️  提示: 如果本地镜像不存在，请先执行 'make build-vibe-kanban-local'"
 	@kubectl exec postgres-shared-postgresql-0 -n $(NAMESPACE) -- bash -c \
 		'PGPASSWORD=devops psql -U postgres -c "CREATE DATABASE vibekanban;"' 2>/dev/null || true
 	@helm upgrade --install vibe-kanban $(SCRIPT_DIR)/charts/vibe-kanban \
@@ -124,17 +124,12 @@ deploy-vibe-kanban-local: ## 部署本地构建的 Vibe Kanban
 	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=vibe-kanban -n $(NAMESPACE) --timeout=120s || echo "⚠️ 等待中..."
 	@echo "✅ Vibe Kanban (本地镜像) 就绪"
 
-build-vibe-kanban-local: ## 构建 Vibe Kanban 本地镜像（需要源码）
+build-vibe-kanban-local: ## 构建 Vibe Kanban 本地镜像（使用 npx）
 	@echo "🔧 构建 Vibe Kanban..."
-	@echo "📝 步骤:"
-	@echo "   1. git clone https://github.com/BloopAI/vibe-kanban.git /tmp/vibe-kanban"
-	@echo "   2. cd /tmp/vibe-kanban && ./local-build.sh"
-	@echo "   3. docker tag vibe-kanban:latest vibe-kanban:local"
-	@echo "   4. kind load docker-image vibe-kanban:local --name kind"
-	@echo "   5. make deploy-vibe-kanban-local"
+	@echo "📝 使用 npx vibe-kanban 方式启动（无需源码构建）"
 	@echo ""
 	@echo "📄 详细文档: docs/vibe-kanban-manual-build.md"
-	@echo "🔄 开始自动构建..."
+	@echo "🔄 开始构建..."
 	@chmod +x $(SCRIPT_DIR)/build-vibe-kanban.sh && $(SCRIPT_DIR)/build-vibe-kanban.sh
 
 logs-vibe-kanban: ## 查看 Vibe Kanban 日志

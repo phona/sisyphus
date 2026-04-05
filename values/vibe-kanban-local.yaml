@@ -5,10 +5,14 @@ image:
   tag: local
   pullPolicy: IfNotPresent
 
+# 使用镜像内置的 CMD，不覆盖
+command: []
+args: []
+
 service:
   type: ClusterIP
-  port: 3000
-  backendPort: 3001
+  port: 3001
+  backendPort: 3000
 
 # 使用共享 PostgreSQL
 database:
@@ -22,17 +26,21 @@ database:
 
 # 环境变量配置
 env:
-  PORT: "3000"
-  BACKEND_PORT: "3001"
+  PORT: "3001"
+  BACKEND_PORT: "3000"
   HOST: "0.0.0.0"
   MCP_HOST: "0.0.0.0"
   
   # CORS 配置
-  VK_ALLOWED_ORIGINS: "http://vibe-kanban.sisyphus.svc.cluster.local:3000,http://localhost:3000,http://127.0.0.1:3000"
+  VK_ALLOWED_ORIGINS: "http://vibe-kanban.sisyphus.svc.cluster.local:3001,http://localhost:3001,http://127.0.0.1:3001"
   
   # 禁用分析
   POSTHOG_API_KEY: ""
   POSTHOG_API_ENDPOINT: ""
+  
+  # Gitea 集成配置
+  VK_GIT_URL: "http://gitea-http.sisyphus.svc.cluster.local:3000"
+  VK_GIT_TYPE: "gitea"
 
 # 资源限制
 resources:
@@ -41,10 +49,11 @@ resources:
     memory: 512Mi
   limits:
     cpu: 1000m
-    memory: 2Gi
+    memory: 1Gi
 
 # 持久化
 persistence:
   enabled: true
   size: 5Gi
   accessMode: ReadWriteOnce
+  mountPath: /data

@@ -32,6 +32,14 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.command }}
+          command:
+            {{- toYaml .Values.command | nindent 12 }}
+          {{- end }}
+          {{- if .Values.args }}
+          args:
+            {{- toYaml .Values.args | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.env.PORT | default 3000 }}
@@ -58,13 +66,13 @@ spec:
           livenessProbe:
             httpGet:
               path: /
-              port: http
+              port: backend
             initialDelaySeconds: 60
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /
-              port: http
+              port: backend
             initialDelaySeconds: 10
             periodSeconds: 5
       volumes:

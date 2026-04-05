@@ -1,13 +1,8 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: gitea-runner
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: gitea-act-runner
-  namespace: gitea-runner
+  namespace: sisyphus
 spec:
   replicas: 1
   selector:

@@ -1,9 +1,15 @@
-# Vibe Kanban 部署配置 - Sisyphus 环境
+# Vibe Kanban 部署配置 - 使用 npx 直接启动
 
 image:
-  repository: bloopai/vibe-kanban
-  tag: latest
+  repository: node
+  tag: "20-alpine"
   pullPolicy: IfNotPresent
+
+# 使用 npx 启动 vibe-kanban
+command:
+  - npx
+args:
+  - vibe-kanban
 
 service:
   type: ClusterIP
@@ -48,3 +54,10 @@ persistence:
   enabled: true
   size: 5Gi
   accessMode: ReadWriteOnce
+  mountPath: /data
+
+# 挂载本地 projects 代码
+projectsMount:
+  enabled: true
+  hostPath: /Users/tao/Desktop/Projects/sisyphus/projects
+  mountPath: /projects

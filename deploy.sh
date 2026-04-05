@@ -74,6 +74,23 @@ helm upgrade --install n8n "$SCRIPT_DIR/charts/n8n" \
 
 echo "✅ n8n 就绪"
 
+# 部署 Vibe Kanban
+echo ">>> 部署 Vibe Kanban..."
+kubectl exec -n $NAMESPACE postgres-shared-postgresql-0 -- bash -c \
+  'PGPASSWORD=devops psql -U postgres -c "CREATE DATABASE vibekanban;"' 2>/dev/null || true
+helm upgrade --install vibe-kanban "$SCRIPT_DIR/charts/vibe-kanban" \
+  --namespace $NAMESPACE \
+  --values "$SCRIPT_DIR/values/vibe-kanban.yaml" \
+  --wait --timeout 5m
+
+echo "✅ Vibe Kanban 就绪"
+
+# 部署 Gitea Runner
+echo ">>> 部署 Gitea Runner..."
+kubectl apply -f "$SCRIPT_DIR/charts/gitea-act-runner.yaml"
+
+echo "✅ Gitea Runner 就绪"
+
 echo ""
 echo "========================================"
 echo "  ✅ 部署完成！"
@@ -86,6 +103,7 @@ echo "访问方式（使用 telepresence）:"
 echo "  telepresence connect"
 echo "  curl http://gitea-http.$NAMESPACE.svc.cluster.local:3000"
 echo "  curl http://n8n.$NAMESPACE.svc.cluster.local:5678"
+echo "  curl http://vibe-kanban.$NAMESPACE.svc.cluster.local:3000"
 echo ""
 echo "账号信息:"
 echo "  Gitea: gitea_admin / admin123"

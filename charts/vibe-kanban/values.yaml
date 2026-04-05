@@ -1,9 +1,13 @@
 # Default values for vibe-kanban.
 
 image:
-  repository: bloopai/vibe-kanban
+  repository: node
   pullPolicy: IfNotPresent
-  tag: "latest"
+  tag: "20-alpine"
+
+# 自定义启动命令（可选）
+command: []
+args: []
 
 imagePullSecrets: []
 nameOverride: ""
@@ -96,3 +100,9 @@ persistence:
   accessMode: ReadWriteOnce
   size: 5Gi
   mountPath: /data
+
+# Mount local projects directory
+projectsMount:
+  enabled: false
+  hostPath: /path/to/projects
+  mountPath: /projects
