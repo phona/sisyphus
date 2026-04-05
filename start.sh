@@ -119,6 +119,20 @@ deploy_infrastructure() {
     kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=n8n -n $NAMESPACE --timeout=120s 2>/dev/null || \
         log_warn "n8n 启动较慢，继续等待..."
     
+    log_success "n8n 就绪"
+    
+    # 5. 部署 Vibe Kanban
+    log_info "部署 Vibe Kanban..."
+    kubectl exec -n $NAMESPACE postgres-shared-postgresql-0 -- bash -c \
+        'PGPASSWORD=devops psql -U postgres -c "CREATE DATABASE vibekanban;"' 2>/dev/null || true
+    helm upgrade --install vibe-kanban "$SCRIPT_DIR/charts/vibe-kanban" \
+        --namespace $NAMESPACE \
+        --values "$SCRIPT_DIR/values/vibe-kanban.yaml" \
+        --wait --timeout 5m 2>&1 | tail -5
+    
+    kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=vibe-kanban -n $NAMESPACE --timeout=120s 2>/dev/null || \
+        log_warn "Vibe Kanban 启动较慢，继续等待..."
+    
     log_success "基础设施部署完成"
 }
 
@@ -178,8 +192,9 @@ show_status() {
     
     echo ""
     echo "🔗 访问地址（需 telepresence）:"
-    echo "  Gitea:  http://gitea-http.sisyphus.svc.cluster.local:3000"
-    echo "  n8n:    http://n8n.sisyphus.svc.cluster.local:5678"
+    echo "  Gitea:       http://gitea-http.sisyphus.svc.cluster.local:3000"
+    echo "  n8n:         http://n8n.sisyphus.svc.cluster.local:5678"
+    echo "  Vibe Kanban: http://vibe-kanban.sisyphus.svc.cluster.local:3000"
     echo ""
     
     echo "📁 Git 仓库:"

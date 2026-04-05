@@ -70,11 +70,12 @@ make port-forward-n8n
 
 ## 📦 平台组件
 
-| 组件 | 版本 | 访问地址 | 默认账号 |
-|------|------|----------|----------|
-| PostgreSQL | 18.5.15 | postgres-shared:5432 | postgres / devops |
-| Gitea | 1.25.4 | http://gitea.local:3000 | gitea_admin / admin123 |
-| n8n | 2.14.2 | http://n8n.local:5678 | admin / admin123 |
+| 组件 | 版本 | 访问地址 | 默认账号 | 状态 |
+|------|------|----------|----------|------|
+| PostgreSQL | 18.5.15 | postgres-shared:5432 | postgres / devops | ✅ 自动部署 |
+| Gitea | 1.25.4 | http://gitea.local:3000 | gitea_admin / admin123 | ✅ 自动部署 |
+| n8n | 2.14.2 | http://n8n.local:5678 | admin / admin123 | ✅ 自动部署 |
+| Vibe Kanban | latest | http://vibe-kanban.local:3000 | - | ⚠️ 需手动构建 |
 
 ## 🗂️ 项目结构
 
@@ -87,11 +88,13 @@ sisyphus/
 │   ├── postgresql/
 │   ├── gitea/
 │   ├── n8n/
+│   ├── vibe-kanban/
 │   └── gitea-act-runner.yaml
 ├── values/              # 配置文件
 │   ├── postgres.yaml
 │   ├── gitea.yaml
-│   └── n8n.yaml
+│   ├── n8n.yaml
+│   └── vibe-kanban.yaml
 ├── projects/            # 业务项目（Git Submodules）
 │   ├── ttpos-flutter/   # Flutter 前端
 │   └── ttpos-server-go/ # Go 后端
@@ -142,6 +145,25 @@ make test-go           # 仅测试 Go
 cd projects/ttpos-flutter && make ci
 cd projects/ttpos-server-go && make ci
 ```
+
+## 🔧 Vibe Kanban 手动构建
+
+Vibe Kanban 镜像未发布到 Docker Hub，需要本地构建：
+
+```bash
+# 方式 1：使用 Makefile 一键构建
+make build-vibe-kanban-local
+
+# 方式 2：手动步骤
+git clone https://github.com/BloopAI/vibe-kanban.git /tmp/vibe-kanban
+cd /tmp/vibe-kanban
+./local-build.sh
+docker tag vibe-kanban:latest vibe-kanban:local
+kind load docker-image vibe-kanban:local --name kind
+make deploy-vibe-kanban-local
+```
+
+详细说明见 [docs/vibe-kanban-manual-build.md](docs/vibe-kanban-manual-build.md)
 
 ## 🔧 CI/CD 工作流
 

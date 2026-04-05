@@ -1,0 +1,98 @@
+# Default values for vibe-kanban.
+
+image:
+  repository: bloopai/vibe-kanban
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 3000
+  backendPort: 3001
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: vibe-kanban.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Resource configuration
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+# Autoscaling
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+
+# Pod configuration
+podAnnotations: {}
+podSecurityContext: {}
+securityContext: {}
+
+# Node selector
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Database configuration
+database:
+  # Use external PostgreSQL (shared instance)
+  external:
+    enabled: true
+    host: postgres-shared.sisyphus.svc.cluster.local
+    port: 5432
+    database: vibekanban
+    username: postgres
+    password: devops
+  
+  # Or use built-in SQLite (not recommended for production)
+  sqlite:
+    enabled: false
+
+# Environment variables
+env:
+  # Server configuration
+  PORT: "3000"
+  BACKEND_PORT: "3001"
+  HOST: "0.0.0.0"
+  MCP_HOST: "0.0.0.0"
+  
+  # CORS - Allow frontend origin
+  VK_ALLOWED_ORIGINS: "http://vibe-kanban.sisyphus.svc.cluster.local:3000,http://localhost:3000"
+  
+  # Disable analytics by default
+  POSTHOG_API_KEY: ""
+  POSTHOG_API_ENDPOINT: ""
+  
+  # Debug options
+  DISABLE_WORKTREE_CLEANUP: "false"
+
+# Additional environment variables from secrets
+envFromSecrets: []
+
+# Persistence
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 5Gi
+  mountPath: /data
