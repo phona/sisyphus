@@ -1,0 +1,205 @@
+{
+  "name": "CI Failure Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "webhook-ci-failed",
+      "name": "Webhook: CI Failed",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "ci-failed"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 解析 CI 失败信息\nconst input = $input.first().json;\n\n// 构建 issue 数据\nconst issueData = {\n  title: `[CI Failed] ${input.branch} - ${input.failed_stage}`,\n  description: `## CI 失败报告\\n\\n**项目**: ${input.project}\\n**分支**: ${input.branch}\\n**提交**: ${input.commit}\\n**失败阶段**: ${input.failed_stage}\\n\\n### 日志\\n${input.log_url || 'N/A'}\\n\\n### 修复检查清单\\n- [ ] 分析问题原因\\n- [ ] 修复代码\\n- [ ] 本地验证通过\\n- [ ] 提交并 push`,\n  labels: ['ci-failed', input.failed_stage, 'auto-fix']\n};\n\nreturn [{ json: issueData }];"
+      },
+      "id": "parse-failure",
+      "name": "Parse Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://vibe-kanban.sisyphus.svc.cluster.local:3002/mcp/call",
+        "sendBody": true,
+        "contentType": "application/json",
+        "body": {
+          "jsonrpc": "2.0",
+          "method": "tools/call",
+          "params": {
+            "name": "create_issue",
+            "arguments": {
+              "title": "={{ $json.title }}",
+              "description": "={{ $json.description }}",
+              "labels": "={{ JSON.stringify($json.labels) }}"
+            }
+          },
+          "id": 1
+        }
+      },
+      "id": "mcp-create-issue",
+      "name": "MCP: Create Issue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "id": "wait",
+      "name": "Wait 30s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/ttpos-server-go/commits/master/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "check-ci",
+      "name": "Check CI Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-1",
+              "leftValue": "={{ $json.state }}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-success",
+      "name": "CI Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// CI 通过，进入下一阶段\nreturn [{ json: { status: 'success', message: 'CI fixed and passed' } }];"
+      },
+      "id": "success",
+      "name": "Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// CI 仍失败，可以重试或人工介入\nconst input = $input.first().json;\nreturn [{ \n  json: { \n    status: 'still_failed', \n    state: input.state,\n    retry_needed: true\n  } \n}];"
+      },
+      "id": "still-failed",
+      "name": "Still Failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1450, 400]
+    }
+  ],
+  "connections": {
+    "Webhook: CI Failed": {
+      "main": [
+        [
+          {
+            "node": "Parse Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Failure": {
+      "main": [
+        [
+          {
+            "node": "MCP: Create Issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MCP: Create Issue": {
+      "main": [
+        [
+          {
+            "node": "Wait 30s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 30s": {
+      "main": [
+        [
+          {
+            "node": "Check CI Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check CI Status": {
+      "main": [
+        [
+          {
+            "node": "CI Passed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CI Passed?": {
+      "main": [
+        [
+          {
+            "node": "Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Still Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "timezone": "Asia/Shanghai"
+  }
+}

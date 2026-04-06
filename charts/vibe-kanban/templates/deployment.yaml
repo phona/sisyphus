@@ -114,6 +114,18 @@ spec:
             - name: projects
               mountPath: /projects
             {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: backend
+            initialDelaySeconds: 60
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: backend
+            initialDelaySeconds: 10
+            periodSeconds: 5
         {{- if .Values.mcpProxy.enabled }}
         # MCP Proxy Sidecar - 将 stdio MCP 转为 SSE
         - name: mcp-proxy
@@ -139,18 +151,6 @@ spec:
               cpu: 100m
               memory: 128Mi
         {{- end }}
-          livenessProbe:
-            httpGet:
-              path: /
-              port: backend
-            initialDelaySeconds: 60
-            periodSeconds: 10
-          readinessProbe:
-            httpGet:
-              path: /
-              port: backend
-            initialDelaySeconds: 10
-            periodSeconds: 5
       volumes:
         - name: data
           {{- if .Values.persistence.enabled }}
