@@ -143,6 +143,24 @@ spec:
           env:
             - name: MCP_HOST
               value: "0.0.0.0"
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.claude.existingSecret | default "claude-api-key" }}
+                  key: api-key
+            - name: ANTHROPIC_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.claude.existingSecret | default "claude-api-key" }}
+                  key: anthropic-auth-token
+            - name: ANTHROPIC_BASE_URL
+              value: "https://open.bigmodel.cn/api/anthropic"
+            - name: ANTHROPIC_DEFAULT_SONNET_MODEL
+              value: "glm-5-turbo"
+            - name: ANTHROPIC_DEFAULT_OPUS_MODEL
+              value: "glm-5.1"
+            - name: ANTHROPIC_DEFAULT_HAIKU_MODEL
+              value: "glm-4.5-air"
           resources:
             limits:
               cpu: 200m

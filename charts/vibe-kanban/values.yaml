@@ -25,6 +25,11 @@ mcpProxy:
   enabled: true
   port: 3002
 
+# Claude API configuration
+claude:
+  # Secret name containing ANTHROPIC_API_KEY
+  existingSecret: "claude-api-key"
+
 # Ingress configuration
 ingress:
   enabled: false
