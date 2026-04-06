@@ -1,0 +1,107 @@
+{{- if .Values.projects.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "vibe-kanban.fullname" . }}-clone-projects
+  labels:
+    {{- include "vibe-kanban.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "vibe-kanban.selectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-for-gitea
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Gitea..."
+              # wget already available
+              until wget -qO- "{{ .Values.gitea.url }}/api/v1/version" 2>/dev/null | grep -q '"version"'; do
+                echo "  Gitea not ready, waiting..."
+                sleep 5
+              done
+              echo "Gitea is ready!"
+        {{- if .Values.gitea.enabled }}
+        - name: setup-git-credentials
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              # git already available in vibe-kanban image
+              mkdir -p /root/.config/git
+              GITEA_HOST=$(echo "$GITEA_URL" | sed 's|http://||; s|https://||')
+              PROTOCOL=$(echo "$GITEA_URL" | grep -q "https" && echo "https" || echo "http")
+              echo "${PROTOCOL}://${GITEA_USERNAME}:${GITEA_TOKEN}@${GITEA_HOST}" > /root/.git-credentials
+              git config --global credential.helper store
+              git config --global url."${PROTOCOL}://${GITEA_USERNAME}:${GITEA_TOKEN}@${GITEA_HOST}/".insteadOf "${GITEA_URL}/"
+              echo "Git credentials configured"
+          env:
+            - name: GITEA_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gitea.existingSecret | default "vibe-kanban-gitea" }}
+                  key: token
+            - name: GITEA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gitea.existingSecret | default "vibe-kanban-gitea" }}
+                  key: username
+            - name: GITEA_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gitea.existingSecret | default "vibe-kanban-gitea" }}
+                  key: url
+          volumeMounts:
+            - name: git-credentials
+              mountPath: /root
+      {{- end }}
+      containers:
+        - name: clone
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              # git already available in vibe-kanban image
+              echo "=== Starting project clone ==="
+              {{- range .Values.projects.repos }}
+              if [ ! -d "/projects/{{ .name }}/.git" ]; then
+                echo "Cloning {{ .name }}..."
+                git clone --branch {{ .branch }} "{{ .url }}" "/projects/{{ .name }}"
+              else
+                echo "{{ .name }} already exists, pulling latest..."
+                cd "/projects/{{ .name }}" && git pull
+              fi
+              {{- end }}
+              echo ""
+              echo "=== All projects ready ==="
+              ls -la /projects/
+          volumeMounts:
+            - name: projects
+              mountPath: /projects
+            {{- if .Values.gitea.enabled }}
+            - name: git-credentials
+              mountPath: /root
+            {{- end }}
+      volumes:
+        - name: projects
+          persistentVolumeClaim:
+            claimName: {{ include "vibe-kanban.fullname" . }}-projects
+        {{- if .Values.gitea.enabled }}
+        - name: git-credentials
+          emptyDir: {}
+        {{- end }}
+{{- end }}

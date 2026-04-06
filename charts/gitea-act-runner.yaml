@@ -13,18 +13,55 @@ spec:
       labels:
         app: gitea-act-runner
     spec:
-      containers:
-        - name: runner
+      initContainers:
+        - name: register
           image: gitea/act_runner:nightly
           imagePullPolicy: IfNotPresent
+          workingDir: /data
           command:
             - /bin/sh
             - -c
             - |
-              if [ ! -f /data/.runner ]; then
-                act_runner register --instance http://10.244.0.119:3000 --token "V0IVv4BVRrgcOWwmAEA5NGaIzdX7LVfWdm7yPnN7" --name kind-runner --labels self-hosted:docker://alpine:latest
+              if [ ! -f .runner ]; then
+                act_runner register \
+                  --instance http://gitea-http.sisyphus.svc.cluster.local:3000 \
+                  --token "5Da4TpkD2r7PqXdmePRr8qbiB8fHTwZlKkKLedE9" \
+                  --name kind-runner \
+                  --labels self-hosted:docker://alpine:latest
               fi
-              act_runner daemon
+              echo "Registration done"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: docker
+          image: docker:24-dind
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          env:
+            - name: DOCKER_TLS_CERTDIR
+              value: ""
+          volumeMounts:
+            - name: docker-data
+              mountPath: /var/lib/docker
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+        - name: runner
+          image: gitea/act_runner:nightly
+          imagePullPolicy: IfNotPresent
+          workingDir: /data
+          command:
+            - act_runner
+            - daemon
+          env:
+            - name: DOCKER_HOST
+              value: tcp://localhost:2375
           volumeMounts:
             - name: data
               mountPath: /data
@@ -37,4 +74,6 @@ spec:
               memory: 512Mi
       volumes:
         - name: data
+          emptyDir: {}
+        - name: docker-data
           emptyDir: {}

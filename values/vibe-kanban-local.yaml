@@ -2,7 +2,7 @@
 
 image:
   repository: vibe-kanban
-  tag: local
+  tag: claude-test
   pullPolicy: IfNotPresent
 
 # 使用镜像内置的 CMD，不覆盖
@@ -24,6 +24,28 @@ database:
     username: postgres
     password: devops
 
+# Gitea 集成配置
+gitea:
+  enabled: true
+  url: "http://gitea-http.sisyphus.svc.cluster.local:3000"
+  host: "gitea-http.sisyphus.svc.cluster.local:3000"
+  username: "gitea_admin"
+  # Token secret 由 deploy 脚本创建
+
+# 项目列表 - 部署时自动 clone
+projects:
+  enabled: true
+  storage:
+    enabled: true
+    size: 10Gi
+  repos:
+    - name: ttpos-flutter
+      url: http://gitea-http.sisyphus.svc.cluster.local:3000/gitea_admin/ttpos-flutter.git
+      branch: master
+    - name: ttpos-server-go
+      url: http://gitea-http.sisyphus.svc.cluster.local:3000/gitea_admin/ttpos-server-go.git
+      branch: master
+
 # 环境变量配置
 env:
   PORT: "3001"
@@ -37,10 +59,6 @@ env:
   # 禁用分析
   POSTHOG_API_KEY: ""
   POSTHOG_API_ENDPOINT: ""
-  
-  # Gitea 集成配置
-  VK_GIT_URL: "http://gitea-http.sisyphus.svc.cluster.local:3000"
-  VK_GIT_TYPE: "gitea"
 
 # 资源限制
 resources:

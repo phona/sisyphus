@@ -32,7 +32,7 @@ gitea:
       USER: postgres
       PASSWD: devops
     server:
-      ROOT_URL: "http://gitea.local/"
+      ROOT_URL: "http://gitea-http.sisyphus.svc.cluster.local:3000/"
     actions:
       ENABLED: true
     webhook:

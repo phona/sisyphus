@@ -121,17 +121,18 @@ deploy_infrastructure() {
     
     log_success "n8n 就绪"
     
-    # 5. 部署 Vibe Kanban
+    # 5. 部署 Vibe Kanban（使用一键脚本，含 Gitea 集成和代码推送）
     log_info "部署 Vibe Kanban..."
-    kubectl exec -n $NAMESPACE postgres-shared-postgresql-0 -- bash -c \
-        'PGPASSWORD=devops psql -U postgres -c "CREATE DATABASE vibekanban;"' 2>/dev/null || true
-    helm upgrade --install vibe-kanban "$SCRIPT_DIR/charts/vibe-kanban" \
-        --namespace $NAMESPACE \
-        --values "$SCRIPT_DIR/values/vibe-kanban.yaml" \
-        --wait --timeout 5m 2>&1 | tail -5
-    
-    kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=vibe-kanban -n $NAMESPACE --timeout=120s 2>/dev/null || \
-        log_warn "Vibe Kanban 启动较慢，继续等待..."
+    chmod +x "$SCRIPT_DIR/scripts/deploy-vibe-kanban.sh"
+    "$SCRIPT_DIR/scripts/deploy-vibe-kanban.sh" "$NAMESPACE" "$GITEA_ADMIN" "$GITEA_PASSWORD" || {
+        log_warn "Vibe Kanban 部署脚本执行失败，尝试基本部署..."
+        kubectl exec -n $NAMESPACE postgres-shared-postgresql-0 -- bash -c \
+            'PGPASSWORD=devops psql -U postgres -c "CREATE DATABASE vibekanban;"' 2>/dev/null || true
+        helm upgrade --install vibe-kanban "$SCRIPT_DIR/charts/vibe-kanban" \
+            --namespace $NAMESPACE \
+            --values "$SCRIPT_DIR/values/vibe-kanban.yaml" \
+            --wait --timeout 5m 2>&1 | tail -5
+    }
     
     log_success "基础设施部署完成"
 }

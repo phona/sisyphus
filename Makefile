@@ -105,24 +105,30 @@ deploy-n8n: ## 部署 n8n
 		--namespace $(NAMESPACE) --values $(SCRIPT_DIR)/values/n8n.yaml --wait
 	@echo "✅ n8n 就绪"
 
-deploy-vibe-kanban: ## 部署 Vibe Kanban（使用预构建镜像）
+deploy-vibe-kanban: ## 部署 Vibe Kanban（使用一键脚本，含 Gitea 集成）
+	@echo "📦 部署 Vibe Kanban（一键脚本）..."
+	@chmod +x $(SCRIPT_DIR)/scripts/deploy-vibe-kanban.sh
+	@$(SCRIPT_DIR)/scripts/deploy-vibe-kanban.sh $(NAMESPACE)
+
+deploy-vibe-kanban-only: ## 仅部署 Vibe Kanban（依赖已就绪）
 	@echo "📦 部署 Vibe Kanban..."
 	@echo "⚠️  提示: 如果本地镜像不存在，请先执行 'make build-vibe-kanban-local'"
 	@kubectl exec postgres-shared-postgresql-0 -n $(NAMESPACE) -- bash -c \
 		'PGPASSWORD=devops psql -U postgres -c "CREATE DATABASE vibekanban;"' 2>/dev/null || true
 	@helm upgrade --install vibe-kanban $(SCRIPT_DIR)/charts/vibe-kanban \
-		--namespace $(NAMESPACE) --values $(SCRIPT_DIR)/values/vibe-kanban.yaml --wait
+		--namespace $(NAMESPACE) --values $(SCRIPT_DIR)/values/vibe-kanban-local.yaml --wait
 	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=vibe-kanban -n $(NAMESPACE) --timeout=120s || echo "⚠️ 等待中..."
 	@echo "✅ Vibe Kanban 就绪"
 
-deploy-vibe-kanban-local: ## 部署本地构建的 Vibe Kanban
-	@echo "📦 部署本地 Vibe Kanban 镜像..."
-	@kubectl exec postgres-shared-postgresql-0 -n $(NAMESPACE) -- bash -c \
-		'PGPASSWORD=devops psql -U postgres -c "CREATE DATABASE vibekanban;"' 2>/dev/null || true
-	@helm upgrade --install vibe-kanban $(SCRIPT_DIR)/charts/vibe-kanban \
-		--namespace $(NAMESPACE) --values $(SCRIPT_DIR)/values/vibe-kanban-local.yaml --wait
-	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=vibe-kanban -n $(NAMESPACE) --timeout=120s || echo "⚠️ 等待中..."
-	@echo "✅ Vibe Kanban (本地镜像) 就绪"
+clean-vibe-kanban: ## 清理 Vibe Kanban（保留 namespace）
+	@echo "🧹 清理 Vibe Kanban..."
+	@helm uninstall vibe-kanban -n $(NAMESPACE) 2>/dev/null || true
+	@kubectl delete secret vibe-kanban-gitea -n $(NAMESPACE) --ignore-not-found
+	@kubectl delete pvc vibe-kanban-projects vibe-kanban-data -n $(NAMESPACE) --ignore-not-found
+	@kubectl delete job vibe-kanban-clone-projects -n $(NAMESPACE) --ignore-not-found
+	@echo "✅ Vibe Kanban 已清理"
+
+reset-vibe-kanban: clean-vibe-kanban deploy-vibe-kanban ## 完全重置 Vibe Kanban（清理后重新部署）
 
 build-vibe-kanban-local: ## 构建 Vibe Kanban 本地镜像（使用 npx）
 	@echo "🔧 构建 Vibe Kanban..."

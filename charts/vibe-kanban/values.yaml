@@ -72,6 +72,28 @@ database:
   sqlite:
     enabled: false
 
+# Gitea integration
+gitea:
+  enabled: false
+  url: "http://gitea-http.sisyphus.svc.cluster.local:3000"
+  host: "gitea-http.sisyphus.svc.cluster.local:3000"
+  username: "gitea_admin"
+  # Name of existing secret containing token, username, url
+  existingSecret: ""
+
+# Projects configuration
+projects:
+  enabled: false
+  storage:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+  repos: []
+  # repos:
+  #   - name: my-project
+  #     url: http://gitea-http.sisyphus.svc.cluster.local:3000/gitea_admin/my-project.git
+  #     branch: main
+
 # Environment variables
 env:
   # Server configuration

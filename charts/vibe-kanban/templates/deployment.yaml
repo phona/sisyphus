@@ -26,6 +26,49 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        {{- if .Values.gitea.enabled }}
+        - name: setup-git-credentials
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              # 创建 .git-credentials
+              mkdir -p /shared/.config/git
+              GITEA_HOST=$(echo "$GITEA_URL" | sed 's|http://||; s|https://||')
+              PROTOCOL=$(echo "$GITEA_URL" | grep -q "https" && echo "https" || echo "http")
+              echo "${PROTOCOL}://${GITEA_USERNAME}:${GITEA_TOKEN}@${GITEA_HOST}" > /shared/.git-credentials
+              
+              # 配置 Git
+              git config --global credential.helper store
+              git config --global url."${PROTOCOL}://${GITEA_USERNAME}:${GITEA_TOKEN}@${GITEA_HOST}/".insteadOf "${GITEA_URL}/"
+              
+              cp /shared/.git-credentials /shared/
+              cp /root/.gitconfig /shared/
+              
+              echo "Git credentials configured"
+          env:
+            - name: GITEA_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gitea.existingSecret | default "vibe-kanban-gitea" }}
+                  key: token
+            - name: GITEA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gitea.existingSecret | default "vibe-kanban-gitea" }}
+                  key: username
+            - name: GITEA_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gitea.existingSecret | default "vibe-kanban-gitea" }}
+                  key: url
+          volumeMounts:
+            - name: git-credentials
+              mountPath: /shared
+        {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -63,6 +106,14 @@ spec:
           volumeMounts:
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
+            {{- if .Values.gitea.enabled }}
+            - name: git-credentials
+              mountPath: /root
+            {{- end }}
+            {{- if .Values.projects.enabled }}
+            - name: projects
+              mountPath: /projects
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /
@@ -83,6 +134,15 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- if .Values.gitea.enabled }}
+        - name: git-credentials
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.projects.enabled }}
+        - name: projects
+          persistentVolumeClaim:
+            claimName: {{ include "vibe-kanban.fullname" . }}-projects
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
