@@ -165,6 +165,33 @@ make deploy-vibe-kanban-local
 
 详细说明见 [docs/vibe-kanban-manual-build.md](docs/vibe-kanban-manual-build.md)
 
+## 🏗️ 分布式 CI 架构 (实验性)
+
+本项目正在实验 **AI 驱动的分布式 CI 架构**：
+
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│   n8n       │───►│ vibe-kanban │───►│  测试机     │───►│   Gitea     │
+│  (调度器)    │    │ (开发机)    │    │ (卡点器)    │    │  (归档器)   │
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+      │                   │                  │                  │
+      │ 流程控制           │ 写代码/修复       │ 跑测试/Lint      │ 存储代码/Issue
+      │                   │                  │                  │
+      └───────────────────┴──────────────────┴──────────────────┘
+                        6 阶段工作流
+           P0契约 → P1拆分 → P2并行 → P3TDD → P4质量 → P5验收 → P6发布
+```
+
+**关键设计**：
+- **n8n**：流程调度，决策判断
+- **vibe-kanban**：调用 Claude MCP 写代码、修复
+- **测试机 (Act Runner)**：只跑测试，返回 PASS/FAIL
+- **Gitea**：代码和 Issue 归档
+
+**文档**：
+- [分布式 CI 架构设计](./docs/distributed-ci-architecture.md)
+- [实施与验证计划](./docs/implementation-plan.md)
+
 ## 🔧 CI/CD 工作流
 
 ### 项目 Makefile 接口

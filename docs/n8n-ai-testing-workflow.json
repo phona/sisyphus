@@ -1,0 +1,866 @@
+{
+  "name": "AI 驱动自动化测试工作流",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-manual",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 初始化需求上下文\nconst reqId = $input.first().json.req_id || 'REQ-01';\nconst reqTitle = $input.first().json.title || '新功能需求';\n\nreturn [{\n  json: {\n    req_id: reqId,\n    title: reqTitle,\n    phase: 'init',\n    status: 'started',\n    timestamp: new Date().toISOString(),\n    specs: {\n      dev: null,\n      contract: null,\n      acceptance: null\n    },\n    branches: {\n      dev: `dev/${reqId}`,\n      test: `test/${reqId}`,\n      ac: `ac/${reqId}`\n    },\n    test_results: {\n      unit: null,\n      contract: null,\n      acceptance: null\n    },\n    quality_gate: {\n      lint: null,\n      ai_review: null\n    }\n  }\n}];"
+      },
+      "id": "init-context",
+      "name": "初始化需求上下文",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/{{$json.req_id}}-specs/issues",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "[Phase 0] 接口契约设计 - {{$json.req_id}}"
+            },
+            {
+              "name": "body",
+              "value": "## 契约设计任务\n\n**需求ID**: {{$json.req_id}}\n**需求标题**: {{$json.title}}\n\n### 任务清单\n- [ ] 后端主导设计 API 契约\n- [ ] 前端确认接口满足 UI 需求\n- [ ] 测试确认契约可测试、边界清晰\n\n### 输出物\n- `specs/{{$json.req_id}}/contract.spec.yaml`\n\n### 检查点\n- [ ] 请求/响应 Schema 完整\n- [ ] 边界值定义清晰\n- [ ] 错误码规范统一\n\n@backend @frontend @qa"
+            }
+          ]
+        }
+      },
+      "id": "create-contract-issue",
+      "name": "创建契约设计任务",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [650, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/{{$json.req_id}}-specs/contents/specs/{{$json.req_id}}/contract.spec.yaml",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "check-contract-spec",
+      "name": "检查契约规格",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [650, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "200",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "contract-exists",
+      "name": "契约是否存在?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [850, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Phase 1: OpenSpec 拆分\nconst input = $input.first().json;\n\n// 模拟 AI 拆分规格\nconst devSpec = `# DEV-SPEC: ${input.title}\n\n## 功能清单\n- [ ] FR-01: 核心功能实现\n- [ ] FR-02: 边界处理\n\n## 数据模型\n\`\`\`go\ntype Entity struct {\n    ID string\n    // ...\n}\n\`\`\`\n\n## 实现注意事项\n1. 注意并发安全\n2. 完整状态机设计\n`;\n\nconst acSpec = {\n  version: '1.0',\n  req_id: input.req_id,\n  acceptance_criteria: [\n    {\n      id: `${input.req_id}-AC-01`,\n      title: '核心功能验收',\n      given: ['系统正常运行'],\n      when: [{ action: 'trigger_feature', params: {} }],\n      then: [{ assert: 'feature.status == \"success\"' }]\n    }\n  ]\n};\n\nreturn [{\n  json: {\n    ...input,\n    phase: 'spec_split',\n    specs: {\n      dev: devSpec,\n      contract: '已存在',\n      acceptance: acSpec\n    }\n  }\n}];"
+      },
+      "id": "spec-split",
+      "name": "OpenSpec 拆分",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 350]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 创建三个并行开发分支\nconst input = $input.first().json;\nconst branches = ['dev', 'test', 'ac'];\n\nreturn branches.map(type => ({\n  json: {\n    ...input,\n    branch_type: type,\n    branch_name: `${type}/${input.req_id}`,\n    assignee: type === 'dev' ? 'developer' : type === 'test' ? 'tester' : 'acceptance'\n  }\n}));"
+      },
+      "id": "create-branches",
+      "name": "创建并行分支",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/ttpos-server-go/pulls",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "[{{$json.branch_type}}] {{$json.req_id}}: {{$json.title}}"
+            },
+            {
+              "name": "head",
+              "value": "={{$json.branch_name}}"
+            },
+            {
+              "name": "base",
+              "value": "feature/{{$json.req_id}}"
+            },
+            {
+              "name": "body",
+              "value": "## {{$json.branch_type === 'dev' ? '开发' : $json.branch_type === 'test' ? '测试' : '验收'}}分支\n\n**需求ID**: {{$json.req_id}}\n**负责人**: @{{$json.assignee}}\n\n### 任务\n{{$json.branch_type === 'dev' ? '- [ ] 编写单元测试 (TDD)' : $json.branch_type === 'test' ? '- [ ] 编写契约测试' : '- [ ] 编写验收用例'}}\n{{$json.branch_type === 'dev' ? '- [ ] 实现功能代码' : ''}}\n\n### 完成标准\n{{$json.branch_type === 'dev' ? '- 单元测试覆盖率 ≥ 80%' : $json.branch_type === 'test' ? '- 契约测试全部通过' : '- 验收用例可被 AI 执行'}}"
+            }
+          ]
+        }
+      },
+      "id": "create-branch-pr",
+      "name": "创建分支 PR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem"
+      },
+      "id": "merge-branch-results",
+      "name": "合并分支结果",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [1650, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/ttpos-server-go/contents/.sisyphus/{{$json.req_id}}/status.yaml",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "check-status-file",
+      "name": "检查三方状态",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1850, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 解析状态文件检查三方是否都 done\nconst input = $input.first().json;\n\n// 模拟从 Gitea 获取的状态\nconst mockStatus = {\n  dev: { status: 'done', completed_at: '2026-04-06T10:00:00Z', unit_test_coverage: '85%' },\n  test: { status: 'done', completed_at: '2026-04-06T11:00:00Z', contract_test_count: 12 },\n  ac: { status: 'done', completed_at: '2026-04-06T12:00:00Z', acceptance_cases_count: 6 }\n};\n\nconst allDone = mockStatus.dev.status === 'done' && \n                  mockStatus.test.status === 'done' && \n                  mockStatus.ac.status === 'done';\n\nreturn [{\n  json: {\n    ...input,\n    phase: 'merge_gate',\n    status_check: mockStatus,\n    all_done: allDone\n  }\n}];"
+      },
+      "id": "check-all-done",
+      "name": "检查完成状态",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2050, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.all_done }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "all-done-check",
+      "name": "三方都完成?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/ttpos-server-go/pulls",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "Merge: {{$json.req_id}} - 三方开发完成"
+            },
+            {
+              "name": "head",
+              "value": "feature/{{$json.req_id}}"
+            },
+            {
+              "name": "base",
+              "value": "master"
+            },
+            {
+              "name": "body",
+              "value": "## 合并请求\n\n**需求ID**: {{$json.req_id}}\n\n### 三方状态\n- ✅ 开发: 单元测试覆盖率 85%\n- ✅ 测试: 契约测试 12 个全部通过\n- ✅ 验收: 验收用例 6 个已编写\n\n### 下一步\n- [ ] TDD + 契约 Battle\n- [ ] 质量关卡\n- [ ] AI 验收"
+            }
+          ]
+        }
+      },
+      "id": "create-merge-pr",
+      "name": "创建合并 PR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2450, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Phase 3: TDD + 契约 Battle\nconst input = $input.first().json;\n\n// 模拟运行单元测试\nconst unitTestResult = {\n  passed: true,\n  coverage: 85,\n  total: 45,\n  failed: 0,\n  duration: '12s'\n};\n\n// 模拟运行契约测试\nconst contractTestResult = {\n  passed: true,\n  total: 12,\n  failed: 0,\n  duration: '8s'\n};\n\nreturn [{\n  json: {\n    ...input,\n    phase: 'tdd_battle',\n    test_results: {\n      unit: unitTestResult,\n      contract: contractTestResult\n    },\n    battle_passed: unitTestResult.passed && contractTestResult.passed\n  }\n}];"
+      },
+      "id": "run-tdd-battle",
+      "name": "运行 TDD Battle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2650, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.battle_passed }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "battle-passed-check",
+      "name": "Battle 通过?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2850, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Phase 4: 质量关卡\nconst input = $input.first().json;\n\n// 模拟 Linter 检查\nconst lintResult = {\n  passed: true,\n  tool: 'golangci-lint',\n  issues: 0,\n  duration: '5s'\n};\n\n// 模拟 AI Code Review\nconst aiReviewResult = {\n  passed: true,\n  model: 'claude-3-5-sonnet',\n  comments: [],\n  score: 95,\n  duration: '30s'\n};\n\nreturn [{\n  json: {\n    ...input,\n    phase: 'quality_gate',\n    quality_gate: {\n      lint: lintResult,\n      ai_review: aiReviewResult\n    },\n    quality_passed: lintResult.passed && aiReviewResult.passed\n  }\n}];"
+      },
+      "id": "run-quality-gate",
+      "name": "运行质量关卡",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3050, 150]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.quality_passed }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "quality-passed-check",
+      "name": "质量关卡通过?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3250, 150]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Phase 5: AI 验收\nconst input = $input.first().json;\n\n// 模拟加载验收规格\nconst acCases = [\n  { id: 'AC-01', title: '核心功能验收', status: 'passed' },\n  { id: 'AC-02', title: '边界条件验收', status: 'passed' },\n  { id: 'AC-03', title: '异常处理验收', status: 'passed' },\n  { id: 'AC-04', title: '并发场景验收', status: 'passed' },\n  { id: 'AC-05', title: '性能基准验收', status: 'passed' },\n  { id: 'AC-06', title: '安全合规验收', status: 'passed' }\n];\n\nconst allPassed = acCases.every(c => c.status === 'passed');\n\nreturn [{\n  json: {\n    ...input,\n    phase: 'ai_acceptance',\n    test_results: {\n      ...input.test_results,\n      acceptance: {\n        cases: acCases,\n        passed: acCases.filter(c => c.status === 'passed').length,\n        failed: acCases.filter(c => c.status === 'failed').length,\n        total: acCases.length\n      }\n    },\n    acceptance_passed: allPassed\n  }\n}];"
+      },
+      "id": "run-ai-acceptance",
+      "name": "运行 AI 验收",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3450, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.acceptance_passed }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "acceptance-passed-check",
+      "name": "验收通过?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3650, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/ttpos-server-go/pulls",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "Release: {{$json.req_id}} - 验收全绿"
+            },
+            {
+              "name": "head",
+              "value": "feature/{{$json.req_id}}"
+            },
+            {
+              "name": "base",
+              "value": "master"
+            },
+            {
+              "name": "body",
+              "value": "## 🎉 验收通过，准备发布\n\n**需求ID**: {{$json.req_id}}\n\n### 测试报告\n| 阶段 | 结果 |\n|------|------|\n| 单元测试 | ✅ {{$json.test_results.unit.coverage}}% 覆盖率 |\n| 契约测试 | ✅ {{$json.test_results.contract.total}} 个通过 |\n| Linter | ✅ 无错误 |\n| AI Review | ✅ 评分 {{$json.quality_gate.ai_review.score}} |\n| AI 验收 | ✅ {{$json.test_results.acceptance.total}} 个用例通过 |\n\n### 操作\n- [ ] 合并到 master\n- [ ] 自动部署到生产"
+            }
+          ]
+        }
+      },
+      "id": "create-release-pr",
+      "name": "创建发布 PR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [3850, 50]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/ttpos-server-go/pulls/{{$json.pr_number}}/merge",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "do",
+              "value": "merge"
+            },
+            {
+              "name": "delete_branch_after_merge",
+              "value": "false"
+            }
+          ]
+        }
+      },
+      "id": "merge-to-master",
+      "name": "合并到 Master",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [4050, 50]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/ttpos-server-go/actions/pipelines",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "ref",
+              "value": "master"
+            }
+          ]
+        }
+      },
+      "id": "trigger-deploy",
+      "name": "触发自动部署",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [4250, 50]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/ttpos-server-go/issues",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "🐛 TDD Battle 失败 - {{$json.req_id}}"
+            },
+            {
+              "name": "body",
+              "value": "## Battle 失败报告\n\n**需求ID**: {{$json.req_id}}\n**阶段**: TDD + 契约 Battle\n\n### 测试结果\n```json\n{{JSON.stringify($json.test_results, null, 2)}}\n```\n\n### 处理流程\n1. 开发修复代码\n2. 重新运行 TDD Battle\n\n@developer"
+            },
+            {
+              "name": "labels",
+              "value": "bug,tdd-battle,high-priority"
+            }
+          ]
+        }
+      },
+      "id": "create-battle-issue",
+      "name": "创建 Battle 失败 Issue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [3050, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/ttpos-server-go/issues",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "🔧 质量关卡失败 - {{$json.req_id}}"
+            },
+            {
+              "name": "body",
+              "value": "## 质量关卡失败报告\n\n**需求ID**: {{$json.req_id}}\n**阶段**: 质量关卡\n\n### 检查结果\n```json\n{{JSON.stringify($json.quality_gate, null, 2)}}\n```\n\n### 处理流程\n1. 开发修复代码规范\n2. 重新运行质量关卡\n\n@developer"
+            },
+            {
+              "name": "labels",
+              "value": "bug,quality-gate,high-priority"
+            }
+          ]
+        }
+      },
+      "id": "create-quality-issue",
+      "name": "创建质量关卡失败 Issue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [3450, 250]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/ttpos-server-go/issues",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "❌ AI 验收失败 - {{$json.req_id}}"
+            },
+            {
+              "name": "body",
+              "value": "## 验收失败报告\n\n**需求ID**: {{$json.req_id}}\n**阶段**: AI 验收\n\n### 验收结果\n```json\n{{JSON.stringify($json.test_results.acceptance, null, 2)}}\n```\n\n### 修复标准\n- [ ] 修复业务逻辑\n- [ ] 单元测试通过\n- [ ] 契约测试通过\n- [ ] Linter 通过\n- [ ] AI Review 通过\n- [ ] 重新验收通过\n\n@developer"
+            },
+            {
+              "name": "labels",
+              "value": "bug,acceptance,critical"
+            }
+          ]
+        }
+      },
+      "id": "create-acceptance-issue",
+      "name": "创建验收失败 Issue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [3850, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 生成最终报告\nconst input = $input.first().json;\n\nconst report = {\n  req_id: input.req_id,\n  title: input.title,\n  status: 'completed',\n  phases: {\n    spec_split: { status: 'passed', output: input.specs },\n    parallel_dev: { status: 'passed', branches: input.branches },\n    tdd_battle: { status: input.battle_passed ? 'passed' : 'failed', results: input.test_results },\n    quality_gate: { status: input.quality_passed ? 'passed' : 'failed', results: input.quality_gate },\n    ai_acceptance: { status: input.acceptance_passed ? 'passed' : 'failed', results: input.test_results.acceptance }\n  },\n  summary: {\n    total_phases: 5,\n    passed: [input.battle_passed, input.quality_passed, input.acceptance_passed].filter(Boolean).length + 2,\n    coverage: input.test_results?.unit?.coverage || 0,\n    contract_tests: input.test_results?.contract?.total || 0,\n    acceptance_cases: input.test_results?.acceptance?.total || 0\n  }\n};\n\nreturn [{ json: report }];"
+      },
+      "id": "generate-report",
+      "name": "生成测试报告",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4450, 50]
+    },
+    {
+      "parameters": {
+        "content": "=## AI 驱动测试工作流执行报告\n\n**需求ID**: {{$json.req_id}}\n**需求标题**: {{$json.title}}\n**执行状态**: {{$json.status}}\n\n### 各阶段状态\n| 阶段 | 状态 |\n|------|------|\n| OpenSpec 拆分 | ✅ {{$json.phases.spec_split.status}} |\n| 并行开发 | ✅ {{$json.phases.parallel_dev.status}} |\n| TDD Battle | {{$json.phases.tdd_battle.status === 'passed' ? '✅' : '❌'}} {{$json.phases.tdd_battle.status}} |\n| 质量关卡 | {{$json.phases.quality_gate.status === 'passed' ? '✅' : '❌'}} {{$json.phases.quality_gate.status}} |\n| AI 验收 | {{$json.phases.ai_acceptance.status === 'passed' ? '✅' : '❌'}} {{$json.phases.ai_acceptance.status}} |\n\n### 测试统计\n- 单元测试覆盖率: {{$json.summary.coverage}}%\n- 契约测试数量: {{$json.summary.contract_tests}}\n- 验收用例数量: {{$json.summary.acceptance_cases}}\n\n### 详细结果\n```json\n{{JSON.stringify($json.phases, null, 2)}}\n```\n\n---\n*Generated by n8n AI Testing Workflow*"
+      },
+      "id": "format-report",
+      "name": "格式化报告",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [4650, 50]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "final-report",
+      "name": "输出报告",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [4850, 50]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "初始化需求上下文",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "初始化需求上下文": {
+      "main": [
+        [
+          {
+            "node": "创建契约设计任务",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "检查契约规格",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "检查契约规格": {
+      "main": [
+        [
+          {
+            "node": "契约是否存在?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "契约是否存在?": {
+      "main": [
+        [
+          {
+            "node": "OpenSpec 拆分",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "创建契约设计任务",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenSpec 拆分": {
+      "main": [
+        [
+          {
+            "node": "创建并行分支",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "创建并行分支": {
+      "main": [
+        [
+          {
+            "node": "创建分支 PR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "创建分支 PR": {
+      "main": [
+        [
+          {
+            "node": "合并分支结果",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "合并分支结果": {
+      "main": [
+        [
+          {
+            "node": "检查三方状态",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "检查三方状态": {
+      "main": [
+        [
+          {
+            "node": "检查完成状态",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "检查完成状态": {
+      "main": [
+        [
+          {
+            "node": "三方都完成?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "三方都完成?": {
+      "main": [
+        [
+          {
+            "node": "创建合并 PR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "创建合并 PR": {
+      "main": [
+        [
+          {
+            "node": "运行 TDD Battle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "运行 TDD Battle": {
+      "main": [
+        [
+          {
+            "node": "Battle 通过?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Battle 通过?": {
+      "main": [
+        [
+          {
+            "node": "运行质量关卡",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "创建 Battle 失败 Issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "运行质量关卡": {
+      "main": [
+        [
+          {
+            "node": "质量关卡通过?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "质量关卡通过?": {
+      "main": [
+        [
+          {
+            "node": "运行 AI 验收",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "创建质量关卡失败 Issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "运行 AI 验收": {
+      "main": [
+        [
+          {
+            "node": "验收通过?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "验收通过?": {
+      "main": [
+        [
+          {
+            "node": "创建发布 PR",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "创建验收失败 Issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "创建发布 PR": {
+      "main": [
+        [
+          {
+            "node": "合并到 Master",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "合并到 Master": {
+      "main": [
+        [
+          {
+            "node": "触发自动部署",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "触发自动部署": {
+      "main": [
+        [
+          {
+            "node": "生成测试报告",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "生成测试报告": {
+      "main": [
+        [
+          {
+            "node": "格式化报告",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "格式化报告": {
+      "main": [
+        [
+          {
+            "node": "输出报告",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "timezone": "Asia/Shanghai"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "ai-testing",
+      "id": "tag-ai-testing",
+      "createdAt": "2026-04-06T00:00:00.000Z",
+      "updatedAt": "2026-04-06T00:00:00.000Z"
+    },
+    {
+      "name": "tdd",
+      "id": "tag-tdd",
+      "createdAt": "2026-04-06T00:00:00.000Z",
+      "updatedAt": "2026-04-06T00:00:00.000Z"
+    }
+  ]
+}
