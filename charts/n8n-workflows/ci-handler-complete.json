@@ -1,0 +1,208 @@
+{
+  "id": 1,
+  "name": "CI Failure Handler",
+  "active": true,
+  "nodes": [
+    {
+      "id": "webhook-1",
+      "name": "Webhook: CI Failed",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "ci-failed",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ci-failed",
+        "responseMode": "responseNode"
+      }
+    },
+    {
+      "id": "parse-1",
+      "name": "Parse Webhook",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\nconst result = {\n  project: body.repository?.name || body.project || 'unknown',\n  branch: body.ref?.replace('refs/heads/', '') || body.branch || 'unknown',\n  commit: body.after?.substring(0, 7) || body.commit || 'unknown',\n  failed_stage: body.failed_stage || 'unknown',\n  log_url: body.log_url || '',\n  timestamp: new Date().toISOString()\n};\n\nconsole.log('CI Failure:', result);\nreturn [{ json: result }];"
+      }
+    },
+    {
+      "id": "call-vk-1",
+      "name": "Call vibe-kanban MCP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [650, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "http://vibe-kanban.sisyphus.svc.cluster.local:3002/mcp",
+        "sendBody": true,
+        "contentType": "application/json",
+        "body": {
+          "jsonrpc": "2.0",
+          "method": "tools/call",
+          "params": {
+            "name": "create_issue",
+            "arguments": {
+              "title": "={{ 'Fix CI for ' + $json.branch }}",
+              "description": "={{ '## CI Failure\\n\\n**Project**: ' + $json.project + '\\n**Branch**: ' + $json.branch + '\\n**Failed**: ' + $json.failed_stage + '\\n\\n**Logs**: ' + $json.log_url }}",
+              "labels": ["ci-failed", "auto-fix"]
+            }
+          },
+          "id": "={{ Date.now() }}"
+        }
+      }
+    },
+    {
+      "id": "wait-1",
+      "name": "Wait 60s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [850, 300],
+      "parameters": {
+        "amount": 60,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "check-ci-1",
+      "name": "Check CI Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1050, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/' + $input.first().json.project + '/commits/' + $input.first().json.branch + '/status' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      }
+    },
+    {
+      "id": "if-success-1",
+      "name": "CI Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1250, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-1",
+              "leftValue": "={{ $json.state }}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "respond-success-1",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1450, 200],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, message: 'CI fixed and passed' }) }}"
+      }
+    },
+    {
+      "id": "respond-retry-1",
+      "name": "Respond Retry",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1450, 400],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: false, state: $json.state, message: 'CI still failing, will retry' }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook: CI Failed": {
+      "main": [
+        [
+          {
+            "node": "Parse Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Webhook": {
+      "main": [
+        [
+          {
+            "node": "Call vibe-kanban MCP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call vibe-kanban MCP": {
+      "main": [
+        [
+          {
+            "node": "Wait 60s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 60s": {
+      "main": [
+        [
+          {
+            "node": "Check CI Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check CI Status": {
+      "main": [
+        [
+          {
+            "node": "CI Passed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CI Passed?": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

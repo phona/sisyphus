@@ -368,7 +368,14 @@ main:
     labels: {}
 
   # -- Extra environment variables
-  extraEnvVars: {}
+  extraEnvVars:
+    # SiliconFlow API configuration for AI nodes
+    - name: OPENAI_API_KEY
+      value: "sk-lqavbdvmpcteoecjnjonplmuehaqoweujhozvkziotwzsbdx"
+    - name: OPENAI_BASE_URL
+      value: "https://api.siliconflow.cn/v1"
+    - name: OPENAI_MODEL
+      value: "Pro/deepseek-ai/DeepSeek-V3.2"
 
   # -- Extra secrets for environment variables
   extraSecretNamesForEnvFrom: []
