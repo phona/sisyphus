@@ -1,311 +1,166 @@
 # 分布式 CI 架构设计
 
-> 基于 n8n + vibe-kanban + 测试机 的 AI 驱动开发工作流
+> 基于 n8n + vibe-kanban MCP + 测试机的 AI 驱动开发工作流
 
-## 架构概述
+## 架构概览
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              n8n (调度器)                                    │
-│  职责: 流程控制、阶段推进、决策判断                                           │
+│  职责: 阶段控制、决策判断、任务分发                                           │
 │                                                                              │
-│   REQ-01 ──► P0契约 ──► P1拆分 ──► P2并行开发 ──► P3TDD ──► P4质量 ──► P5验收 ──► P6发布  │
-│                │           │           │           │           │              │
-│                ▼           ▼           ▼           ▼           ▼              │
-│            [失败则调用 vibe-kanban 修复]                                       │
+│   Phase0 ──► Phase1 ──► Phase2 ──► Phase3 ──► Phase4 ──► Phase5 ──► Phase6  │
+│   契约设计     三分拆分      并行开发      TDD        质量        验收        │
+│                                                                              │
+│   【任何阶段失败】                                                           │
+│        │                                                                     │
+│        └────► MCP: create_issue({title, desc, parent}) ──► vibe-kanban     │
 └─────────────────────────────────────────────────────────────────────────────┘
                                        │
-                                       │ HTTP 调用修复
+                                       │ MCP Protocol
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        vibe-kanban (开发机/执行器)                           │
-│  职责: 写代码、修复、提交 (调用 Claude MCP)                                   │
+│                       vibe-kanban (执行器)                                   │
+│  职责: 接收任务、拆解子任务、调用 Claude 修复、git push、关闭 Issue          │
 │                                                                              │
-│   接收修复指令 ──► Claude 分析 ──► 修改代码 ──► 本地验证 ──► git push ──► 返回结果  │
+│   MCP Tools:                           内部执行流程:                         │
+│   • create_issue()    ──► 接收任务    analyze ──► fix ──► verify ──► push   │
+│   • read_file()       ──► 读取代码                                          │
+│   • write_file()      ──► 修改代码                                          │
+│   • execute_command() ──► git/make                                          │
+│   • close_issue()     ──► 完成任务                                          │
 └─────────────────────────────────────────────────────────────────────────────┘
-                                       │
-                                       │ push 代码
+                                       │ git push
                                        ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           测试机 (卡点器)                                    │
-│  职责: 跑测试、lint、验收，只返回 通过/失败                                   │
-│                                                                              │
-│   收到 push webhook ──► 跑 Lint ──► 跑 Test ──► 跑 Build ──► 返回结果给 n8n   │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                       │
-                                       │ webhook 触发
+                              ┌─────────────────┐
+                              │     Gitea       │
+                              │  - 代码仓库     │
+                              │  - Issues       │
+                              └────────┬────────┘
+                                       │ webhook
                                        ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         Gitea/GitHub (归档器)                                │
-│  职责: 存储代码、Issue、历史记录                                              │
-│                                                                              │
-│   ├── 代码仓库 (分支、提交)                                                   │
-│   ├── Issues (CI 失败记录、修复历史)                                          │
-│   └── Actions/Workflows (CI 配置)                                            │
-└─────────────────────────────────────────────────────────────────────────────┘
+                              ┌─────────────────┐
+                              │     测试机       │
+                              │   跑 CI 卡点     │
+                              │   返回PASS/FAIL  │
+                              └─────────────────┘
 ```
 
-## 职责分离
+## 6 阶段工作流
 
-| 角色 | 职责 | 实体 | 当前环境 | 生产环境 |
-|------|------|------|---------|---------|
-| **调度器** | 流程控制、阶段推进、决策判断 | n8n | Kind 集群内 | 独立部署 |
-| **执行器** | 写代码、修复、提交 | vibe-kanban | Kind 集群内 | 可扩展多节点 |
-| **卡点器** | 跑测试、lint、验收 | Act Runner | Kind 集群内 (DinD) | K8s + 多 Runner |
-| **归档器** | 存储代码、Issue、历史 | Gitea | Kind 集群内 | GitHub Enterprise |
+| 阶段 | 名称 | 输入 | 输出 | 失败处理 |
+|------|------|------|------|---------|
+| **P0** | 契约设计 | 需求PRD | contract.spec.yaml | VK修改契约 |
+| **P1** | OpenSpec拆分 | PRD+契约 | dev.spec / contract.spec / ac.spec | VK重新拆分 |
+| **P2** | 并行开发 | 三分规格 | dev/test/ac三个分支 | VK修复对应分支 |
+| **P3** | TDD Battle | 合并后的feature | 单元测试+契约测试通过 | VK修复代码 |
+| **P4** | 质量关卡 | 通过TDD的代码 | Lint+AI Review通过 | VK修复规范 |
+| **P5** | AI验收 | 通过质量的代码 | 验收用例通过 | VK修复业务逻辑 |
+| **P6** | 发布 | 通过验收的代码 | 合并到master+部署 | - |
 
-## 开发流程 (6 阶段)
+## 三分设计详情
+
+### Phase1 输出（三份规格）
+
+| 规格文件 | 内容 | 对应分支 | 负责角色 | 产出 |
+|---------|------|---------|---------|------|
+| **dev.spec.md** | 功能清单、数据模型、实现细节 | dev/REQ-01 | 开发 | 单元测试+实现代码 |
+| **contract.spec.yaml** | API定义、请求/响应Schema、边界条件 | test/REQ-01 | 测试 | 契约测试 |
+| **ac.spec.yaml** | Given/When/Then业务场景 | ac/REQ-01 | 验收方 | 验收用例yaml |
+
+### Phase2 并行开发
+
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│ dev/REQ-01  │    │ test/REQ-01 │    │ ac/REQ-01   │
+│  开发负责    │    │  测试负责    │    │  验收负责    │
+├─────────────┤    ├─────────────┤    ├─────────────┤
+│ 1.写单元测试 │    │ 1.读契约规格 │    │ 1.读验收规格 │
+│ 2.写实现代码 │    │ 2.写契约测试 │    │ 2.写yaml用例 │
+│ 3.本地验证  │    │ 3.验证API   │    │ 3.验证可执行 │
+│ 4.push分支  │    │ 4.push分支   │    │ 4.push分支   │
+└─────────────┘    └─────────────┘    └─────────────┘
+       │                  │                  │
+       └──────────────────┼──────────────────┘
+                          ▼
+                   合并到 feature/REQ-01
+```
+
+## 核心交互时序
 
 ```mermaid
-flowchart TB
-    Start([REQ-01 需求]) --> P0[Phase0: 契约设计评审]
-    P0 --> P0_Check{通过?}
-    P0_Check -->|否| P0_Fix[vibe-kanban<br/>修复契约]
-    P0_Fix --> P0
-    P0_Check -->|是| P1[Phase1: OpenSpec拆分]
+sequenceDiagram
+    actor Test as 测试机
+    participant N8n as n8n调度器
+    participant VK as vibe-kanban
+    participant Claude as Claude MCP
+    participant Gitea as Gitea
+
+    Note over Test,N8n: CI 失败触发
     
-    P1 --> P1_Check{完整?}
-    P1_Check -->|否| P1_Fix[vibe-kanban<br/>重新拆分]
-    P1_Fix --> P1
-    P1_Check -->|是| P2[Phase2: 并行开发]
+    Test->>N8n: POST ci-failed(project, branch, failed_stage)
+    N8n->>VK: MCP create_issue(title, desc, parent)
+    activate VK
+    VK-->>N8n: return issue_id VK-XXX
+    deactivate N8n
     
-    P2 --> P2_Monitor[监控 dev/test/ac]
-    P2_Monitor --> P2_Check{全部完成?}
-    P2_Check -->|否| P2_Fix[vibe-kanban<br/>修复未完成分支]
-    P2_Fix --> P2_Monitor
-    P2_Check -->|是| P3[Phase3: TDD Battle]
+    Note over VK,Claude: vibe-kanban 内部执行
     
-    P3 --> P3_Test[测试机: 单元+契约测试]
-    P3_Test --> P3_Check{通过?}
-    P3_Check -->|否| P3_Fix[vibe-kanban<br/>修复代码]
-    P3_Fix --> P3_Test
-    P3_Check -->|是| P4[Phase4: 质量关卡]
+    VK->>Claude: analyze_failure
+    Claude-->>VK: 分析结果
+    VK->>Claude: fix_code
+    Claude-->>VK: 修复完成
+    VK->>VK: execute_command(make ci-lint/test)
+    VK->>Claude: commit_and_push
+    Claude-->>VK: push完成
+    VK->>Gitea: close_issue
+    deactivate VK
     
-    P4 --> P4_Test[测试机: Lint+AI Review]
-    P4_Test --> P4_Check{通过?}
-    P4_Check -->|否| P4_Fix[vibe-kanban<br/>修复规范]
-    P4_Fix --> P4_Test
-    P4_Check -->|是| P5[Phase5: AI验收]
-    
-    P5 --> P5_Test[测试机: 执行验收用例]
-    P5_Test --> P5_Check{通过?}
-    P5_Check -->|否| P5_Fix[vibe-kanban<br/>修复业务逻辑]
-    P5_Fix --> P5_Test
-    P5_Check -->|是| P6[Phase6: 发布]
-    
-    P6 --> End([发布完成])
+    Note over Test,N8n: 修复完成重新CI
+    Gitea->>Test: webhook push
+    Test->>Test: 重新跑CI
+    Test-->>N8n: CI Passed
 ```
 
-## 交互时序
+## Issue 层级结构
 
 ```
-1. n8n 触发测试机跑 CI
-   n8n ──webhook──► 测试机
-
-2. 测试机返回结果给 n8n
-   测试机 ──webhook──► n8n
-
-3. n8n 决定调用开发机修复
-   n8n ──HTTP──► vibe-kanban
-
-4. 开发机修复后 push 代码
-   vibe-kanban ──git push──► Gitea
-
-5. Gitea 触发测试机重新跑 CI
-   Gitea ──webhook──► 测试机
-
-6. 循环直到通过
+REQ-01 (父需求 - n8n管理生命周期)
+├── Phase0: 契约设计
+│   └── VK-001: 设计契约规格
+├── Phase1: OpenSpec拆分
+│   ├── VK-002: 生成dev.spec.md
+│   ├── VK-003: 生成contract.spec.yaml
+│   └── VK-004: 生成ac.spec.yaml
+├── Phase2: 并行开发
+│   ├── VK-005: dev/REQ-01开发 (单元测试+实现)
+│   ├── VK-006: test/REQ-01开发 (契约测试)
+│   └── VK-007: ac/REQ-01开发 (验收用例)
+├── Phase3: TDD Battle
+│   ├── VK-008: Fix lint错误
+│   ├── VK-009: Fix test错误
+│   └── VK-010: Fix contract错误
+├── Phase4: 质量关卡
+│   └── VK-011: Fix quality问题
+└── Phase5: AI验收
+    └── VK-012: Fix acceptance失败
 ```
 
-## 各阶段详细说明
+## 职责边界
 
-### Phase 0: 契约设计评审
+| 组件 | 负责 | 不负责 |
+|------|------|--------|
+| **n8n** | 阶段控制、决策判断、调用VK | 不写代码 |
+| **vibe-kanban** | 接收任务、拆解、调用Claude、git操作 | 不做阶段决策 |
+| **Claude MCP** | 分析、写代码、修复 | 无状态，单次调用 |
+| **测试机** | 跑CI测试、返回PASS/FAIL | 不改代码 |
+| **Gitea** | 存储代码、Issue、触发CI | 不执行逻辑 |
 
-**卡点器 (测试机)**:
-- 检查契约规格文件是否存在
-- 检查契约是否符合规范
+## 实施阶段
 
-**失败时 - 执行器 (开发机)**:
-```bash
-POST /api/fix-contract
-# Claude 修改 contract.spec.yaml
-# git commit & push
-```
+见 [implementation-plan.md](./implementation-plan.md)
 
-### Phase 1: OpenSpec 拆分
-
-**卡点器 (测试机)**:
-- 检查是否生成3份规格文件
-- 检查规格完整性
-
-**失败时 - 执行器 (开发机)**:
-```bash
-POST /api/fix-spec
-# Claude 拆分需求
-# 生成 dev.spec.md / contract.spec.yaml / ac.spec.yaml
-# 提交到 specs/REQ-01/
-```
-
-### Phase 2: 并行开发
-
-**卡点器 (测试机)**:
-- 监控 dev/REQ-01, test/REQ-01, ac/REQ-01 分支状态
-- 检查三方是否都标记为 done
-
-**失败时 - 执行器 (开发机)**:
-```bash
-POST /api/fix-dev  # 修复 dev 分支
-POST /api/fix-test # 修复 test 分支
-POST /api/fix-ac   # 修复 ac 分支
-
-# Claude 写代码/测试/验收用例
-# git push 到对应分支
-```
-
-### Phase 3: TDD Battle
-
-**卡点器 (测试机)**:
-```yaml
-# .gitea/workflows/tdd-battle.yml
-jobs:
-  tdd:
-    runs-on: self-hosted-test
-    steps:
-      - run: make ci-lint
-      - run: make ci-unit-test
-      - run: make ci-contract-test
-```
-
-**失败时 - 执行器 (开发机)**:
-```bash
-POST /api/fix-tdd
-# Claude 修复单元/契约测试
-# make ci-test (本地验证)
-# git push
-```
-
-### Phase 4: 质量关卡
-
-**卡点器 (测试机)**:
-```yaml
-jobs:
-  quality:
-    runs-on: self-hosted-test
-    steps:
-      - run: golangci-lint run
-      - run: semgrep --config=auto
-      - run: ai-code-review
-```
-
-**失败时 - 执行器 (开发机)**:
-```bash
-POST /api/fix-quality
-# Claude 修复 Lint 错误
-# 重构复杂代码
-# make ci-lint (本地验证)
-# git push
-```
-
-### Phase 5: AI 验收
-
-**卡点器 (测试机)**:
-```yaml
-jobs:
-  acceptance:
-    runs-on: self-hosted-test
-    steps:
-      - run: make ci-acceptance
-```
-
-**失败时 - 执行器 (开发机)**:
-```bash
-POST /api/fix-acceptance
-# Claude 修复业务逻辑
-# 通过验收用例
-# git push
-```
-
-### Phase 6: 发布
-
-**调度器 (n8n)**:
-- 合并 feature/REQ-01 到 master
-- 触发自动部署
-
-## API 列表
-
-### 开发机 (vibe-kanban) 提供
-
-| API | 功能 | 输入 | 输出 |
-|-----|------|------|------|
-| `POST /api/fix-contract` | 修改契约规格 | `{req_id, contract_issues}` | `{status, commit}` |
-| `POST /api/fix-spec` | OpenSpec 拆分 | `{req_id, prd_content}` | `{status, files[]}` |
-| `POST /api/fix-dev` | 修复 dev 分支 | `{req_id, failed_tests}` | `{status, commit}` |
-| `POST /api/fix-test` | 修复 test 分支 | `{req_id, failed_contracts}` | `{status, commit}` |
-| `POST /api/fix-ac` | 修复 ac 分支 | `{req_id, missing_cases}` | `{status, commit}` |
-| `POST /api/fix-tdd` | 修复单元/契约测试 | `{req_id, branch, failed_stages}` | `{status, commit}` |
-| `POST /api/fix-quality` | 修复 Lint/AI Review | `{req_id, branch, lint_errors}` | `{status, commit}` |
-| `POST /api/fix-acceptance` | 修复验收用例 | `{req_id, branch, failed_cases}` | `{status, commit}` |
-
-### 测试机触发 n8n
-
-| Webhook | 触发时机 |
-|---------|---------|
-| `POST n8n:/webhook/phase-done` | 各阶段完成 |
-| `POST n8n:/webhook/ci-failed` | CI 失败 |
-| `POST n8n:/webhook/quality-done` | 质量关卡完成 |
-| `POST n8n:/webhook/acceptance-done` | 验收完成 |
-
-## 实验环境 vs 生产环境
-
-| 组件 | 实验环境 (当前) | 生产环境 |
-|------|----------------|---------|
-| **调度器** | Kind 内 n8n | 独立 n8n 集群 |
-| **执行器** | Kind 内 vibe-kanban | K8s + 多 vibe-kanban 节点 |
-| **卡点器** | Kind 内 Act Runner (DinD) | K8s + 多 Runner + 缓存 |
-| **归档器** | Kind 内 Gitea | GitHub Enterprise |
-| **网络** | ClusterIP | Ingress + HTTPS |
-| **存储** | emptyDir/PVC | 分布式存储 |
-| **监控** | 无 | Prometheus + Grafana |
-
-## 实施路线图
-
-### Phase 1: 基础搭建 (当前)
-- [x] Kind 集群搭建
-- [x] Gitea + Act Runner 部署
-- [ ] n8n 部署
-- [ ] vibe-kanban 部署
-
-### Phase 2: 单阶段验证
-- [ ] 实现 Phase 3 (TDD Battle) 完整闭环
-- [ ] 验证: CI 失败 → n8n 调度 → vibe-kanban 修复 → 重新 CI
-
-### Phase 3: 全阶段串联
-- [ ] 实现 6 阶段完整工作流
-- [ ] 端到端测试: 需求 → 发布
-
-### Phase 4: 生产迁移
-- [ ] Gitea → GitHub
-- [ ] Kind → 生产 K8s
-- [ ] 添加监控告警
-
-## 快速开始
-
-```bash
-# 1. 启动实验环境
-make start
-
-# 2. 创建新需求
-make req-create REQ_ID=REQ-01 TITLE="新功能"
-
-# 3. 启动 n8n 工作流
-make n8n-start
-
-# 4. 触发开发流程
-make dev-start REQ_ID=REQ-01
-```
-
-## 参考文档
+## 参考
 
 - [AI 驱动测试工作流](./ai-driven-testing-workflow.md) - 详细阶段说明
 - [n8n 工作流使用](./n8n-workflow-usage.md) - n8n 配置说明
-- [完整开发工作流](./complete-development-workflow.md) - 分支策略
