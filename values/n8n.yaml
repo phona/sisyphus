@@ -45,6 +45,10 @@ main:
     N8N_BASIC_AUTH_USER: "admin"
     N8N_BASIC_AUTH_PASSWORD: "admin123"
     WEBHOOK_URL: "http://localhost:5678/"
+    # SiliconFlow API configuration
+    OPENAI_API_KEY: "sk-lqavbdvmpcteoecjnjonplmuehaqoweujhozvkziotwzsbdx"
+    OPENAI_BASE_URL: "https://api.siliconflow.cn/v1"
+    OPENAI_MODEL: "Pro/deepseek-ai/DeepSeek-V3.2"
   
   # 资源限制（可选，根据实际需要调整）
   resources:
