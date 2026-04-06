@@ -19,6 +19,12 @@ service:
   port: 3000
   backendPort: 3001
 
+# MCP Proxy Sidecar configuration
+# 将 vibe-kanban 的 stdio MCP 转为 SSE，供 n8n 调用
+mcpProxy:
+  enabled: true
+  port: 3002
+
 # Ingress configuration
 ingress:
   enabled: false

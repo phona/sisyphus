@@ -15,5 +15,11 @@ spec:
       targetPort: backend
       protocol: TCP
       name: backend
+    {{- if .Values.mcpProxy.enabled }}
+    - port: {{ .Values.mcpProxy.port | default 3002 }}
+      targetPort: mcp
+      protocol: TCP
+      name: mcp
+    {{- end }}
   selector:
     {{- include "vibe-kanban.selectorLabels" . | nindent 4 }}

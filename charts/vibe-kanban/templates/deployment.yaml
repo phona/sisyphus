@@ -114,6 +114,31 @@ spec:
             - name: projects
               mountPath: /projects
             {{- end }}
+        {{- if .Values.mcpProxy.enabled }}
+        # MCP Proxy Sidecar - 将 stdio MCP 转为 SSE
+        - name: mcp-proxy
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          command:
+            - sh
+            - -c
+            - |
+              npm install -g mcp-proxy
+              mcp-proxy npx vibe-kanban mcp --port 3002
+          ports:
+            - name: mcp
+              containerPort: 3002
+              protocol: TCP
+          env:
+            - name: MCP_HOST
+              value: "0.0.0.0"
+          resources:
+            limits:
+              cpu: 200m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+        {{- end }}
           livenessProbe:
             httpGet:
               path: /
