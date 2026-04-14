@@ -1,9 +1,9 @@
 # Default values for vibe-kanban.
 
 image:
-  repository: node
-  pullPolicy: IfNotPresent
-  tag: "20-alpine"
+  repository: vibe-kanban
+  pullPolicy: Never
+  tag: "with-bash"
 
 # 自定义启动命令（可选）
 command: []
@@ -16,14 +16,24 @@ fullnameOverride: ""
 # Service configuration
 service:
   type: ClusterIP
-  port: 3000
-  backendPort: 3001
+  # HTTP 端口 (vibe-kanban 同时提供前端和后端 API)
+  port: 3001
 
 # MCP Proxy Sidecar configuration
 # 将 vibe-kanban 的 stdio MCP 转为 SSE，供 n8n 调用
 mcpProxy:
+  enabled: false
+  port: 3004
+
+# Claude Code HTTP Wrapper configuration
+# n8n 调用此 wrapper 来执行 `claude -p` 任务
+wrapper:
   enabled: true
-  port: 3002
+  port: 3005
+  defaultCwd: /projects/ttpos-server-go
+  timeout: 300000
+  base_url: "https://coding.dashscope.aliyuncs.com/apps/anthropic"
+  model: "qwen3.6-plus"
 
 # Claude API configuration
 claude:
@@ -46,7 +56,7 @@ ingress:
 resources:
   limits:
     cpu: 1000m
-    memory: 1Gi
+    memory: 2Gi
   requests:
     cpu: 100m
     memory: 256Mi
@@ -108,12 +118,14 @@ projects:
 # Environment variables
 env:
   # Server configuration
-  PORT: "3000"
-  BACKEND_PORT: "3001"
+  # 前端 Vite dev server 端口
+  PORT: "3001"
+  # 后端 API 端口
+  BACKEND_PORT: "3000"
   HOST: "0.0.0.0"
   MCP_HOST: "0.0.0.0"
   
-  # CORS - Allow frontend origin
+  # CORS - Allow frontend origin  
   VK_ALLOWED_ORIGINS: "http://vibe-kanban.sisyphus.svc.cluster.local:3000,http://localhost:3000"
   
   # Disable analytics by default

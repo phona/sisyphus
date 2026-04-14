@@ -39,6 +39,10 @@ image:
 command: []
 args: []
 
+# 禁用 MCP Proxy（我们使用 HTTP API 直接调用）
+mcpProxy:
+  enabled: false
+
 service:
   type: ClusterIP
   port: 3000
@@ -64,6 +68,18 @@ env:
   POSTHOG_API_KEY: ""
   POSTHOG_API_ENDPOINT: ""
 
+# 额外环境变量（包括 Claude API Key）
+extraEnv:
+  - name: ANTHROPIC_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: claude-api-key
+        key: api-key
+  - name: ANTHROPIC_MODEL
+    value: "qwen3.6-plus"
+  - name: ANTHROPIC_BASE_URL
+    value: "https://coding.dashscope.aliyuncs.com/apps/anthropic"
+
 # 资源限制
 resources:
   requests:
@@ -79,6 +95,17 @@ persistence:
   size: 5Gi
   accessMode: ReadWriteOnce
   mountPath: /data
+
+# 项目配置 - 克隆 Git 仓库
+projects:
+  enabled: true
+  storage:
+    enabled: true
+    size: 10Gi
+  repos:
+    - name: ttpos-server-go
+      url: http://gitea-http.sisyphus.svc.cluster.local:3000/gitea_admin/ttpos-server-go.git
+      branch: master
 EOF
 
 helm upgrade --install vibe-kanban ${SCRIPT_DIR}/charts/vibe-kanban \

@@ -1,0 +1,469 @@
+{
+  "name": "Feature Development v14 - CI Retry + Acceptance Reject",
+  "id": 13,
+  "active": true,
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Trigger: New Feature",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 400],
+      "webhookId": "feature-request",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "feature-request"
+      }
+    },
+    {
+      "id": "parse",
+      "name": "Parse Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 400],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nreturn [{\n  json: {\n    req_id: body.req_id || 'REQ-TEST-01',\n    title: body.title || 'New Feature',\n    description: body.description || '',\n    scope: body.scope || 'backend',\n    branch: 'feature/' + (body.req_id || 'req-test-01')\n  }\n}];"
+      }
+    },
+    {
+      "id": "p0",
+      "name": "P0: Design Contract",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [650, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "http://vibe-kanban.sisyphus.svc.cluster.local:3005/execute",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "options": { "timeout": 300000 },
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "prompt",
+              "value": "=Generate design doc and save to /data/contracts/{{ $node[\"Parse Request\"].json.req_id }}.md. Content: req ID {{ $node[\"Parse Request\"].json.req_id }}, title {{ $node[\"Parse Request\"].json.title }}, description {{ $node[\"Parse Request\"].json.description }}."
+            },
+            { "name": "cwd", "value": "/projects/ttpos-server-go" },
+            { "name": "timeout", "value": 300000 }
+          ]
+        }
+      }
+    },
+    {
+      "id": "p1",
+      "name": "P1: Create OpenSpecs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [850, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "http://vibe-kanban.sisyphus.svc.cluster.local:3005/execute",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "options": { "timeout": 300000 },
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "prompt",
+              "value": "=Read /data/contracts/{{ $node[\"Parse Request\"].json.req_id }}.md, create openspec file at /data/openspecs/{{ $node[\"Parse Request\"].json.req_id }}/task.md."
+            },
+            { "name": "cwd", "value": "/projects/ttpos-server-go" },
+            { "name": "timeout", "value": 300000 }
+          ]
+        }
+      }
+    },
+    {
+      "id": "p2",
+      "name": "P2: Create Branch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1050, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "http://vibe-kanban.sisyphus.svc.cluster.local:3005/execute",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "options": { "timeout": 60000 },
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "prompt",
+              "value": "=Run these shell commands exactly as written:\ncd /projects/ttpos-server-go\ngit fetch origin\ngit checkout -b {{ $node[\"Parse Request\"].json.branch }}\ngit push origin {{ $node[\"Parse Request\"].json.branch }}\necho 'BRANCH_CREATED'"
+            },
+            { "name": "cwd", "value": "/projects/ttpos-server-go" },
+            { "name": "timeout", "value": 60000 }
+          ]
+        }
+      }
+    },
+    {
+      "id": "p3",
+      "name": "P3: Implement Code",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1250, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "http://vibe-kanban.sisyphus.svc.cluster.local:3005/execute",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "options": { "timeout": 1800000 },
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "prompt",
+              "value": "=Read /data/openspecs/{{ $node[\"Parse Request\"].json.req_id }}/task.md and implement the feature in /projects/ttpos-server-go on branch {{ $node[\"Parse Request\"].json.branch }}. After implementation:\ncd /projects/ttpos-server-go && git add -A && git commit -m 'feat: {{ $node[\"Parse Request\"].json.title }} ({{ $node[\"Parse Request\"].json.req_id }})' && git push origin {{ $node[\"Parse Request\"].json.branch }}"
+            },
+            { "name": "cwd", "value": "/projects/ttpos-server-go" },
+            { "name": "timeout", "value": 1800000 }
+          ]
+        }
+      }
+    },
+    {
+      "id": "p4-dispatch",
+      "name": "P4: Trigger CI (workflow_dispatch)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1450, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "=http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/ttpos-server-go/actions/workflows/ci.yml/dispatches",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "token e9600732757a45bfe976ef8ddae31cc2656ef8bb" }
+          ]
+        },
+        "bodyParameters": {
+          "parameters": [
+            { "name": "ref", "value": "={{ $node[\"Parse Request\"].json.branch }}" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      }
+    },
+    {
+      "id": "p4a-wait",
+      "name": "P4a: Wait for CI",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1650, 400],
+      "parameters": {
+        "mode": "automatic",
+        "amount": 3,
+        "unit": "minutes"
+      },
+      "webhookId": "ci-wait"
+    },
+    {
+      "id": "p4b-check",
+      "name": "P4b: Check CI Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1850, 400],
+      "parameters": {
+        "method": "GET",
+        "url": "=http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/ttpos-server-go/actions/runs?branch={{ $node[\"Parse Request\"].json.branch }}&status=completed",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "token e9600732757a45bfe976ef8ddae31cc2656ef8bb" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      }
+    },
+    {
+      "id": "p4c-parse",
+      "name": "P4c: Parse CI Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2050, 400],
+      "parameters": {
+        "jsCode": "const runs = $input.first().json.workflow_runs || [];\nconst req_id = $input.first().json.req_id;\nconst branch = $input.first().json.branch;\nconst latestRun = runs[0] || {};\nconst conclusion = latestRun.conclusion || 'unknown';\nconst status = latestRun.status || 'unknown';\nconst ci_passed = conclusion === 'success';\nreturn [{ json: { req_id, branch, ci_passed, ci_status: status, ci_conclusion: conclusion, ci_run_id: latestRun.id || 'none', ci_run_url: latestRun.html_url || null } }];"
+      }
+    },
+    {
+      "id": "p4d-if",
+      "name": "P4d: CI Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2250, 400],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            { "value1": "={{ $json.ci_passed }}", "value2": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ci-retry-count",
+      "name": "CI Retry: Check Count",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2450, 500],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst retryCount = (data.retry_count || 0) + 1;\nreturn [{ json: { ...data, retry_count: retryCount, max_retries: 3, give_up: retryCount >= 3 } }];"
+      }
+    },
+    {
+      "id": "ci-retry-if",
+      "name": "CI Retry: Try Again?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2650, 500],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            { "value1": "={{ $json.give_up }}", "value2": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ci-fix",
+      "name": "CI Fix (Claude)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [2850, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "http://vibe-kanban.sisyphus.svc.cluster.local:3005/execute",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "options": { "timeout": 600000 },
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "prompt",
+              "value": "=CI failed on branch {{ $node[\"Parse Request\"].json.branch }}. Retry attempt {{ $node[\"CI Retry: Check Count\"].json.retry_count }}/3. Read CI logs, fix issues in /projects/ttpos-server-go, then:\ncd /projects/ttpos-server-go && git add -A && git commit -m 'fix: CI failure (attempt {{ $node[\"CI Retry: Check Count\"].json.retry_count }}) for {{ $node[\"Parse Request\"].json.req_id }}' && git push origin {{ $node[\"Parse Request\"].json.branch }}"
+            },
+            { "name": "cwd", "value": "/projects/ttpos-server-go" },
+            { "name": "timeout", "value": 600000 }
+          ]
+        }
+      }
+    },
+    {
+      "id": "p5",
+      "name": "P5: Acceptance",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [2450, 150],
+      "parameters": {
+        "method": "POST",
+        "url": "http://vibe-kanban.sisyphus.svc.cluster.local:3005/execute",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "options": { "timeout": 600000 },
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "prompt",
+              "value": "=CI passed. Review code on branch {{ $node[\"Parse Request\"].json.branch }}. Generate acceptance report to /data/reviews/{{ $node[\"Parse Request\"].json.req_id }}-acceptance.md. Include: feature summary, code review, API verification, security notes, test coverage. At the end, output ACCEPTED or REJECTED with reason."
+            },
+            { "name": "cwd", "value": "/projects/ttpos-server-go" },
+            { "name": "timeout", "value": 300000 }
+          ]
+        }
+      }
+    },
+    {
+      "id": "p5b-if",
+      "name": "P5b: Acceptance Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2650, 150],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            { "value1": "={{ $json.acceptance_passed }}", "value2": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "p5c-parse-accept",
+      "name": "P5c: Parse Acceptance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2450, 250],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst output = data.output || '';\nconst accepted = output.includes('ACCEPTED') && !output.includes('REJECTED');\nreturn [{ json: { ...data, acceptance_passed: accepted, acceptance_output: output } }];"
+      }
+    },
+    {
+      "id": "p5d-reject-fix",
+      "name": "P5d: Acceptance Reject Fix",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [2850, 250],
+      "parameters": {
+        "method": "POST",
+        "url": "http://vibe-kanban.sisyphus.svc.cluster.local:3005/execute",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "options": { "timeout": 600000 },
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "prompt",
+              "value": "=Acceptance review rejected code on branch {{ $node[\"Parse Request\"].json.branch }}. Read /data/reviews/{{ $node[\"Parse Request\"].json.req_id }}-acceptance.md for rejection reasons. Fix the issues in /projects/ttpos-server-go, then:\ncd /projects/ttpos-server-go && git add -A && git commit -m 'fix: acceptance review feedback for {{ $node[\"Parse Request\"].json.req_id }}' && git push origin {{ $node[\"Parse Request\"].json.branch }}"
+            },
+            { "name": "cwd", "value": "/projects/ttpos-server-go" },
+            { "name": "timeout", "value": 600000 }
+          ]
+        }
+      }
+    },
+    {
+      "id": "p6-pr",
+      "name": "P6: Create PR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [2850, 150],
+      "parameters": {
+        "method": "POST",
+        "url": "http://gitea-http.sisyphus.svc.cluster.local:3000/api/v1/repos/gitea_admin/ttpos-server-go/pulls",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "token e9600732757a45bfe976ef8ddae31cc2656ef8bb" }
+          ]
+        },
+        "bodyParameters": {
+          "parameters": [
+            { "name": "head", "value": "={{ $node[\"Parse Request\"].json.branch }}" },
+            { "name": "base", "value": "master" },
+            { "name": "title", "value": "={{ $node[\"Parse Request\"].json.title }} ({{ $node[\"Parse Request\"].json.req_id }})" },
+            { "name": "body", "value": "=Automated PR. CI: {{ $node[\"P4c: Parse CI Status\"].json.ci_conclusion }}. Acceptance: passed" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "notify-ok",
+      "name": "Notify Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3050, 150],
+      "parameters": {
+        "jsCode": "const pr = $('P6: Create PR').first().json;\nconst parseData = $('Parse Request').first().json;\nconst ciData = $('P4c: Parse CI Status').first().json;\nreturn [{ json: { success: true, req_id: parseData.req_id, status: 'pr_created', pr_number: pr.number || pr.id, pr_url: pr.html_url, ci_conclusion: ciData.ci_conclusion } }];"
+      }
+    },
+    {
+      "id": "notify-ci-giveup",
+      "name": "Notify CI Give Up",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2850, 600],
+      "parameters": {
+        "jsCode": "const parseData = $('Parse Request').first().json;\nconst ciData = $('P4c: Parse CI Status').first().json;\nreturn [{ json: { success: false, req_id: parseData.req_id, status: 'ci_give_up', ci_conclusion: ciData.ci_conclusion, retries_exhausted: true, message: 'CI failed after 3 retry attempts' } }];"
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [3050, 400],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Trigger: New Feature": {
+      "main": [[{ "node": "Parse Request", "type": "main", "index": 0 }]]
+    },
+    "Parse Request": {
+      "main": [[{ "node": "P0: Design Contract", "type": "main", "index": 0 }]]
+    },
+    "P0: Design Contract": {
+      "main": [[{ "node": "P1: Create OpenSpecs", "type": "main", "index": 0 }]]
+    },
+    "P1: Create OpenSpecs": {
+      "main": [[{ "node": "P2: Create Branch", "type": "main", "index": 0 }]]
+    },
+    "P2: Create Branch": {
+      "main": [[{ "node": "P3: Implement Code", "type": "main", "index": 0 }]]
+    },
+    "P3: Implement Code": {
+      "main": [[{ "node": "P4: Trigger CI (workflow_dispatch)", "type": "main", "index": 0 }]]
+    },
+    "P4: Trigger CI (workflow_dispatch)": {
+      "main": [[{ "node": "P4a: Wait for CI", "type": "main", "index": 0 }]]
+    },
+    "P4a: Wait for CI": {
+      "main": [[{ "node": "P4b: Check CI Result", "type": "main", "index": 0 }]]
+    },
+    "P4b: Check CI Result": {
+      "main": [[{ "node": "P4c: Parse CI Status", "type": "main", "index": 0 }]]
+    },
+    "P4c: Parse CI Status": {
+      "main": [[{ "node": "P4d: CI Passed?", "type": "main", "index": 0 }]]
+    },
+    "P4d: CI Passed?": {
+      "main": [
+        [{ "node": "P5: Acceptance", "type": "main", "index": 0 }],
+        [{ "node": "CI Retry: Check Count", "type": "main", "index": 0 }]
+      ]
+    },
+    "CI Retry: Check Count": {
+      "main": [[{ "node": "CI Retry: Try Again?", "type": "main", "index": 0 }]]
+    },
+    "CI Retry: Try Again?": {
+      "main": [
+        [{ "node": "CI Fix (Claude)", "type": "main", "index": 0 }],
+        [{ "node": "Notify CI Give Up", "type": "main", "index": 0 }]
+      ]
+    },
+    "CI Fix (Claude)": {
+      "main": [[{ "node": "P4: Trigger CI (workflow_dispatch)", "type": "main", "index": 0 }]]
+    },
+    "P5: Acceptance": {
+      "main": [[{ "node": "P5c: Parse Acceptance", "type": "main", "index": 0 }]]
+    },
+    "P5c: Parse Acceptance": {
+      "main": [[{ "node": "P5b: Acceptance Passed?", "type": "main", "index": 0 }]]
+    },
+    "P5b: Acceptance Passed?": {
+      "main": [
+        [{ "node": "P6: Create PR", "type": "main", "index": 0 }],
+        [{ "node": "P5d: Acceptance Reject Fix", "type": "main", "index": 0 }]
+      ]
+    },
+    "P5d: Acceptance Reject Fix": {
+      "main": [[{ "node": "P3: Implement Code", "type": "main", "index": 0 }]]
+    },
+    "P6: Create PR": {
+      "main": [[{ "node": "Notify Success", "type": "main", "index": 0 }]]
+    },
+    "Notify Success": {
+      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
+    },
+    "Notify CI Give Up": {
+      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

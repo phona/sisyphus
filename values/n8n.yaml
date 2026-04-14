@@ -39,16 +39,16 @@ main:
     size: 5Gi
     accessMode: ReadWriteOnce
   
-  # 额外环境变量
+  # 额外环境变量 - 必须是 list 格式
   extraEnvVars:
     N8N_BASIC_AUTH_ACTIVE: "true"
     N8N_BASIC_AUTH_USER: "admin"
     N8N_BASIC_AUTH_PASSWORD: "admin123"
     WEBHOOK_URL: "http://localhost:5678/"
-    # SiliconFlow API configuration
-    OPENAI_API_KEY: "sk-lqavbdvmpcteoecjnjonplmuehaqoweujhozvkziotwzsbdx"
+    OPENAI_API_KEY: "sk-lqavbdvmpcteoecjnplmuehaqoweujhozvkziotwzsbdx"
     OPENAI_BASE_URL: "https://api.siliconflow.cn/v1"
     OPENAI_MODEL: "Pro/deepseek-ai/DeepSeek-V3.2"
+    N8N_SECURE_COOKIE: "false"
   
   # 资源限制（可选，根据实际需要调整）
   resources:

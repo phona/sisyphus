@@ -7,19 +7,24 @@ metadata:
 spec:
   type: {{ .Values.service.type }}
   ports:
+    # 主 HTTP 端口 (同时提供前端和后端 API)
     - port: {{ .Values.service.port }}
-      targetPort: http
-      protocol: TCP
-      name: http
-    - port: {{ .Values.service.backendPort }}
       targetPort: backend
       protocol: TCP
-      name: backend
+      name: http
     {{- if .Values.mcpProxy.enabled }}
-    - port: {{ .Values.mcpProxy.port | default 3002 }}
-      targetPort: mcp
+    # MCP HTTP API 端口
+    - port: {{ .Values.mcpProxy.port | default 3004 }}
+      targetPort: http-proxy
       protocol: TCP
-      name: mcp
+      name: http-proxy
+    {{- end }}
+    {{- if .Values.wrapper.enabled }}
+    # Claude Code Wrapper 端口
+    - port: {{ .Values.wrapper.port | default 3005 }}
+      targetPort: wrapper
+      protocol: TCP
+      name: wrapper
     {{- end }}
   selector:
     {{- include "vibe-kanban.selectorLabels" . | nindent 4 }}
