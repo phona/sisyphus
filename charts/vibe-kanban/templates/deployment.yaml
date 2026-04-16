@@ -109,6 +109,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
+            - name: worktrees
+              mountPath: /var/tmp/vibe-kanban
             {{- if .Values.gitea.enabled }}
             - name: git-credentials
               mountPath: /root
@@ -187,16 +189,37 @@ spec:
             - -c
             - |
               # 创建非 root 用户（Claude 拒绝以 root 运行）
-              grep -q developer /etc/passwd || adduser -D -s /bin/bash developer
+              grep -q developer /etc/passwd || adduser -D -s /bin/sh developer
               mkdir -p /data /projects /home/developer 2>/dev/null
               chown -R developer:developer /data /projects /home/developer 2>/dev/null || true
 
               # 修复 git safe.directory 问题（PVC 文件属主为 root，但 Claude 以 developer 运行）
               git config --global --add safe.directory '*' 2>/dev/null || true
               # 为 developer 用户也配置
-              su -s /bin/bash developer -c "git config --global --add safe.directory '*'" 2>/dev/null || true
-              su -s /bin/bash developer -c "git config --global user.name 'Claude Bot'" 2>/dev/null || true
-              su -s /bin/bash developer -c "git config --global user.email 'claude@sisyphus.local'" 2>/dev/null || true
+              su -s /bin/sh developer -c "git config --global --add safe.directory '*'" 2>/dev/null || true
+              su -s /bin/sh developer -c "git config --global user.name 'Claude Bot'" 2>/dev/null || true
+              su -s /bin/sh developer -c "git config --global user.email 'claude@sisyphus.local'" 2>/dev/null || true
+
+              # 配置 Claude MCP 连接到 vibe-kanban
+              mkdir -p /home/developer/.claude
+              chown developer:developer /home/developer/.claude
+              cat > /home/developer/.claude/mcp_settings.json << 'MCP_EOF'
+              {
+                "mcpServers": {
+                  "vibe-kanban": {
+                    "command": "vibe-kanban",
+                    "args": ["mcp"],
+                    "env": {
+                      "PORT": "3000"
+                    }
+                  }
+                }
+              }
+              MCP_EOF
+              chown developer:developer /home/developer/.claude/mcp_settings.json
+
+              # 确保 worktree 目录对 developer 可写
+              chmod -R 777 /var/tmp/vibe-kanban 2>/dev/null || true
 
               cat > /app/wrapper.js << 'WRAPPER_EOF'
               const http = require('http');
@@ -215,12 +238,13 @@ spec:
                   const script = commands.split('\n').filter(l => l.trim() && !l.trim().startsWith('#')).join(' && ');
                   const child = spawn('/bin/sh', ['-c', script], {
                     cwd,
-                    env: {...process.env, HOME: '/home/developer'},
+                    env: {...process.env, HOME: '/home/developer', SHELL: '/bin/sh'},
                     stdio: ['ignore','pipe','pipe'],
+                    detached: true,
                   });
                   let out = '', err = '', timedOut = false, responded = false;
                   const safeTimeout = Math.floor(timeout * 0.8);
-                  const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); setTimeout(()=>{ if(!child.killed) child.kill('SIGKILL') }, 3000); }, safeTimeout);
+                  const timer = setTimeout(() => { timedOut = true; try { process.kill(-child.pid, 'SIGTERM'); } catch(e){} setTimeout(()=>{ try { process.kill(-child.pid, 'SIGKILL'); } catch(e){} }, 3000); }, safeTimeout);
                   child.stdout.on('data', d => out += d.toString());
                   child.stderr.on('data', d => err += d.toString());
                   child.on('close', code => { clearTimeout(timer); if(!responded){responded=true; resolve({exitCode:code||0, output:out.trim(), stderr:err.trim(), timedOut});} });
@@ -250,24 +274,27 @@ spec:
               function runClaude(prompt, cwd, timeout) {
                 return new Promise((resolve, reject) => {
                   const fs = require('fs');
+                  // Ensure worktrees are writable by developer before running Claude
+                  try { require('child_process').execSync('chmod -R 777 /var/tmp/vibe-kanban/worktrees/ 2>/dev/null || true'); } catch(e){}
                   const tmpFile = '/tmp/claude-prompt-' + Date.now() + '.txt';
                   fs.writeFileSync(tmpFile, prompt);
 
-                  const cmd = `/bin/busybox su -s /bin/bash developer -c "HOME=/home/developer claude -p --dangerously-skip-permissions < ${tmpFile}"`;
+                  const cmd = `/bin/busybox su -s /bin/sh developer -c "export SHELL=/bin/sh; export HOME=/home/developer; claude -p --dangerously-skip-permissions --mcp-config /home/developer/.claude/mcp_settings.json < ${tmpFile}"`;
                   const child = spawn('/bin/sh', ['-c', cmd], {
                     cwd,
-                    env: {...process.env, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY||'', ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL||'claude-sonnet-4-6-20250514'},
-                    stdio: ['ignore','pipe','pipe']
+                    env: {...process.env, SHELL: '/bin/sh', ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY||'', ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL||'claude-sonnet-4-6-20250514'},
+                    stdio: ['ignore','pipe','pipe'],
+                    detached: true,
                   });
                   let out = '', err = '', timedOut = false, responded = false;
                   // Use 80% of timeout to ensure we respond before n8n's HTTP timeout
                   const safeTimeout = Math.floor(timeout * 0.8);
-                  const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); setTimeout(()=>{ if(!child.killed) child.kill('SIGKILL') }, 3000); }, safeTimeout);
+                  const timer = setTimeout(() => { timedOut = true; try { process.kill(-child.pid, 'SIGTERM'); } catch(e){} setTimeout(()=>{ try { process.kill(-child.pid, 'SIGKILL'); } catch(e){} }, 3000); }, safeTimeout);
                   // Safety timeout: force respond after full timeout + 5s
                   const safetyTimer = setTimeout(() => {
-                    if (!responded) { responded = true; try { child.kill('SIGKILL'); } catch(e){} try { fs.unlinkSync(tmpFile); } catch(e){}
+                    if (!responded) { responded = true; try { process.kill(-child.pid, 'SIGKILL'); } catch(e){} try { fs.unlinkSync(tmpFile); } catch(e){}
                       resolve({exitCode:-1, output:out.trim(), stderr:err.trim()||'Force killed', timedOut:true}); }
-                  }, timeout + 5000);
+                  }, parseInt(timeout) + 5000);
                   child.stdout.on('data', d => out += d.toString());
                   child.stderr.on('data', d => err += d.toString());
                   child.on('close', code => { clearTimeout(timer); clearTimeout(safetyTimer); if(!responded){responded=true; fs.unlink(tmpFile,()=>{}); resolve({exitCode:code, output:out.trim(), stderr:err.trim(), timedOut});} });
@@ -284,7 +311,16 @@ spec:
                   req.on('data', c => body+=c);
                   req.on('end', async () => {
                     try {
-                      const {prompt, cwd, timeout} = JSON.parse(body);
+                      let parsed = JSON.parse(body);
+                      // n8n HTTP Request node (keypair) sends {parameters: [{name, value}]}
+                      if (parsed.parameters && Array.isArray(parsed.parameters)) {
+                        const flat = {};
+                        for (const param of parsed.parameters) {
+                          if (param.name) flat[param.name] = param.value;
+                        }
+                        parsed = flat;
+                      }
+                      const {prompt, cwd, timeout} = parsed;
                       if (!prompt) return json(res,400,{error:'prompt is required'});
                       console.log('[wrapper] execute:', JSON.stringify({length:prompt.length, preview:prompt.substring(0,80)}));
                       let r;
@@ -316,6 +352,12 @@ spec:
               value: {{ .Values.wrapper.base_url | default "https://coding.dashscope.aliyuncs.com/apps/anthropic" | quote }}
             - name: ANTHROPIC_MODEL
               value: {{ .Values.wrapper.model | default "qwen3.6-plus" | quote }}
+            - name: HTTP_PROXY
+              value: "http://192.168.50.53:7890"
+            - name: HTTPS_PROXY
+              value: "http://192.168.50.53:7890"
+            - name: NO_PROXY
+              value: "localhost,127.0.0.1,.svc.cluster.local,gitea-http.sisyphus.svc.cluster.local,postgres-shared-postgresql.sisyphus.svc.cluster.local,vibe-kanban.sisyphus.svc.cluster.local,n8n.sisyphus.svc.cluster.local"
           envFrom:
             - secretRef:
                 name: claude-api-key
@@ -325,14 +367,16 @@ spec:
               protocol: TCP
           resources:
             limits:
-              cpu: 2000m
-              memory: 4Gi
+              cpu: {{ .Values.wrapper.resources.limits.cpu | default "1000m" }}
+              memory: {{ .Values.wrapper.resources.limits.memory | default "1Gi" }}
             requests:
-              cpu: 100m
-              memory: 256Mi
+              cpu: {{ .Values.wrapper.resources.requests.cpu | default "100m" }}
+              memory: {{ .Values.wrapper.resources.requests.memory | default "256Mi" }}
           volumeMounts:
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
+            - name: worktrees
+              mountPath: /var/tmp/vibe-kanban
             {{- if .Values.projects.enabled }}
             - name: projects
               mountPath: /projects
@@ -343,6 +387,8 @@ spec:
             {{- end }}
         {{- end }}
       volumes:
+        - name: worktrees
+          emptyDir: {}
         - name: data
           {{- if .Values.persistence.enabled }}
           persistentVolumeClaim:

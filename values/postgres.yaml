@@ -7,3 +7,32 @@ primary:
   persistence:
     enabled: true
     size: 5Gi
+
+  # 资源限制（防止拖垮宿主机）
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+  # 延长 probe，避免 crash recovery 期间被杀
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 60
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 10
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+
+  # 开发/测试环境关闭 fsync 加速 recovery
+  postgresqlExtendedConf:
+    fsync: "off"
+    fullPageWrites: "off"
+    synchronousCommit: "off"

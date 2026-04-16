@@ -45,3 +45,12 @@ service:
 
 image:
   pullPolicy: IfNotPresent
+
+# 资源限制（防止拖垮宿主机）
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 1Gi

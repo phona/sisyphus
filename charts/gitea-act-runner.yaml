@@ -25,9 +25,9 @@ spec:
               if [ ! -f .runner ]; then
                 act_runner register \
                   --instance http://gitea-http.sisyphus.svc.cluster.local:3000 \
-                  --token "5Da4TpkD2r7PqXdmePRr8qbiB8fHTwZlKkKLedE9" \
+                  --token "Cfcb3DhAQcQ05xuJr7G9iVCGRY1rB2Xbt516ENMe" \
                   --name kind-runner \
-                  --labels self-hosted:docker://alpine:latest
+                  --labels self-hosted:docker://node:20
               fi
               echo "Registration done"
           volumeMounts:

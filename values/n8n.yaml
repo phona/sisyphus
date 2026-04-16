@@ -38,8 +38,8 @@ main:
     enabled: true
     size: 5Gi
     accessMode: ReadWriteOnce
-  
-  # 额外环境变量 - 必须是 list 格式
+
+  # 额外环境变量 - chart 要求 table/map 格式
   extraEnvVars:
     N8N_BASIC_AUTH_ACTIVE: "true"
     N8N_BASIC_AUTH_USER: "admin"
@@ -49,15 +49,50 @@ main:
     OPENAI_BASE_URL: "https://api.siliconflow.cn/v1"
     OPENAI_MODEL: "Pro/deepseek-ai/DeepSeek-V3.2"
     N8N_SECURE_COOKIE: "false"
-  
-  # 资源限制（可选，根据实际需要调整）
+    # 确保 task runner 能找到 shell
+    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    # 延长工作流执行超时（MCP 流程可能超过 10 分钟）
+    EXECUTIONS_TIMEOUT: "3600"
+    EXECUTIONS_TIMEOUT_MAX: "3600"
+    # 延长 task runner 请求超时（code 节点默认 60s 太短，P3 实现可能需要 20+ 分钟）
+    N8N_RUNNERS_TASK_REQUEST_TIMEOUT: "1800"
+    # 代理配置
+    HTTP_PROXY: "http://192.168.50.53:7890"
+    HTTPS_PROXY: "http://192.168.50.53:7890"
+    NO_PROXY: "localhost,127.0.0.1,.svc.cluster.local,gitea-http.sisyphus.svc.cluster.local,postgres-shared-postgresql.sisyphus.svc.cluster.local,vibe-kanban.sisyphus.svc.cluster.local,n8n.sisyphus.svc.cluster.local"
+
+  # 资源限制（长执行需要更多资源）
   resources:
     requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 500m
+      cpu: 200m
       memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+  # 延长 probe，避免 kind 资源紧张时超时重启
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+  readinessProbe:
+    httpGet:
+      path: /healthz/readiness
+      port: http
+    initialDelaySeconds: 15
+    periodSeconds: 5
+    timeoutSeconds: 5
+    failureThreshold: 6
+
+# taskRunners 配置：n8n:latest (2.16.0) 不包含 task-runner-launcher，必须使用 internal
+taskRunners:
+  mode: internal
+  taskTimeout: 300
+  maxConcurrency: 3
 
 # 服务模式（使用 ClusterIP，通过 telepresence 访问）
 service:

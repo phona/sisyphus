@@ -21,14 +21,14 @@ WORKDIR /app
 # 从 installer 阶段复制 Claude 二进制文件
 COPY --from=claude-installer /root/.local/bin/claude /usr/local/bin/claude
 
-# 安装 git (Claude CLI 需要)
-RUN apk add --no-cache git
+# 安装 git (Claude CLI 需要) 和 bash (Claude Bash tool 需要)
+RUN apk add --no-cache git bash
 
 # 安装 vibe-kanban 并在构建时预下载二进制文件
 # 需要启动服务触发下载，然后复制缓存目录
 RUN npm install -g vibe-kanban \
     && mkdir -p /root/.vibe-kanban \
-    && timeout 60 sh -c 'npx vibe-kanban & sleep 15 && kill %1' || true
+    && timeout 300 sh -c 'npx vibe-kanban & sleep 60 && kill %1' || true
 
 # 创建数据目录
 RUN mkdir -p /data

@@ -5,8 +5,64 @@ image:
   tag: claude-test
   pullPolicy: IfNotPresent
 
-# 使用镜像内置的 CMD，不覆盖
-command: []
+# 覆盖启动命令：持久化 SQLite + 自动 seed repo
+command:
+  - sh
+  - -c
+  - |
+    mkdir -p /data/vibe-kanban-data
+    mkdir -p /root/.local/share
+    rm -rf /root/.local/share/vibe-kanban
+    ln -s /data/vibe-kanban-data /root/.local/share/vibe-kanban
+
+    # 后台启动 vibe-kanban
+    npm exec vibe-kanban &
+    VK_PID=$!
+
+    # 等待 API 就绪并 seed repo
+    for i in $(seq 1 60); do
+      if node -e "
+        const http = require('http');
+        const req = http.request({hostname:'localhost',port:3000,path:'/api/repos',method:'GET'}, (res) => {
+          let body = '';
+          res.on('data', c => body += c);
+          res.on('end', () => {
+            try {
+              const data = JSON.parse(body);
+              const repos = data.data || [];
+              const found = repos.find(r => r.name === 'ttpos-server-go');
+              if (found) { console.log('EXISTS'); process.exit(0); }
+            } catch(e) {}
+            console.log('MISSING'); process.exit(1);
+          });
+        });
+        req.on('error', () => { console.log('ERROR'); process.exit(1); });
+        req.end();
+      " 2>/dev/null | grep -q EXISTS; then
+        echo "Repo ttpos-server-go already exists."
+        break
+      fi
+
+      if [ $i -eq 1 ] || [ $i -eq 30 ] || [ $i -eq 60 ]; then
+        echo "Seeding ttpos-server-go repo (attempt $i/60)..."
+        node -e "
+          const http = require('http');
+          const data = JSON.stringify({path:'/projects/ttpos-server-go',name:'ttpos-server-go',display_name:'ttpos-server-go'});
+          const req = http.request({hostname:'localhost',port:3000,path:'/api/repos',method:'POST',headers:{'Content-Type':'application/json','Content-Length':data.length}}, (res) => {
+            let body = '';
+            res.on('data', c => body += c);
+            res.on('end', () => console.log('SEED_RESULT:', res.statusCode, body));
+          });
+          req.on('error', e => console.log('SEED_ERROR:', e.message));
+          req.write(data);
+          req.end();
+        " 2>/dev/null | grep -q "SEED_RESULT: 200" && break
+      fi
+      sleep 2
+    done
+
+    # 等待 vibe-kanban 主进程
+    wait $VK_PID
 args: []
 
 service:
@@ -75,3 +131,19 @@ persistence:
   size: 5Gi
   accessMode: ReadWriteOnce
   mountPath: /data
+
+# Wrapper 资源限制（防止拖垮宿主机）
+wrapper:
+  enabled: true
+  port: 3005
+  defaultCwd: /projects/ttpos-server-go
+  timeout: 1500000
+  base_url: "https://coding.dashscope.aliyuncs.com/apps/anthropic"
+  model: "qwen3.6-plus"
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
