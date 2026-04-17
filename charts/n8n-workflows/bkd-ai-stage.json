@@ -35,7 +35,7 @@
       "id": "parse_session",
       "name": "Parse Session",
       "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "typeVersion": 1,
       "position": [640, 400],
       "parameters": {
         "jsCode": "const resp = $input.first().json;\nconst input = $node['Execute Workflow Trigger'].json;\n\n// Extract session ID from response headers\nlet sessionId = '';\nconst headers = resp.headers || {};\nsessionId = headers['mcp-session-id'] || headers['Mcp-Session-Id'] || '';\n\n// Parse SSE body to get data\nlet body = resp.body || resp.data || resp;\nif (typeof body === 'string' && body.includes('data:')) {\n  const lines = body.split('\\n').filter(l => l.startsWith('data:'));\n  if (lines.length > 0) {\n    try { body = JSON.parse(lines[lines.length - 1].replace('data: ', '')); } catch(e) {}\n  }\n}\n\nreturn [{\n  json: {\n    _session_id: sessionId,\n    _bkd_url: 'https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp',\n    _coder_token: 'GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn',\n    projectId: input.projectId || 'ttposhwt',\n    title: input.title,\n    prompt: input.prompt,\n    engineType: input.engineType || 'claude-code',\n    tags: input.tags || [],\n    timeoutMs: input.timeoutMs || 900000,\n    useWorktree: input.useWorktree !== false,\n    _input: input\n  }\n}];"
@@ -69,7 +69,7 @@
       "id": "parse_issue_id",
       "name": "Parse Issue ID",
       "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "typeVersion": 1,
       "position": [1080, 400],
       "parameters": {
         "jsCode": "const ctx = $node['Parse Session'].json;\nconst raw = $input.first().json;\n\n// Parse SSE response\nlet respData = raw;\nif (typeof raw === 'string' || (typeof raw.data === 'string')) {\n  const str = typeof raw === 'string' ? raw : raw.data;\n  const lines = str.split('\\n').filter(l => l.startsWith('data:'));\n  if (lines.length > 0) {\n    try { respData = JSON.parse(lines[lines.length - 1].replace('data: ', '')); } catch(e) {}\n  }\n}\n\nlet issueData = {};\ntry {\n  const text = respData.result?.content?.[0]?.text || '{}';\n  issueData = typeof text === 'string' ? JSON.parse(text) : text;\n} catch(e) {\n  issueData = respData;\n}\n\nreturn [{\n  json: {\n    ...ctx,\n    issueId: issueData.id || issueData.issueId,\n    _poll_start: Date.now(),\n    _poll_count: 0\n  }\n}];"
@@ -162,7 +162,7 @@
       "id": "parse_status",
       "name": "Parse Status",
       "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "typeVersion": 1,
       "position": [2180, 400],
       "parameters": {
         "jsCode": "const raw = $input.first().json;\nconst ctx = $node['Parse Issue ID'].json;\n\n// Parse SSE\nlet respData = raw;\nif (typeof raw === 'string' || (typeof raw.data === 'string')) {\n  const str = typeof raw === 'string' ? raw : raw.data;\n  const lines = str.split('\\n').filter(l => l.startsWith('data:'));\n  if (lines.length > 0) {\n    try { respData = JSON.parse(lines[lines.length - 1].replace('data: ', '')); } catch(e) {}\n  }\n}\n\nlet issue = {};\ntry {\n  const text = respData.result?.content?.[0]?.text || '{}';\n  issue = typeof text === 'string' ? JSON.parse(text) : text;\n} catch(e) {\n  issue = respData;\n}\n\nconst status = issue.statusId || issue.status || 'unknown';\nconst elapsed = Date.now() - ctx._poll_start;\nconst pollCount = (ctx._poll_count || 0) + 1;\n\nreturn [{\n  json: {\n    ...ctx,\n    _status: status,\n    _still_working: (status === 'working'),\n    _timed_out: (elapsed >= ctx.timeoutMs),\n    _poll_count: pollCount,\n    _elapsed_ms: elapsed\n  }\n}];"
@@ -224,7 +224,7 @@
       "id": "timeout_result",
       "name": "Timeout Result",
       "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "typeVersion": 1,
       "position": [3060, 200],
       "parameters": {
         "jsCode": "const ctx = $node['Parse Issue ID'].json;\nreturn [{\n  json: {\n    success: false,\n    issueId: ctx.issueId,\n    error: 'Stage timed out after ' + Math.round(ctx.timeoutMs / 1000) + 's',\n    output: null,\n    _input: ctx._input\n  }\n}];"
@@ -258,7 +258,7 @@
       "id": "parse_result",
       "name": "Parse Result",
       "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "typeVersion": 1,
       "position": [2840, 550],
       "parameters": {
         "jsCode": "const raw = $input.first().json;\nconst ctx = $node['Parse Issue ID'].json;\n\n// Parse SSE\nlet respData = raw;\nif (typeof raw === 'string' || (typeof raw.data === 'string')) {\n  const str = typeof raw === 'string' ? raw : raw.data;\n  const lines = str.split('\\n').filter(l => l.startsWith('data:'));\n  if (lines.length > 0) {\n    try { respData = JSON.parse(lines[lines.length - 1].replace('data: ', '')); } catch(e) {}\n  }\n}\n\nlet logs = {};\ntry {\n  const text = respData.result?.content?.[0]?.text || '{}';\n  logs = typeof text === 'string' ? JSON.parse(text) : text;\n} catch(e) {\n  logs = respData;\n}\n\nlet output = null;\nlet success = false;\nconst entries = logs.entries || logs.messages || [];\nfor (let i = entries.length - 1; i >= 0; i--) {\n  const entry = entries[i];\n  const content = entry.content || entry.text || '';\n  if (entry.role === 'assistant' || entry.type === 'assistant-message') {\n    const jsonMatch = content.match(/\\{[\\s\\S]*\\}/);\n    if (jsonMatch) {\n      try {\n        output = JSON.parse(jsonMatch[0]);\n        success = output.success === true || output.accepted === true;\n      } catch(e) {\n        output = content;\n      }\n    } else {\n      output = content;\n    }\n    break;\n  }\n}\n\nconst sessionStatus = logs.sessionStatus || ctx._status;\nif (sessionStatus === 'failed' || sessionStatus === 'cancelled') {\n  success = false;\n}\n\nreturn [{\n  json: {\n    success: success,\n    issueId: ctx.issueId,\n    sessionStatus: sessionStatus,\n    output: output,\n    error: success ? null : (output?.error_summary || output?.error || 'Stage failed'),\n    _input: ctx._input\n  }\n}];"
