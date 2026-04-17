@@ -1,0 +1,706 @@
+{
+  "name": "V2 Main Orchestration",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 400],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "v2-orchestration",
+        "responseMode": "responseNode"
+      }
+    },
+    {
+      "id": "parse_request",
+      "name": "Parse Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 400],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nreturn [{\n  json: {\n    req_id: body.req_id,\n    title: body.title,\n    description: body.description || '',\n    scope: body.scope || 'server-go',\n    round: 0,\n    total_tokens: 0,\n    start_time: Date.now(),\n    max_rounds: 3,\n    max_duration_ms: 3600000,\n    max_tokens: 500000\n  }\n}];"
+      }
+    },
+    {
+      "id": "p0_contract",
+      "name": "P0: Contract Design",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [700, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "http://vibe-kanban.sisyphus.svc.cluster.local:3005/execute",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"prompt\": \"You are working on requirement {{ $json.req_id }}: {{ $json.title }}.\\n\\nDescription: {{ $json.description }}\\n\\nScope: {{ $json.scope }}\\n\\nTask: Design the API contract for this requirement.\\n- Define endpoint paths, methods, request/response schemas\\n- Output as contract.spec.yaml\\n- Save to the worktree\",\n  \"timeout\": 300000\n}",
+        "options": {
+          "timeout": 360000
+        }
+      }
+    },
+    {
+      "id": "p0_check",
+      "name": "P0 Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [950, 400],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success !== false }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "p0_failed",
+      "name": "P0 Failed - Escalate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1150, 600],
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nreturn [{\n  json: {\n    status: 'p0_failed',\n    req_id: input.req_id || $node['Parse Request'].json.req_id,\n    message: 'P0 contract design failed, escalating to human',\n    error: input.error || 'Unknown error'\n  }\n}];"
+      }
+    },
+    {
+      "id": "p1_spec_split",
+      "name": "P1: Spec Split + Lock Acceptance",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1150, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "http://vibe-kanban.sisyphus.svc.cluster.local:3005/execute",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"prompt\": \"Requirement {{ $node['Parse Request'].json.req_id }}: {{ $node['Parse Request'].json.title }}\\n\\nTask: Split the contract into three specs:\\n1. dev.spec.md - implementation details and unit test requirements\\n2. contract.spec.yaml - API schema validation rules\\n3. ac.spec.yaml - acceptance test scenarios (Given/When/Then)\\n\\nIMPORTANT: The ac.spec.yaml is LOCKED after this step. It must not be modified by the AI during development. It serves as the acceptance criteria.\",\n  \"timeout\": 300000\n}",
+        "options": {
+          "timeout": 360000
+        }
+      }
+    },
+    {
+      "id": "p1_check",
+      "name": "P1 Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1400, 400],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success !== false }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "p1_failed",
+      "name": "P1 Failed - Escalate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1600, 600],
+      "parameters": {
+        "jsCode": "const req = $node['Parse Request'].json;\nreturn [{\n  json: {\n    status: 'p1_failed',\n    req_id: req.req_id,\n    message: 'P1 spec split failed, escalating to human'\n  }\n}];"
+      }
+    },
+    {
+      "id": "conflict_precheck",
+      "name": "Conflict Pre-check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1600, 400],
+      "parameters": {
+        "jsCode": "// TODO: Check if target files are occupied by other active tasks\n// For now, pass through - implement when parallel tasks are running\nconst req = $node['Parse Request'].json;\nreturn [{\n  json: {\n    ...req,\n    conflict_check: 'passed',\n    conflicting_files: []\n  }\n}];"
+      }
+    },
+    {
+      "id": "conflict_found",
+      "name": "Conflict Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1850, 400],
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.conflicting_files.length }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "queue_wait",
+      "name": "Queue - Wait for Conflict Resolution",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [2100, 300],
+      "parameters": {
+        "unit": "seconds",
+        "amount": 60
+      }
+    },
+    {
+      "id": "concurrency_check",
+      "name": "Concurrency Pool Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2100, 500],
+      "parameters": {
+        "jsCode": "// TODO: Query active namespace count from cluster state\n// For now, assume pool is available\nconst maxConcurrent = 3;\nconst activeNamespaces = 0; // Replace with actual kubectl query\nreturn [{\n  json: {\n    pool_available: activeNamespaces < maxConcurrent,\n    active_count: activeNamespaces,\n    max_concurrent: maxConcurrent\n  }\n}];"
+      }
+    },
+    {
+      "id": "pool_available",
+      "name": "Pool Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2350, 500],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.pool_available }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "pool_queue",
+      "name": "Queue - Wait for Pool Slot",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [2600, 400],
+      "parameters": {
+        "unit": "seconds",
+        "amount": 30
+      }
+    },
+    {
+      "id": "dispatch_ai",
+      "name": "Dispatch: AI Code + Push + Test",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [2600, 600],
+      "parameters": {
+        "method": "POST",
+        "url": "http://vibe-kanban.sisyphus.svc.cluster.local:3005/execute",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"prompt\": \"Requirement {{ $node['Parse Request'].json.req_id }}: {{ $node['Parse Request'].json.title }}\\nRound: {{ $node['Parse Request'].json.round + 1 }}\\n\\nTask: Implement the feature based on dev.spec.md, then verify in debug environment.\\n\\nSteps:\\n1. Write code in worktree based on dev.spec.md\\n2. Use skill for small orchestration (split files, generate tests, self-check)\\n3. git push the changes\\n4. Use aissh MCP to control the debug environment:\\n   a. git pull the latest code\\n   b. Setup dependencies (DB, backend, frontend)\\n   c. Run layered verification:\\n      - L0: Static check (lint, type check, compile)\\n      - L1: Unit tests\\n      - L2: Contract tests (API schema validation)\\n      - L3: Deploy services + Integration tests\\n   d. Return results for each layer\\n5. Report results back\\n\\nReturn JSON: { success: bool, layer_results: { l0: {passed, log}, l1: {passed, log}, l2: {passed, log}, l3: {passed, log} }, tokens_used: number, failed_layer: string|null, error_summary: string|null }\",\n  \"timeout\": 1500000\n}",
+        "options": {
+          "timeout": 1800000
+        }
+      }
+    },
+    {
+      "id": "collect_result",
+      "name": "Collect Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2900, 600],
+      "parameters": {
+        "jsCode": "const result = $input.first().json;\nconst state = $node['Parse Request'].json;\nconst elapsed = Date.now() - state.start_time;\nconst tokens = (state.total_tokens || 0) + (result.tokens_used || 0);\n\nreturn [{\n  json: {\n    req_id: state.req_id,\n    title: state.title,\n    scope: state.scope,\n    round: state.round + 1,\n    total_tokens: tokens,\n    start_time: state.start_time,\n    elapsed_ms: elapsed,\n    max_rounds: state.max_rounds,\n    max_duration_ms: state.max_duration_ms,\n    max_tokens: state.max_tokens,\n    success: result.success === true,\n    layer_results: result.layer_results || {},\n    failed_layer: result.failed_layer || null,\n    error_summary: result.error_summary || null\n  }\n}];"
+      }
+    },
+    {
+      "id": "all_passed",
+      "name": "All Tests Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [3150, 600],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "circuit_breaker",
+      "name": "Circuit Breaker Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3400, 800],
+      "parameters": {
+        "jsCode": "const s = $input.first().json;\nconst tripped = (\n  s.round >= s.max_rounds ||\n  s.elapsed_ms >= s.max_duration_ms ||\n  s.total_tokens >= s.max_tokens\n);\nconst reason = [];\nif (s.round >= s.max_rounds) reason.push(`rounds ${s.round}/${s.max_rounds}`);\nif (s.elapsed_ms >= s.max_duration_ms) reason.push(`time ${Math.round(s.elapsed_ms/1000)}s/${s.max_duration_ms/1000}s`);\nif (s.total_tokens >= s.max_tokens) reason.push(`tokens ${s.total_tokens}/${s.max_tokens}`);\n\nreturn [{\n  json: {\n    ...s,\n    breaker_tripped: tripped,\n    breaker_reason: reason.join(', ') || 'none'\n  }\n}];"
+      }
+    },
+    {
+      "id": "breaker_tripped",
+      "name": "Breaker Tripped?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [3650, 800],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.breaker_tripped }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "escalate_human",
+      "name": "Escalate to Human",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3900, 700],
+      "parameters": {
+        "jsCode": "const s = $input.first().json;\n// TODO: Create Issue via vibe-kanban API for human escalation\nreturn [{\n  json: {\n    status: 'breaker_tripped',\n    req_id: s.req_id,\n    title: s.title,\n    round: s.round,\n    total_tokens: s.total_tokens,\n    elapsed_ms: s.elapsed_ms,\n    breaker_reason: s.breaker_reason,\n    failed_layer: s.failed_layer,\n    error_summary: s.error_summary,\n    message: 'Circuit breaker tripped. Escalating to human. Debug namespace preserved for investigation.'\n  }\n}];"
+      }
+    },
+    {
+      "id": "create_sub_issue",
+      "name": "Create Sub-Issue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3900, 900],
+      "parameters": {
+        "jsCode": "const s = $input.first().json;\n// TODO: Create sub-issue via vibe-kanban API with:\n// - failed layer, error summary, round number, token usage, elapsed time\nreturn [{\n  json: {\n    ...s,\n    sub_issue_created: true,\n    sub_issue_title: `[${s.req_id}] Round ${s.round} failed at ${s.failed_layer}: ${s.error_summary}`\n  }\n}];"
+      }
+    },
+    {
+      "id": "update_state_for_retry",
+      "name": "Update State for Retry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4150, 900],
+      "parameters": {
+        "jsCode": "// Pass updated state back to dispatch loop\nconst s = $input.first().json;\nreturn [{\n  json: {\n    req_id: s.req_id,\n    title: s.title,\n    description: s.description || '',\n    scope: s.scope,\n    round: s.round,\n    total_tokens: s.total_tokens,\n    start_time: s.start_time,\n    max_rounds: s.max_rounds,\n    max_duration_ms: s.max_duration_ms,\n    max_tokens: s.max_tokens\n  }\n}];"
+      }
+    },
+    {
+      "id": "close_issue",
+      "name": "Close Issue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3400, 500],
+      "parameters": {
+        "jsCode": "const s = $input.first().json;\n// TODO: Close the requirement issue via vibe-kanban API\nreturn [{\n  json: {\n    ...s,\n    issue_closed: true\n  }\n}];"
+      }
+    },
+    {
+      "id": "serial_merge_window",
+      "name": "Serial Merge Window",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3650, 500],
+      "parameters": {
+        "jsCode": "// TODO: Check merge queue, wait if another PR is merging\n// For now, pass through\nconst s = $input.first().json;\nreturn [{\n  json: {\n    ...s,\n    merge_slot_acquired: true\n  }\n}];"
+      }
+    },
+    {
+      "id": "create_pr",
+      "name": "Create PR on GitHub",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [3900, 500],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.github.com/repos/OWNER/REPO/pulls",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"title\": \"{{ $json.req_id }}: {{ $json.title }}\",\n  \"head\": \"feat/{{ $json.req_id }}\",\n  \"base\": \"main\",\n  \"body\": \"## Summary\\n\\nAI-generated implementation for {{ $json.req_id }}.\\n\\n- Rounds: {{ $json.round }}\\n- Tokens: {{ $json.total_tokens }}\\n- Elapsed: {{ Math.round($json.elapsed_ms / 1000) }}s\"\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "token GITHUB_TOKEN"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.github.v3+json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "wait_ci",
+      "name": "Wait for CI",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [4150, 500],
+      "parameters": {
+        "unit": "seconds",
+        "amount": 120
+      }
+    },
+    {
+      "id": "check_ci",
+      "name": "Check CI Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [4400, 500],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/repos/OWNER/REPO/commits/{{ $node['Create PR on GitHub'].json.head.sha }}/check-runs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "token GITHUB_TOKEN"
+            },
+            {
+              "name": "Accept",
+              "value": "application/vnd.github.v3+json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "ci_passed",
+      "name": "CI Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [4650, 500],
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.check_runs?.[0]?.conclusion || 'pending' }}",
+              "value2": "success"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ci_still_running",
+      "name": "CI Still Running?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [4900, 600],
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.check_runs?.[0]?.status || 'queued' }}",
+              "operation": "notEqual",
+              "value2": "completed"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ci_wait_more",
+      "name": "Wait More for CI",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [5150, 500],
+      "parameters": {
+        "unit": "seconds",
+        "amount": 60
+      }
+    },
+    {
+      "id": "classify_ci_failure",
+      "name": "Classify CI Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5150, 700],
+      "parameters": {
+        "jsCode": "const ci = $input.first().json;\n// TODO: Compare failed test names against known flaky test list\n// For now, treat all as real failures\nconst failedTests = ci.check_runs?.filter(r => r.conclusion === 'failure') || [];\nconst isFlaky = false; // Replace with actual flaky detection logic\n\nreturn [{\n  json: {\n    is_flaky: isFlaky,\n    failed_tests: failedTests.map(t => t.name),\n    ci_conclusion: ci.check_runs?.[0]?.conclusion || 'unknown'\n  }\n}];"
+      }
+    },
+    {
+      "id": "is_flaky",
+      "name": "Is Flaky?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [5400, 700],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.is_flaky }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ci_retry",
+      "name": "Retry CI (Flaky)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [5650, 600],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.github.com/repos/OWNER/REPO/actions/runs/{{ $node['Check CI Status'].json.check_runs?.[0]?.id }}/rerun",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "token GITHUB_TOKEN"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "ci_real_failure",
+      "name": "CI Real Failure - Sub-Issue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5650, 800],
+      "parameters": {
+        "jsCode": "const ci = $input.first().json;\nconst state = $node['Collect Result'].json;\n// TODO: Create sub-issue for CI failure via vibe-kanban API\nreturn [{\n  json: {\n    ...state,\n    ci_failed: true,\n    failed_tests: ci.failed_tests,\n    sub_issue_title: `[${state.req_id}] CI failed: ${ci.failed_tests.join(', ')}`\n  }\n}];"
+      }
+    },
+    {
+      "id": "trigger_acceptance",
+      "name": "Trigger Acceptance Test",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [4900, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "http://vibe-kanban.sisyphus.svc.cluster.local:3005/execute",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"prompt\": \"You are an independent acceptance tester. You have NO context from the development process.\\n\\nRequirement: {{ $node['Parse Request'].json.req_id }} - {{ $node['Parse Request'].json.title }}\\n\\nTask:\\n1. Read the LOCKED ac.spec.yaml for this requirement\\n2. Use aissh MCP to setup a clean environment (new or reuse namespace)\\n3. Deploy the full service stack\\n4. Execute each Given/When/Then scenario\\n5. Record evidence (response bodies, status codes, screenshots if UI)\\n6. Generate acceptance report\\n\\nReturn JSON: { accepted: bool, scenarios_total: number, scenarios_passed: number, report: string, evidence: [] }\",\n  \"timeout\": 600000\n}",
+        "options": {
+          "timeout": 660000
+        }
+      }
+    },
+    {
+      "id": "acceptance_passed",
+      "name": "Acceptance Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [5150, 400],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.accepted === true }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "acceptance_failed",
+      "name": "Acceptance Failed - Sub-Issue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5400, 500],
+      "parameters": {
+        "jsCode": "const ac = $input.first().json;\nconst state = $node['Collect Result'].json;\n// TODO: Create sub-issue for acceptance failure\nreturn [{\n  json: {\n    ...state,\n    acceptance_failed: true,\n    scenarios_passed: ac.scenarios_passed,\n    scenarios_total: ac.scenarios_total,\n    sub_issue_title: `[${state.req_id}] Acceptance failed: ${ac.scenarios_passed}/${ac.scenarios_total} scenarios passed`\n  }\n}];"
+      }
+    },
+    {
+      "id": "respond_success",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [5400, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"success\",\n  \"req_id\": \"{{ $node['Parse Request'].json.req_id }}\",\n  \"title\": \"{{ $node['Parse Request'].json.title }}\",\n  \"rounds\": {{ $node['Collect Result'].json.round }},\n  \"total_tokens\": {{ $node['Collect Result'].json.total_tokens }},\n  \"elapsed_ms\": {{ $node['Collect Result'].json.elapsed_ms }},\n  \"message\": \"Feature implemented, CI passed, acceptance passed. Ready for code review.\"\n}"
+      }
+    },
+    {
+      "id": "respond_escalated",
+      "name": "Respond Escalated",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [5400, 100],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($input.first().json) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [[{ "node": "Parse Request", "type": "main", "index": 0 }]]
+    },
+    "Parse Request": {
+      "main": [[{ "node": "P0: Contract Design", "type": "main", "index": 0 }]]
+    },
+    "P0: Contract Design": {
+      "main": [[{ "node": "P0 Succeeded?", "type": "main", "index": 0 }]]
+    },
+    "P0 Succeeded?": {
+      "main": [
+        [{ "node": "P1: Spec Split + Lock Acceptance", "type": "main", "index": 0 }],
+        [{ "node": "P0 Failed - Escalate", "type": "main", "index": 0 }]
+      ]
+    },
+    "P0 Failed - Escalate": {
+      "main": [[{ "node": "Respond Escalated", "type": "main", "index": 0 }]]
+    },
+    "P1: Spec Split + Lock Acceptance": {
+      "main": [[{ "node": "P1 Succeeded?", "type": "main", "index": 0 }]]
+    },
+    "P1 Succeeded?": {
+      "main": [
+        [{ "node": "Conflict Pre-check", "type": "main", "index": 0 }],
+        [{ "node": "P1 Failed - Escalate", "type": "main", "index": 0 }]
+      ]
+    },
+    "P1 Failed - Escalate": {
+      "main": [[{ "node": "Respond Escalated", "type": "main", "index": 0 }]]
+    },
+    "Conflict Pre-check": {
+      "main": [[{ "node": "Conflict Found?", "type": "main", "index": 0 }]]
+    },
+    "Conflict Found?": {
+      "main": [
+        [{ "node": "Queue - Wait for Conflict Resolution", "type": "main", "index": 0 }],
+        [{ "node": "Concurrency Pool Check", "type": "main", "index": 0 }]
+      ]
+    },
+    "Queue - Wait for Conflict Resolution": {
+      "main": [[{ "node": "Conflict Pre-check", "type": "main", "index": 0 }]]
+    },
+    "Concurrency Pool Check": {
+      "main": [[{ "node": "Pool Available?", "type": "main", "index": 0 }]]
+    },
+    "Pool Available?": {
+      "main": [
+        [{ "node": "Dispatch: AI Code + Push + Test", "type": "main", "index": 0 }],
+        [{ "node": "Queue - Wait for Pool Slot", "type": "main", "index": 0 }]
+      ]
+    },
+    "Queue - Wait for Pool Slot": {
+      "main": [[{ "node": "Concurrency Pool Check", "type": "main", "index": 0 }]]
+    },
+    "Dispatch: AI Code + Push + Test": {
+      "main": [[{ "node": "Collect Result", "type": "main", "index": 0 }]]
+    },
+    "Collect Result": {
+      "main": [[{ "node": "All Tests Passed?", "type": "main", "index": 0 }]]
+    },
+    "All Tests Passed?": {
+      "main": [
+        [{ "node": "Close Issue", "type": "main", "index": 0 }],
+        [{ "node": "Circuit Breaker Check", "type": "main", "index": 0 }]
+      ]
+    },
+    "Circuit Breaker Check": {
+      "main": [[{ "node": "Breaker Tripped?", "type": "main", "index": 0 }]]
+    },
+    "Breaker Tripped?": {
+      "main": [
+        [{ "node": "Escalate to Human", "type": "main", "index": 0 }],
+        [{ "node": "Create Sub-Issue", "type": "main", "index": 0 }]
+      ]
+    },
+    "Escalate to Human": {
+      "main": [[{ "node": "Respond Escalated", "type": "main", "index": 0 }]]
+    },
+    "Create Sub-Issue": {
+      "main": [[{ "node": "Update State for Retry", "type": "main", "index": 0 }]]
+    },
+    "Update State for Retry": {
+      "main": [[{ "node": "Dispatch: AI Code + Push + Test", "type": "main", "index": 0 }]]
+    },
+    "Close Issue": {
+      "main": [[{ "node": "Serial Merge Window", "type": "main", "index": 0 }]]
+    },
+    "Serial Merge Window": {
+      "main": [[{ "node": "Create PR on GitHub", "type": "main", "index": 0 }]]
+    },
+    "Create PR on GitHub": {
+      "main": [[{ "node": "Wait for CI", "type": "main", "index": 0 }]]
+    },
+    "Wait for CI": {
+      "main": [[{ "node": "Check CI Status", "type": "main", "index": 0 }]]
+    },
+    "Check CI Status": {
+      "main": [[{ "node": "CI Passed?", "type": "main", "index": 0 }]]
+    },
+    "CI Passed?": {
+      "main": [
+        [{ "node": "Trigger Acceptance Test", "type": "main", "index": 0 }],
+        [{ "node": "CI Still Running?", "type": "main", "index": 0 }]
+      ]
+    },
+    "CI Still Running?": {
+      "main": [
+        [{ "node": "Wait More for CI", "type": "main", "index": 0 }],
+        [{ "node": "Classify CI Failure", "type": "main", "index": 0 }]
+      ]
+    },
+    "Wait More for CI": {
+      "main": [[{ "node": "Check CI Status", "type": "main", "index": 0 }]]
+    },
+    "Classify CI Failure": {
+      "main": [[{ "node": "Is Flaky?", "type": "main", "index": 0 }]]
+    },
+    "Is Flaky?": {
+      "main": [
+        [{ "node": "Retry CI (Flaky)", "type": "main", "index": 0 }],
+        [{ "node": "CI Real Failure - Sub-Issue", "type": "main", "index": 0 }]
+      ]
+    },
+    "Retry CI (Flaky)": {
+      "main": [[{ "node": "Wait for CI", "type": "main", "index": 0 }]]
+    },
+    "CI Real Failure - Sub-Issue": {
+      "main": [[{ "node": "Update State for Retry", "type": "main", "index": 0 }]]
+    },
+    "Trigger Acceptance Test": {
+      "main": [[{ "node": "Acceptance Passed?", "type": "main", "index": 0 }]]
+    },
+    "Acceptance Passed?": {
+      "main": [
+        [{ "node": "Respond Success", "type": "main", "index": 0 }],
+        [{ "node": "Acceptance Failed - Sub-Issue", "type": "main", "index": 0 }]
+      ]
+    },
+    "Acceptance Failed - Sub-Issue": {
+      "main": [[{ "node": "Update State for Retry", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  }
+}
