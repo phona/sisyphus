@@ -54,7 +54,7 @@ main:
     # 延长工作流执行超时（MCP 流程可能超过 10 分钟）
     EXECUTIONS_TIMEOUT: "3600"
     EXECUTIONS_TIMEOUT_MAX: "3600"
-    # 延长 task runner 请求超时（code 节点默认 60s 太短，P3 实现可能需要 20+ 分钟）
+    # 延长 task runner 请求超时（code 节点默认 60s 太短，AI 代码生成可能需要 20+ 分钟）
     N8N_RUNNERS_TASK_REQUEST_TIMEOUT: "1800"
     # 代理配置
     HTTP_PROXY: "http://192.168.50.53:7890"

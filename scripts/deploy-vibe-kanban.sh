@@ -6,7 +6,7 @@ set -e
 
 NAMESPACE="${1:-sisyphus}"
 GITEA_USER="${2:-gitea_admin}"
-ITEA_PASS="${3:-admin123}"
+GITEA_PASS="${3:-admin123}"
 GITEA_URL="http://gitea-http.${NAMESPACE}.svc.cluster.local:3000"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -44,7 +44,7 @@ if ! kubectl get deployment gitea -n "$NAMESPACE" &>/dev/null; then
     kubectl create secret generic gitea-admin-secret \
         -n "$NAMESPACE" \
         --from-literal=username="$GITEA_USER" \
-        --from-literal=password="$ITEA_PASS" 2>/dev/null || true
+        --from-literal=password="$GITEA_PASS" 2>/dev/null || true
     
     helm upgrade --install gitea "${PROJECT_ROOT}/charts/gitea" \
         --namespace "$NAMESPACE" \
@@ -67,7 +67,7 @@ if ! kubectl get secret vibe-kanban-gitea -n "$NAMESPACE" &>/dev/null; then
     done
     
     echo "      创建 Gitea token..."
-    TOKEN_RESPONSE=$(kubectl exec -n "$NAMESPACE" deployment/gitea -- curl -s -u "$GITEA_USER:$ITEA_PASS" \
+    TOKEN_RESPONSE=$(kubectl exec -n "$NAMESPACE" deployment/gitea -- curl -s -u "$GITEA_USER:$GITEA_PASS" \
         -X POST "http://localhost:3000/api/v1/users/$GITEA_USER/tokens" \
         -H "Content-Type: application/json" \
         -d "{\"name\":\"vibe-kanban-$(date +%s)\",\"scopes\":[\"write:repository\"]}")
@@ -106,7 +106,7 @@ for project in ttpos-flutter ttpos-server-go; do
     fi
     
     echo "      推送 $project..."
-    "${SCRIPT_DIR}/push-to-gitea-api.sh" "$project" "$NAMESPACE" "$GITEA_USER" "$ITEA_PASS" 2>&1 | tail -3
+    "${SCRIPT_DIR}/push-to-gitea-api.sh" "$project" "$NAMESPACE" "$GITEA_USER" "$GITEA_PASS" 2>&1 | tail -3
 done
 
 echo "      所有项目已推送到 Gitea（流水线已触发）"

@@ -165,32 +165,23 @@ make deploy-vibe-kanban-local
 
 详细说明见 [docs/vibe-kanban-manual-build.md](docs/vibe-kanban-manual-build.md)
 
-## 🏗️ 分布式 CI 架构 (实验性)
+## 🏗️ V2 工作流架构
 
-本项目正在实验 **AI 驱动的分布式 CI 架构**：
+AI 驱动的无人值守开发平台，三环模型：
 
 ```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│   n8n       │───►│ vibe-kanban │───►│  测试机     │───►│   Gitea     │
-│  (调度器)    │    │ (开发机)    │    │ (卡点器)    │    │  (归档器)   │
-└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
-      │                   │                  │                  │
-      │ 流程控制           │ 写代码/修复       │ 跑测试/Lint      │ 存储代码/Issue
-      │                   │                  │                  │
-      └───────────────────┴──────────────────┴──────────────────┘
-                        6 阶段工作流
-           P0契约 → P1拆分 → P2并行 → P3TDD → P4质量 → P5验收 → P6发布
+开发环境（写代码+控制）→ 调试环境（验证）→ GitHub（最终门禁）
 ```
 
-**关键设计**：
-- **n8n**：流程调度，决策判断
-- **vibe-kanban**：调用 Claude MCP 写代码、修复
-- **测试机 (Act Runner)**：只跑测试，返回 PASS/FAIL
-- **Gitea**：代码和 Issue 归档
+- **开发环境**：AI 在 worktree 写代码，n8n 主编排，通过 aissh MCP 操控调试环境
+- **调试环境**：K8s namespace 隔离，分层验证（静态检查→单测→契约→集成）
+- **GitHub**：CI 全量一把梭 + 独立子 agent 验收测试
+
+**关键机制**：熔断、心跳、并发池、冲突预检、串行合并窗口、CI 失败分类
 
 **文档**：
-- [分布式 CI 架构设计](./docs/distributed-ci-architecture.md)
-- [实施与验证计划](./docs/implementation-plan.md)
+- [V2 架构设计](./docs/workflow-v2-architecture.md)（权威参考）
+- [n8n 主编排使用说明](./docs/n8n-workflow-usage.md)
 
 ## 🔧 CI/CD 工作流
 

@@ -455,7 +455,7 @@ jobs:
 
 ### 10.2 相关文档
 
-- [完整研发流程](./complete-development-workflow.md)
+- [V2 架构设计](./workflow-v2-architecture.md)
 - [API 生命周期管理](./api-lifecycle-management.md)
 - [Apifox 契约测试工作流](./workflow-apifox-contract-testing.md)
 
