@@ -1,5 +1,5 @@
 {
-  "name": "V2 Main Orchestration (BKD)",
+  "name": "V2 Main Orchestration (BKD MVP)",
   "nodes": [
     {
       "id": "trigger",
@@ -10,7 +10,8 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "v2-orchestration",
-        "responseMode": "responseNode"
+        "responseMode": "onReceived",
+        "options": { "responseCode": 202 }
       }
     },
     {
@@ -20,11 +21,11 @@
       "typeVersion": 2,
       "position": [420, 400],
       "parameters": {
-        "jsCode": "const body = $input.first().json.body || $input.first().json;\nreturn [{\n  json: {\n    req_id: body.req_id,\n    title: body.title,\n    description: body.description || '',\n    scope: body.scope || 'server-go',\n    round: 0,\n    total_tokens: 0,\n    start_time: Date.now(),\n    max_rounds: 3,\n    max_duration_ms: 3600000,\n    max_tokens: 500000\n  }\n}];"
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nreturn [{\n  json: {\n    req_id: body.req_id,\n    title: body.title,\n    description: body.description || '',\n    scope: body.scope || 'server-go',\n    repo: body.repo || '',\n    github_token: body.github_token || '',\n    bkd_issue_id: body.bkd_issue_id || '',\n    bkd_project_id: body.bkd_project_id || 'ttposhwt',\n    round: 0,\n    total_tokens: 0,\n    start_time: Date.now(),\n    max_rounds: 3,\n    max_duration_ms: 3600000,\n    max_tokens: 500000\n  }\n}];"
       }
     },
     {
-      "id": "mcp_init_main",
+      "id": "mcp_init",
       "name": "MCP: Init",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
@@ -51,24 +52,24 @@
       "name": "Parse Init",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [780, 400],
+      "position": [860, 400],
       "parameters": {
-        "jsCode": "const resp = $input.first().json;\nconst headers = resp.headers || {};\nconst sessionId = headers['mcp-session-id'] || headers['Mcp-Session-Id'] || '';\nreturn [{\n  json: {\n    ...$node['Parse Request'].json,\n    _session_id: sessionId,\n    _bkd_url: 'https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp',\n    _coder_token: 'GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn'\n  }\n}];"
+        "jsCode": "const resp = $input.first().json;\nconst headers = resp.headers || {};\nconst sessionId = headers['mcp-session-id'] || headers['Mcp-Session-Id'] || '';\nconst state = $node['Parse Request'].json;\nreturn [{\n  json: {\n    ...state,\n    _session_id: sessionId,\n    _bkd_url: 'https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp',\n    _coder_token: 'GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn'\n  }\n}];"
       }
     },
     {
-      "id": "check_capacity",
-      "name": "BKD: Check Capacity",
+      "id": "callback_start",
+      "name": "Callback: Started",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
-      "position": [920, 400],
+      "position": [1080, 400],
       "parameters": {
         "method": "POST",
         "url": "={{ $json._bkd_url }}",
         "sendBody": true,
         "contentType": "json",
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get-processes-capacity', arguments: {} } }) }}",
+        "jsonBody": "={{ JSON.stringify({ jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'follow-up-issue', arguments: { projectId: $json.bkd_project_id, issueId: $json.bkd_issue_id, prompt: '## 编排启动\\nn8n 已接收需求 ' + $json.req_id + ': ' + $json.title + '\\n开始执行 P0 合约设计...' } } }) }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -77,57 +78,8 @@
             { "name": "Mcp-Session-Id", "value": "={{ $json._session_id }}" }
           ]
         },
-        "options": { "timeout": 15000 }
-      }
-    },
-    {
-      "id": "parse_capacity",
-      "name": "Parse Capacity",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1060, 400],
-      "parameters": {
-        "jsCode": "const raw = $input.first().json;\nconst state = $node['Parse Init'].json;\n\n// Parse SSE\nlet respData = raw;\nif (typeof raw === 'string' || (typeof raw.data === 'string')) {\n  const str = typeof raw === 'string' ? raw : raw.data;\n  const lines = str.split('\\n').filter(l => l.startsWith('data:'));\n  if (lines.length > 0) {\n    try { respData = JSON.parse(lines[lines.length - 1].replace('data: ', '')); } catch(e) {}\n  }\n}\n\nlet data = {};\ntry {\n  const text = respData.result?.content?.[0]?.text || '{}';\n  data = typeof text === 'string' ? JSON.parse(text) : text;\n} catch(e) {\n  data = respData;\n}\nconst available = data.availableSlots || 0;\nreturn [{\n  json: {\n    ...state,\n    _available_slots: available,\n    _capacity_ok: available >= 2\n  }\n}];"
-      }
-    },
-    {
-      "id": "capacity_ok",
-      "name": "Capacity OK?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [1080, 400],
-      "parameters": {
-        "conditions": {
-          "boolean": [
-            {
-              "value1": "={{ $json._capacity_ok }}",
-              "value2": true
-            }
-          ]
-        }
-      }
-    },
-    {
-      "id": "wait_capacity",
-      "name": "Wait for Capacity",
-      "type": "n8n-nodes-base.wait",
-      "typeVersion": 1,
-      "position": [1300, 300],
-      "parameters": {
-        "unit": "seconds",
-        "amount": 60
-      }
-    },
-    {
-      "id": "p0_stage",
-      "name": "P0: Contract Design",
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1,
-      "position": [1300, 500],
-      "parameters": {
-        "source": "parameter",
-        "workflowId": "={{ $env.BKD_AI_STAGE_WORKFLOW_ID }}",
-        "options": {}
+        "options": { "timeout": 15000 },
+        "onError": "continueRegularOutput"
       }
     },
     {
@@ -135,9 +87,21 @@
       "name": "P0 Prepare",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1080, 500],
+      "position": [1300, 400],
       "parameters": {
-        "jsCode": "const s = $node['Parse Request'].json;\nreturn [{\n  json: {\n    projectId: 'ttposhwt',\n    title: '[' + s.req_id + '] P0 Contract Design',\n    prompt: 'Requirement ' + s.req_id + ': ' + s.title + '\\n\\nDescription: ' + s.description + '\\nScope: ' + s.scope + '\\n\\nTask: Design the API contract for this requirement.\\n- Define endpoint paths, methods, request/response schemas\\n- Output as contract.spec.yaml\\n- Save to the worktree\\n- When done, move issue to review status',\n    engineType: 'claude-code',\n    tags: ['p0', s.req_id],\n    timeoutMs: 900000,\n    useWorktree: true\n  }\n}];"
+        "jsCode": "const s = $node['Parse Init'].json;\nreturn [{\n  json: {\n    projectId: 'ttposhwt',\n    title: '[' + s.req_id + '] P0 Contract Design',\n    prompt: 'Requirement ' + s.req_id + ': ' + s.title + '\\n\\nDescription: ' + s.description + '\\nScope: ' + s.scope + '\\n\\nTask: Design the API contract for this requirement.\\n- Define endpoint paths, methods, request/response schemas\\n- Output as contract.spec.yaml\\n- Save to the worktree\\n- When done, move issue to review status',\n    engineType: 'claude-code',\n    tags: ['p0', s.req_id],\n    timeoutMs: 900000,\n    useWorktree: true\n  }\n}];"
+      }
+    },
+    {
+      "id": "p0_stage",
+      "name": "P0: Contract Design",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1520, 400],
+      "parameters": {
+        "source": "parameter",
+        "workflowId": "3xxaXcoNGb6glXmI",
+        "options": {}
       }
     },
     {
@@ -145,16 +109,38 @@
       "name": "P0 Succeeded?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [1520, 500],
+      "position": [1740, 400],
       "parameters": {
         "conditions": {
           "boolean": [
-            {
-              "value1": "={{ $json.success }}",
-              "value2": true
-            }
+            { "value1": "={{ $json.success }}", "value2": true }
           ]
         }
+      }
+    },
+    {
+      "id": "callback_p0_ok",
+      "name": "Callback: P0 Done",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1960, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $node['Parse Init'].json._bkd_url }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'follow-up-issue', arguments: { projectId: $node['Parse Init'].json.bkd_project_id, issueId: $node['Parse Init'].json.bkd_issue_id, prompt: '## P0 合约设计 ✅\\n开始执行 P1 Spec 拆分...' } } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/json, text/event-stream" },
+            { "name": "Coder-Session-Token", "value": "={{ $node['Parse Init'].json._coder_token }}" },
+            { "name": "Mcp-Session-Id", "value": "={{ $node['Parse Init'].json._session_id }}" }
+          ]
+        },
+        "options": { "timeout": 15000 },
+        "onError": "continueRegularOutput"
       }
     },
     {
@@ -162,9 +148,9 @@
       "name": "P1 Prepare",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1740, 500],
+      "position": [2180, 400],
       "parameters": {
-        "jsCode": "const s = $node['Parse Request'].json;\nreturn [{\n  json: {\n    projectId: 'ttposhwt',\n    title: '[' + s.req_id + '] P1 Spec Split',\n    prompt: 'Requirement ' + s.req_id + ': ' + s.title + '\\n\\nTask: Split the contract into three specs:\\n1. dev.spec.md - implementation details and unit test requirements\\n2. contract.spec.yaml - API schema validation rules\\n3. ac.spec.yaml - acceptance test scenarios (Given/When/Then)\\n\\nIMPORTANT: The ac.spec.yaml is LOCKED after this step. It must not be modified by the AI during development. It serves as the acceptance criteria.\\n\\nWhen done, move issue to review status.',\n    engineType: 'claude-code',\n    tags: ['p1', s.req_id],\n    timeoutMs: 900000,\n    useWorktree: true\n  }\n}];"
+        "jsCode": "const s = $node['Parse Init'].json;\nreturn [{\n  json: {\n    projectId: 'ttposhwt',\n    title: '[' + s.req_id + '] P1 Spec Split',\n    prompt: 'Requirement ' + s.req_id + ': ' + s.title + '\\n\\nTask: Split the contract into three specs:\\n1. dev.spec.md - implementation details and unit test requirements\\n2. contract.spec.yaml - API schema validation rules\\n3. ac.spec.yaml - acceptance test scenarios (Given/When/Then)\\n\\nIMPORTANT: The ac.spec.yaml is LOCKED after this step.\\n\\nWhen done, move issue to review status.',\n    engineType: 'claude-code',\n    tags: ['p1', s.req_id],\n    timeoutMs: 900000,\n    useWorktree: true\n  }\n}];"
       }
     },
     {
@@ -172,10 +158,10 @@
       "name": "P1: Spec Split",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1,
-      "position": [1960, 500],
+      "position": [2400, 400],
       "parameters": {
         "source": "parameter",
-        "workflowId": "={{ $env.BKD_AI_STAGE_WORKFLOW_ID }}",
+        "workflowId": "3xxaXcoNGb6glXmI",
         "options": {}
       }
     },
@@ -184,16 +170,38 @@
       "name": "P1 Succeeded?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [2180, 500],
+      "position": [2620, 400],
       "parameters": {
         "conditions": {
           "boolean": [
-            {
-              "value1": "={{ $json.success }}",
-              "value2": true
-            }
+            { "value1": "={{ $json.success }}", "value2": true }
           ]
         }
+      }
+    },
+    {
+      "id": "callback_p1_ok",
+      "name": "Callback: P1 Done",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [2840, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $node['Parse Init'].json._bkd_url }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'follow-up-issue', arguments: { projectId: $node['Parse Init'].json.bkd_project_id, issueId: $node['Parse Init'].json.bkd_issue_id, prompt: '## P1 Spec 拆分 ✅\\n开始执行开发实现...' } } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/json, text/event-stream" },
+            { "name": "Coder-Session-Token", "value": "={{ $node['Parse Init'].json._coder_token }}" },
+            { "name": "Mcp-Session-Id", "value": "={{ $node['Parse Init'].json._session_id }}" }
+          ]
+        },
+        "options": { "timeout": 15000 },
+        "onError": "continueRegularOutput"
       }
     },
     {
@@ -201,9 +209,9 @@
       "name": "Dev Prepare",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2400, 500],
+      "position": [3060, 400],
       "parameters": {
-        "jsCode": "const s = $node['Parse Request'].json;\nconst round = s.round + 1;\nreturn [{\n  json: {\n    projectId: 'ttposhwt',\n    title: '[' + s.req_id + '] Dev Round ' + round,\n    prompt: 'Requirement ' + s.req_id + ': ' + s.title + '\\nRound: ' + round + '\\n\\nTask: Implement the feature based on dev.spec.md, then verify.\\n\\nSteps:\\n1. Write code in worktree based on dev.spec.md\\n2. Run layered verification:\\n   - L0: Static check (lint, type check, compile)\\n   - L1: Unit tests\\n   - L2: Contract tests (API schema validation)\\n   - L3: Deploy services + Integration tests\\n3. Use aissh MCP to control the debug environment for verification\\n4. git commit and push changes\\n5. Report results\\n\\nWhen complete, move issue to review.\\n\\nReturn JSON in your final message:\\n{ \"success\": true/false, \"layer_results\": { \"l0\": {\"passed\": bool, \"log\": \"...\"}, \"l1\": {...}, \"l2\": {...}, \"l3\": {...} }, \"tokens_used\": number, \"failed_layer\": null/string, \"error_summary\": null/string }',\n    engineType: 'claude-code',\n    tags: ['dev', s.req_id, 'round-' + round],\n    timeoutMs: 1500000,\n    useWorktree: true\n  }\n}];"
+        "jsCode": "// 从 Collect Result 或 Parse Init 获取状态\nlet s;\ntry { s = $node['Collect Result'].json; } catch(e) { s = $node['Parse Init'].json; }\nconst round = (s.round || 0) + 1;\nreturn [{\n  json: {\n    projectId: 'ttposhwt',\n    title: '[' + s.req_id + '] Dev Round ' + round,\n    prompt: 'Requirement ' + s.req_id + ': ' + s.title + '\\nRound: ' + round + '\\n\\nTask: Implement the feature based on dev.spec.md, then verify.\\n\\nSteps:\\n1. Write code based on dev.spec.md\\n2. Run verification (lint, unit tests, contract tests)\\n3. Use aissh MCP for debug environment if needed\\n4. git commit and push changes\\n5. Report results\\n\\nWhen complete, move issue to review.\\n\\nReturn JSON in your final message:\\n{ \"success\": true/false, \"layer_results\": {...}, \"tokens_used\": number, \"failed_layer\": null/string, \"error_summary\": null/string }',\n    engineType: 'claude-code',\n    tags: ['dev', s.req_id, 'round-' + round],\n    timeoutMs: 1500000,\n    useWorktree: true\n  }\n}];"
       }
     },
     {
@@ -211,10 +219,10 @@
       "name": "Dispatch: Dev",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1,
-      "position": [2620, 500],
+      "position": [3280, 400],
       "parameters": {
         "source": "parameter",
-        "workflowId": "={{ $env.BKD_AI_STAGE_WORKFLOW_ID }}",
+        "workflowId": "3xxaXcoNGb6glXmI",
         "options": {}
       }
     },
@@ -223,9 +231,34 @@
       "name": "Collect Result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2840, 500],
+      "position": [3500, 400],
       "parameters": {
-        "jsCode": "const result = $input.first().json;\nconst state = $node['Parse Request'].json;\nconst elapsed = Date.now() - state.start_time;\nconst tokensUsed = result.output?.tokens_used || 0;\nconst tokens = (state.total_tokens || 0) + tokensUsed;\n\nreturn [{\n  json: {\n    req_id: state.req_id,\n    title: state.title,\n    description: state.description,\n    scope: state.scope,\n    round: state.round + 1,\n    total_tokens: tokens,\n    start_time: state.start_time,\n    elapsed_ms: elapsed,\n    max_rounds: state.max_rounds,\n    max_duration_ms: state.max_duration_ms,\n    max_tokens: state.max_tokens,\n    success: result.success === true,\n    layer_results: result.output?.layer_results || {},\n    failed_layer: result.output?.failed_layer || null,\n    error_summary: result.output?.error_summary || result.error || null,\n    issueId: result.issueId\n  }\n}];"
+        "jsCode": "const result = $input.first().json;\nconst state = $node['Parse Init'].json;\nconst prevRound = state.round || 0;\nconst elapsed = Date.now() - state.start_time;\nconst tokensUsed = result.output?.tokens_used || 0;\nconst tokens = (state.total_tokens || 0) + tokensUsed;\n\nreturn [{\n  json: {\n    req_id: state.req_id,\n    title: state.title,\n    description: state.description,\n    scope: state.scope,\n    repo: state.repo,\n    github_token: state.github_token,\n    bkd_issue_id: state.bkd_issue_id,\n    bkd_project_id: state.bkd_project_id,\n    round: prevRound + 1,\n    total_tokens: tokens,\n    start_time: state.start_time,\n    elapsed_ms: elapsed,\n    max_rounds: state.max_rounds,\n    max_duration_ms: state.max_duration_ms,\n    max_tokens: state.max_tokens,\n    success: result.success === true,\n    layer_results: result.output?.layer_results || {},\n    failed_layer: result.output?.failed_layer || null,\n    error_summary: result.output?.error_summary || result.error || null,\n    issueId: result.issueId,\n    _session_id: state._session_id,\n    _bkd_url: state._bkd_url,\n    _coder_token: state._coder_token\n  }\n}];"
+      }
+    },
+    {
+      "id": "callback_dev",
+      "name": "Callback: Dev Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [3720, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json._bkd_url }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jsonrpc: '2.0', id: 13, method: 'tools/call', params: { name: 'follow-up-issue', arguments: { projectId: $json.bkd_project_id, issueId: $json.bkd_issue_id, prompt: '## Dev Round ' + $json.round + ($json.success ? ' ✅' : ' ❌') + '\\n' + ($json.success ? '全部测试通过，准备创建 PR' : '失败层: ' + ($json.failed_layer || 'unknown') + '\\n原因: ' + ($json.error_summary || 'unknown')) + '\\n耗时: ' + Math.round($json.elapsed_ms/1000) + 's' } } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/json, text/event-stream" },
+            { "name": "Coder-Session-Token", "value": "={{ $json._coder_token }}" },
+            { "name": "Mcp-Session-Id", "value": "={{ $json._session_id }}" }
+          ]
+        },
+        "options": { "timeout": 15000 },
+        "onError": "continueRegularOutput"
       }
     },
     {
@@ -233,26 +266,23 @@
       "name": "All Tests Passed?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [3060, 500],
+      "position": [3940, 400],
       "parameters": {
         "conditions": {
           "boolean": [
-            {
-              "value1": "={{ $json.success }}",
-              "value2": true
-            }
+            { "value1": "={{ $node['Collect Result'].json.success }}", "value2": true }
           ]
         }
       }
     },
     {
       "id": "circuit_breaker",
-      "name": "Circuit Breaker Check",
+      "name": "Circuit Breaker",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [3280, 700],
+      "position": [4160, 600],
       "parameters": {
-        "jsCode": "const s = $input.first().json;\nconst tripped = (\n  s.round >= s.max_rounds ||\n  s.elapsed_ms >= s.max_duration_ms ||\n  s.total_tokens >= s.max_tokens\n);\nconst reason = [];\nif (s.round >= s.max_rounds) reason.push('rounds ' + s.round + '/' + s.max_rounds);\nif (s.elapsed_ms >= s.max_duration_ms) reason.push('time ' + Math.round(s.elapsed_ms/1000) + 's/' + s.max_duration_ms/1000 + 's');\nif (s.total_tokens >= s.max_tokens) reason.push('tokens ' + s.total_tokens + '/' + s.max_tokens);\n\nreturn [{\n  json: {\n    ...s,\n    breaker_tripped: tripped,\n    breaker_reason: reason.join(', ') || 'none'\n  }\n}];"
+        "jsCode": "const s = $node['Collect Result'].json;\nconst tripped = (\n  s.round >= s.max_rounds ||\n  s.elapsed_ms >= s.max_duration_ms ||\n  s.total_tokens >= s.max_tokens\n);\nconst reason = [];\nif (s.round >= s.max_rounds) reason.push('rounds ' + s.round + '/' + s.max_rounds);\nif (s.elapsed_ms >= s.max_duration_ms) reason.push('time ' + Math.round(s.elapsed_ms/1000) + 's');\nif (s.total_tokens >= s.max_tokens) reason.push('tokens ' + s.total_tokens + '/' + s.max_tokens);\nreturn [{\n  json: {\n    ...s,\n    breaker_tripped: tripped,\n    breaker_reason: reason.join(', ') || 'none'\n  }\n}];"
       }
     },
     {
@@ -260,26 +290,63 @@
       "name": "Breaker Tripped?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [3500, 700],
+      "position": [4380, 600],
       "parameters": {
         "conditions": {
           "boolean": [
-            {
-              "value1": "={{ $json.breaker_tripped }}",
-              "value2": true
-            }
+            { "value1": "={{ $json.breaker_tripped }}", "value2": true }
           ]
         }
       }
     },
     {
-      "id": "escalate_human",
-      "name": "Escalate to Human",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [3720, 600],
+      "id": "callback_escalate",
+      "name": "Callback: Escalate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [4600, 500],
       "parameters": {
-        "jsCode": "const s = $input.first().json;\nreturn [{\n  json: {\n    status: 'breaker_tripped',\n    req_id: s.req_id,\n    title: s.title,\n    round: s.round,\n    total_tokens: s.total_tokens,\n    elapsed_ms: s.elapsed_ms,\n    breaker_reason: s.breaker_reason,\n    failed_layer: s.failed_layer,\n    error_summary: s.error_summary,\n    message: 'Circuit breaker tripped. Escalating to human.'\n  }\n}];"
+        "method": "POST",
+        "url": "={{ $json._bkd_url }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jsonrpc: '2.0', id: 20, method: 'tools/call', params: { name: 'follow-up-issue', arguments: { projectId: $json.bkd_project_id, issueId: $json.bkd_issue_id, prompt: '## ⚠️ 熔断触发\\n原因: ' + $json.breaker_reason + '\\n失败层: ' + ($json.failed_layer || 'N/A') + '\\n错误: ' + ($json.error_summary || 'N/A') + '\\n\\n需要人工介入。' } } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/json, text/event-stream" },
+            { "name": "Coder-Session-Token", "value": "={{ $json._coder_token }}" },
+            { "name": "Mcp-Session-Id", "value": "={{ $json._session_id }}" }
+          ]
+        },
+        "options": { "timeout": 15000 },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "set_review",
+      "name": "Set Issue Review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [4820, 500],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $node['Collect Result'].json._bkd_url }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jsonrpc: '2.0', id: 21, method: 'tools/call', params: { name: 'update-issue', arguments: { projectId: $node['Collect Result'].json.bkd_project_id, issueId: $node['Collect Result'].json.bkd_issue_id, statusId: 'review' } } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/json, text/event-stream" },
+            { "name": "Coder-Session-Token", "value": "={{ $node['Collect Result'].json._coder_token }}" },
+            { "name": "Mcp-Session-Id", "value": "={{ $node['Collect Result'].json._session_id }}" }
+          ]
+        },
+        "options": { "timeout": 15000 },
+        "onError": "continueRegularOutput"
       }
     },
     {
@@ -287,229 +354,183 @@
       "name": "Prepare Retry",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [3720, 800],
+      "position": [4600, 700],
       "parameters": {
-        "jsCode": "// Update Parse Request state for next round via Set node workaround\nconst s = $input.first().json;\nreturn [{\n  json: {\n    req_id: s.req_id,\n    title: s.title,\n    description: s.description || '',\n    scope: s.scope,\n    round: s.round,\n    total_tokens: s.total_tokens,\n    start_time: s.start_time,\n    max_rounds: s.max_rounds,\n    max_duration_ms: s.max_duration_ms,\n    max_tokens: s.max_tokens\n  }\n}];"
-      }
-    },
-    {
-      "id": "close_issue",
-      "name": "Close Issue",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [3280, 400],
-      "parameters": {
-        "jsCode": "const s = $input.first().json;\nreturn [{\n  json: {\n    ...s,\n    issue_closed: true\n  }\n}];"
-      }
-    },
-    {
-      "id": "serial_merge",
-      "name": "Serial Merge Window",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [3500, 400],
-      "parameters": {
-        "jsCode": "const s = $input.first().json;\nreturn [{\n  json: {\n    ...s,\n    merge_slot_acquired: true\n  }\n}];"
+        "jsCode": "// 更新 Parse Init 的状态用于下一轮\nconst s = $node['Collect Result'].json;\nreturn [{ json: s }];"
       }
     },
     {
       "id": "create_pr",
-      "name": "Create PR on GitHub",
+      "name": "Create PR",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
-      "position": [3720, 400],
+      "position": [4160, 300],
       "parameters": {
         "method": "POST",
-        "url": "=https://api.github.com/repos/OWNER/REPO/pulls",
+        "url": "=https://api.github.com/repos/{{ $node['Collect Result'].json.repo }}/pulls",
         "sendBody": true,
         "contentType": "json",
         "specifyBody": "json",
-        "jsonBody": "={\n  \"title\": \"{{ $json.req_id }}: {{ $json.title }}\",\n  \"head\": \"feat/{{ $json.req_id }}\",\n  \"base\": \"main\",\n  \"body\": \"## Summary\\n\\nAI-generated implementation for {{ $json.req_id }}.\\n\\n- Rounds: {{ $json.round }}\\n- Tokens: {{ $json.total_tokens }}\\n- Elapsed: {{ Math.round($json.elapsed_ms / 1000) }}s\"\n}",
+        "jsonBody": "={\n  \"title\": \"{{ $node['Collect Result'].json.req_id }}: {{ $node['Collect Result'].json.title }}\",\n  \"head\": \"feat/{{ $node['Collect Result'].json.req_id }}\",\n  \"base\": \"main\",\n  \"body\": \"## Summary\\n\\nAI-generated implementation for {{ $node['Collect Result'].json.req_id }}.\\n\\n- Rounds: {{ $node['Collect Result'].json.round }}\\n- Tokens: {{ $node['Collect Result'].json.total_tokens }}\\n- Elapsed: {{ Math.round($node['Collect Result'].json.elapsed_ms / 1000) }}s\"\n}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Authorization", "value": "token GITHUB_TOKEN" },
+            { "name": "Authorization", "value": "=token {{ $node['Collect Result'].json.github_token }}" },
             { "name": "Accept", "value": "application/vnd.github.v3+json" }
           ]
         },
-        "options": { "timeout": 30000 }
+        "options": { "timeout": 30000 },
+        "onError": "continueRegularOutput"
       }
     },
     {
-      "id": "wait_ci",
-      "name": "Wait for CI",
-      "type": "n8n-nodes-base.wait",
-      "typeVersion": 1,
-      "position": [3940, 400],
-      "parameters": {
-        "unit": "seconds",
-        "amount": 120
-      }
-    },
-    {
-      "id": "check_ci",
-      "name": "Check CI Status",
+      "id": "callback_pr",
+      "name": "Callback: PR Created",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
-      "position": [4160, 400],
+      "position": [4380, 300],
       "parameters": {
-        "method": "GET",
-        "url": "=https://api.github.com/repos/OWNER/REPO/commits/{{ $node['Create PR on GitHub'].json.head.sha }}/check-runs",
+        "method": "POST",
+        "url": "={{ $node['Collect Result'].json._bkd_url }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jsonrpc: '2.0', id: 14, method: 'tools/call', params: { name: 'follow-up-issue', arguments: { projectId: $node['Collect Result'].json.bkd_project_id, issueId: $node['Collect Result'].json.bkd_issue_id, prompt: '## PR 已创建 ✅\\nURL: ' + ($input.first().json.html_url || 'N/A') + '\\n\\n流程完成。' } } }) }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Authorization", "value": "token GITHUB_TOKEN" },
-            { "name": "Accept", "value": "application/vnd.github.v3+json" }
+            { "name": "Accept", "value": "application/json, text/event-stream" },
+            { "name": "Coder-Session-Token", "value": "={{ $node['Collect Result'].json._coder_token }}" },
+            { "name": "Mcp-Session-Id", "value": "={{ $node['Collect Result'].json._session_id }}" }
           ]
         },
-        "options": { "timeout": 30000 }
+        "options": { "timeout": 15000 },
+        "onError": "continueRegularOutput"
       }
     },
     {
-      "id": "ci_passed",
-      "name": "CI Passed?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [4380, 400],
-      "parameters": {
-        "conditions": {
-          "string": [
-            {
-              "value1": "={{ $json.check_runs?.[0]?.conclusion || 'pending' }}",
-              "value2": "success"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "id": "ci_still_running",
-      "name": "CI Still Running?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [4600, 550],
-      "parameters": {
-        "conditions": {
-          "string": [
-            {
-              "value1": "={{ $json.check_runs?.[0]?.status || 'queued' }}",
-              "operation": "notEqual",
-              "value2": "completed"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "id": "ci_wait_more",
-      "name": "Wait More for CI",
-      "type": "n8n-nodes-base.wait",
-      "typeVersion": 1,
-      "position": [4820, 450],
-      "parameters": {
-        "unit": "seconds",
-        "amount": 60
-      }
-    },
-    {
-      "id": "ci_failure",
-      "name": "CI Failed",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [4820, 650],
-      "parameters": {
-        "jsCode": "const ci = $input.first().json;\nconst state = $node['Collect Result'].json;\nreturn [{\n  json: {\n    ...state,\n    success: false,\n    failed_layer: 'ci',\n    error_summary: 'CI failed: ' + (ci.check_runs?.[0]?.conclusion || 'unknown')\n  }\n}];"
-      }
-    },
-    {
-      "id": "acceptance_prepare",
-      "name": "Acceptance Prepare",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "set_review_success",
+      "name": "Set Issue Review (Success)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
       "position": [4600, 300],
       "parameters": {
-        "jsCode": "const s = $node['Parse Request'].json;\nreturn [{\n  json: {\n    projectId: 'ttposhwt',\n    title: '[' + s.req_id + '] Acceptance Test',\n    prompt: 'You are an independent acceptance tester. You have NO context from the development process.\\n\\nRequirement: ' + s.req_id + ' - ' + s.title + '\\n\\nTask:\\n1. Read the LOCKED ac.spec.yaml for this requirement\\n2. Use aissh MCP to setup a clean environment\\n3. Deploy the full service stack\\n4. Execute each Given/When/Then scenario\\n5. Record evidence (response bodies, status codes)\\n6. Generate acceptance report\\n\\nReturn JSON: { \"accepted\": bool, \"scenarios_total\": number, \"scenarios_passed\": number, \"report\": string }\\n\\nWhen done, move issue to review.',\n    engineType: 'claude-code',\n    tags: ['acceptance', s.req_id],\n    timeoutMs: 1200000,\n    useWorktree: false\n  }\n}];"
-      }
-    },
-    {
-      "id": "acceptance_stage",
-      "name": "Acceptance Test",
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1,
-      "position": [4820, 300],
-      "parameters": {
-        "source": "parameter",
-        "workflowId": "={{ $env.BKD_AI_STAGE_WORKFLOW_ID }}",
-        "options": {}
-      }
-    },
-    {
-      "id": "acceptance_check",
-      "name": "Acceptance Passed?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 1,
-      "position": [5040, 300],
-      "parameters": {
-        "conditions": {
-          "boolean": [
-            {
-              "value1": "={{ $json.success }}",
-              "value2": true
-            }
+        "method": "POST",
+        "url": "={{ $node['Collect Result'].json._bkd_url }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jsonrpc: '2.0', id: 22, method: 'tools/call', params: { name: 'update-issue', arguments: { projectId: $node['Collect Result'].json.bkd_project_id, issueId: $node['Collect Result'].json.bkd_issue_id, statusId: 'review' } } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/json, text/event-stream" },
+            { "name": "Coder-Session-Token", "value": "={{ $node['Collect Result'].json._coder_token }}" },
+            { "name": "Mcp-Session-Id", "value": "={{ $node['Collect Result'].json._session_id }}" }
           ]
-        }
-      }
-    },
-    {
-      "id": "acceptance_failed",
-      "name": "Acceptance Failed",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [5260, 400],
-      "parameters": {
-        "jsCode": "const ac = $input.first().json;\nconst state = $node['Collect Result'].json;\nreturn [{\n  json: {\n    ...state,\n    success: false,\n    failed_layer: 'acceptance',\n    error_summary: 'Acceptance test failed'\n  }\n}];"
-      }
-    },
-    {
-      "id": "respond_success",
-      "name": "Respond Success",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1,
-      "position": [5260, 200],
-      "parameters": {
-        "respondWith": "json",
-        "responseBody": "={\n  \"status\": \"success\",\n  \"req_id\": \"{{ $node['Parse Request'].json.req_id }}\",\n  \"title\": \"{{ $node['Parse Request'].json.title }}\",\n  \"rounds\": {{ $node['Collect Result'].json.round }},\n  \"total_tokens\": {{ $node['Collect Result'].json.total_tokens }},\n  \"elapsed_ms\": {{ $node['Collect Result'].json.elapsed_ms }},\n  \"message\": \"Feature implemented, CI passed, acceptance passed. Ready for code review.\"\n}"
-      }
-    },
-    {
-      "id": "respond_escalated",
-      "name": "Respond Escalated",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1,
-      "position": [5260, 50],
-      "parameters": {
-        "respondWith": "json",
-        "responseBody": "={{ JSON.stringify($input.first().json) }}"
+        },
+        "options": { "timeout": 15000 },
+        "onError": "continueRegularOutput"
       }
     },
     {
       "id": "p0_failed",
-      "name": "P0 Failed",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1740, 650],
+      "name": "Callback: P0 Failed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1960, 550],
       "parameters": {
-        "jsCode": "const s = $node['Parse Request'].json;\nreturn [{\n  json: {\n    status: 'p0_failed',\n    req_id: s.req_id,\n    message: 'P0 contract design failed, escalating to human'\n  }\n}];"
+        "method": "POST",
+        "url": "={{ $node['Parse Init'].json._bkd_url }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jsonrpc: '2.0', id: 30, method: 'tools/call', params: { name: 'follow-up-issue', arguments: { projectId: $node['Parse Init'].json.bkd_project_id, issueId: $node['Parse Init'].json.bkd_issue_id, prompt: '## P0 合约设计 ❌\\n失败，需要人工介入。' } } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/json, text/event-stream" },
+            { "name": "Coder-Session-Token", "value": "={{ $node['Parse Init'].json._coder_token }}" },
+            { "name": "Mcp-Session-Id", "value": "={{ $node['Parse Init'].json._session_id }}" }
+          ]
+        },
+        "options": { "timeout": 15000 },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "p0_set_review",
+      "name": "P0 Set Review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [2180, 550],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $node['Parse Init'].json._bkd_url }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jsonrpc: '2.0', id: 31, method: 'tools/call', params: { name: 'update-issue', arguments: { projectId: $node['Parse Init'].json.bkd_project_id, issueId: $node['Parse Init'].json.bkd_issue_id, statusId: 'review' } } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/json, text/event-stream" },
+            { "name": "Coder-Session-Token", "value": "={{ $node['Parse Init'].json._coder_token }}" },
+            { "name": "Mcp-Session-Id", "value": "={{ $node['Parse Init'].json._session_id }}" }
+          ]
+        },
+        "options": { "timeout": 15000 },
+        "onError": "continueRegularOutput"
       }
     },
     {
       "id": "p1_failed",
-      "name": "P1 Failed",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [2400, 650],
+      "name": "Callback: P1 Failed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [2840, 550],
       "parameters": {
-        "jsCode": "const s = $node['Parse Request'].json;\nreturn [{\n  json: {\n    status: 'p1_failed',\n    req_id: s.req_id,\n    message: 'P1 spec split failed, escalating to human'\n  }\n}];"
+        "method": "POST",
+        "url": "={{ $node['Parse Init'].json._bkd_url }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jsonrpc: '2.0', id: 32, method: 'tools/call', params: { name: 'follow-up-issue', arguments: { projectId: $node['Parse Init'].json.bkd_project_id, issueId: $node['Parse Init'].json.bkd_issue_id, prompt: '## P1 Spec 拆分 ❌\\n失败，需要人工介入。' } } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/json, text/event-stream" },
+            { "name": "Coder-Session-Token", "value": "={{ $node['Parse Init'].json._coder_token }}" },
+            { "name": "Mcp-Session-Id", "value": "={{ $node['Parse Init'].json._session_id }}" }
+          ]
+        },
+        "options": { "timeout": 15000 },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "p1_set_review",
+      "name": "P1 Set Review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [3060, 550],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $node['Parse Init'].json._bkd_url }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jsonrpc: '2.0', id: 33, method: 'tools/call', params: { name: 'update-issue', arguments: { projectId: $node['Parse Init'].json.bkd_project_id, issueId: $node['Parse Init'].json.bkd_issue_id, statusId: 'review' } } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/json, text/event-stream" },
+            { "name": "Coder-Session-Token", "value": "={{ $node['Parse Init'].json._coder_token }}" },
+            { "name": "Mcp-Session-Id", "value": "={{ $node['Parse Init'].json._session_id }}" }
+          ]
+        },
+        "options": { "timeout": 15000 },
+        "onError": "continueRegularOutput"
       }
     }
   ],
@@ -524,22 +545,10 @@
       "main": [[{ "node": "Parse Init", "type": "main", "index": 0 }]]
     },
     "Parse Init": {
-      "main": [[{ "node": "BKD: Check Capacity", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Callback: Started", "type": "main", "index": 0 }]]
     },
-    "BKD: Check Capacity": {
-      "main": [[{ "node": "Parse Capacity", "type": "main", "index": 0 }]]
-    },
-    "Parse Capacity": {
-      "main": [[{ "node": "Capacity OK?", "type": "main", "index": 0 }]]
-    },
-    "Capacity OK?": {
-      "main": [
-        [{ "node": "P0 Prepare", "type": "main", "index": 0 }],
-        [{ "node": "Wait for Capacity", "type": "main", "index": 0 }]
-      ]
-    },
-    "Wait for Capacity": {
-      "main": [[{ "node": "BKD: Check Capacity", "type": "main", "index": 0 }]]
+    "Callback: Started": {
+      "main": [[{ "node": "P0 Prepare", "type": "main", "index": 0 }]]
     },
     "P0 Prepare": {
       "main": [[{ "node": "P0: Contract Design", "type": "main", "index": 0 }]]
@@ -549,12 +558,15 @@
     },
     "P0 Succeeded?": {
       "main": [
-        [{ "node": "P1 Prepare", "type": "main", "index": 0 }],
-        [{ "node": "P0 Failed", "type": "main", "index": 0 }]
+        [{ "node": "Callback: P0 Done", "type": "main", "index": 0 }],
+        [{ "node": "Callback: P0 Failed", "type": "main", "index": 0 }]
       ]
     },
-    "P0 Failed": {
-      "main": [[{ "node": "Respond Escalated", "type": "main", "index": 0 }]]
+    "Callback: P0 Done": {
+      "main": [[{ "node": "P1 Prepare", "type": "main", "index": 0 }]]
+    },
+    "Callback: P0 Failed": {
+      "main": [[{ "node": "P0 Set Review", "type": "main", "index": 0 }]]
     },
     "P1 Prepare": {
       "main": [[{ "node": "P1: Spec Split", "type": "main", "index": 0 }]]
@@ -564,12 +576,15 @@
     },
     "P1 Succeeded?": {
       "main": [
-        [{ "node": "Dev Prepare", "type": "main", "index": 0 }],
-        [{ "node": "P1 Failed", "type": "main", "index": 0 }]
+        [{ "node": "Callback: P1 Done", "type": "main", "index": 0 }],
+        [{ "node": "Callback: P1 Failed", "type": "main", "index": 0 }]
       ]
     },
-    "P1 Failed": {
-      "main": [[{ "node": "Respond Escalated", "type": "main", "index": 0 }]]
+    "Callback: P1 Done": {
+      "main": [[{ "node": "Dev Prepare", "type": "main", "index": 0 }]]
+    },
+    "Callback: P1 Failed": {
+      "main": [[{ "node": "P1 Set Review", "type": "main", "index": 0 }]]
     },
     "Dev Prepare": {
       "main": [[{ "node": "Dispatch: Dev", "type": "main", "index": 0 }]]
@@ -578,76 +593,37 @@
       "main": [[{ "node": "Collect Result", "type": "main", "index": 0 }]]
     },
     "Collect Result": {
+      "main": [[{ "node": "Callback: Dev Result", "type": "main", "index": 0 }]]
+    },
+    "Callback: Dev Result": {
       "main": [[{ "node": "All Tests Passed?", "type": "main", "index": 0 }]]
     },
     "All Tests Passed?": {
       "main": [
-        [{ "node": "Close Issue", "type": "main", "index": 0 }],
-        [{ "node": "Circuit Breaker Check", "type": "main", "index": 0 }]
+        [{ "node": "Create PR", "type": "main", "index": 0 }],
+        [{ "node": "Circuit Breaker", "type": "main", "index": 0 }]
       ]
     },
-    "Circuit Breaker Check": {
+    "Circuit Breaker": {
       "main": [[{ "node": "Breaker Tripped?", "type": "main", "index": 0 }]]
     },
     "Breaker Tripped?": {
       "main": [
-        [{ "node": "Escalate to Human", "type": "main", "index": 0 }],
+        [{ "node": "Callback: Escalate", "type": "main", "index": 0 }],
         [{ "node": "Prepare Retry", "type": "main", "index": 0 }]
       ]
     },
-    "Escalate to Human": {
-      "main": [[{ "node": "Respond Escalated", "type": "main", "index": 0 }]]
+    "Callback: Escalate": {
+      "main": [[{ "node": "Set Issue Review", "type": "main", "index": 0 }]]
     },
     "Prepare Retry": {
       "main": [[{ "node": "Dev Prepare", "type": "main", "index": 0 }]]
     },
-    "Close Issue": {
-      "main": [[{ "node": "Serial Merge Window", "type": "main", "index": 0 }]]
+    "Create PR": {
+      "main": [[{ "node": "Callback: PR Created", "type": "main", "index": 0 }]]
     },
-    "Serial Merge Window": {
-      "main": [[{ "node": "Create PR on GitHub", "type": "main", "index": 0 }]]
-    },
-    "Create PR on GitHub": {
-      "main": [[{ "node": "Wait for CI", "type": "main", "index": 0 }]]
-    },
-    "Wait for CI": {
-      "main": [[{ "node": "Check CI Status", "type": "main", "index": 0 }]]
-    },
-    "Check CI Status": {
-      "main": [[{ "node": "CI Passed?", "type": "main", "index": 0 }]]
-    },
-    "CI Passed?": {
-      "main": [
-        [{ "node": "Acceptance Prepare", "type": "main", "index": 0 }],
-        [{ "node": "CI Still Running?", "type": "main", "index": 0 }]
-      ]
-    },
-    "CI Still Running?": {
-      "main": [
-        [{ "node": "Wait More for CI", "type": "main", "index": 0 }],
-        [{ "node": "CI Failed", "type": "main", "index": 0 }]
-      ]
-    },
-    "Wait More for CI": {
-      "main": [[{ "node": "Check CI Status", "type": "main", "index": 0 }]]
-    },
-    "CI Failed": {
-      "main": [[{ "node": "Circuit Breaker Check", "type": "main", "index": 0 }]]
-    },
-    "Acceptance Prepare": {
-      "main": [[{ "node": "Acceptance Test", "type": "main", "index": 0 }]]
-    },
-    "Acceptance Test": {
-      "main": [[{ "node": "Acceptance Passed?", "type": "main", "index": 0 }]]
-    },
-    "Acceptance Passed?": {
-      "main": [
-        [{ "node": "Respond Success", "type": "main", "index": 0 }],
-        [{ "node": "Acceptance Failed", "type": "main", "index": 0 }]
-      ]
-    },
-    "Acceptance Failed": {
-      "main": [[{ "node": "Circuit Breaker Check", "type": "main", "index": 0 }]]
+    "Callback: PR Created": {
+      "main": [[{ "node": "Set Issue Review (Success)", "type": "main", "index": 0 }]]
     }
   },
   "settings": {
