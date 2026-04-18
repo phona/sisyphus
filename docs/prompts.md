@@ -101,26 +101,25 @@ These test files are LOCKED after this stage — no one can modify them.
 Read dev.spec.md for implementation details.
 Read contract_test.* and acceptance_test.* to understand what tests you must pass.
 
-TDD workflow — small steps:
-1. Read one test case
-2. Write minimal code to pass it
-3. Use aissh MCP to run tests in debug environment:
-   - aissh exec_run on vm-node04: cd to project, run go test (or equivalent)
-4. Red? Fix. Green? Next test.
-5. Repeat until all tests pass
-
-Verification checklist (use aissh MCP):
-- L0: aissh exec_run — lint/compile passes
-- L1: aissh exec_run — unit tests pass
-- L2: aissh exec_run — contract tests pass (contract_test.*)
-- L3: aissh exec_run — acceptance tests pass (acceptance_test.*)
+Workflow:
+1. Read dev.spec.md thoroughly
+2. Read all test files to understand what's expected
+3. Write the full implementation
+4. Write unit tests
+5. Use aissh MCP to verify on debug environment (vm-node04):
+   - aissh exec_run: L0 — lint/compile
+   - aissh exec_run: L1 — unit tests
+   - aissh exec_run: L2 — contract tests (contract_test.*)
+   - aissh exec_run: L3 — acceptance tests (acceptance_test.*)
+6. If any test fails, fix and re-run (iterate locally, don't commit yet)
+7. ALL L0-L3 pass → commit once → push → move to review
 
 RULES:
 - Do NOT modify contract_test.* or acceptance_test.* (LOCKED)
 - Do NOT modify contract.spec.yaml
-- ALL L0-L3 must pass before moving to review
-- Commit and push when done
-- Move to review
+- Only commit when ALL tests pass
+- One clean commit, not many small ones
+- Move to review after push
 ```
 
 ## 阶段四：测试验证
