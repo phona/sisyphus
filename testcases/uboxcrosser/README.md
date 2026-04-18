@@ -17,6 +17,7 @@
 | REQ-07 | 并行任务文件冲突 | P1 | Medium | proto+proxy+api | 冲突预检 | [REQ-07-conflict-detection.md](./REQ-07-conflict-detection.md) |
 | REQ-08 | 不完整需求容错 | P1 | Hard | crosser-api | 容错熔断 | [REQ-08-incomplete-requirement.md](./REQ-08-incomplete-requirement.md) |
 | REQ-09 | 奇葩需求测试集 | P1 | Varies | all | 边界防御 | [REQ-09-absurd-requirements.md](./REQ-09-absurd-requirements.md) |
+| REQ-10 | 性能基准测试 | P0 | - | meta | 速度/成本/质量 | [REQ-10-performance-benchmark.md](./REQ-10-performance-benchmark.md) |
 
 ## DAG Dependency
 
@@ -82,3 +83,4 @@ ubox-crosser/
 | 冲突预检 | REQ-07 |
 | 容错降级 | REQ-08 |
 | 边界防御（奇葩需求） | REQ-09 (6 个子场景) |
+| 性能（速度/成本/质量） | REQ-10 (效率比、吞吐量、稳定性) |
