@@ -1,74 +1,63 @@
 # Sisyphus
 
-AI 驱动的无人值守开发平台。
+AI 驱动的无人值守开发平台。契约驱动 + 测试先行。
 
 ## 架构
 
-V2 架构文档为唯一权威参考：[docs/workflow-v2-architecture.md](docs/workflow-v2-architecture.md)
+架构文档为唯一权威参考：[docs/architecture.md](docs/architecture.md)
 
-### 三环模型
+### 核心哲学
 
-- **开发环境**：AI 写代码（worktree 隔离），n8n 主编排，通过 aissh MCP 操控调试环境
-- **调试环境**：K8s namespace 隔离，纯被动执行，分层验证（静态检查→单测→契约→集成）
-- **GitHub**：最终门禁，CI 全量一把梭，独立子 agent 做验收测试
+- **契约驱动（CDD）**：OpenAPI Spec 为唯一真相源
+- **测试先行（TDD）**：先写测试，再写实现，测试 LOCKED 不可改
+- **两段式流程**：有人阶段（需求分析，有歧义就停）→ 无人阶段（全自动，熔断兜底）
 
-### 硬约束
+### 分工
 
-- 开发环境只通过 **aissh MCP** 连接调试环境，这是唯一桥梁
-- 开发环境**只写代码**，所有验证都推到调试环境跑
-- 代码传输走 **git push/pull**，控制走 **aissh MCP**
+| 角色 | 职责 |
+|------|------|
+| **n8n** | 门控：阶段串联、熔断、超时、可观测性 |
+| **BKD** | 执行：每个 issue 是一个纯粹的单任务 |
+| **OpenSpec** | 需求拆解：/opsx:propose |
+| **aissh MCP** | 唯一桥梁：远程控制调试环境 |
 
-### 两层编排
+### 阶段
 
-- **n8n**：粗粒度主编排，管阶段推进、熔断、并发池、冲突预检
-- **AI skill**：细粒度小编排，管具体实现，有心跳上报和硬超时兜底
+```
+需求分析 → 测试编写 → 开发 → 测试验证 → 验收 → review
+```
 
-### 关键机制
-
-- 熔断：≥3轮修复 or 超时 or token 超限 → 挂 Issue 升级人工
-- 心跳：AI skill 执行时定期上报，超时强制中断
-- 并发池：控制同时活跃的 namespace 数量
-- 冲突预检：分发前检查文件级冲突
-- 串行合并窗口：避免并行 PR 互踩
-- CI 失败分类：flaky test 直接 retry，真实失败回开发环境
-- Issue 可观测性：记录失败层级、原因、修复 diff、token 消耗、耗时、资源使用
+每个阶段是一个独立的 BKD issue，通过 tag（REQ-xx）关联，n8n 通过 BKD webhook 事件驱动串联。
 
 ## 技术栈
 
-- **编排**：n8n
-- **AI 执行**：BKD + Claude Agent
+- **编排**：n8n（vm-node04 K3s）
+- **AI 执行**：BKD + Claude Agent（Coder Workspace）
+- **需求拆解**：OpenSpec
 - **远程控制**：aissh MCP
 - **代码托管**：GitHub
-- **CI/CD**：GitHub Actions
+- **调试环境**：K3s namespace 隔离
 
 ## 项目结构
 
 ```
 sisyphus/
-├── charts/
-│   └── n8n-workflows/   # n8n 工作流 JSON
-├── values/              # 配置
-├── docs/                # 文档
-│   ├── workflow-v2-architecture.md  # V2 架构（权威）
-│   └── ...              # 其他参考文档
-├── projects/            # 子项目（git submodule）
-│   ├── ttpos-flutter/
-│   ├── ttpos-server-go/
-│   └── vibe-kanban/
-├── testcases/           # 测试用例
-└── Makefile             # 统一命令入口
+├── charts/n8n-workflows/   # n8n 工作流 JSON（v3-*.json）
+├── docs/
+│   ├── architecture.md      # 架构设计（权威）
+│   ├── n8n-k3s-pitfalls.md  # n8n on K3s 踩坑手册
+│   └── n8n-workflow-usage.md
+├── testcases/               # 测试用例
+└── Makefile
 ```
 
 ## 文档索引
 
 | 文档 | 内容 |
 |------|------|
-| [workflow-v2-architecture.md](docs/workflow-v2-architecture.md) | V2 架构设计（权威参考） |
-| [workflow-v3-flow.md](docs/workflow-v3-flow.md) | V3 工作流全景 |
-| [bkd-agent-prompt-template.md](docs/bkd-agent-prompt-template.md) | BKD Agent Prompt 模板 |
-| [api-tag-management-spec.md](docs/api-tag-management-spec.md) | API 标签管理规范 |
-| [n8n-workflow-usage.md](docs/n8n-workflow-usage.md) | n8n 主编排使用说明 |
-
+| [architecture.md](docs/architecture.md) | 架构设计 + 流程图（权威） |
+| [n8n-k3s-pitfalls.md](docs/n8n-k3s-pitfalls.md) | n8n on K3s 踩坑手册（11 个坑）|
+| [n8n-workflow-usage.md](docs/n8n-workflow-usage.md) | n8n 使用说明 |
 
 ## 开发规范
 
