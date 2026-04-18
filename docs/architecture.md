@@ -1,208 +1,231 @@
-# V3 工作流全景
+# Sisyphus 架构设计
 
-## 整体协作流程
+> 契约驱动 + 测试先行的 AI 无人值守开发平台。
+
+## 核心哲学
+
+```
+有人阶段（人机协作）           无人阶段（全自动）
+需求分析 → 测试编写      →    开发 → 测试验证 → 验收
+有歧义就停    测试锁定          熔断兜底
+```
+
+- **契约驱动（CDD）**：OpenAPI Spec 为唯一真相源
+- **测试先行（TDD）**：先写测试再写实现，测试 LOCKED 不可改
+- **每个阶段只做一件事**：产出物明确，职责不交叉
+
+## 五阶段流程
+
+```mermaid
+flowchart LR
+    A[需求分析] -->|openspec artifacts| B[测试编写]
+    B -->|contract_test + acceptance_test LOCKED| C[开发]
+    C -->|业务代码 + 单元测试| D[测试验证]
+    D -->|通过| E[验收]
+    D -->|失败| C
+    E -->|通过| F[Review]
+    E -->|失败| C
+
+    style A fill:#e3f2fd
+    style B fill:#e3f2fd
+    style C fill:#e8f5e9
+    style D fill:#fff3e0
+    style E fill:#fff3e0
+    style F fill:#f3e5f5
+```
+
+### 阶段一：需求分析（有人）
+
+| 项 | 说明 |
+|---|------|
+| **输入** | 需求描述 |
+| **做什么** | /opsx:propose 拆解需求，设计合约边界 |
+| **产出** | openspec/changes/xxx/ (proposal.md, specs/, design.md, tasks.md) |
+| **不做** | 不写代码，不写测试 |
+| **歧义** | 停下来问用户 |
+
+### 阶段二：测试编写（有人）
+
+| 项 | 说明 |
+|---|------|
+| **输入** | openspec artifacts + contract.spec.yaml |
+| **做什么** | 写契约测试代码 + 验收测试代码 |
+| **产出** | contract_test.* + acceptance_test.* |
+| **不做** | 不写业务代码 |
+| **LOCKED** | 测试产出后锁定，后续阶段不可修改 |
+| **歧义** | 停下来问用户（最后的人工关卡） |
+
+### 阶段三：开发（无人）
+
+| 项 | 说明 |
+|---|------|
+| **输入** | openspec artifacts + 测试代码（只读） |
+| **做什么** | 按 tasks.md 写业务代码 + 单元测试 |
+| **产出** | 业务代码 + 单元测试 |
+| **不做** | 不修改 contract_test / acceptance_test / contract.spec |
+| **完成** | commit + push |
+
+### 阶段四：测试验证（无人）
+
+| 项 | 说明 |
+|---|------|
+| **输入** | 代码 + 所有测试 |
+| **做什么** | 在调试环境跑分层测试 |
+| **分层** | L0 lint → L1 单元测试 → L2 契约测试 → L3 集成测试 |
+| **不做** | 不改代码，只报告结果 |
+| **结果** | 通过 → 验收，失败 → 回开发 |
+
+### 阶段五：验收（无人）
+
+| 项 | 说明 |
+|---|------|
+| **输入** | acceptance_test.* + 干净环境 |
+| **执行者** | 独立 agent，无开发上下文 |
+| **做什么** | 部署完整环境，跑验收测试 |
+| **不做** | 不改代码，不改测试 |
+| **结果** | 通过 → review，失败 → 回开发 |
+
+## 系统协作
 
 ```mermaid
 sequenceDiagram
     participant User as 用户
-    participant BKD as BKD 看板
-    participant N8N as n8n 门控
-    participant Spec as Spec Agent<br/>(开发环境)
-    participant Dev as Dev Agent<br/>(开发环境)
-    participant Debug as 调试环境<br/>(K8s)
-
-    Note over User,Debug: ═══ 有人阶段（合约驱动，有歧义就停）═══
+    participant BKD as BKD
+    participant N8N as n8n
+    participant Agent as Agent
+    participant Debug as 调试环境
 
     User->>BKD: 创建需求 Issue
-    BKD->>N8N: 触发 /v2
-    N8N->>BKD: 创建 [REQ-xx] Spec Issue<br/>follow-up prompt + update(working)
+    BKD->>N8N: /v2 触发
+    N8N->>BKD: 创建 [REQ-xx] 需求分析 issue
 
-    BKD->>Spec: 启动 Spec Agent
-    Spec->>Spec: 1. 分析需求，设计契约边界
-    Spec->>Spec: 2. /opsx:propose 拆解需求
-    Note right of Spec: openspec/changes/xxx/<br/>├── proposal.md<br/>├── specs/<br/>├── design.md<br/>└── tasks.md
+    Note over N8N,Agent: 阶段一：需求分析
+    Agent->>Agent: /opsx:propose
+    Agent->>BKD: 移 review
+    BKD-->>N8N: webhook (title 含 "需求分析")
 
-    alt 需求有歧义
-        Spec->>BKD: 在 Issue 里提问
-        User->>BKD: 回答
-        BKD->>Spec: follow-up
-    end
+    Note over N8N,Agent: 阶段二：测试编写
+    N8N->>BKD: 创建 [REQ-xx] 测试编写 issue
+    Agent->>Agent: 写 contract_test + acceptance_test
+    Agent->>BKD: 移 review
+    BKD-->>N8N: webhook (title 含 "测试编写")
 
-    Spec->>Spec: 3. 基于 specs 写契约测试代码
-    Spec->>Spec: 4. 基于 specs 写验收测试代码
-    Spec->>Spec: 5. git commit（测试 LOCKED）
-    Spec->>BKD: 6. 移 issue 到 review
+    Note over N8N,Debug: 阶段三：开发
+    N8N->>BKD: 创建 [REQ-xx] 开发 issue
+    Agent->>Agent: 写业务代码
+    Agent->>BKD: 移 review
+    BKD-->>N8N: webhook (title 含 "开发")
 
-    Note over User,Debug: ═══ 无人阶段（全自动，熔断兜底）═══
-
-    BKD-->>N8N: webhook: issue.status.review (tag=spec)
-    N8N->>N8N: 门控：检测到 spec 完成
-    N8N->>BKD: 创建 [REQ-xx] Dev Issue<br/>follow-up prompt + update(working)
-
-    BKD->>Dev: 启动 Dev Agent
-    Dev->>Dev: 1. 读 openspec 产出物 + 测试代码
-    Dev->>Dev: 2. 按 tasks.md 写业务代码
-    Dev->>Dev: 3. 写单元测试
-    Dev->>Dev: 4. git push
-
-    Dev->>Debug: aissh: git pull + setup
-    Dev->>Debug: aissh: L0 lint/compile
-    Dev->>Debug: aissh: L1 单元测试
-    Dev->>Debug: aissh: L2 契约测试（LOCKED）
-    Dev->>Debug: aissh: L3 验收测试（LOCKED）
-    Debug-->>Dev: 返回结果
+    Note over N8N,Debug: 阶段四：测试验证
+    N8N->>BKD: 创建 [REQ-xx] 测试验证 issue
+    Agent->>Debug: aissh: 跑 L0-L3
+    Debug-->>Agent: 结果
+    Agent->>BKD: 移 review
+    BKD-->>N8N: webhook (title 含 "测试验证")
 
     alt 测试失败
-        Dev->>Dev: 修改业务代码（不改测试）
-        Dev->>Debug: 重新验证（最多 3 轮）
+        N8N->>N8N: 熔断检查
+        N8N->>BKD: 创建新的 开发 issue（带失败上下文）
     end
 
-    Dev->>BKD: 移 issue 到 review
+    Note over N8N,Debug: 阶段五：验收
+    N8N->>BKD: 创建 [REQ-xx] 验收 issue
+    Agent->>Debug: 部署 + 跑 acceptance_test
+    Agent->>BKD: 移 review
+    BKD-->>N8N: webhook (title 含 "验收")
 
-    BKD-->>N8N: webhook: issue.status.review (tag=dev)
-    N8N->>N8N: 门控：检测到 dev 完成
-    N8N->>BKD: 回调父 Issue "全部完成"
+    alt 验收失败
+        N8N->>BKD: 回到开发阶段
+    end
+
     N8N->>BKD: 父 Issue 设 review
-    BKD-->>User: 通知用户 review
+    BKD-->>User: 完成通知
 ```
 
-## 系统组件图
+## Issue 关联与可观测性
+
+同一需求的所有 issue 通过 **tag** 和 **父 issue follow-up** 关联：
+
+```
+父 Issue: "实现 /api/connections 接口"
+  ├── [REQ-xx] 需求分析    (tags: REQ-xx, analyze)
+  ├── [REQ-xx] 测试编写    (tags: REQ-xx, test-write)
+  ├── [REQ-xx] 开发        (tags: REQ-xx, dev)
+  ├── [REQ-xx] 测试验证    (tags: REQ-xx, verify)
+  └── [REQ-xx] 验收        (tags: REQ-xx, accept)
+```
+
+**三层可观测性**：
+- **BKD 看板**：按 REQ-xx tag 看完整链路，每个 issue 有完整对话日志
+- **n8n execution**：每个阶段独立记录，耗时、成功率、失败原因
+- **父 issue 时间线**：n8n 每个阶段完成后 follow-up 进展摘要
+
+## n8n 架构
+
+**2 个 webhook**，纯事件驱动：
 
 ```mermaid
 flowchart TB
-    subgraph USER["用户"]
-        U[创建需求 / Review / 回答问题]
+    subgraph ENTRY["/v2 入口"]
+        E1[Webhook] --> E2[MCP Init + Set Ctx]
+        E2 --> E3[Create 需求分析 Issue]
+        E3 --> E4[Follow-up + Start]
+        E4 --> E5[Callback 父 Issue]
     end
 
-    subgraph N8N["n8n 门控层（2 个 webhook）"]
-        W1["/v2<br/>入口：创建 Spec Issue"]
-        W2["/bkd-events<br/>BKD 状态变更路由"]
-        W2 --> ROUTE{按 tag 路由}
-        ROUTE -->|spec| ACTION_SPEC[创建 Dev Issue]
-        ROUTE -->|dev| ACTION_DEV[回调父 Issue + 设 review]
-        OBS[(执行记录<br/>可观测性)]
+    subgraph EVENTS["/bkd-events 路由"]
+        V1[Webhook] --> V2[MCP Init + Set Ctx]
+        V2 --> V3{按 title 路由}
+        V3 -->|需求分析完成| CREATE_TW[创建 测试编写 issue]
+        V3 -->|测试编写完成| CREATE_DEV[创建 开发 issue]
+        V3 -->|开发完成| CREATE_VER[创建 测试验证 issue]
+        V3 -->|测试验证 通过| CREATE_ACC[创建 验收 issue]
+        V3 -->|测试验证 失败| FUSE{熔断检查}
+        FUSE -->|未触发| RETRY[创建新 开发 issue]
+        FUSE -->|触发| ESCALATE[升级人工]
+        V3 -->|验收 通过| DONE[父 Issue review]
+        V3 -->|验收 失败| RETRY
     end
-
-    subgraph BKD["BKD 执行引擎"]
-        PARENT[父 Issue<br/>需求跟踪]
-        SPEC_ISSUE[Spec Issue<br/>tag: spec]
-        DEV_ISSUE[Dev Issue<br/>tag: dev]
-        WEBHOOK[Webhook 通知<br/>issue.status.review<br/>session.completed<br/>session.failed]
-        PROC[进程管理<br/>并发/超时]
-    end
-
-    subgraph DEV_ENV["开发环境（Coder Workspace）"]
-        SPEC_AGENT[Spec Agent]
-        DEV_AGENT[Dev Agent]
-        OPSX[OpenSpec<br/>/opsx:propose]
-        AISSH[aissh MCP]
-    end
-
-    subgraph DEBUG["调试环境（K8s vm-node04）"]
-        L0[L0: lint/compile]
-        L1[L1: 单元测试]
-        L2[L2: 契约测试 LOCKED]
-        L3[L3: 验收测试 LOCKED]
-    end
-
-    subgraph REPO["Git 仓库"]
-        CODE[业务代码]
-        SPECS[openspec/changes/xxx/]
-        TESTS[测试代码 LOCKED]
-    end
-
-    %% 用户
-    U --> PARENT
-    PARENT -.-> U
-
-    %% n8n 编排
-    W1 -->|MCP| SPEC_ISSUE
-    ACTION_SPEC -->|MCP| DEV_ISSUE
-    ACTION_DEV -->|MCP| PARENT
-
-    %% BKD webhook → n8n
-    WEBHOOK -->|HTTP POST| W2
-
-    %% BKD 执行
-    SPEC_ISSUE --> SPEC_AGENT
-    DEV_ISSUE --> DEV_AGENT
-
-    %% Spec Agent
-    SPEC_AGENT --> OPSX --> SPECS
-    SPEC_AGENT --> TESTS
-    SPEC_AGENT -->|移 review| WEBHOOK
-
-    %% Dev Agent
-    DEV_AGENT --> CODE
-    DEV_AGENT --> AISSH
-    AISSH --> L0 --> L1 --> L2 --> L3
-    L2 -.->|读| TESTS
-    L3 -.->|读| TESTS
-    DEV_AGENT -->|移 review| WEBHOOK
-
-    %% 代码传输
-    CODE -->|push| REPO
-    REPO -->|pull| DEBUG
-
-    style N8N fill:#e1f5fe
-    style BKD fill:#f3e5f5
-    style DEV_ENV fill:#e8f5e9
-    style DEBUG fill:#fff3e0
-    style TESTS stroke:#f44336,stroke-width:3px
 ```
 
-## n8n 工作流内部
+## BKD Webhook
 
-```mermaid
-flowchart LR
-    subgraph ENTRY["/v2 入口（8 节点）"]
-        E1[Webhook] --> E2[MCP Init]
-        E2 --> E3[Set Ctx]
-        E3 --> E4[Create Spec Issue]
-        E4 --> E5[Extract ID]
-        E5 --> E6[Follow-up Prompt]
-        E6 --> E7[Update Working]
-        E7 --> E8[Callback 父 Issue]
-    end
+```json
+{
+  "url": "http://n8n.43.239.84.24.nip.io/webhook/bkd-events",
+  "events": ["issue.status.review", "session.completed", "session.failed"]
+}
+```
 
-    subgraph EVENTS["/bkd-events 路由（10 节点）"]
-        V1[Webhook] --> V2[MCP Init]
-        V2 --> V3[Set Ctx<br/>event/tags/issueId]
-        V3 --> V4{Is Spec?}
-        V4 -->|Yes| V5[Create Dev Issue]
-        V5 --> V6[Extract ID]
-        V6 --> V7[Follow-up Prompt]
-        V7 --> V8[Update Working]
-        V4 -->|No| V9{Is Dev?}
-        V9 -->|Yes| V10[Callback 父 Issue<br/>+ Set Review]
-    end
+n8n 通过 `title` 关键词路由：需求分析 → 测试编写 → 开发 → 测试验证 → 验收。
 
-    E8 -.->|Spec Agent 完成<br/>BKD webhook 自动触发| V1
-    V8 -.->|Dev Agent 完成<br/>BKD webhook 自动触发| V1
+## 分工
+
+| 角色 | 做什么 | 不做什么 |
+|------|--------|---------|
+| **n8n** | 阶段串联、创建 issue、熔断、超时、可观测性 | 不做 AI 判断、不管执行细节 |
+| **BKD** | 管理 issue、启动 agent、webhook 通知 | 不做阶段决策 |
+| **Agent** | 执行单个任务、产出交付物、完成后移 review | 不做跨阶段编排 |
+| **OpenSpec** | 需求拆解（/opsx:propose） | — |
+| **aissh MCP** | 远程控制调试环境 | 不做逻辑判断 |
+
+## 熔断
+
+```
+测试验证或验收失败 → n8n 检查：
+  轮次 ≥ 3 → 升级人工
+  超时 → 升级人工
+  token 超限 → 升级人工
+  否则 → 创建新的开发 issue（带失败上下文）→ 重试
 ```
 
 ## 数据流
 
-| 通道 | 用途 | 方向 |
-|------|------|------|
-| n8n webhook `/v2` | 入口触发 | 用户/BKD → n8n |
-| BKD MCP (JSON-RPC) | n8n 创建/管理 Issue | n8n → BKD |
-| BKD Webhook | Issue 状态变更通知 | BKD → n8n |
-| OpenSpec `/opsx:propose` | 需求拆解 | Agent 内部 |
-| git push/pull | 代码传输 | 开发环境 ↔ 调试环境 |
-| aissh MCP | 远程控制调试环境 | 开发环境 → 调试环境 |
-| BKD Issue 对话 | 可观测性 + 人机交互 | Agent ↔ 用户 |
-
-## BKD Webhook 配置
-
-```json
-{
-  "channel": "webhook",
-  "url": "http://n8n.43.239.84.24.nip.io/webhook/bkd-events",
-  "events": ["issue.status.review", "session.completed", "session.failed"],
-  "isActive": true
-}
-```
-
-Webhook payload 包含：event, issueId, projectId, title, tags, newStatus, 对话上下文。
-n8n 通过 payload 中的 `tags` 判断是哪个阶段完成（spec/dev），路由到对应处理逻辑。
+| 通道 | 用途 |
+|------|------|
+| n8n `/v2` | 入口触发 |
+| BKD webhook → n8n `/bkd-events` | 阶段完成通知（事件驱动） |
+| BKD MCP | n8n 创建/管理 issue |
+| git push/pull | 代码传输 |
+| aissh MCP | 远程控制调试环境 |
+| BKD issue 对话 | 可观测性 + 人机交互 |
