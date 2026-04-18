@@ -36,19 +36,18 @@ V2 架构文档为唯一权威参考：[docs/workflow-v2-architecture.md](docs/w
 ## 技术栈
 
 - **编排**：n8n
-- **AI 执行**：vibe-kanban + Claude MCP
+- **AI 执行**：BKD + Claude Agent
 - **远程控制**：aissh MCP
-- **代码托管**：Gitea（开发阶段）→ GitHub（生产）
-- **基础设施**：Kind (K8s) + PostgreSQL + Helm
+- **代码托管**：GitHub
 - **CI/CD**：GitHub Actions
 
 ## 项目结构
 
 ```
 sisyphus/
-├── charts/              # Helm charts（PostgreSQL, Gitea, n8n, vibe-kanban）
-├── values/              # Helm values 配置
-├── scripts/             # 部署脚本
+├── charts/
+│   └── n8n-workflows/   # n8n 工作流 JSON
+├── values/              # 配置
 ├── docs/                # 文档
 │   ├── workflow-v2-architecture.md  # V2 架构（权威）
 │   └── ...              # 其他参考文档
@@ -57,22 +56,17 @@ sisyphus/
 │   ├── ttpos-server-go/
 │   └── vibe-kanban/
 ├── testcases/           # 测试用例
-├── Makefile             # 统一命令入口
-├── start.sh             # 一键启动
-└── kind-config.yaml     # K8s 集群配置
+└── Makefile             # 统一命令入口
 ```
 
 ## 文档索引
 
-### 当前有效
-
 | 文档 | 内容 |
 |------|------|
 | [workflow-v2-architecture.md](docs/workflow-v2-architecture.md) | V2 架构设计（权威参考） |
-| [api-tag-management-spec.md](docs/api-tag-management-spec.md) | API 标签管理规范，对应 P0 合约阶段 |
-| [api-lifecycle-management.md](docs/api-lifecycle-management.md) | API 生命周期管理 |
-| [workflow-apifox-contract-testing.md](docs/workflow-apifox-contract-testing.md) | 契约测试实践 |
-| [vibe-kanban-manual-build.md](docs/vibe-kanban-manual-build.md) | vibe-kanban 构建指南 |
+| [workflow-v3-flow.md](docs/workflow-v3-flow.md) | V3 工作流全景 |
+| [bkd-agent-prompt-template.md](docs/bkd-agent-prompt-template.md) | BKD Agent Prompt 模板 |
+| [api-tag-management-spec.md](docs/api-tag-management-spec.md) | API 标签管理规范 |
 | [n8n-workflow-usage.md](docs/n8n-workflow-usage.md) | n8n 主编排使用说明 |
 
 
