@@ -1,12 +1,22 @@
 # 工作流 V2 架构设计
 
-> AI 驱动的无人值守开发工作流。加速开发，每个节点都有存在的理由。
+> AI 驱动的无人值守开发工作流。测试驱动，OpenAPI Spec 为唯一真相源。
+
+## 核心哲学
+
+**测试驱动开发（TDD）**：先定义合约，再写测试，最后写实现。AI 不能自己出题自己答。
+
+```
+需求 → 合约（OpenAPI Spec）→ 测试代码 → 业务代码 → 验证
+                ↑ 唯一真相源          ↑ LOCKED        ↑ 只跑测试
+```
 
 ## 核心原则
 
 - **目标**：加速开发，走向无人值守
-- **约束**：不搞花里胡哨的流程节点，每一个节点必须有意义
+- **约束**：每个节点只做一件事，不搞花里胡哨
 - **硬约束**：开发环境只能通过 aissh MCP 连接调试环境
+- **TDD 约束**：测试先于实现，测试代码一旦产出即锁定，Dev 不能修改测试
 
 ## 架构概览：三环模型
 
@@ -14,231 +24,266 @@
 开发环境（写代码+控制）→ 调试环境（验证）→ GitHub（最终门禁）
 ```
 
-- **开发环境**：AI 写代码，n8n 编排，aissh 远程操控调试环境
+- **开发环境**：AI 写代码，n8n 编排，BKD 执行，aissh 远程操控调试环境
 - **调试环境**：纯被动执行，分层验证，K8s namespace 隔离
 - **GitHub**：CI 全量一把梭 + 验收测试 + Code Review
+
+## 流程全景
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  P0: 合约设计                                                   │
+│  输入: 需求描述                                                  │
+│  输出: OpenAPI Spec (contract.spec.yaml)                        │
+│  原则: 只定义接口边界，不写任何代码                                │
+└──────────────────────────┬──────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  P1: 测试先行                                                   │
+│  输入: OpenAPI Spec                                             │
+│  输出:                                                          │
+│    ├── dev.spec.md          实现指南（给 Dev agent 看）           │
+│    ├── contract.test.*      契约测试代码（验证 API schema）       │
+│    └── ac.test.*            验收测试代码（Given/When/Then）       │
+│  原则: 只写测试，不写业务代码。测试产出即 LOCKED。                  │
+└──────────────────────────┬──────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  Dev: 实现                                                      │
+│  输入: dev.spec.md + 已有的测试代码                               │
+│  输出: 业务代码 + 单元测试                                       │
+│  原则: 只写业务代码，不能修改 contract.test 和 ac.test            │
+│  验证: 在调试环境跑分层测试                                       │
+│    L0: 静态检查（lint, type check, compile）                     │
+│    L1: 单元测试                                                  │
+│    L2: 契约测试（contract.test.*）                               │
+│    L3: 集成测试                                                  │
+│  全部通过才能进入下一阶段                                         │
+└──────────────────────────┬──────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  PR + CI                                                        │
+│  创建 PR → CI 全量跑 → 失败分类（flaky/真实）                    │
+│  flaky → retry    真实失败 → 回 Dev                              │
+└──────────────────────────┬──────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  验收测试                                                       │
+│  执行者: 独立 agent（无开发上下文）                               │
+│  输入: ac.test.*（LOCKED）+ 部署完整环境                         │
+│  输出: 验收报告（通过/失败 + 证据）                               │
+│  失败 → 回 Dev                                                  │
+└──────────────────────────┬──────────────────────────────────────┘
+                           ↓
+                    Code Review → 合并 → Done
+```
+
+## 每个节点的产出和约束
+
+### P0: 合约设计
+
+| 项目 | 说明 |
+|------|------|
+| **输入** | 需求描述（自然语言） |
+| **输出** | `contract.spec.yaml`（OpenAPI 3.0+ 规范） |
+| **做什么** | 定义 endpoint paths, methods, request/response schemas, error codes |
+| **不做什么** | 不写任何代码，不写测试 |
+| **质量门控** | Spec 必须包含：路径、方法、请求体 schema、响应体 schema、错误响应 |
+
+### P1: 测试先行
+
+| 项目 | 说明 |
+|------|------|
+| **输入** | `contract.spec.yaml` |
+| **输出** | `dev.spec.md` + `contract.test.*` + `ac.test.*` |
+| **做什么** | 1. 拆解实现指南 2. 编写契约测试代码 3. 编写验收测试代码 |
+| **不做什么** | 不写业务代码 |
+| **LOCKED** | `contract.test.*` 和 `ac.test.*` 一旦产出，后续阶段不能修改 |
+
+**contract.test（契约测试）**：
+- 基于 OpenAPI Spec 验证 API schema
+- 请求格式是否符合 spec
+- 响应格式是否符合 spec
+- 状态码是否正确
+- 必填字段是否存在
+
+**ac.test（验收测试）**：
+- Given/When/Then 格式
+- 覆盖正常路径和异常路径
+- 端到端场景验证
+- 由独立 agent 在干净环境执行
+
+### Dev: 实现
+
+| 项目 | 说明 |
+|------|------|
+| **输入** | `dev.spec.md` + 已有的测试代码（只读） |
+| **输出** | 业务代码 + 单元测试 |
+| **做什么** | 写代码让所有测试通过 |
+| **不做什么** | 不修改 `contract.test.*` 和 `ac.test.*` |
+| **验证** | 在调试环境跑 L0-L3 分层测试 |
+
+### 验证: 分层测试
+
+| 层级 | 内容 | 失败处理 |
+|------|------|---------|
+| L0 | 静态检查（lint, compile） | 立即回 Dev 修 |
+| L1 | 单元测试（Dev 自己写的） | 立即回 Dev 修 |
+| L2 | 契约测试（P1 写的，LOCKED） | 回 Dev 修业务代码 |
+| L3 | 集成测试 | 回 Dev 修 |
+
+### 验收: 独立验证
+
+| 项目 | 说明 |
+|------|------|
+| **执行者** | 独立 agent，无开发过程上下文 |
+| **输入** | `ac.test.*`（LOCKED）+ 部署完整环境 |
+| **环境** | 干净 namespace，完整服务栈 |
+| **输出** | 验收报告（场景通过率 + 证据） |
 
 ## 流程图
 
 ```mermaid
 flowchart TD
-    subgraph DEV["开发环境"]
-        subgraph N8N["n8n 主编排"]
-            REQ[需求 Issue REQ-xx]
-            P0[P0 合约设计]
-            P1[P1 规格拆分<br/>+ 验收用例锁定]
-            CONFLICT_CHECK[文件级冲突预检<br/>检查目标文件是否被其他任务占用]
-            DISPATCH[分发任务]
-            POOL{并发池检查<br/>活跃 namespace < 上限?}
-            QUEUE[排队等待]
-            COLLECT[收集验证结果]
-            DECIDE{全部通过?}
-            FUSE{熔断检查<br/>≥3轮 or 超时 or token超限?}
-            ESCALATE[挂 Issue 升级人工]
-            CREATE_PR[创建 PR]
-        end
+    REQ[需求 Issue] --> P0[P0: 合约设计<br/>产出 OpenAPI Spec]
+    P0 --> P1[P1: 测试先行<br/>产出 dev.spec + 契约测试 + 验收测试]
+    P1 --> DEV[Dev: 实现<br/>写业务代码让测试通过]
 
-        subgraph VK["vibe-kanban + Claude MCP — worktree 隔离"]
-            CODE[AI 写代码 + skill 小编排]
-            HEARTBEAT[心跳 / 进度上报]
-            GIT_PUSH[git push]
-            AISSH[aissh MCP 操控调试环境]
-        end
+    DEV --> VERIFY{调试环境分层验证<br/>L0→L1→L2→L3}
+    VERIFY -- 全部通过 --> PR[创建 PR]
+    VERIFY -- 有失败 --> FUSE{熔断检查}
+    FUSE -- 未触发 --> DEV
+    FUSE -- 触发 --> ESCALATE[升级人工]
 
-        subgraph OBS["可观测性 — Issue"]
-            SUB_ISSUE[子 Issue 记录:<br/>失败层级 / 原因 / 修复 diff<br/>token / 耗时 / 资源]
-            CLOSE_ISSUE[关闭 Issue]
-        end
+    PR --> CI{CI 全量}
+    CI -- 通过 --> AC[验收测试<br/>独立 agent 跑 ac.test]
+    CI -- 失败 --> CI_CLASS{分类}
+    CI_CLASS -- flaky --> CI
+    CI_CLASS -- 真实 --> DEV
 
-        FIX[修复代码]
-    end
-
-    subgraph DEBUG["调试环境 — K8s namespace 隔离<br/>ResourceQuota + LimitRange"]
-        subgraph NS["namespace: feat-xxx"]
-            PULL[git pull]
-            SETUP[setup 依赖<br/>DB / 后端 / 前端]
-            L0[静态检查]
-            L1[单元测试]
-            L2[契约测试]
-            L3[集成测试]
-            RESULT[返回结果]
-        end
-    end
-
-    subgraph GITHUB["GitHub"]
-        MERGE_WINDOW[串行合并窗口]
-        PR[PR]
-        CI[CI 全量一把梭]
-        CI_CLASS{失败分类}
-        CI_RETRY[flaky → 直接 retry]
-        CI_REAL[真实失败 → 回开发环境]
-        subgraph AC["验收测试"]
-            AC_NS[复用或新建 namespace<br/>拉起完整环境]
-            AC_AGENT[独立子 agent 执行<br/>Given/When/Then]
-            AC_REPORT[归档验收报告]
-        end
-        REVIEW[Code Review]
-        MERGE[合并]
-    end
-
-    %% 主流程
-    REQ --> P0 --> P1 --> CONFLICT_CHECK
-    CONFLICT_CHECK --> DISPATCH --> POOL
-    POOL -- 有余量 --> CODE
-    POOL -- 已满 --> QUEUE --> POOL
-    CODE --> HEARTBEAT
-    CODE --> GIT_PUSH
-
-    %% 跨环境
-    GIT_PUSH --> AISSH
-    AISSH --> PULL --> SETUP
-    SETUP --> L0 --> L1 --> L2 --> L3 --> RESULT
-    RESULT --> AISSH
-    AISSH --> COLLECT --> DECIDE
-
-    %% 失败路径
-    DECIDE -- 有失败 --> FUSE
-    FUSE -- 未触发 --> SUB_ISSUE --> FIX --> CODE
-    FUSE -- 触发熔断 --> ESCALATE
-
-    %% 成功 → 串行合并
-    DECIDE -- 全部通过 --> CLOSE_ISSUE --> MERGE_WINDOW --> PR --> CI
-
-    %% CI 失败分类
-    CI -- 失败 --> CI_CLASS
-    CI_CLASS -- flaky test --> CI_RETRY --> CI
-    CI_CLASS -- 真实失败 --> CI_REAL --> SUB_ISSUE
-
-    %% 验收
-    CI -- 通过 --> AC_NS --> AC_AGENT --> AC_REPORT
-    AC_REPORT -- 失败 --> SUB_ISSUE
-    AC_REPORT -- 通过 --> REVIEW --> MERGE
+    AC -- 通过 --> REVIEW[Code Review] --> MERGE[合并] --> DONE[Done]
+    AC -- 失败 --> DEV
 ```
 
 ## 职责划分
 
 | 角色 | 职责 | 不做什么 |
 |------|------|---------|
-| **n8n** | 主编排：阶段控制、任务分发、结果收集、熔断判断、并发池管理 | 不写代码、不直接操作调试环境 |
-| **vibe-kanban + Claude** | 写代码（worktree 直接操作）、小编排用 skill 自己搞、git push、通过 aissh 操控调试环境 | 不做阶段决策 |
-| **aissh MCP** | 唯一桥梁：开发环境远程操控调试环境（拉代码、setup、触发、读结果） | 不做逻辑判断 |
-| **调试环境** | 纯执行：拉代码、setup、分层跑验证、返回结果 | 不修代码、不做决策 |
-| **Issue** | 可观测性：记录 AI 卡在哪、怎么卡、修了几轮、每轮改了什么 | 不是流程控制工具 |
-| **GitHub CI** | 最终门禁：全量一把梭验证 | 不做分层 |
+| **n8n** | 主编排：阶段推进、回调路由、熔断判断 | 不写代码、不做 AI 判断 |
+| **BKD** | AI 执行引擎：管理 issue、启动 agent、日志 | 不做阶段决策 |
+| **Claude agent** | 写代码/测试、通过 aissh 操控调试环境 | 不做阶段决策、不修改 LOCKED 文件 |
+| **aissh MCP** | 唯一桥梁：远程操控调试环境 | 不做逻辑判断 |
+| **调试环境** | 纯执行：拉代码、setup、跑测试、返回结果 | 不修代码 |
+| **OpenAPI Spec** | 唯一真相源：定义接口边界 | 产出后不修改 |
 
 ## 两层编排
 
 | 层级 | 谁负责 | 粒度 | 例子 |
 |------|--------|------|------|
-| 主编排 | n8n | 粗粒度，管阶段推进 | P0→P1→分发→收集→决策→PR |
-| 小编排 | AI skill | 细粒度，管具体实现 | 拆文件、生成测试、处理依赖、自检 |
+| 主编排 | n8n | 粗粒度，管阶段推进 | P0→P1→Dev→验证→PR→验收 |
+| 小编排 | AI agent | 细粒度，管具体实现 | 拆文件、写测试、处理依赖、跑验证 |
 
 n8n 管"做什么、什么顺序"，AI 管"具体怎么做"。
 
-## 隔离方案
+## n8n 工作流架构
 
-| 层级 | 隔离方式 | 效果 |
-|------|---------|------|
-| 开发环境 | git worktree | 功能 A、B 各自独立 worktree，代码互不干扰 |
-| 调试环境 | K8s namespace + ResourceQuota + LimitRange | 每个功能独立 namespace，完整依赖，天然网络隔离，资源受限 |
-| 验收测试 | 独立子 agent | 干净上下文，不受开发过程污染 |
+采用事件驱动回调模式，每个阶段一个独立工作流：
+
+| Webhook | 触发时机 | 动作 |
+|---------|---------|------|
+| `/v2` | 入口 | 创建 P0 issue，发送需求 prompt |
+| `/v2-p0-done` | P0 agent 完成 | 创建 P1 issue，发送 Spec + 测试编写要求 |
+| `/v2-p1-done` | P1 agent 完成 | 创建 Dev issue，发送 dev.spec + 测试代码路径 |
+| `/v2-dev-done` | Dev agent 完成 | 检查测试结果，通过→创建 PR，失败→熔断检查 |
+| `/v2-ci-done` | CI 完成 | 通过→创建验收 issue，失败→分类处理 |
+| `/v2-accept-done` | 验收完成 | 通过→设 review，失败→回 Dev |
+
+每个工作流通过 BKD MCP 创建 issue + follow-up + 触发执行，agent 完成后回调下一个 webhook。
 
 ## 数据流
 
-| 通道 | 用途 |
-|------|------|
-| git push/pull | 代码传输 |
-| aissh MCP | 控制通道（唯一桥梁，硬约束） |
-| n8n | 编排控制 |
-| Issue | 可观测性 |
+| 阶段 | 输入 | 产出 | 传递方式 |
+|------|------|------|---------|
+| P0 | 需求描述 | contract.spec.yaml | git commit |
+| P1 | contract.spec.yaml | dev.spec.md, contract.test.*, ac.test.* | git commit |
+| Dev | dev.spec.md, tests | 业务代码, 单元测试 | git commit |
+| 验证 | 代码 + 测试 | L0-L3 结果 | aissh MCP |
+| CI | PR | 全量测试结果 | GitHub API |
+| 验收 | ac.test.* + 环境 | 验收报告 | BKD issue log |
+
+代码传输走 **git push/pull**，控制走 **aissh MCP**，编排走 **n8n webhook 回调**。
 
 ## 关键机制
 
-### 1. 熔断
+### 1. 测试锁定（LOCKED）
+
+P1 产出的 `contract.test.*` 和 `ac.test.*` 一旦 commit，后续阶段的 agent prompt 明确禁止修改这些文件。n8n 在 Dev 完成后可以检查这些文件是否被改动（git diff），改了就拒绝。
+
+### 2. 熔断
 
 ```
-每次失败 → 计数器 +1 → 检查三个条件：
+每次 Dev 失败 → 轮次 +1 → 检查：
   1. 修复轮数 ≥ 3
   2. 累计耗时超限
   3. 累计 token 消耗超限
 
-任一触发 → 停止自动修复 → 挂 Issue 升级人工
+任一触发 → 停止 → 挂 Issue 升级人工
 ```
 
-n8n 做判断，不依赖 AI 自己决定。
+n8n 做判断，通过 webhook 入参传递轮次和累计数据。
 
-### 2. AI 心跳
+### 3. AI 心跳
 
-AI 执行 skill 小编排时，定期向 n8n 上报进度。n8n 设硬超时，超时未收到心跳 → 强制中断 → 挂 Issue。
+BKD 内置进程监控。agent 超时未完成 → BKD 自动标记失败 → 触发回调。
 
-### 3. 文件级冲突预检
+### 4. 冲突预检
 
-n8n 分发任务前，检查目标文件是否被其他活跃任务占用。有冲突则排队或调整任务范围。
+n8n 分发 Dev 任务前，检查目标文件是否被其他活跃任务占用。
 
-### 4. 并发池
+### 5. 并发池
 
-n8n 维护并发池，控制同时活跃的调试环境 namespace 数量。超出上限的新任务排队等待。
+BKD `get-processes-capacity` 检查可用槽位，超限排队。
 
-### 5. 串行合并窗口
+### 6. 串行合并窗口
 
-多个功能都通过验证后，串行化合并到主分支，避免并行 PR 互相踩。
+多个 PR 通过验证后，串行化合并到主分支。
 
-### 6. CI 失败分类
+### 7. CI 失败分类
 
-| 类型 | 处理方式 |
-|------|---------|
-| flaky test（间歇性失败） | 直接 retry，不回开发环境 |
-| 真实失败 | 挂 Issue 回开发环境走正常修复流程 |
-
-### 7. 验收测试
-
-- **执行者**：独立干净子 agent，不带开发过程的记忆
-- **输入**：P1 阶段锁定的验收用例 + PR diff
-- **环境**：复用或新建 namespace，拉起完整服务，实际跑 Given/When/Then
-- **输出**：归档验收报告（通过/失败 + 证据）
-
-### 8. 调试环境 namespace 生命周期
-
-| 事件 | 动作 |
+| 类型 | 处理 |
 |------|------|
-| 任务开始 | aissh 创建 namespace + 部署依赖 |
-| 验证过程 | 在 namespace 内跑分层测试 |
-| 全部通过 | 清理 namespace |
-| 熔断升级 | 保留 namespace 供人工排查 |
+| flaky test | 直接 retry |
+| 真实失败 | 回 Dev 走修复流程 |
 
-## 可观测性：Issue 记录内容
+### 8. 验收测试隔离
 
-每个 Issue 记录：
-- 失败层级（静态检查 / 单测 / 契约 / 集成）
-- 失败原因（错误日志摘要）
-- 修复 diff（改了哪些文件的哪些行）
-- token 消耗 + 耗时
-- 调试环境资源使用（内存 / CPU 峰值）
-- 第几轮修复
+独立 agent，不带开发过程记忆。复用或新建 namespace，部署完整服务栈，执行 LOCKED 的 ac.test.*。
 
-## 分层测试 vs CI
+## 可观测性
 
-| | 调试环境（开发阶段） | GitHub CI |
-|---|---|---|
-| **策略** | 分层，逐级递进 | 全量一把梭 |
-| **目的** | 快速定位问题，小步快跑 | 最终确认，兜底 |
-| **失败处理** | 哪层挂了立刻回去改 | 分类后处理 |
+BKD issue 记录每个阶段的：
+- 产出物（Spec、测试代码、业务代码）
+- 测试结果（哪层失败、错误日志）
+- 修复轮次和 diff
+- token 消耗和耗时
+- 回调状态
+
+n8n execution 记录编排层的：
+- 每个 webhook 触发和响应
+- 每个 BKD MCP 调用结果
+- 阶段推进路径
 
 ## 每个节点的存在理由
 
 | 节点 | 为什么需要 | 去掉会怎样 |
 |------|-----------|-----------|
 | P0 合约设计 | AI 写代码前必须知道边界 | 返工率爆炸 |
-| P1 规格拆分 + 验收锁定 | 拆清楚才能并行，验收锁定防 AI 自己出题自己答 | 无法并行，验收失去意义 |
-| 冲突预检 | 并行开发前确认不打架 | 合并阶段才发现冲突，前面全白干 |
-| 并发池 | 资源有限，不控制就跑爆 | 集群挂掉，全部任务一起死 |
-| AI 写代码 | 核心价值 | — |
-| git push + aissh 验证 | 写完必须知道能不能跑 | 垃圾代码堆积到 CI 才发现 |
-| 分层测试 | 秒级发现的问题不等到集成才暴露 | 每次跑全套，反馈慢 |
+| P1 测试先行 | 测试锁定防 AI 自己出题自己答 | 验收失去意义 |
+| 契约测试 | 验证 API 是否符合 Spec | 接口不一致到集成才发现 |
+| 验收测试 | 验证业务逻辑是否正确 | 技术通了但业务是错的 |
+| Dev 实现 | 核心价值 | — |
+| 分层验证 | 快速定位问题层级 | 每次跑全套，反馈慢 |
 | 熔断 | AI 卡住了继续烧没意义 | 死循环烧 token |
-| 心跳 | n8n 必须知道 AI 还活着 | 卡死了没人知道 |
-| Issue 记录 | 知道 AI 哪里弱才能改进 | 黑盒，无法优化 |
-| 串行合并窗口 | 避免并行 PR 互相踩 | 合并冲突 |
-| CI 全量 | 分步验的不够，组合问题需要兜底 | 漏掉组合问题 |
-| CI 失败分类 | flaky test 不值得走完整修复回环 | 浪费整轮循环 |
-| 验收测试 | 确认业务逻辑对不对 | 技术通了但业务是错的 |
+| CI 全量 | 组合问题需要兜底 | 漏掉组合问题 |
+| CI 失败分类 | flaky 不值得走完整修复 | 浪费整轮循环 |
+| 串行合并 | 避免并行 PR 互踩 | 合并冲突 |
