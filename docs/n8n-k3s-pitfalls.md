@@ -136,6 +136,48 @@ resources:
 
 **建议**：使用 latest（2.16.1+），接受 Runner 的不稳定性，通过避免 Code 节点和 JSON.stringify 来规避。
 
+## 9. fullResponse 字段名是 `data` 不是 `body`
+
+**现象**：`$json.body` 是 undefined，ID 提取正则返回空。
+
+**根因**：n8n 2.x 的 HTTP Request 在 `fullResponse: true` + `responseFormat: text` 模式下，响应体存在 `$json.data` 字段中，不是 `$json.body`。完整结构是 `{ data, headers, statusCode, statusMessage }`。
+
+**解决**：
+```
+// 错误
+{{ $json.body }}
+
+// 正确
+{{ $json.data }}
+
+// 跨节点引用
+{{ $node.Create.json.data }}
+```
+
+## 10. BKD issue ID 从 SSE 中提取
+
+**现象**：`create-issue` 返回 SSE 格式，ID 在多层转义的 JSON 字符串中。
+
+**根因**：SSE body 中 `"id"` 被转义为 `\\"id\\"` （在 JS 字符串中是 `\"id\"`），标准 JSON 正则匹配不上。
+
+**解决**：用简单正则匹配 BKD issue ID 格式（8 位小写字母数字）：
+```
+={{ String($node.Create.json.data || "").match(/id[^a-z]*([a-z0-9]{8})/)?.[1] || "" }}
+```
+
+## 11. execute-issue 不能对 todo 状态的 issue
+
+**现象**：`execute-issue` 返回 `Cannot execute a todo issue — move to working first`。
+
+**根因**：BKD 的 `execute-issue` 只能对 `review` 状态的 issue 使用。`todo` 状态需要先通过 `update-issue` 改为 `working`。
+
+**解决**：使用 `create(todo) → follow-up → update-issue(working)` 三步流程：
+```
+1. create-issue(statusId="todo")     // 创建，不执行
+2. follow-up-issue(prompt="详细需求") // 发送详细 prompt（队列中）
+3. update-issue(statusId="working")   // 触发执行，agent 自动处理队列中的 follow-up
+```
+
 ## 最佳实践总结
 
 | 做法 | 说明 |
