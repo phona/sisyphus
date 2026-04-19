@@ -335,6 +335,100 @@ case_analyze_complete() {
   fi
 }
 
+# --- 新架构用例 ---
+
+# UNSUPPORTED: 需求分析 title prefix "UNSUPPORTED" → 应进 escalate 不 fan-out Spec
+case_analyze_unsupported() {
+  cmd_clean
+  mcp_init
+  echo "=== ANALYZE_UNSUPPORTED: title 'UNSUPPORTED [X] 需求分析' 不应 fan-out 3 Specs ==="
+  post_webhook "UNSUPPORTED [${REQ_ID}] 需求分析" "fake-an" "[\"analyze\",\"${REQ_ID}\"]"
+  sleep 4
+  bkd_list_test_ids
+  specs=$(bkd_list_test_ids | grep -cE 'Spec$' || true)
+  if [[ "$specs" -eq 0 ]]; then
+    echo "✅ PASS: UNSUPPORTED 走 escalate，没创建 Spec"
+  else
+    echo "❌ FAIL: 创建了 $specs 个 Spec（应该 0）"
+  fi
+}
+
+# NEEDS-CLARIFY: 同 UNSUPPORTED，走 escalate 路径
+case_analyze_needs_clarify() {
+  cmd_clean
+  mcp_init
+  echo "=== ANALYZE_NEEDS_CLARIFY: 需要澄清的需求不应 fan-out ==="
+  post_webhook "NEEDS-CLARIFY [${REQ_ID}] 需求分析" "fake-an" "[\"analyze\",\"${REQ_ID}\"]"
+  sleep 4
+  bkd_list_test_ids
+  specs=$(bkd_list_test_ids | grep -cE 'Spec$' || true)
+  if [[ "$specs" -eq 0 ]]; then
+    echo "✅ PASS: NEEDS-CLARIFY 不 fan-out"
+  else
+    echo "❌ FAIL: 创建了 $specs 个 Spec"
+  fi
+}
+
+# TEST-BUG diagnosis: Bug Fix title prefix "TEST-BUG" → 启动 Test Bug Fix agent
+case_bugfix_test_bug() {
+  cmd_clean
+  mcp_init
+  echo "=== BUGFIX_TEST_BUG: 'TEST-BUG [X] Bug Fix' → 创 Test Bug Fix ==="
+  post_webhook "TEST-BUG [${REQ_ID}] Bug Fix Round 1" "fake-bf" "[\"bugfix\",\"${REQ_ID}\"]"
+  sleep 3
+  bkd_list_test_ids
+  if bkd_list_test_ids | grep -qE 'Test Bug Fix'; then
+    echo "✅ PASS: 创建了 Test Bug Fix issue"
+  else
+    echo "❌ FAIL: 没创建 Test Bug Fix"
+  fi
+}
+
+# SPEC-BUG diagnosis: Bug Fix title prefix "SPEC-BUG" → escalate, 不创建新 issue
+case_bugfix_spec_bug() {
+  cmd_clean
+  mcp_init
+  echo "=== BUGFIX_SPEC_BUG: 'SPEC-BUG [X] Bug Fix' → escalate 不创 issue ==="
+  post_webhook "SPEC-BUG [${REQ_ID}] Bug Fix Round 1" "fake-bf" "[\"bugfix\",\"${REQ_ID}\"]"
+  sleep 3
+  bkd_list_test_ids
+  if bkd_list_test_ids | grep -qE '(测试验证|Test Bug Fix)'; then
+    echo "❌ FAIL: 误创建了测试验证或 Test Bug Fix"
+  else
+    echo "✅ PASS: 走 escalate，没新 issue"
+  fi
+}
+
+# Test Bug Fix 完成 → 回流应创建测试验证
+case_test_bugfix_complete() {
+  cmd_clean
+  mcp_init
+  echo "=== TEST_BUGFIX_COMPLETE: '[X] Test Bug Fix' 完成 → 创测试验证 ==="
+  post_webhook "[${REQ_ID}] Test Bug Fix" "fake-tbf" "[\"test-bugfix\",\"${REQ_ID}\"]"
+  sleep 3
+  bkd_list_test_ids
+  if bkd_list_test_ids | grep -qE '测试验证$'; then
+    echo "✅ PASS: Test Bug Fix 完成后重跑 verify"
+  else
+    echo "❌ FAIL: 没创建测试验证"
+  fi
+}
+
+# 常规 Bug Fix (无 prefix) 完成 → 当作 CODE BUG 修完，重跑 verify（原行为）
+case_bugfix_code_bug() {
+  cmd_clean
+  mcp_init
+  echo "=== BUGFIX_CODE_BUG: 常规 '[X] Bug Fix' 完成 → 创测试验证 ==="
+  post_webhook "[${REQ_ID}] Bug Fix" "fake-bf" "[\"bugfix\",\"${REQ_ID}\"]"
+  sleep 3
+  bkd_list_test_ids
+  if bkd_list_test_ids | grep -qE '测试验证$'; then
+    echo "✅ PASS"
+  else
+    echo "❌ FAIL: 没创建测试验证"
+  fi
+}
+
 # JSON 转义：Ctx 的 ttl 字段遇到带 " 和 \n 的 title 应安全
 case_json_escape() {
   cmd_clean
@@ -368,6 +462,13 @@ cmd_all() {
   case_accept_fail
   case_analyze_complete
   case_json_escape
+  # 新架构用例
+  case_analyze_unsupported
+  case_analyze_needs_clarify
+  case_bugfix_test_bug
+  case_bugfix_spec_bug
+  case_test_bugfix_complete
+  case_bugfix_code_bug
   cmd_clean
   echo "[BKD webhook 仍然 disabled — 若要恢复实跑流程: ./test-events-harness.sh webhook_on]"
 }
