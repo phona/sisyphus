@@ -11,17 +11,22 @@ Requirement: {title}
 Description: {description}
 
 Use /opsx:propose to decompose this requirement.
-Design the API contract boundary. Output contract.spec.yaml (OpenAPI 3.0+).
 
-Deliverables:
-- openspec/changes/xxx/ (proposal.md, specs/, design.md, tasks.md)
-- contract.spec.yaml
+产出 openspec/changes/{reqId}/：
+- proposal.md：做什么、为什么
+- specs/：capability 规格（后续验收测试依据）
+- design.md：关键设计决策
+**不要产出 tasks.md**（实现任务拆解归开发Spec阶段）。
 
-contract.spec.yaml must include:
-- All endpoint paths and HTTP methods
-- Request/response schemas with types and constraints
-- Status codes and error responses
-- Example request/response pairs
+另出 contract.spec.yaml（OpenAPI 3.0+）：
+- 所有 endpoint 路径、HTTP 方法
+- Request/response schema，含类型与约束
+- 状态码与错误响应
+- 示例 request/response
+
+这份 openspec 文档是**所有后续 agent（Spec / Dev / Bug Fix）的唯一真相源**。
+所有人都靠它理解做什么、为什么。写得清楚、完备、无歧义。
+后续任何 Bug Fix 也要回头读这份文档，防止改出奇奇怪怪的东西。
 
 Do NOT write any code or tests.
 If requirements are ambiguous, STOP and ask via this issue.
@@ -160,12 +165,17 @@ Move to review when done.
 Previous test verification failed. Failure details:
 {fail_info}
 
+**动手前必读**：
+- openspec/changes/{reqId}/（proposal.md / specs/ / design.md）—— 本需求的唯一真相源
+- dev.spec.md —— 实现指南
+搞清楚原本要做什么、设计约束是什么，避免改出奇奇怪怪的东西偏离初衷。
+
 Fix the code to make failing tests pass.
 
 TDD approach — use aissh MCP on debug environment:
 1. aissh exec_run: reproduce the failure
 2. Read the failing test to understand what's expected
-3. Fix the implementation code
+3. Fix the implementation code (遵循 openspec 和 dev.spec.md)
 4. aissh exec_run: re-run the failing test
 5. Red? Fix more. Green? Run all tests.
 6. aissh exec_run: L0-L3 all pass
@@ -173,6 +183,7 @@ TDD approach — use aissh MCP on debug environment:
 RULES:
 - Do NOT modify contract_test.* or acceptance_test.* (LOCKED)
 - Only fix implementation code
+- 决策不明时回头看 openspec，不要凭空发挥
 - Commit and push when done
 - Move to review
 ```
