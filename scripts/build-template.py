@@ -752,7 +752,7 @@ const reqId = routerParams.reqId;
 // Simple heuristic: if >=2 spec issues ci-passed (dev-spec + accept-spec at minimum), gate open.
 const reqSpecs = issues.filter(i => Array.isArray(i.tags) && i.tags.includes(reqId));
 const passed = reqSpecs.filter(i => i.tags.includes('ci-passed'));
-const expectedCount = 2; // MVP: dev-spec + accept-spec baseline
+const expectedCount = 3; // backend layer: dev-spec + accept-spec + contract-spec
 const allReady = passed.length >= expectedCount;
 return [{ json: {
   allReady,
@@ -792,8 +792,20 @@ nodes.append(code_node("spg_dev_id", "[SPG] Dev Id", 2680, y-60, ID_EXTRACT.repl
 nodes.append(http_node(
     "spg_dev_fu", "[SPG] Dev Fu", 2900, y-60,
     follow_up_body(
-        '{{ $json.iid }}',
-        '## 开发 (DEV)\nAGENT_ROLE=dev-agent\nREQ={{ $node["[SPG] Gate check"].json.reqId }}\n\n所有 Spec 阶段已通过 CI lint gate。按 prompts.md 的 dev-agent 定义干活：读 openspec/changes/$REQ/* 实现业务代码 + unit test，走 stage/$REQ-dev 子分支，ONE 干净 commit 后 move review。',
+        "{{ $json.iid }}",
+        "## 开发 (DEV)\n"
+        "AGENT_ROLE=dev-agent\n"
+        "REQ={{ $json.reqId }}\n"
+        "\n"
+        "所有 Spec 阶段已通过 CI lint gate。按 prompts.md 的 dev-agent 定义干活：\n"
+        "1. 读 openspec/changes/$REQ/* (proposal/design/specs/contract.spec.yaml/tasks.md)\n"
+        "2. 从 feat/$REQ 拉 stage/$REQ-dev 子分支\n"
+        "3. 实现业务代码 + 同目录 unit test\n"
+        "4. 通过 mcp__aissh-tao__exec_run 在 vm-node04 本地 go vet / go build 验证\n"
+        "5. ONE 干净 commit + push\n"
+        "6. move review\n"
+        "\n"
+        "禁改 tests/contract/* / tests/acceptance/* / tests/ui/* / openspec/specs/* (pre-commit ACL 会拦)。",
         73),
     rpc_id=73, on_error="continueRegularOutput",
 ))

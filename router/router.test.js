@@ -110,6 +110,14 @@ test('routeEvent: ci(lint) pass on spec → mark_spec_reviewed', () => {
   assert.equal(r.params.specStage, 'contract-spec');
 });
 
+test('routeEvent: spec done → mark_spec_reviewed (TEMP bypass ci-lint)', () => {
+  // Temporary: spec completion shortcuts straight to SPG gate (ci-lint disabled during integration testing)
+  const r = routeEvent({ tags: ['dev-spec', 'REQ-20'], issueId: 'spec-1', projectId: '77k9z58j' });
+  assert.equal(r.action, 'mark_spec_reviewed');
+  assert.equal(r.params.specStage, 'dev-spec');
+  assert.equal(r.params.parentIssueId, 'spec-1');
+});
+
 test('routeEvent: analyze done with layers → fanout expected specs', () => {
   const body = { tags: ['analyze', 'REQ-5', 'layer:backend', 'layer:frontend'] };
   const r = routeEvent(body);
