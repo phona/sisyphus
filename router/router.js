@@ -283,24 +283,12 @@ function routeCiDone(ctx, issueId, webhookBody) {
       };
     }
     // integration failure = contract/acceptance assertions broke.
-    // Diagnose via stderr_tail: code-bug → bugfix; spec|test|unknown → GitHub issue (human).
+    // User policy: 契约/验收是 LOCKED 边界，任何 integration fail 一律让人工介入 (GitHub issue)，
+    // 不再区分 code-bug/spec-bug。AI 不会自主去改跟"产品需求与代码契合度"相关的错误。
+    // diagnosis 依然跑一次只作为 hint 附到 GitHub issue 上下文。
     if (ctx.target === 'integration') {
       const ciResult = webhookBody._ciResult || {};
       const diag = diagnoseCiFailure({ target: 'integration', stderrTail: ciResult.stderrTail, failedTests: ciResult.failedTests });
-      if (diag.diagnosis === 'code-bug') {
-        return {
-          action: 'create_bugfix',
-          params: {
-            reqId: ctx.reqId,
-            round: 1,
-            sourceIssueId: issueId,
-            reason: 'ci:integration fail (code-bug)',
-            branch: `feat/${ctx.reqId}`,
-            diagnosis: diag.diagnosis,
-          },
-        };
-      }
-      // spec-bug / test-bug / unknown → human decides via GitHub issue
       return {
         action: 'open_github_issue',
         params: {
@@ -314,6 +302,9 @@ function routeCiDone(ctx, issueId, webhookBody) {
           workdir: workdirFor(`feat/${ctx.reqId}`),
           stderrTail: ciResult.stderrTail || '',
           failedTests: ciResult.failedTests || [],
+          // Dedup key: same REQ + same kind → agent should comment on existing open issue
+          // instead of opening a new one each CI round.
+          incidentKey: `${ctx.reqId}:ci-integration-fail`,
         },
       };
     }
@@ -365,6 +356,7 @@ function routeAcceptDone(ctx, issueId) {
         branch: `feat/${ctx.reqId}`,
         repoUrl: ctx._repoMap[ctx._projectId] || null,
         workdir: workdirFor(`feat/${ctx.reqId}`),
+        incidentKey: `${ctx.reqId}:accept-fail`,
       },
     };
   }

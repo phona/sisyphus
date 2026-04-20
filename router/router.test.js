@@ -98,33 +98,32 @@ test('routeEvent: ci(integration) pass → create_accept', () => {
   assert.equal(r.params.repoUrl, 'https://github.com/phona/ubox-crosser.git');
 });
 
-test('routeEvent: ci(integration) fail code-bug (runtime FAIL) → create_bugfix', () => {
+test('routeEvent: ci(integration) fail ALWAYS → open_github_issue (even code-bug)', () => {
   const body = {
     tags: ['ci', 'REQ-10', 'ci:fail', 'target:integration'],
     issueId: 'ci-x',
-    _ciResult: { stderrTail: '--- FAIL: TestHealthz\nexpected 200 got 500', failedTests: ['TestHealthz'] },
-  };
-  const r = routeEvent(body);
-  assert.equal(r.action, 'create_bugfix');
-  assert.equal(r.params.round, 1);
-  assert.equal(r.params.diagnosis, 'code-bug');
-});
-
-test('routeEvent: ci(integration) fail test-bug (compile err in tests/) → open_github_issue', () => {
-  const body = {
-    tags: ['ci', 'REQ-10', 'ci:fail', 'target:integration'],
-    issueId: 'ci-y',
     projectId: '77k9z58j',
-    _ciResult: { stderrTail: 'tests/contract/ping_test.go:12: undefined: SomeHelper', failedTests: [] },
+    _ciResult: { stderrTail: '--- FAIL: TestHealthz\nexpected 200 got 500', failedTests: ['TestHealthz'] },
   };
   const r = routeEvent(body);
   assert.equal(r.action, 'open_github_issue');
   assert.equal(r.params.kind, 'ci-integration-fail');
-  assert.equal(r.params.diagnosis, 'test-bug');
-  assert.equal(r.params.repoUrl, 'https://github.com/phona/ubox-crosser.git');
+  assert.equal(r.params.diagnosis, 'code-bug');  // hint, not routing decision
+  assert.equal(r.params.incidentKey, 'REQ-10:ci-integration-fail');
 });
 
-test('routeEvent: ci(integration) fail unknown (no stderr) → open_github_issue', () => {
+test('routeEvent: ci(integration) fail test-bug → open_github_issue', () => {
+  const body = {
+    tags: ['ci', 'REQ-10', 'ci:fail', 'target:integration'],
+    issueId: 'ci-y',
+    _ciResult: { stderrTail: 'tests/contract/ping_test.go:12: undefined: SomeHelper', failedTests: [] },
+  };
+  const r = routeEvent(body);
+  assert.equal(r.action, 'open_github_issue');
+  assert.equal(r.params.diagnosis, 'test-bug');
+});
+
+test('routeEvent: ci(integration) fail unknown → open_github_issue', () => {
   const body = {
     tags: ['ci', 'REQ-10', 'ci:fail', 'target:integration'],
     issueId: 'ci-z',
