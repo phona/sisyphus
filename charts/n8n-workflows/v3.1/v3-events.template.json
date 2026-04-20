@@ -1638,6 +1638,94 @@
       }
     },
     {
+      "id": "gh_bug_list",
+      "name": "[GH Bugfix List]",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        2340
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":85,\"method\":\"tools/call\",\"params\":{\"name\":\"list-issues\",\"arguments\":{\"projectId\":\"{{ $node[\"[ENTRY] Ctx 提取\"].json.projectId }}\",\"limit\":200}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 10000
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "gh_bug_gate",
+      "name": "[GH Bugfix Gate]",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        2340
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// Count existing BUGFIX issues for this REQ to decide next round + 熔断.\nconst raw = $node['[GH Bugfix List]'].json;\nconst src = raw && (raw.data || raw.body || raw);\nconst text = typeof src === 'string' ? src : String(src);\nconst m = text.match(/data:\\s*(\\{[\\s\\S]*?\\})\\s*$/m);\nlet issues = [];\nif (m) {\n  try {\n    const env = JSON.parse(m[1]);\n    const c = env.result && Array.isArray(env.result.content) ? env.result.content[0] : null;\n    if (c && typeof c.text === 'string') issues = JSON.parse(c.text);\n  } catch {}\n}\nconst routerParams = $node['Router'].json.params;\nconst reqId = routerParams.reqId;\nconst existing = (Array.isArray(issues) ? issues : []).filter(i =>\n  Array.isArray(i.tags) && i.tags.includes('bugfix') && i.tags.includes(reqId));\nconst round = existing.length + 1;\nconst CB = 3; // circuit-breaker threshold; matches router.js CB_THRESHOLD\nconst shouldBugfix = round <= CB;\n// Carry context needed by [BUG] Cr downstream, shaped like Router's create_bugfix params.\nreturn [{ json: {\n  shouldBugfix,\n  round,\n  cbThreshold: CB,\n  existingCount: existing.length,\n  // Expose under params.* so [BUG] Cr's existing expressions ($json.params.*) still work.\n  params: {\n    reqId,\n    round,\n    sourceIssueId: routerParams.sourceIssueId || routerParams.issueId,\n    reason: (routerParams.kind || 'gh-escalated') + ' round-' + round,\n    branch: routerParams.branch || ('feat/' + reqId),\n  },\n}}];\n"
+      }
+    },
+    {
+      "id": "gh_bug_if",
+      "name": "[GH Bugfix If]",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2160,
+        2340
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              },
+              "leftValue": "={{ $json.shouldBugfix }}",
+              "rightValue": true
+            }
+          ]
+        }
+      }
+    },
+    {
       "id": "done_cr",
       "name": "[DONE] Cr",
       "type": "n8n-nodes-base.httpRequest",
@@ -2669,6 +2757,57 @@
         [
           {
             "node": "[GH] St",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[GH] St": {
+      "main": [
+        [
+          {
+            "node": "[GH Bugfix List]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[GH Bugfix List]": {
+      "main": [
+        [
+          {
+            "node": "[GH Bugfix Gate]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[GH Bugfix Gate]": {
+      "main": [
+        [
+          {
+            "node": "[GH Bugfix If]",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[GH Bugfix If]": {
+      "main": [
+        [
+          {
+            "node": "[BUG] Cr",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[A] skip",
             "type": "main",
             "index": 0
           }

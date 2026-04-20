@@ -851,6 +851,86 @@ nodes.append(http_node(
 conns["[GH] Cr"] = {"main": [[{"node": "[GH] Id", "type": "main", "index": 0}]]}
 conns["[GH] Id"] = {"main": [[{"node": "[GH] Fu", "type": "main", "index": 0}]]}
 conns["[GH] Fu"] = {"main": [[{"node": "[GH] St", "type": "main", "index": 0}]]}
+conns["[GH] St"] = {"main": [[{"node": "[GH Bugfix List]", "type": "main", "index": 0}]]}
+
+# ─── [GH] → BKD bugfix gate ──────────────────────────────────────────────
+# After GH issue created/commented, decide whether to also trigger BKD bugfix chain.
+# Policy (user-confirmed):
+#   - every ci-integration/accept fail → GH issue (done above)
+#   - additionally BKD bugfix unless round > CB_THRESHOLD (熔断，只留 GH)
+#   - round count = existing BUGFIX+REQ issues + 1
+# Independent of Router Dispatch; runs as a post-step after [GH] St.
+y = y + 140  # below [GH] row
+nodes.append(http_node(
+    "gh_bug_list", "[GH Bugfix List]", 1580, y,
+    ('={"jsonrpc":"2.0","id":85,"method":"tools/call","params":{"name":"list-issues","arguments":'
+     '{"projectId":"{{ $node["[ENTRY] Ctx 提取"].json.projectId }}","limit":200}}}'),
+    rpc_id=85, timeout=10000, on_error="continueRegularOutput",
+))
+nodes.append(code_node(
+    "gh_bug_gate", "[GH Bugfix Gate]", 1800, y,
+    """// Count existing BUGFIX issues for this REQ to decide next round + 熔断.
+const raw = $node['[GH Bugfix List]'].json;
+const src = raw && (raw.data || raw.body || raw);
+const text = typeof src === 'string' ? src : String(src);
+const m = text.match(/data:\\s*(\\{[\\s\\S]*?\\})\\s*$/m);
+let issues = [];
+if (m) {
+  try {
+    const env = JSON.parse(m[1]);
+    const c = env.result && Array.isArray(env.result.content) ? env.result.content[0] : null;
+    if (c && typeof c.text === 'string') issues = JSON.parse(c.text);
+  } catch {}
+}
+const routerParams = $node['Router'].json.params;
+const reqId = routerParams.reqId;
+const existing = (Array.isArray(issues) ? issues : []).filter(i =>
+  Array.isArray(i.tags) && i.tags.includes('bugfix') && i.tags.includes(reqId));
+const round = existing.length + 1;
+const CB = 3; // circuit-breaker threshold; matches router.js CB_THRESHOLD
+const shouldBugfix = round <= CB;
+// Carry context needed by [BUG] Cr downstream, shaped like Router's create_bugfix params.
+return [{ json: {
+  shouldBugfix,
+  round,
+  cbThreshold: CB,
+  existingCount: existing.length,
+  // Expose under params.* so [BUG] Cr's existing expressions ($json.params.*) still work.
+  params: {
+    reqId,
+    round,
+    sourceIssueId: routerParams.sourceIssueId || routerParams.issueId,
+    reason: (routerParams.kind || 'gh-escalated') + ' round-' + round,
+    branch: routerParams.branch || ('feat/' + reqId),
+  },
+}}];
+"""
+))
+nodes.append({
+    "id": "gh_bug_if", "name": "[GH Bugfix If]",
+    "type": "n8n-nodes-base.if", "typeVersion": 2.2,
+    "position": [2020, y],
+    "parameters": {
+        "conditions": {
+            "options": {"caseSensitive": True, "typeValidation": "loose"},
+            "combinator": "and",
+            "conditions": [{
+                "operator": {"type": "boolean", "operation": "true"},
+                "leftValue": "={{ $json.shouldBugfix }}",
+                "rightValue": True,
+            }],
+        },
+    },
+})
+conns["[GH Bugfix List]"] = {"main": [[{"node": "[GH Bugfix Gate]", "type": "main", "index": 0}]]}
+conns["[GH Bugfix Gate]"] = {"main": [[{"node": "[GH Bugfix If]", "type": "main", "index": 0}]]}
+# If branch: true → start BUGFIX chain; false → terminal (circuit-breaker, GH issue alone)
+conns["[GH Bugfix If]"] = {
+    "main": [
+        [{"node": "[BUG] Cr", "type": "main", "index": 0}],
+        [{"node": "[A] skip", "type": "main", "index": 0}],
+    ],
+}
 
 # === Action: done_archive ====================================================
 # Accept pass → openspec apply + gh pr create + mark analyze parent done
@@ -1251,6 +1331,13 @@ _spg_row_idx = next(i for i, (name, _) in enumerate(ACTION_ROWS) if name == 'mar
 _spg_y = ACTION_ROW_Y_START + _spg_row_idx * ACTION_ROW_SPACING
 LAYOUT['[SPG] Dev St']             = (COL['a7'] + 240, _spg_y)       # end of If-true chain
 LAYOUT['[SPG] Gate not yet ready'] = (COL['a5'],       _spg_y + 80)  # below Dev Cr (If-false branch)
+
+# [GH Bugfix] gate row: below [GH] main row (open_github_issue action)
+_gh_row_idx = next(i for i, (name, _) in enumerate(ACTION_ROWS) if name == 'open_github_issue')
+_gh_y = ACTION_ROW_Y_START + _gh_row_idx * ACTION_ROW_SPACING
+LAYOUT['[GH Bugfix List]'] = (COL['a1'], _gh_y + 100)
+LAYOUT['[GH Bugfix Gate]'] = (COL['a2'], _gh_y + 100)
+LAYOUT['[GH Bugfix If]']   = (COL['a3'], _gh_y + 100)
 
 # Apply layout
 missing = []
