@@ -153,13 +153,12 @@ const _ciResult = (hookBody && hookBody._ciResult && typeof hookBody._ciResult =
   ? hookBody._ciResult
   : parseCiResult(issue.description);
 
-// Dedup by BKD-native event ID.
-//   session.completed 携带 executionId (UUID，session 唯一)；
-//   issue.updated 没 UUID，用 timestamp|issueId|event 作复合 ID（毫秒精度足够）。
-// True duplicates (BKD 重投递) 共享同 eventId；合法 agent 再跑会产生新 executionId。
-// 无 TTL、无 tags 对比、不需要 statusUpdatedAt 兜底。
-const eventId = hookBody.executionId
-              || ((hookBody.timestamp || '') + '|' + issueId + '|' + event);
+// Dedup by (timestamp + issueId + event [+ executionId]).
+// 观察：BKD 的 executionId 不是 session-unique（同 issue 多次 session 复用同一 UUID），
+// 只是 issue-level 标识。真正唯一的是 timestamp（毫秒精度）。同一事件 BKD 重投递会带
+// 完全相同的 timestamp+executionId。合法重发（agent 再跑）timestamp 不同。
+const eventId = (hookBody.timestamp || '') + '|' + issueId + '|' + event
+              + (hookBody.executionId ? '|' + hookBody.executionId : '');
 const staticData = $getWorkflowStaticData('global');
 staticData.seen = staticData.seen || {};
 const dedupSkip = !!staticData.seen[eventId];
