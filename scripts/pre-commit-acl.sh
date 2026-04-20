@@ -31,8 +31,9 @@
 #   test-bugfix-agent   : 只许改 tests/**（contract / ui / acceptance / mobile）
 #                         内部代码、migrations、openspec 都禁
 #   verify-agent        : 所有文件（只读模式，不应 commit）
-#   qa-agent            : tests/** internal/** cmd/** migrations/** openspec/specs/**
-#                         openspec/changes/*/（除 reports/qa.md）
+#   qa-agent            : 只允许 reports/qa.md，其它一律禁
+#
+# 配套校验：tasks.md section 归属由 check-tasks-section-ownership.sh 单独跑。
 
 set -euo pipefail
 
@@ -103,8 +104,8 @@ forbid_others "analyze-agent" \
   '^openspec/changes/[^/]+/(proposal|design)\.md$' \
   '需求 / 设计文档'
 
-# ---- tests/contract/：仅 contract-test-agent 可写 ----
-forbid_others "contract-test-agent" \
+# ---- tests/contract/：contract-test-agent 或 test-bugfix-agent 可写 ----
+forbid_others "contract-test-agent test-bugfix-agent" \
   '^tests/contract/' \
   '契约测试 LOCKED'
 
@@ -118,44 +119,30 @@ forbid_others "ui-test-agent test-bugfix-agent" \
   '^tests/(ui|mobile)/' \
   'UI/移动端测试 LOCKED'
 
-# ---- tests/contract/：contract-test-agent 或 test-bugfix-agent 可写（补之前遗漏）----
-# （上面已有 contract-test-agent，这里不重复，但要让 test-bugfix-agent 也能写）
-# 实际通过上面 ^tests/contract/ 的规则已处理
-
 # ---- migrations/*.sql, *.md：仅 migration-agent 可写 ----
 forbid_others "migration-agent" \
   '^migrations/' \
   'DB migration 脚本'
 
-# ---- 业务代码：禁止 Test / Migration / Test Bug Fix 阶段修改 ----
-forbid "contract-test-agent" \
+# ---- 业务代码：仅 dev-agent / bugfix-agent 可写（unit test 跟 prod code 同 dir 也允许）----
+forbid_others "dev-agent bugfix-agent" \
   '^(internal|cmd)/' \
-  '契约测试阶段只许写测试'
-
-forbid "ui-test-agent" \
-  '^(internal|cmd)/' \
-  'UI 测试阶段只许写测试'
-
-forbid "accept-test-agent" \
-  '^(internal|cmd)/' \
-  '验收测试阶段只许写测试'
-
-forbid "migration-agent" \
-  '^(internal|cmd)/' \
-  'Migration 阶段只许写 SQL + plan'
-
-forbid "test-bugfix-agent" \
-  '^(internal|cmd)/' \
-  'Test Bug Fix 阶段禁改业务代码（diagnosis 诊断为 TEST BUG 时才启用此 agent）'
-
-forbid "test-bugfix-agent" \
-  '^migrations/' \
-  'Test Bug Fix 阶段禁改 migration'
+  '业务代码 + unit test 仅 dev / bugfix 阶段可写'
 
 # ---- reports/qa.md：仅 qa-agent 可写 ----
 forbid_others "qa-agent" \
   '^openspec/changes/[^/]+/reports/qa\.md$' \
   '验收签收文档'
+
+# ---- reports/bugfix-*.md：bugfix-agent / test-bugfix-agent 可写（diagnosis 报告）----
+forbid_others "bugfix-agent test-bugfix-agent" \
+  '^openspec/changes/[^/]+/reports/bugfix-' \
+  'Bug Fix diagnosis 报告'
+
+# ---- reports/ 兜底：禁止其他 agent 在 reports/ 下随意写 ----
+forbid_others "qa-agent bugfix-agent test-bugfix-agent analyze-agent" \
+  '^openspec/changes/[^/]+/reports/' \
+  'reports/ 目录受控'
 
 # ---- verify-agent 不该 commit 任何文件 ----
 if [[ "$AGENT_ROLE" == "verify-agent" ]]; then

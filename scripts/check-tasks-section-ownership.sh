@@ -28,10 +28,11 @@ fi
 # 拿改动的行号（git diff --cached，staged 的 diff）
 CHANGED_LINES=$(git diff --cached --unified=0 -- "$FILE" \
   | awk '/^@@/{
-      # @@ -a,b +c,d @@
-      split($3, hunk, ",");
+      # @@ -a,b +c,d @@   (commas optional). split() returns the element count
+      # (portable across gawk/mawk/BSD awk; length(array) is gawk-only).
+      n = split($3, hunk, ",");
       start = substr(hunk[1], 2);
-      len = (length(hunk) > 1) ? hunk[2] : 1;
+      len = (n > 1) ? hunk[2] : 1;
       for (i=0; i<len; i++) print start + i
     }' || true)
 
@@ -54,9 +55,9 @@ done < "$FILE"
 
 FAILED=0
 for ln in $CHANGED_LINES; do
-  # 只校验 checkbox 改动行（`- [ ]` 或 `- [x]`）
+  # 只校验 checkbox 改动行（`- [ ]` 或 `- [x]`，含缩进的 subtask）
   content=$(sed -n "${ln}p" "$FILE" 2>/dev/null || true)
-  if [[ -n "$content" ]] && [[ "$content" =~ ^-\ \[[\ xX]\] ]]; then
+  if [[ -n "$content" ]] && [[ "$content" =~ ^[[:space:]]*-[[:space:]]+\[[\ xX]\] ]]; then
     owner="${LINE_OWNER[$ln]:-<none>}"
     if [[ "$owner" != "$AGENT_ROLE" ]]; then
       echo "FAIL: $FILE:$ln 属于 section owner=$owner，但当前 AGENT_ROLE=$AGENT_ROLE"

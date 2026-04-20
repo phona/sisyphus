@@ -1,161 +1,127 @@
-# n8n 主编排使用说明
+# n8n 工作流使用说明（v3）
 
-> 基于 V2 架构，n8n 负责粗粒度主编排，管"做什么、什么顺序"。
+权威架构：[architecture.md](./architecture.md)。当前实现：[workflow-current.md](./workflow-current.md)。本文只讲怎么导入、配凭证、触发、排查。
 
-## 编排职责
-
-n8n 在 V2 架构中的角色：
+## 工作流文件
 
 ```
-需求 → P0 合约 → P1 规格拆分 → 冲突预检 → 并发池检查 →
-分发给 AI → 收集验证结果 → 熔断检查 → 创建 PR / 升级人工
+charts/n8n-workflows/
+├── v3-entry.json      # /v2 入口 webhook（7 节点）：接需求 → 创建[REQ-xx] 需求分析 issue
+└── v3-events.json     # /bkd-events 路由（55 节点）：接 BKD session.completed → 按 tags routeKey 路由
 ```
 
-n8n **不写代码、不直接操作调试环境**，这些由 vibe-kanban + Claude MCP 通过 aissh 完成。
+> 架构里提的 `shared/` `variants/` 目录目前没物化，所有 escalation / openspec-apply 都在 v3-events.json 里 inline。
 
-## 编排节点说明
+## 路由原理
 
-| 节点 | 功能 | 说明 |
-|------|------|------|
-| **需求接收** | 接收 Issue REQ-xx | Webhook 或手动触发 |
-| **P0 合约设计** | 分发合约设计任务 | 输出：contract.spec.yaml |
-| **P1 规格拆分** | 分发规格拆分任务 | 输出：dev.spec / contract.spec / ac.spec + 验收用例锁定 |
-| **冲突预检** | 检查文件级冲突 | 目标文件是否被其他活跃任务占用 |
-| **并发池检查** | 检查资源余量 | 活跃 namespace 是否低于上限，超出则排队 |
-| **任务分发** | 分发给 vibe-kanban | AI 在 worktree 写代码 + skill 小编排 |
-| **心跳监听** | 接收 AI 进度上报 | 超时未收到 → 强制中断 → 挂 Issue |
-| **结果收集** | 接收调试环境验证结果 | AI 通过 aissh 操控调试环境后回报 |
-| **熔断检查** | 判断是否触发熔断 | ≥3轮修复 or 超时 or token 超限 |
-| **创建 PR** | 推送到 GitHub | 通过串行合并窗口 |
-| **CI 结果处理** | CI 失败分类 | flaky → retry，真实失败 → 回开发环境 |
-| **验收调度** | 触发独立子 agent | 干净上下文执行 Given/When/Then |
+**title 完全不参与调度**。`Ctx` 节点从 `webhook.body.tags` 计算两个 key，所有 IF 节点都基于这两个 key 比较：
+
+- **routeKey**（阶段路由）：`analyze` / `spec` / `dev` / `verify` / `bugfix` / `test-bugfix` / `accept`
+- **resultKey**（结果路由）：`pass` / `fail` / `test-bug` / `spec-bug` / `unsupported` / `needs-clarify`
+
+agent 完成阶段时通过 `update-issue(tags=[...])` 追加结果 tag（`result:pass` / `diagnosis:test-bug` 等），n8n 的 13 个 IF 节点全部基于此判定，不读 title。
+
+完整路由表 + tag 协议 + title 撒谎也不影响调度的不变量见 [workflow-current.md](./workflow-current.md)。
+agent 端要加哪些 tag 见 [prompts.md 结果 tag 协议](./prompts.md#结果-tag-协议重要)。
 
 ## 导入步骤
 
-1. 登录 n8n Web 界面 (http://localhost:5678)
-2. 点击 **Workflows** → **Import from File**
-3. 选择 `charts/n8n-workflows/` 下的工作流 JSON
-4. 配置凭证（见下方）
+1. 登录 n8n Web 界面（http://n8n.43.239.84.24.nip.io）
+2. **Workflows** → **Import from File** → 选 `charts/n8n-workflows/v3-entry.json`
+3. 同样导入 `v3-events.json`
+4. 两个 workflow **Activate**
+
+> 重新导入会保留旧 webhook ID。如果改了 `webhookId` 字段，要先把旧版 deactivate 再激活新版，避免 path 冲突。
 
 ## 凭证配置
 
-### Gitea API
+⚠️ **当前 v3 把 Coder Session Token 硬编码在 HTTP node header 里**（`GRvtsFrbNV-...`）。轮换 token 必须全文替换 v3-entry.json + v3-events.json + testcases/test-events-harness.sh。
 
-1. **Settings** → **Credentials** → **New Credential**
-2. 选择 **HTTP Header Auth**
-3. 配置：
-   - **Name**: `Gitea API`
-   - **Header Name**: `Authorization`
-   - **Header Value**: `token YOUR_GITEA_TOKEN`
-
-> 获取 Token: Gitea → 用户设置 → 应用 → 生成令牌
-
-### vibe-kanban Wrapper
-
-n8n 通过 HTTP 调用 vibe-kanban wrapper（端口 3005）分发任务。
+**改进路径（待做）**：把 token 迁到 n8n Credentials → Generic Credential Type → Header Auth，HTTP node 引用 credential 而非 inline。
 
 ## 触发方式
 
-### Webhook 触发（推荐）
+### 入口（用户提需求）
 
-配置 Webhook URL，由外部系统（Issue 创建、手动触发）调用：
+POST `https://n8n.43.239.84.24.nip.io/webhook/v2`
 
 ```json
 {
-  "req_id": "REQ-01",
-  "title": "会员堂食点餐功能",
-  "description": "需求描述",
-  "scope": "server-go"
+  "req_id": "REQ-10",
+  "title": "用户头像上传",
+  "description": "支持 png/jpg，限 2MB",
+  "bkd_project_id": "workflowtest"
 }
 ```
 
-### 手动触发
+### BKD 事件回流（自动）
 
-在 n8n 中打开工作流 → **Execute Workflow** → 输入上述 JSON。
+BKD 在 `Settings → Webhooks` 配置：
 
-## 熔断机制实现
-
-n8n 负责熔断判断，不依赖 AI：
-
-```
-每次验证失败：
-  1. 修复计数器 +1
-  2. 累加 token 消耗和耗时
-  3. 检查三个条件：
-     - 修复轮数 ≥ 3 ?
-     - 累计耗时超限 ?
-     - 累计 token 超限 ?
-  4. 任一触发 → 挂 Issue 升级人工，停止自动修复
-     全部未触发 → 创建子 Issue，回 AI 继续修
+```json
+{
+  "url": "http://n8n.43.239.84.24.nip.io/webhook/bkd-events",
+  "events": ["session.completed", "session.failed"]
+}
 ```
 
-## 并发池管理
+**只订阅 `session.completed/failed`**，不订阅 `issue.status.review`（重复触发，见 `n8n-k3s-pitfalls.md` #12）。
 
-n8n 维护全局并发池状态：
+BKD webhook payload 必含 `tags` 字段（数组），路由依赖此字段。
 
-```
-分发任务前：
-  1. 查询当前活跃 namespace 数量
-  2. 活跃数 < 上限 → 分发任务，计数 +1
-  3. 活跃数 ≥ 上限 → 排队等待
-  
-任务完成后：
-  1. 清理 namespace
-  2. 计数 -1
-  3. 检查队列，有等待任务则分发
-```
+## 测试
 
-## 心跳监听
+`testcases/test-events-harness.sh`：覆盖 21 个路由 + gate + 熔断用例，**不调真 agent**（关 BKD webhook 防串扰）。
 
-AI 执行 skill 小编排时，定期向 n8n 上报进度：
+```bash
+# 关 BKD webhook，跑全部用例
+./testcases/test-events-harness.sh all
 
-```
-n8n 侧：
-  1. 任务分发时启动超时计时器
-  2. 收到心跳 → 重置计时器
-  3. 超时未收到 → 强制中断任务 → 挂 Issue
+# 单个用例
+./testcases/test-events-harness.sh case gate_pass
+
+# 清理 TEST-* issue
+./testcases/test-events-harness.sh clean
+
+# 恢复 BKD webhook
+./testcases/test-events-harness.sh webhook_on
 ```
 
-## CI 失败分类
+## 熔断
 
-CI 失败后 n8n 做分类处理：
+Bug Fix（含 test-bugfix）累计 ≥ 3 → escalate。
 
-| 类型 | 判断依据 | 处理 |
-|------|---------|------|
-| flaky test | 历史记录中同一测试间歇性失败 | 直接 retry CI |
-| 真实失败 | 新出现的失败 | 挂 Issue 回开发环境修复 |
+判定走 `CB Query` (list-issues) → `CB Count`（统一 SSE→JSON 解析，按 tags `bugfix` ∪ `test-bugfix` 数 issue）→ `CB Tripped?`（数值比较）。
 
-## 串行合并窗口
+## 排查
 
-多个功能同时通过验证时，n8n 控制串行合并：
+### webhook 404
 
-```
-功能 A 通过 → 进入合并队列
-功能 B 通过 → 进入合并队列
-队列处理：A 合并 → B rebase → B 合并
-```
+参见 [n8n-k3s-pitfalls.md #1](./n8n-k3s-pitfalls.md)：webhook 节点必须有 `webhookId` 字段。
 
-## 故障排查
+### 路由没命中
 
-### API 返回 401
+1. n8n Web → Executions 查看本次 webhook 执行
+2. 看 `Ctx` 节点输出的 `routeKey` 字段值
+3. 对照下游 IF 节点的 `value2` 比较值
 
-检查凭证配置，确保 token 有效且有足够权限。
+如果 `routeKey == 'unknown'`：webhook payload 里 `tags` 字段缺失或不含已知阶段标签。检查 BKD 端 issue 的 tags 是否按 [tag 规范](./workflow-current.md#issue-命名和-tag-规范)设置。
 
-### HTTP 节点超时
+### gate 一直不放行
 
-1. 检查目标服务是否正常
-2. 节点设置中增加超时时间
-3. 检查网络连接
+`All3?` gate 期望某些 tag 的 issue 状态为 `review`。打开 `Query` 节点的 SSE 响应，找 reqId 匹配的 issue，确认 tags 和 statusId。常见原因：
 
-### 工作流执行卡住
+- analyze agent 没在 tags 加 `layer:foo`，All3? fallback 到 `dev-spec / accept-spec / contract-spec` 三路 expected
+- 某 spec issue 还在 `working` 没移到 `review`
+- `dev` tag 的 issue 已经存在（idempotency 防重复）
 
-1. 检查心跳是否正常上报
-2. 查看执行日志定位问题节点
-3. 确保所有条件分支都有出口
-4. 检查是否触发了熔断但未正确处理
+### 熔断意外触发
 
-## 参考文档
+`CB Count` 数到的 bugfix 数包含历史所有 round。当前没按"本次 verify→bugfix 链路"分组，**任何 reqId 下累计 bugfix ≥ 3 都熔断**。这是已知简化，详见 [workflow-current.md](./workflow-current.md#已知问题)。
 
-- [V2 架构设计](./workflow-v2-architecture.md)（权威参考）
-- [n8n 官方文档](https://docs.n8n.io/)
-- [Gitea API 文档](https://docs.gitea.com/api/)
+## 引用
+
+- [架构设计（权威）](./architecture.md)
+- [当前实现状态 + 已知问题](./workflow-current.md)
+- [n8n on K3s 踩坑手册](./n8n-k3s-pitfalls.md)
+- [agent prompt 大全](./prompts.md)

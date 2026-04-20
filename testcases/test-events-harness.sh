@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# 快速测 n8n /bkd-events 路由、gate 正则，无需真 agent。
+# 快速测 n8n /bkd-events 路由、gate、熔断，无需真 agent。
 # 用 TEST-01 前缀避免污染真实 REQ-xx。
+#
+# v3 路由完全走 tags，title 不再参与判定。
+# 阶段路由：tags 含 analyze/dev-spec/spec/dev/verify/bugfix/test-bugfix/accept
+# 结果路由：tags 含 result:pass / result:fail / diagnosis:test-bug / diagnosis:spec-bug
+#                  / decision:unsupported / decision:needs-clarify
+# 详见 docs/workflow-current.md 和 docs/prompts.md 结果 tag 协议。
 
 set -euo pipefail
 
@@ -10,7 +16,7 @@ BKD_API="$BKD_API_BASE/mcp"
 WEBHOOK_ID="01KPFP700EAJK0RCTM29H85S71"
 TOKEN="GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
 PROJECT_ID="77k9z58j"
-REQ_ID="${REQ_ID:-TEST-01}"
+REQ_ID="${REQ_ID:-REQ-T01}"
 
 # 关 BKD session webhook，防止 n8n 下发创建的 issue 跑真 agent 后回流触发连锁
 webhook_off() {
@@ -220,12 +226,12 @@ case_accept_spec_not_accept() {
   fi
 }
 
-# 测试验证 PASS → 创建 验收
+# 测试验证 PASS → 创建 验收（结果靠 tag result:pass）
 case_verify_pass() {
   cmd_clean
   mcp_init
-  echo "=== VERIFY_PASS: PASS [X] 测试验证 → 创建 验收 ==="
-  post_webhook "PASS [${REQ_ID}] 测试验证" "fake-vf" "[\"verify\",\"${REQ_ID}\"]"
+  echo "=== VERIFY_PASS: tags 含 verify+result:pass → 创建 验收 ==="
+  post_webhook "[${REQ_ID}] 测试验证" "fake-vf" "[\"verify\",\"result:pass\",\"${REQ_ID}\"]"
   sleep 3
   bkd_list_test_ids
   if bkd_list_test_ids | grep -qE '验收$'; then
@@ -235,12 +241,12 @@ case_verify_pass() {
   fi
 }
 
-# 测试验证 FAIL 且 bugfix 计数 <3 → 创建 Bug Fix
+# 测试验证 FAIL 且 bugfix 计数 <3 → 创建 Bug Fix（结果靠 tag result:fail）
 case_verify_fail_creates_bugfix() {
   cmd_clean
   mcp_init
-  echo "=== VERIFY_FAIL: FAIL [X] 测试验证 + 无 bugfix 历史 → 创 Bug Fix ==="
-  post_webhook "FAIL [${REQ_ID}] 测试验证 L2" "fake-vf" "[\"verify\",\"${REQ_ID}\"]"
+  echo "=== VERIFY_FAIL: tags 含 verify+result:fail → 创 Bug Fix ==="
+  post_webhook "[${REQ_ID}] 测试验证 L2 fail" "fake-vf" "[\"verify\",\"result:fail\",\"level:L2\",\"${REQ_ID}\"]"
   sleep 3
   bkd_list_test_ids
   if bkd_list_test_ids | grep -qE 'Bug Fix'; then
@@ -274,7 +280,7 @@ case_circuit_breaker() {
     iid=$(bkd_create "[${REQ_ID}] Bug Fix round-$i" "[\"bugfix\",\"${REQ_ID}\"]" "review")
     echo "  seed bugfix $i: $iid"
   done
-  post_webhook "FAIL [${REQ_ID}] 测试验证 L1" "fake-vf" "[\"verify\",\"${REQ_ID}\"]"
+  post_webhook "[${REQ_ID}] 测试验证 L1 fail" "fake-vf" "[\"verify\",\"result:fail\",\"level:L1\",\"${REQ_ID}\"]"
   sleep 3
   bfcount=$(bkd_list_test_ids | grep -c "Bug Fix" || true)
   echo "当前 Bug Fix issue 数：$bfcount"
@@ -285,12 +291,12 @@ case_circuit_breaker() {
   fi
 }
 
-# 验收 PASS → Done（不创新 issue）
+# 验收 PASS → Done（结果靠 tag result:pass，不创新 issue）
 case_accept_pass() {
   cmd_clean
   mcp_init
-  echo "=== ACCEPT_PASS: PASS [X] 验收 → Done（不创新 issue） ==="
-  post_webhook "PASS [${REQ_ID}] 验收" "fake-ac" "[\"accept\",\"${REQ_ID}\"]"
+  echo "=== ACCEPT_PASS: tags 含 accept+result:pass → Done（不创新 issue） ==="
+  post_webhook "[${REQ_ID}] 验收 pass" "fake-ac" "[\"accept\",\"result:pass\",\"${REQ_ID}\"]"
   sleep 3
   bkd_list_test_ids
   n=$(bkd_list_test_ids | wc -l)
@@ -301,18 +307,18 @@ case_accept_pass() {
   fi
 }
 
-# 验收 FAIL → 应该创建 Bug Fix（当前 workflow 可能走 Done 而漏掉）
+# 验收 FAIL → 应该创建 Bug Fix（结果靠 tag result:fail）
 case_accept_fail() {
   cmd_clean
   mcp_init
-  echo "=== ACCEPT_FAIL: FAIL [X] 验收 → 应创 Bug Fix（检测 workflow 缺陷） ==="
-  post_webhook "FAIL [${REQ_ID}] 验收" "fake-ac" "[\"accept\",\"${REQ_ID}\"]"
+  echo "=== ACCEPT_FAIL: tags 含 accept+result:fail → 应创 Bug Fix ==="
+  post_webhook "[${REQ_ID}] 验收 fail" "fake-ac" "[\"accept\",\"result:fail\",\"${REQ_ID}\"]"
   sleep 3
   bkd_list_test_ids
   if bkd_list_test_ids | grep -qE 'Bug Fix'; then
     echo "✅ PASS: 创建了 Bug Fix"
   else
-    echo "❌ FAIL (workflow bug): 验收 FAIL 没有 fan-out 到 Bug Fix，可能误入 Done 分支"
+    echo "❌ FAIL: 验收 FAIL 没创建 Bug Fix"
   fi
 }
 
@@ -337,12 +343,12 @@ case_analyze_complete() {
 
 # --- 新架构用例 ---
 
-# UNSUPPORTED: 需求分析 title prefix "UNSUPPORTED" → 应进 escalate 不 fan-out Spec
+# UNSUPPORTED: tags 含 decision:unsupported → 应进 escalate 不 fan-out Spec
 case_analyze_unsupported() {
   cmd_clean
   mcp_init
-  echo "=== ANALYZE_UNSUPPORTED: title 'UNSUPPORTED [X] 需求分析' 不应 fan-out 3 Specs ==="
-  post_webhook "UNSUPPORTED [${REQ_ID}] 需求分析" "fake-an" "[\"analyze\",\"${REQ_ID}\"]"
+  echo "=== ANALYZE_UNSUPPORTED: tags 含 analyze+decision:unsupported 不应 fan-out 3 Specs ==="
+  post_webhook "[${REQ_ID}] 需求分析 unsupported" "fake-an" "[\"analyze\",\"decision:unsupported\",\"${REQ_ID}\"]"
   sleep 4
   bkd_list_test_ids
   specs=$(bkd_list_test_ids | grep -cE 'Spec$' || true)
@@ -353,12 +359,12 @@ case_analyze_unsupported() {
   fi
 }
 
-# NEEDS-CLARIFY: 同 UNSUPPORTED，走 escalate 路径
+# NEEDS-CLARIFY: tags 含 decision:needs-clarify，走 escalate 路径
 case_analyze_needs_clarify() {
   cmd_clean
   mcp_init
-  echo "=== ANALYZE_NEEDS_CLARIFY: 需要澄清的需求不应 fan-out ==="
-  post_webhook "NEEDS-CLARIFY [${REQ_ID}] 需求分析" "fake-an" "[\"analyze\",\"${REQ_ID}\"]"
+  echo "=== ANALYZE_NEEDS_CLARIFY: tags 含 analyze+decision:needs-clarify 不应 fan-out ==="
+  post_webhook "[${REQ_ID}] 需求分析 needs-clarify" "fake-an" "[\"analyze\",\"decision:needs-clarify\",\"${REQ_ID}\"]"
   sleep 4
   bkd_list_test_ids
   specs=$(bkd_list_test_ids | grep -cE 'Spec$' || true)
@@ -369,12 +375,12 @@ case_analyze_needs_clarify() {
   fi
 }
 
-# TEST-BUG diagnosis: Bug Fix title prefix "TEST-BUG" → 启动 Test Bug Fix agent
+# TEST-BUG diagnosis: tags 含 diagnosis:test-bug → 启动 Test Bug Fix agent
 case_bugfix_test_bug() {
   cmd_clean
   mcp_init
-  echo "=== BUGFIX_TEST_BUG: 'TEST-BUG [X] Bug Fix' → 创 Test Bug Fix ==="
-  post_webhook "TEST-BUG [${REQ_ID}] Bug Fix Round 1" "fake-bf" "[\"bugfix\",\"${REQ_ID}\"]"
+  echo "=== BUGFIX_TEST_BUG: tags 含 bugfix+diagnosis:test-bug → 创 Test Bug Fix ==="
+  post_webhook "[${REQ_ID}] Bug Fix Round 1 test-bug" "fake-bf" "[\"bugfix\",\"diagnosis:test-bug\",\"${REQ_ID}\"]"
   sleep 3
   bkd_list_test_ids
   if bkd_list_test_ids | grep -qE 'Test Bug Fix'; then
@@ -384,12 +390,12 @@ case_bugfix_test_bug() {
   fi
 }
 
-# SPEC-BUG diagnosis: Bug Fix title prefix "SPEC-BUG" → escalate, 不创建新 issue
+# SPEC-BUG diagnosis: tags 含 diagnosis:spec-bug → escalate, 不创建新 issue
 case_bugfix_spec_bug() {
   cmd_clean
   mcp_init
-  echo "=== BUGFIX_SPEC_BUG: 'SPEC-BUG [X] Bug Fix' → escalate 不创 issue ==="
-  post_webhook "SPEC-BUG [${REQ_ID}] Bug Fix Round 1" "fake-bf" "[\"bugfix\",\"${REQ_ID}\"]"
+  echo "=== BUGFIX_SPEC_BUG: tags 含 bugfix+diagnosis:spec-bug → escalate 不创 issue ==="
+  post_webhook "[${REQ_ID}] Bug Fix Round 1 spec-bug" "fake-bf" "[\"bugfix\",\"diagnosis:spec-bug\",\"${REQ_ID}\"]"
   sleep 3
   bkd_list_test_ids
   if bkd_list_test_ids | grep -qE '(测试验证|Test Bug Fix)'; then
@@ -429,7 +435,58 @@ case_bugfix_code_bug() {
   fi
 }
 
-# JSON 转义：Ctx 的 ttl 字段遇到带 " 和 \n 的 title 应安全
+# 新路由：缺 tags → routeKey == 'unknown' → 所有 IF false，不创任何 issue
+case_route_unknown() {
+  cmd_clean
+  mcp_init
+  echo "=== ROUTE_UNKNOWN: webhook 缺 tags → routeKey=unknown → 不路由 ==="
+  curl -sS -X POST "$N8N_EVENTS" -H "Content-Type: application/json" \
+    -d "{\"event\":\"session.completed\",\"title\":\"[${REQ_ID}] something\",\"issueId\":\"fake-x\",\"projectId\":\"${PROJECT_ID}\"}" \
+    -w "\nhttp=%{http_code}\n"
+  sleep 3
+  bkd_list_test_ids
+  n=$(bkd_list_test_ids | wc -l)
+  if [[ "$n" -eq 0 ]]; then
+    echo "✅ PASS: routeKey unknown 不创建任何 issue"
+  else
+    echo "❌ FAIL: routeKey unknown 误路由，创建了 $n 个 issue"
+  fi
+}
+
+# 新路由：tags 同时含 dev 和 dev-spec 时，routeKey 应优先 dev-spec（spec），不会误命中 dev
+# （实际场景不会有这种 tags 组合，但验证 routeKey 优先级语义）
+case_route_priority() {
+  cmd_clean
+  mcp_init
+  echo "=== ROUTE_PRIORITY: tags=[dev-spec, REQ-XX] 应走 spec 不走 dev ==="
+  # 用真实标题 [REQ-xx] 开发Spec + tags=dev-spec 模拟 spec 完成
+  post_webhook "[${REQ_ID}] ${SEED_DEV_SPEC_TITLE}" "fake-pri" "[\"dev-spec\",\"${REQ_ID}\"]"
+  sleep 3
+  bkd_list_test_ids
+  if bkd_list_test_ids | grep -qE '测试验证'; then
+    echo "❌ FAIL: tags=dev-spec 误命中 routeKey=dev，创建了测试验证"
+  else
+    echo "✅ PASS: dev-spec 走 spec gate（gate 不齐不放行）"
+  fi
+}
+
+# 关键不变量：title 完全不参与调度，tags 是唯一真相
+# title 写 PASS 但 tags 是 result:fail → 必须按 tags 走（创 Bug Fix），不被 title 误导
+case_title_lies() {
+  cmd_clean
+  mcp_init
+  echo "=== TITLE_LIES: title='PASS [X] 验收'但 tags 含 result:fail → 应按 tags 创 Bug Fix ==="
+  post_webhook "PASS [${REQ_ID}] 验收 (title 撒谎)" "fake-tl" "[\"accept\",\"result:fail\",\"${REQ_ID}\"]"
+  sleep 3
+  bkd_list_test_ids
+  if bkd_list_test_ids | grep -qE 'Bug Fix'; then
+    echo "✅ PASS: title 被忽略，按 tags 走"
+  else
+    echo "❌ FAIL: title 还在被读，调度被欺骗"
+  fi
+}
+
+# JSON 转义：Ctx 字段遇到带 " 和 \n 的 title 应安全（title 不路由，但仍持久化在 Ctx 给 prompt 用）
 case_json_escape() {
   cmd_clean
   mcp_init
@@ -469,6 +526,10 @@ cmd_all() {
   case_bugfix_spec_bug
   case_test_bugfix_complete
   case_bugfix_code_bug
+  # tags routeKey 路由专项
+  case_route_unknown
+  case_route_priority
+  case_title_lies
   cmd_clean
   echo "[BKD webhook 仍然 disabled — 若要恢复实跑流程: ./test-events-harness.sh webhook_on]"
 }

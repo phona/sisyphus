@@ -9,6 +9,39 @@
 - 所有 task 必须以 `[SCENARIO-ID]` 前缀，如 `- [ ] [HEALTH-S1] 新建 handler.go`
 - Scenario ID 格式 `FEATURE-S{N}`，由 TL 在 specs/*.md 定义，其它角色只能引用不能重命名
 
+**Title 是描述，不是调度信号**：BKD issue title 仅供人类阅读，**禁止**用作判断依据。所有阶段路由 / 结果分支都走 BKD issue 的 `tags` 字段。**move review 之前必须更新 tags 反映本阶段结果**——见下方"结果 tag 协议"。
+
+## 结果 tag 协议（重要）
+
+n8n /bkd-events 路由完全依赖 tags。每个阶段除已有的阶段 tag（`analyze` / `verify` / `bugfix` 等）和 `REQ-xx` tag 外，**完成时必须追加结果 tag**：
+
+| 阶段 | 结果 | 必加 tag |
+|---|---|---|
+| analyze | 正常 | （无） |
+| analyze | 不支持 | `decision:unsupported` |
+| analyze | 需澄清 | `decision:needs-clarify` |
+| analyze | 含 layer 信息 | `layer:backend` / `layer:frontend` / `layer:data`（按 proposal.md frontmatter 实际声明加）|
+| verify | 全 PASS | `result:pass` |
+| verify | 任一 FAIL | `result:fail` + `level:L0` / `L1` / `L2`（哪层挂的）|
+| accept | PASS | `result:pass` |
+| accept | FAIL | `result:fail` |
+| **bugfix (DEV-FIX)** | CODE BUG 默认 | （无 diagnosis tag，也无 result tag）|
+| **bugfix (DEV-FIX)** | 诊断为 TEST BUG | `diagnosis:test-bug`（不加 result）|
+| **bugfix (DEV-FIX)** | 诊断为 SPEC BUG | `diagnosis:spec-bug`（不加 result）|
+| **test-fix (TEST-FIX)** | 改完测试 | （无 result tag；可选 diagnosis tag）|
+| **reviewer** | 采纳了某边 merge 到 feat | `result:pass` |
+| **reviewer** | 两边都不过 / 弃权 | `result:fail` |
+| 其它（dev-spec / dev / spec 类）| —— | （无结果 tag，路由只看阶段 tag）|
+
+加 tag 用 BKD MCP `update-issue`（保留现有 tag，追加新 tag）：
+
+```
+get-issue → 拿 current tags
+→ update-issue(tags=[...current, "result:pass"]) → move review
+```
+
+**title 可以加 `PASS ` / `FAIL ` 等前缀给人看**（推荐，方便 BKD UI 一眼辨识），**但 n8n 不读 title**。tag 是唯一调度真相。
+
 ---
 
 ## 阶段 1：需求分析（TL / analyze-agent）
@@ -78,13 +111,14 @@ req_id: {reqId}
    <待 dev-spec-agent 补充，dev-agent 勾选>
 
 ## 硬规则
-- 如果需求属于以下"本期未覆盖"类型，title 加 "UNSUPPORTED" 并写 diagnosis 说明原因，move review，不产出 4 件套：
+- 如果需求属于以下"本期未覆盖"类型，**update-issue 加 tag `decision:unsupported`**（title 可加 "UNSUPPORTED " 前缀供人识别），写 diagnosis 说明原因，move review，不产出 4 件套：
   - 紧急 hotfix（> 日常交付速度要求的）
   - 跨 >= 4 repo 的改动
   - Breaking change（删 API / 改已发布语义）
   - 纯 config / flag 调整
   - 纯文档 PR
-- 如果需求模糊到无法写 scenario，title 加 "NEEDS-CLARIFY" + 列出具体不清楚的点，move review
+- 如果需求模糊到无法写 scenario，**update-issue 加 tag `decision:needs-clarify`**（title 可加 "NEEDS-CLARIFY " 前缀），列出具体不清楚的点，move review
+- 正常完成：按 proposal.md frontmatter 实际声明的 layers，**update-issue 追加 `layer:backend` / `layer:frontend` / `layer:data` 对应 tag**（n8n All3? gate 据此动态展开 expected specs）
 
 ## Git Branch
 新建 feat/{reqId} 特性分支（如已存在则从 main 重置）：
@@ -358,11 +392,11 @@ AGENT_ROLE=verify-agent
 - 只跑、只看、只报
 
 ## Report
-在 issue title 前 prefix：
-- 全 PASS：title = "PASS [{reqId}] 测试验证"
-- 任一 FAIL：title = "FAIL L{n} {scenario-id-if-known} [{reqId}] 测试验证"
+**结果通过 tag 上报，不靠 title**：
+- 全 PASS：`update-issue` 追加 `result:pass`（title 可加 "PASS " 前缀给人看）
+- 任一 FAIL：`update-issue` 追加 `result:fail` 和 `level:L{n}`（哪层挂的，如 `level:L2`）
 
-在 issue comment 里报：
+在 issue comment 里详细报：
 - L0: PASS/FAIL + 关键输出
 - L1: PASS/FAIL + 失败的 test 名单
 - L2: PASS/FAIL + 失败的 test 名单
@@ -373,112 +407,81 @@ move review
 
 ---
 
-## 阶段 5：Bug Fix（bugfix-agent，先诊断再动手）
+## 阶段 5：BUGFIX 双 agent 投票链（dev-fix + test-fix + reviewer）
+
+verify / accept fail 后走 **三段投票**：每个 agent 只能改自己域的文件，REVIEWER 最后选胜者 merge。
+
+### 阶段 5a：DEV-FIX（dev-fix-agent）
 
 ```
-## Bug Fix (BUG-FIX)
-AGENT_ROLE=bugfix-agent
-
+AGENT_ROLE=dev-fix-agent
 本轮 Round: {round_n}
-失败 test: {test_name}
-失败 scenario (if known): {scenario_id}
 
-## 可读
-- openspec/changes/{reqId}/proposal.md, design.md, specs/*.md
-- openspec/changes/{reqId}/contract.spec.yaml
-- tests/* （只读，所有测试类型）
-- 业务代码
-- 上一轮的 reports/bugfix-r{n-1}-diagnosis.md（如有）
+## 职责
+上一个 verify/accept fail 了。你是 **code 视角**的修复者。
 
-## 禁读
-- 其它 stage 的 tasks section
+## 权限
+- 可写：internal/ cmd/ 业务代码 + 同目录 unit test
+- 禁写：tests/contract/ tests/acceptance/ tests/ui/ openspec/ migrations/
 
-## ⚠️ 动手前必须先诊断（不许跳过）
+## 诊断（先诊断再改）
+- spec 清楚，test 正确，code 输出错 → **CODE BUG**，改代码
+- test 验了 spec 没说的 / 断言错 / 竞态 → **TEST BUG**，不动代码，加 `diagnosis:test-bug` → move review
+- spec 模糊/矛盾/漏场景 → **SPEC BUG**，不动代码也不动测试，加 `diagnosis:spec-bug` → move review
 
-读完相关 spec + test + code 后，判定故障类型：
+## Git 分支
+stage/bugfix-dev-{reqId}-round-{n}，从 feat/{reqId} 拉。commit + push，**不 merge 到 feat**（reviewer 决定）。
 
-### CODE BUG
-spec 清楚说行为 X，test 正确验 X，code 输出 Y。
-→ 这是代码问题，改业务代码。
-
-### TEST BUG
-test 检查了 spec 没说的东西，或断言写错，或 test 本身有竞态/flaky。
-→ 不要改代码。
-→ 操作：
-   1. title 加 "TEST-BUG" prefix：title = "TEST-BUG [{reqId}] Bug Fix Round {n}"
-   2. 写 openspec/changes/{reqId}/reports/bugfix-r{n}-diagnosis.md：
-      - 哪个 test 文件哪行
-      - spec 说了啥 vs test 验了啥
-      - 根因分析
-   3. move review
-   4. n8n 会路由到 test-bugfix-agent（有改测试权限）
-
-### SPEC BUG
-spec 本身模糊/矛盾/漏场景。
-→ 不动代码也不动测试。
-→ 操作：
-   1. title 加 "SPEC-BUG" prefix
-   2. 写 diagnosis.md 说明：
-      - 哪条 scenario 有问题
-      - spec 哪里说得不清
-      - 建议怎么修
-   3. move review
-   4. n8n 会升级人工（或触发 REANALYZE 新 REQ）
-
-### 判不出
-默认先按 CODE BUG 试。但注意：**连续 3 轮同一位置修不好 = 可能是 TEST/SPEC BUG 误判**，重新诊断。
-
-## CODE BUG 流程
-1. 本地重现失败：aissh exec_run: 跑失败的 test
-2. 定位代码
-3. 写 Root cause: 一段到 reports/bugfix-r{n}-diagnosis.md
-4. 修代码（遵循 design + specs，不凭空发挥）
-5. 重跑 L0+L1+L2 全绿
-6. commit 带 `Root cause:` 段的 message
-7. push stage/bugfix-{reqId}-round-{n} → merge 回 feat
-
-## 硬规则
-- 禁改 tests/*（所有测试都 LOCKED，pre-commit 拦）
-- 禁改 openspec/specs/
-- 禁改 migrations/
-- 必须先写 Root cause 才能 commit 代码修复
-- 如果只想加 if 绕过问题（没改真实逻辑）→ 该走 SPEC BUG 路径
-
-move review
+## 完成时 tag 约束
+- **不加 result:pass / result:fail**（result 只给 verify / accept）
+- 诊断 TEST/SPEC BUG 时加对应 diagnosis tag
+- CODE BUG（默认）不加 diagnosis tag
 ```
 
----
-
-## 阶段 5b：Test Bug Fix（test-bugfix-agent，仅 Bug Fix diagnosis=TEST BUG 时启用）
+### 阶段 5b：TEST-FIX（test-fix-agent）
 
 ```
-## Test Bug Fix (TEST-BUG-FIX)
-AGENT_ROLE=test-bugfix-agent
+AGENT_ROLE=test-fix-agent
+本轮 Round: {round_n}
 
-上一个 Bug Fix 诊断为 TEST BUG：
-- diagnosis: {diagnosis_path}
-- 失败 test: {test_name}
+## 职责
+在 dev-fix 之后跑，站 **test 视角**审视测试。即使 dev-fix 已 merge 也要跑一次（对抗验证）。
 
-## 可读
-- openspec/changes/{reqId}/specs/*.md
-- openspec/changes/{reqId}/reports/bugfix-r{n}-diagnosis.md
-- tests/*
-- 业务代码（只读，用于对照 spec）
+## 权限
+- 可写：tests/contract/ tests/acceptance/ tests/ui/ tests/mobile/
+- 禁写：internal/ cmd/ 业务代码 openspec/ migrations/
 
-## 产出
-改 tests/contract/* 或 tests/acceptance/* 或 tests/ui/* —— 修正测试。
+## 读上一个 dev-fix 的 diagnosis
+get-issue 上一个 bugfix 的 tags/comment，决定怎么改 test：
+- 如 dev-fix 加了 `diagnosis:test-bug` → 你重点修 test
+- 如 dev-fix 已判 CODE BUG → 你审视 test 是否也有问题，无则 no-op
 
-## 硬规则
-- 禁改业务代码 internal/ cmd/（pre-commit 拦）
-- 禁改 openspec/specs/
-- 禁改 migrations/
-- 改完必须能通过 compile（用 aissh 验）
-- 修完 move review，n8n 会重跑 verify
+## Git 分支
+stage/bugfix-test-{reqId}-round-{n}，从 feat/{reqId} 拉。commit + push，**不 merge 到 feat**。
 
-## Git Branch
-stage/test-bugfix-{reqId}-round-{n}，merge 回 feat。
+## 完成时 tag 约束
+同 DEV-FIX：不加 result tag。
+```
 
-commit message 要写：为什么原测试错，改成验什么。
+### 阶段 5c：REVIEWER（reviewer-agent）
+
+```
+AGENT_ROLE=reviewer-agent
+本轮 Round: {round_n}
+
+## 职责
+对比 dev-fix 与 test-fix 两个分支，选胜者 merge 到 feat/{reqId}。
+
+## 流程
+1. 对每个候选分支，cherry-pick 到 feat 的临时分支，用 aissh-tao MCP 跑 contract test
+2. 采纳规则：
+   - 只 dev-fix 过：merge dev-fix → feat → 加 `result:pass`
+   - 只 test-fix 过：merge test-fix → feat → 加 `result:pass`
+   - 两边都过：默认 merge dev-fix（优先改实现不改契约）→ 加 `result:pass`
+   - 两边都不过：不 merge，加 `result:fail` + 诊断说明 → escalate
+
+## 完成时 tag 约束
+**必须加 `result:pass` 或 `result:fail`**。n8n 按此路由：pass → 重跑 verify；fail → escalate。
 ```
 
 ---
@@ -527,6 +530,11 @@ AGENT_ROLE=qa-agent
 ## 硬规则
 - 禁改任何代码 / 测试 / spec
 - qa.md 必须自包含（BKD log 过期后仍可追溯）
+
+## Report
+完成后**`update-issue` 追加结果 tag**：
+- E2E 全 PASS：`result:pass`
+- 任一 FAIL：`result:fail`
 
 move review
 ```
@@ -581,8 +589,9 @@ done
 | ui-test | `stage/{reqId}-ui-test` |
 | migration | `stage/{reqId}-migration` |
 | dev | `stage/{reqId}-dev` |
-| bugfix | `stage/bugfix-{reqId}-round-{n}` |
-| test-bugfix | `stage/test-bugfix-{reqId}-round-{n}` |
+| dev-fix (BUGFIX) | `stage/bugfix-dev-{reqId}-round-{n}` |
+| test-fix | `stage/bugfix-test-{reqId}-round-{n}` |
+| reviewer | 从 feat 拉临时分支比较后直接 merge 胜者到 feat |
 | qa | `stage/{reqId}-qa` |
 
 全都从 `feat/{reqId}` 拉，merge 回 `feat/{reqId}`。最终 `feat/{reqId}` → PR → `main` → `openspec apply` → archive。

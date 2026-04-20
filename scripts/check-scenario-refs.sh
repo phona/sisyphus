@@ -15,7 +15,8 @@ ROOT="${1:-.}"
 cd "$ROOT"
 
 REF_PATTERN='\[([A-Z][A-Z0-9-]+-S[0-9]+)\]'
-HEADING_PATTERN='^##+ Scenario:\s*([A-Z][A-Z0-9-]+-S[0-9]+)\b'
+# Bash [[ =~ ]] uses POSIX ERE — no \s, no \b. Use [[:space:]] and an explicit boundary.
+HEADING_PATTERN='^##+ Scenario:[[:space:]]+([A-Z][A-Z0-9-]+-S[0-9]+)([[:space:]]|$|[^A-Z0-9-])'
 
 # 收集所有 specs 里定义的 scenario ID
 declare -A DEFINED
