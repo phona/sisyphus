@@ -17,12 +17,13 @@ export const STAGE_PRIORITY = [
   'analyze',
 ];
 
+// 两类 spec：契约（LOCKED 跨部件边界定义）+ 验收（LOCKED 用户视角场景）。
+// 原来拆 dev/ui/migration 是按技术栈切分，实际上都是"契约"（不同形态的）；
+// 让 contract-test-agent 按 proposal 决定写 API/UI/DB 哪几种契约文件。
+// dev 阶段的 tasks impl 由 dev-agent 自己填，不再作为 spec-agent 的工作。
 export const SPEC_TAGS = new Set([
-  'dev-spec',
-  'contract-spec',
-  'accept-spec',
-  'ui-spec',
-  'migration-spec',
+  'contract-test',
+  'accept-test',
 ]);
 
 export const CB_THRESHOLD = 3; // bugfix round >= N -> escalate
@@ -178,15 +179,16 @@ function routeAnalyze(ctx, issueId) {
   if (!ctx.reqId) {
     return { action: 'escalate', reason: 'analyze missing reqId', params: { issueId } };
   }
-  // Fan-out 3 固定 spec：契约 + 验收 = LOCKED 边界；dev-spec = 实现计划。
-  // 不再按 layer 选择——layer 是历史拍脑袋维度，实际所有 REQ 都需要这三件套。
-  // 未来真的有 UI-only / migration-only 需求再独立加 stage，不塞进 fan-out。
+  // Fan-out 固定 2 路：contract-test (LOCKED 跨部件契约) + accept-test (LOCKED 用户视角验收)。
+  // dev 阶段的实现细节由 dev-agent 自己填 tasks.md `Stage: implementation` section。
+  // 技术栈（frontend/backend/data）不在 Router 体现，contract-test-agent 自己按 proposal
+  // 决定写 API / UI / DB 哪几种契约文件。
   return {
     action: 'fanout_specs',
     params: {
       reqId: ctx.reqId,
       repos: ctx.repos,  // forward for future multi-repo fan-out; not used by Router today
-      specs: ['dev-spec', 'contract-spec', 'accept-spec'],
+      specs: ['contract-test', 'accept-test'],
     },
   };
 }
@@ -266,7 +268,7 @@ function routeCiDone(ctx, issueId, webhookBody) {
       };
     }
     // spec lint pass → gate: check if all required specs done, create dev if so
-    if (parentStage && /-spec$/.test(parentStage)) {
+    if (parentStage && /-test$/.test(parentStage)) {
       return { action: 'mark_spec_reviewed', params: { reqId: ctx.reqId, specStage: parentStage, parentIssueId } };
     }
     return { action: 'skip', reason: 'ci:pass with unknown parent', params: { issueId } };

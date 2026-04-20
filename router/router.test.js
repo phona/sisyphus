@@ -27,9 +27,9 @@ test('parseTags: bugfix with round', () => {
 });
 
 test('parseTags: spec stage inferred', () => {
-  const ctx = parseTags(['contract-spec', 'REQ-3']);
+  const ctx = parseTags(['contract-test', 'REQ-3']);
   assert.equal(ctx.routeKey, 'spec');
-  assert.equal(ctx.specStage, 'contract-spec');
+  assert.equal(ctx.specStage, 'contract-test');
 });
 
 test('parseTags: analyze with repos (multi-repo hint)', () => {
@@ -135,25 +135,25 @@ test('routeEvent: ci(integration) fail unknown → open_github_issue', () => {
 });
 
 test('routeEvent: ci(lint) pass on spec → mark_spec_reviewed', () => {
-  const body = { tags: ['ci', 'REQ-10', 'ci:pass', 'target:lint'], metadata: { parentStage: 'contract-spec', parentIssueId: 's-1' } };
+  const body = { tags: ['ci', 'REQ-10', 'ci:pass', 'target:lint'], metadata: { parentStage: 'contract-test', parentIssueId: 's-1' } };
   const r = routeEvent(body);
   assert.equal(r.action, 'mark_spec_reviewed');
-  assert.equal(r.params.specStage, 'contract-spec');
+  assert.equal(r.params.specStage, 'contract-test');
 });
 
 test('routeEvent: spec done → mark_spec_reviewed (TEMP bypass ci-lint)', () => {
   // Temporary: spec completion shortcuts straight to SPG gate (ci-lint disabled during integration testing)
-  const r = routeEvent({ tags: ['dev-spec', 'REQ-20'], issueId: 'spec-1', projectId: '77k9z58j' });
+  const r = routeEvent({ tags: ['accept-test', 'REQ-20'], issueId: 'spec-1', projectId: '77k9z58j' });
   assert.equal(r.action, 'mark_spec_reviewed');
-  assert.equal(r.params.specStage, 'dev-spec');
+  assert.equal(r.params.specStage, 'accept-test');
   assert.equal(r.params.parentIssueId, 'spec-1');
 });
 
-test('routeEvent: analyze done → fanout 3 fixed specs (dev/contract/accept)', () => {
+test('routeEvent: analyze done → fanout 2 fixed specs (contract-test + accept-test)', () => {
   const body = { tags: ['analyze', 'REQ-5'] };
   const r = routeEvent(body);
   assert.equal(r.action, 'fanout_specs');
-  assert.deepEqual(r.params.specs.sort(), ['accept-spec', 'contract-spec', 'dev-spec']);
+  assert.deepEqual(r.params.specs.sort(), ['accept-test', 'contract-test']);
 });
 
 test('routeEvent: analyze unsupported → escalate', () => {
@@ -236,7 +236,7 @@ test('routeEvent: agent dropped analyze tag but keeps repo:* → fallback fanout
   const r = routeEvent({ event: 'session.completed', issueId: 'anz-1', issueNumber: 685, tags: ['repo:ubox-crosser'] });
   assert.equal(r.action, 'fanout_specs');
   assert.equal(r.params.reqId, 'REQ-685');
-  assert.deepEqual(r.params.specs.sort(), ['accept-spec', 'contract-spec', 'dev-spec']);
+  assert.deepEqual(r.params.specs.sort(), ['accept-test', 'contract-test']);
 });
 
 test('routeEvent: intent:analyze entry → start_analyze', () => {
