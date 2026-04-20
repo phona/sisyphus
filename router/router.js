@@ -80,8 +80,9 @@ export function parseTags(tags = []) {
   const round = roundTag ? parseInt(roundTag.slice(6), 10) : 0;
   const targetTag = [...t].find(x => /^target:(lint|unit|integration|acceptance)$/.test(x));
   const target = targetTag ? targetTag.split(':')[1] : null;
-  const layers = [...t]
-    .filter(x => /^layer:/.test(x))
+  // repos: analyze emits repo:* for multi-repo REQs (future fan-out hook).
+  const repos = [...t]
+    .filter(x => /^repo:/.test(x))
     .map(x => x.split(':')[1]);
   const specStage = [...t].find(x => SPEC_TAGS.has(x)) || null;
   const parentIdTag = [...t].find(x => /^parent-id:/.test(x));
@@ -89,7 +90,7 @@ export function parseTags(tags = []) {
   const parentStageTag = [...t].find(x => /^parent:/.test(x) && !/^parent-id:/.test(x));
   const parentStage = parentStageTag ? parentStageTag.slice('parent:'.length) : null;
 
-  return { routeKey, resultKey, reqId, round, target, layers, specStage, parentIssueId, parentStage };
+  return { routeKey, resultKey, reqId, round, target, repos, specStage, parentIssueId, parentStage };
 }
 
 export function routeEvent(webhookBody = {}, opts = {}) {
@@ -141,12 +142,15 @@ export function routeEvent(webhookBody = {}, opts = {}) {
     return { action: 'skip', reason: `terminal stage: ${tags.find(t => ['done-archive', 'github-incident'].includes(t))}`, params: { issueId } };
   }
 
-  // L2.5: analyze-layer fallback — if agent overwrote tags leaving only layer:*,
-  // we can still infer analyze completion from layer tags + a reqId. reqId can come
-  // from either existing REQ-xxx tag or the issueNumber fallback.
-  if (ctx.routeKey === 'unknown' && ctx.layers.length > 0) {
-    const reqId = ctx.reqId || (issueNumber ? `REQ-${issueNumber}` : null);
-    if (reqId) {
+  // L2.5: analyze fallback — if agent dropped the `analyze` tag but still has reqId
+  // (we can recover from REQ-xxx tag or issueNumber), treat as analyze completion.
+  // Previously this checked layer:* presence, but layers are now deprecated.
+  if (ctx.routeKey === 'unknown' && (ctx.reqId || issueNumber)) {
+    // Only fall through to analyze if the issue doesn't look like a terminal/ci/spec stage.
+    const stageMarkers = ['ci', 'bugfix', 'test-fix', 'reviewer', 'verify', 'accept', 'dev'];
+    const hasOtherStage = stageMarkers.some(s => tags.includes(s)) || [...SPEC_TAGS].some(s => tags.includes(s));
+    if (!hasOtherStage) {
+      const reqId = ctx.reqId || `REQ-${issueNumber}`;
       ctx.reqId = reqId;
       return routeAnalyze(ctx, issueId);
     }
@@ -171,21 +175,20 @@ function routeAnalyze(ctx, issueId) {
   if (ctx.resultKey === 'unsupported' || ctx.resultKey === 'needs-clarify') {
     return { action: 'escalate', reason: `analyze:${ctx.resultKey}`, params: { issueId, reqId: ctx.reqId } };
   }
-  if (!ctx.layers.length) {
-    return { action: 'escalate', reason: 'analyze missing layers tag', params: { issueId, reqId: ctx.reqId } };
+  if (!ctx.reqId) {
+    return { action: 'escalate', reason: 'analyze missing reqId', params: { issueId } };
   }
+  // Fan-out 3 固定 spec：契约 + 验收 = LOCKED 边界；dev-spec = 实现计划。
+  // 不再按 layer 选择——layer 是历史拍脑袋维度，实际所有 REQ 都需要这三件套。
+  // 未来真的有 UI-only / migration-only 需求再独立加 stage，不塞进 fan-out。
   return {
     action: 'fanout_specs',
-    params: { reqId: ctx.reqId, layers: ctx.layers, specs: expectedSpecsFor(ctx.layers) },
+    params: {
+      reqId: ctx.reqId,
+      repos: ctx.repos,  // forward for future multi-repo fan-out; not used by Router today
+      specs: ['dev-spec', 'contract-spec', 'accept-spec'],
+    },
   };
-}
-
-export function expectedSpecsFor(layers = []) {
-  const specs = ['dev-spec', 'accept-spec'];
-  if (layers.includes('backend'))  specs.push('contract-spec');
-  if (layers.includes('frontend')) specs.push('ui-spec');
-  if (layers.includes('data'))     specs.push('migration-spec');
-  return specs;
 }
 
 function routeSpecDone(ctx, issueId, opts) {

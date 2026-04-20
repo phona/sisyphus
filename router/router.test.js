@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { routeEvent, parseTags, expectedSpecsFor } from './router.js';
+import { routeEvent, parseTags } from './router.js';
 
 // ─── parseTags unit tests ──────────────────────────────────────────────────
 
@@ -32,10 +32,10 @@ test('parseTags: spec stage inferred', () => {
   assert.equal(ctx.specStage, 'contract-spec');
 });
 
-test('parseTags: analyze with layers', () => {
-  const ctx = parseTags(['analyze', 'REQ-1', 'layer:backend', 'layer:data']);
+test('parseTags: analyze with repos (multi-repo hint)', () => {
+  const ctx = parseTags(['analyze', 'REQ-1', 'repo:ubox-crosser', 'repo:fe-app']);
   assert.equal(ctx.routeKey, 'analyze');
-  assert.deepEqual(ctx.layers.sort(), ['backend', 'data']);
+  assert.deepEqual(ctx.repos.sort(), ['fe-app', 'ubox-crosser']);
 });
 
 test('parseTags: stage priority — test-fix outranks bugfix sibling tag', () => {
@@ -149,11 +149,11 @@ test('routeEvent: spec done → mark_spec_reviewed (TEMP bypass ci-lint)', () =>
   assert.equal(r.params.parentIssueId, 'spec-1');
 });
 
-test('routeEvent: analyze done with layers → fanout expected specs', () => {
-  const body = { tags: ['analyze', 'REQ-5', 'layer:backend', 'layer:frontend'] };
+test('routeEvent: analyze done → fanout 3 fixed specs (dev/contract/accept)', () => {
+  const body = { tags: ['analyze', 'REQ-5'] };
   const r = routeEvent(body);
   assert.equal(r.action, 'fanout_specs');
-  assert.deepEqual(r.params.specs.sort(), ['accept-spec', 'contract-spec', 'dev-spec', 'ui-spec']);
+  assert.deepEqual(r.params.specs.sort(), ['accept-spec', 'contract-spec', 'dev-spec']);
 });
 
 test('routeEvent: analyze unsupported → escalate', () => {
@@ -162,10 +162,10 @@ test('routeEvent: analyze unsupported → escalate', () => {
   assert.ok(r.reason.includes('unsupported'));
 });
 
-test('routeEvent: analyze missing layers → escalate', () => {
+test('routeEvent: analyze with reqId but no extra tags → fanout (layers deprecated)', () => {
   const r = routeEvent({ tags: ['analyze', 'REQ-1'] });
-  assert.equal(r.action, 'escalate');
-  assert.match(r.reason, /missing layers/);
+  assert.equal(r.action, 'fanout_specs');
+  assert.equal(r.params.reqId, 'REQ-1');
 });
 
 test('routeEvent: bugfix diagnosis:spec-bug → escalate', () => {
@@ -216,8 +216,8 @@ test('routeEvent: title lies — accept + result:fail still routes to github iss
   assert.equal(r.action, 'open_github_issue');
 });
 
-test('routeEvent: unknown routing → escalate', () => {
-  const r = routeEvent({ tags: ['REQ-9'] });
+test('routeEvent: truly unknown (no reqId, no issueNumber) → escalate', () => {
+  const r = routeEvent({ tags: ['mystery-tag'] });
   assert.equal(r.action, 'escalate');
 });
 
@@ -232,21 +232,11 @@ test('routeEvent: github-incident terminal → skip', () => {
   assert.equal(r.action, 'skip');
 });
 
-test('routeEvent: analyze agent dropped analyze tag → layer fallback fanout', () => {
-  const r = routeEvent({ event: 'session.completed', issueId: 'anz-1', issueNumber: 685, tags: ['layer:backend'] });
+test('routeEvent: agent dropped analyze tag but keeps repo:* → fallback fanout', () => {
+  const r = routeEvent({ event: 'session.completed', issueId: 'anz-1', issueNumber: 685, tags: ['repo:ubox-crosser'] });
   assert.equal(r.action, 'fanout_specs');
   assert.equal(r.params.reqId, 'REQ-685');
   assert.deepEqual(r.params.specs.sort(), ['accept-spec', 'contract-spec', 'dev-spec']);
-});
-
-test('expectedSpecsFor: all three layers → 5 specs', () => {
-  const specs = expectedSpecsFor(['backend', 'frontend', 'data']);
-  assert.deepEqual(specs.sort(), ['accept-spec', 'contract-spec', 'dev-spec', 'migration-spec', 'ui-spec']);
-});
-
-test('expectedSpecsFor: backend only → 3 specs', () => {
-  const specs = expectedSpecsFor(['backend']);
-  assert.deepEqual(specs.sort(), ['accept-spec', 'contract-spec', 'dev-spec']);
 });
 
 test('routeEvent: intent:analyze entry → start_analyze', () => {
