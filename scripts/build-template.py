@@ -324,9 +324,13 @@ if (m) {
     }
   } catch {}
 }
-// Re-attach Router's params so downstream Fu/St can reference $json.params.*
-const routerOut = $node['Router'].json;
-return [{ json: { ...routerOut, iid, _crText: text.slice(-300) } }];
+// Carry forward params: prefer the IMMEDIATE input (gate/if node may have reshaped them,
+// e.g. [GH Bugfix Gate] emits {params:{round:N,...}} that Router didn't have). Fall back
+// to Router output if input doesn't carry params.
+const routerOut = $node['Router'].json || {};
+const inputJson = ($input && $input.first && $input.first().json) || {};
+const params = (inputJson.params && typeof inputJson.params === 'object') ? inputJson.params : (routerOut.params || {});
+return [{ json: { ...routerOut, ...inputJson, params, iid, _crText: text.slice(-300) } }];
 """
 
 def create_issue_body(title_expr, tags_list, rpc_id):
