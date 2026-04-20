@@ -153,9 +153,12 @@ const _ciResult = (hookBody && hookBody._ciResult && typeof hookBody._ciResult =
   ? hookBody._ciResult
   : parseCiResult(issue.description);
 
-// Dedup: skip if same (issueId + event + sorted-tags) seen within last 2 minutes.
-// Protects against feedback loops like spec→CI→comment_back→spec review again.
-const dedupKey = issueId + '|' + event + '|' + [...tags].sort().join(',');
+// Dedup: skip if same (issueId + event + sorted-tags + statusUpdatedAt) seen within TTL.
+// statusUpdatedAt is included so that legitimate retries (comment_back 把 issue 拉回
+// working 然后 agent 再跑一遍完成) 不被吃——每次 review/working 来回，status 会翻
+// 新的 timestamp。同时真重发（BKD 对同一事件重试投递）统一三元组，会被抓住。
+const statusUpdatedAt = issue.statusUpdatedAt || '';
+const dedupKey = issueId + '|' + event + '|' + [...tags].sort().join(',') + '|' + statusUpdatedAt;
 const staticData = $getWorkflowStaticData('global');
 staticData.dedup = staticData.dedup || {};
 const now = Date.now();
