@@ -1009,7 +1009,10 @@ const reqId = routerParams.reqId;
 const reqSpecs = issues.filter(i => Array.isArray(i.tags) && i.tags.includes(reqId));
 const passed = reqSpecs.filter(i => i.tags.includes('ci-passed'));
 const expectedCount = 3; // backend layer: dev-spec + accept-spec + contract-spec
-const allReady = passed.length >= expectedCount;
+// Idempotency gate: if a DEV issue already exists for this REQ, don't open again.
+// Without this, every spec re-entry (mark_spec_reviewed replays) re-triggers dev creation.
+const reqDevs = issues.filter(i => Array.isArray(i.tags) && i.tags.includes('dev') && i.tags.includes(reqId));
+const allReady = passed.length >= expectedCount && reqDevs.length === 0;
 return [{ json: {
   allReady,
   reqId,
