@@ -196,7 +196,9 @@ const issueNumber = hookBody.issueNumber || hookBody.number || null;
 // Strip previously-applied [REQ-xxx] [STAGE] prefixes to get the clean title.
 // Prevents title stacking on retries (e.g. user removes `analyze` and re-adds `intent:analyze`).
 const rawTitle = hookBody.title || '';
-const originalTitle = rawTitle.replace(/^(\\s*\\[REQ-[\\w-]+\\]\\s*\\[[^\\]]+\\]\\s*)+/, '').trim() || rawTitle;
+const strippedTitle = rawTitle.replace(/^(\\s*\\[REQ-[\\w-]+\\]\\s*\\[[^\\]]+\\]\\s*)+/, '').trim() || rawTitle;
+// JSON-escape so downstream jsonBody interpolation stays valid even when title contains `"` or `\\`
+const originalTitle = JSON.stringify(strippedTitle).slice(1, -1);
 // reqId: use existing REQ-xxx tag or generate from issueNumber
 const existingReq = tags.find(t => /^REQ-[\\w-]+$/.test(t));
 const reqId = existingReq || (issueNumber ? `REQ-${issueNumber}` : null);
