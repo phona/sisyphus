@@ -197,16 +197,20 @@ function routeSpecDone(ctx, issueId, opts) {
   if (!ctx.specStage) {
     return { action: 'skip', reason: 'spec without specStage tag', params: { issueId } };
   }
-  // TEMP (integration-testing mode): bypass ci-lint at spec stage and let SPG gate open.
-  // Reason: ubox-crosser baseline lint + go vet not BASE_REV-scoped + spec→CI feedback loop
-  // keep blocking downstream stages (dev / ci-unit / ci-integration / accept). Skipping
-  // ci-lint lets the rest of the chain surface its own bugs in a single run.
+  // spec-agent done → 起 ci-runner 跑 make ci-lint 校验产出（golangci-lint --new-from-rev
+  // 做增量 scope，spec 分支只改 markdown/yaml 不触发 go linter）。
+  // 反馈环靠三道幂等闸兜底：priorStatusId==='done' / dedup / SPG 已开 dev。
+  const branch = `stage/${ctx.reqId}-${ctx.specStage}`;
   return {
-    action: 'mark_spec_reviewed',
+    action: 'create_ci_runner',
     params: {
       reqId: ctx.reqId,
-      specStage: ctx.specStage,
+      target: 'lint',
+      branch,
+      workdir: workdirFor(branch),
+      repoUrl: ctx._repoMap[ctx._projectId] || null,
       parentIssueId: issueId,
+      parentStage: ctx.specStage,
     },
   };
 }
