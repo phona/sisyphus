@@ -148,7 +148,10 @@ function parseCiResult(desc) {
     stderrTail: tail ? tail[1].replace(/^\\s{0,4}/gm, '') : '',
   };
 }
-const _ciResult = parseCiResult(issue.description);
+// Harness/backdoor: allow webhook body to inject _ciResult directly (tests).
+const _ciResult = (hookBody && hookBody._ciResult && typeof hookBody._ciResult === 'object')
+  ? hookBody._ciResult
+  : parseCiResult(issue.description);
 
 // Dedup: skip if same (issueId + event + sorted-tags) seen within last 2 minutes.
 // Protects against feedback loops like spec→CI→comment_back→spec review again.
@@ -354,9 +357,35 @@ TOOLS_WHITELIST = (
     "\n"
 )
 
+# 多次 live 踩坑：agent 在 follow-up / update-issue 时把 issueId 填成了 prompt 里作为参考的\n# SOURCE_* / PARENT_* / ACCEPT_ISSUE 等上游变量，结果把父 issue 的 tags 或 description 改了。\n# 例如：[DONE] agent 把 pr:xxx tag 写到了父 accept issue 693；[GH] agent 把 gh:3 写到了父 ci issue 703。\n# 统一硬约束：所有 update-issue / follow-up-issue 的 issueId 必须取自本 session（通过 mcp__bkd__get-issue\n# 返回的 id 或 session 上下文），不是任何 prompt 里"参考用"的变量。
+SELF_ISSUE_CONSTRAINT = (
+    "## 只改本 issue (HARD CONSTRAINT — 第二优先级)\n"
+    "\n"
+    "你的 prompt 里可能带上游参考变量 (REQ / BRANCH / SRC_ISSUE / ACCEPT_ISSUE / PARENT_ISSUE 等)。\n"
+    "**它们只用来读**，任何 mcp__bkd__update-issue / mcp__bkd__follow-up-issue 的 issueId 参数\n"
+    "**必须是你自己 session 所在的 issue**，不是上面任何一个。\n"
+    "\n"
+    "怎么确认自己的 issueId：\n"
+    "1. 最稳的做法：调一次 `mcp__bkd__list-issues` 或从 session 自身上下文拿 issueId；\n"
+    "2. 或者对你收到的 issueNumber（若 prompt 或 session 提供）调 `mcp__bkd__get-issue` 对齐。\n"
+    "\n"
+    "### tags 覆盖语义\n"
+    "BKD update-issue 会**替换**整个 tags 数组。每次 update 前必须：\n"
+    "1. `mcp__bkd__get-issue` 取当前 tags；\n"
+    "2. 在内存里 merge：保留所有非本阶段管理的 tag + 追加本阶段要写入的 tag；\n"
+    "3. 再 update-issue。\n"
+    "\n"
+    "**不要**只传新 tag 导致原 REQ-xxx / 阶段 tag 被抹掉，Router 会路由到 unknown。\n"
+    "\n"
+    "违反这条约束 = 任务失败。\n"
+    "\n"
+    "─────────\n"
+    "\n"
+)
+
 def follow_up_body(issue_id_expr, prompt_text, rpc_id):
-    # Prepend tool whitelist to every prompt, regardless of source.
-    full_prompt = TOOLS_WHITELIST + prompt_text
+    # Prepend tool whitelist + self-issue constraint to every prompt, regardless of source.
+    full_prompt = TOOLS_WHITELIST + SELF_ISSUE_CONSTRAINT + prompt_text
     # Escape sequence: backslash first, then double-quote, then newline.
     prompt_esc = full_prompt.replace(chr(92), chr(92)*2).replace(chr(34), chr(92)+chr(34)).replace('\n', '\\n')
     # Use Router._input for projectId — works under both [ENTRY] Ctx 提取 and [ENTRY intent] Ctx
