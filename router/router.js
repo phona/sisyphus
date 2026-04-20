@@ -80,8 +80,12 @@ export function parseTags(tags = []) {
     .filter(x => /^layer:/.test(x))
     .map(x => x.split(':')[1]);
   const specStage = [...t].find(x => SPEC_TAGS.has(x)) || null;
+  const parentIdTag = [...t].find(x => /^parent-id:/.test(x));
+  const parentIssueId = parentIdTag ? parentIdTag.slice('parent-id:'.length) : null;
+  const parentStageTag = [...t].find(x => /^parent:/.test(x) && !/^parent-id:/.test(x));
+  const parentStage = parentStageTag ? parentStageTag.slice('parent:'.length) : null;
 
-  return { routeKey, resultKey, reqId, round, target, layers, specStage };
+  return { routeKey, resultKey, reqId, round, target, layers, specStage, parentIssueId, parentStage };
 }
 
 export function routeEvent(webhookBody = {}, opts = {}) {
@@ -90,6 +94,11 @@ export function routeEvent(webhookBody = {}, opts = {}) {
   const ctx = parseTags(tags);
   ctx._projectId = projectId || webhookBody.projectId || '';
   ctx._repoMap = opts.projectRepoMap || DEFAULT_PROJECT_REPO_MAP;
+
+  // L-1: dedup gate (set by upstream Ctx node based on workflowStaticData)
+  if (webhookBody._dedupSkip === true) {
+    return { action: 'skip', reason: 'duplicate event (dedup gate)', params: { issueId, dedupKey: webhookBody._dedupKey } };
+  }
 
   // L0: intent:analyze entry — BKD UI tag trigger
   if (event === 'issue.updated' && tags.includes('intent:analyze') && !tags.includes('analyze')) {
@@ -212,8 +221,10 @@ function ciRunnerAction(ctx, target, parentStage, parentIssueId, branchOverride)
 }
 
 function routeCiDone(ctx, issueId, webhookBody) {
-  const parentStage = webhookBody?.metadata?.parentStage || null;
-  const parentIssueId = webhookBody?.metadata?.parentIssueId || null;
+  // Parent info now comes from tags (`parent:xxx` + `parent-id:xxx`), not webhook metadata.
+  // BKD webhooks don't ship metadata; tags travel with the issue and survive round-trips.
+  const parentStage = ctx.parentStage || webhookBody?.metadata?.parentStage || null;
+  const parentIssueId = ctx.parentIssueId || webhookBody?.metadata?.parentIssueId || null;
 
   if (ctx.resultKey === 'ci-pass') {
     // dev unit pass → run integration CI on feat branch

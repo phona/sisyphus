@@ -74,7 +74,7 @@ nodes.append({
     "id": "wh", "name": "[ENTRY] Hook", "type": "n8n-nodes-base.webhook",
     "typeVersion": 2, "webhookId": "b02404e7-1027-4349-8cfa-705f7bcee7e7",
     "position": [200, 800],
-    "parameters": {"httpMethod": "POST", "path": "bkd-events-v31", "responseMode": "onReceived", "options": {}},
+    "parameters": {"httpMethod": "POST", "path": "bkd-events", "responseMode": "onReceived", "options": {}},
 })
 
 nodes.append(http_node(
@@ -121,16 +121,35 @@ const issue = extractIssue(gi && (gi.data || gi.body || gi)) || {};
 const tags = Array.isArray(issue.tags) ? issue.tags : (Array.isArray(hookBody.tags) ? hookBody.tags : []);
 const priorStatusId = issue.statusId || hookBody.priorStatusId || null;
 const title = hookBody.title || issue.title || '';
+const event = hookBody.event || 'session.completed';
+const issueId = hookBody.issueId || issue.id || '';
+
+// Dedup: skip if same (issueId + event + sorted-tags) seen within last 2 minutes.
+// Protects against feedback loops like spec→CI→comment_back→spec review again.
+const dedupKey = issueId + '|' + event + '|' + [...tags].sort().join(',');
+const staticData = $getWorkflowStaticData('global');
+staticData.dedup = staticData.dedup || {};
+const now = Date.now();
+const TTL = 30 * 60 * 1000;  // 30 min: spec agent fix cycles take 5-10 min
+// GC old entries
+for (const k of Object.keys(staticData.dedup)) {
+  if (now - staticData.dedup[k] > TTL) delete staticData.dedup[k];
+}
+const lastSeen = staticData.dedup[dedupKey];
+const dedupSkip = lastSeen && (now - lastSeen < TTL);
+if (!dedupSkip) staticData.dedup[dedupKey] = now;
 
 return [{ json: {
   sid,
-  event: hookBody.event || 'session.completed',
-  issueId: hookBody.issueId || issue.id || '',
+  event,
+  issueId,
   projectId: hookBody.projectId || issue.projectId || '',
   title,
   tags,
   priorStatusId,
-  metadata: hookBody.metadata || {}
+  metadata: hookBody.metadata || {},
+  _dedupSkip: !!dedupSkip,
+  _dedupKey: dedupKey,
 }}];
 """
 ))
@@ -141,7 +160,7 @@ nodes.append({
     "type": "n8n-nodes-base.webhook", "typeVersion": 2,
     "webhookId": "c02404e7-1027-4349-8cfa-705f7bcee7e8",
     "position": [200, 1500],
-    "parameters": {"httpMethod": "POST", "path": "bkd-issue-updated-v31", "responseMode": "onReceived", "options": {}},
+    "parameters": {"httpMethod": "POST", "path": "bkd-issue-updated", "responseMode": "onReceived", "options": {}},
 })
 
 nodes.append(http_node(
@@ -174,7 +193,10 @@ try {
 const issueId = hookBody.issueId || hookBody.id || '';
 const projectId = hookBody.projectId || '';
 const issueNumber = hookBody.issueNumber || hookBody.number || null;
-const originalTitle = hookBody.title || '';
+// Strip previously-applied [REQ-xxx] [STAGE] prefixes to get the clean title.
+// Prevents title stacking on retries (e.g. user removes `analyze` and re-adds `intent:analyze`).
+const rawTitle = hookBody.title || '';
+const originalTitle = rawTitle.replace(/^(\\s*\\[REQ-[\\w-]+\\]\\s*\\[[^\\]]+\\]\\s*)+/, '').trim() || rawTitle;
 // reqId: use existing REQ-xxx tag or generate from issueNumber
 const existingReq = tags.find(t => /^REQ-[\\w-]+$/.test(t));
 const reqId = existingReq || (issueNumber ? `REQ-${issueNumber}` : null);
@@ -281,12 +303,34 @@ def create_issue_body(title_expr, tags_list, rpc_id):
             f'"title":"{title_expr}","statusId":"todo","useWorktree":false,'
             f'"tags":[{tags_js}]}}}}}}')
 
+TOOLS_WHITELIST = (
+    "## 工具白名单 (HARD CONSTRAINT — 第一优先级)\n"
+    "**仅允许**调用以下 MCP 工具：\n"
+    "- mcp__bkd__* (管 BKD issue 状态/tags/follow-up/get-issue)\n"
+    "- mcp__aissh-tao__* (在 vm-node04 exec_run 命令、file_deploy)\n"
+    "\n"
+    "**绝对禁止**调用：\n"
+    "- mcp__vibe_kanban__* (另一套 kanban，不是我们用的 BKD)\n"
+    "- mcp__erpnext__* (ERP 系统，和本任务无关)\n"
+    "- Task / Agent 子代理工具 (会污染 session)\n"
+    "- 任何其他未列出的 MCP\n"
+    "\n"
+    "违反即视为任务失败。即使工具列表里出现其他工具，你也必须当作不存在。\n"
+    "BKD session 日志会记录工具调用，审计会拦截越权调用。\n"
+    "\n"
+    "─────────\n"
+    "\n"
+)
+
 def follow_up_body(issue_id_expr, prompt_text, rpc_id):
+    # Prepend tool whitelist to every prompt, regardless of source.
+    full_prompt = TOOLS_WHITELIST + prompt_text
     # Escape sequence: backslash first, then double-quote, then newline.
-    prompt_esc = prompt_text.replace(chr(92), chr(92)*2).replace(chr(34), chr(92)+chr(34)).replace('\n', '\\n')
+    prompt_esc = full_prompt.replace(chr(92), chr(92)*2).replace(chr(34), chr(92)+chr(34)).replace('\n', '\\n')
+    # Use Router._input for projectId — works under both [ENTRY] Ctx 提取 and [ENTRY intent] Ctx
     return ('={"jsonrpc":"2.0","id":' + str(rpc_id) +
             ',"method":"tools/call","params":{"name":"follow-up-issue","arguments":'
-            '{"projectId":"{{ $node["[ENTRY] Ctx 提取"].json.projectId }}",'
+            '{"projectId":"{{ $(\'Router\').first().json._input.projectId }}",'
             f'"issueId":"{issue_id_expr}","prompt":"{prompt_esc}"}}}}}}')
 
 def update_issue_body(issue_id_expr, tags_list, rpc_id, status_id=None):
@@ -321,11 +365,30 @@ for hp in nodes[-1]["parameters"]["headerParameters"]["parameters"]:
 
 nodes.append(http_node(
     "anz_fu", "[ANZ] Send analyze prompt", 1800, y,
-    ('={"jsonrpc":"2.0","id":91,"method":"tools/call","params":{"name":"follow-up-issue","arguments":'
-     '{"projectId":"{{ $(\'Router\').first().json._input.projectId }}",'
-     '"issueId":"{{ $(\'Router\').first().json.params.issueId }}",'
-     '"prompt":"## 需求分析 (ANALYZE)\\nAGENT_ROLE=analyze-agent\\nREQ={{ $(\'Router\').first().json.params.reqId }}\\nREPO_URL={{ $(\'Router\').first().json.params.repoUrl }}\\n\\n## 产出 (OpenSpec 四件套 + 契约)\\n1. openspec/changes/$REQ/proposal.md   需求 + layers frontmatter (data/backend/frontend 任选)\\n2. openspec/changes/$REQ/design.md    设计权衡\\n3. openspec/changes/$REQ/specs/*.md   spec-delta (每个 scenario 以 FEATURE-S{N} 命名)\\n4. openspec/changes/$REQ/tasks.md     多个 Stage section 的骨架\\n5. openspec/changes/$REQ/contract.spec.yaml (仅 layers 含 backend 时)\\n\\n## 完成时\\n- commit + push 到 feat/$REQ\\n- 给 issue tags 加 layer:backend / layer:frontend / layer:data (按 proposal 真实 layers)\\n- 如判定不支持: 加 decision:unsupported\\n- 如需澄清: 加 decision:needs-clarify\\n- move review\\n\\nn8n 收到 session.completed 会按 layers 展开 N 路 spec。"}}}'),
-    rpc_id=91, timeout=30000, on_error="continueRegularOutput",
+    follow_up_body(
+        "{{ $('Router').first().json.params.issueId }}",
+        "## 需求分析 (ANALYZE)\n"
+        "AGENT_ROLE=analyze-agent\n"
+        "REQ={{ $('Router').first().json.params.reqId }}\n"
+        "REPO_URL={{ $('Router').first().json.params.repoUrl }}\n"
+        "\n"
+        "## 产出 (OpenSpec 四件套 + 契约)\n"
+        "1. openspec/changes/$REQ/proposal.md   需求 + layers frontmatter (data/backend/frontend 任选)\n"
+        "2. openspec/changes/$REQ/design.md    设计权衡\n"
+        "3. openspec/changes/$REQ/specs/*.md   spec-delta (每个 scenario 以 FEATURE-S{N} 命名)\n"
+        "4. openspec/changes/$REQ/tasks.md     多个 Stage section 的骨架\n"
+        "5. openspec/changes/$REQ/contract.spec.yaml (仅 layers 含 backend 时)\n"
+        "\n"
+        "## 完成时\n"
+        "- commit + push 到 feat/$REQ\n"
+        "- 给 issue tags 加 layer:backend / layer:frontend / layer:data (按 proposal 真实 layers)\n"
+        "- 如判定不支持: 加 decision:unsupported\n"
+        "- 如需澄清: 加 decision:needs-clarify\n"
+        "- move review\n"
+        "\n"
+        "n8n 收到 session.completed 会按 layers 展开 N 路 spec。",
+        91),
+    timeout=30000, on_error="continueRegularOutput",
 ))
 for hp in nodes[-1]["parameters"]["headerParameters"]["parameters"]:
     if hp["name"] == "Mcp-Session-Id":
@@ -353,7 +416,13 @@ nodes.append(http_node(
     "ci_cr", "[CI] Cr", 1580, y,
     create_issue_body(
         '[{{ $json.params.reqId }}] [CI {{ $json.params.target }}] self-check {{ $json.params.parentStage }}',
-        ['ci', '{{ $json.params.reqId }}', 'target:{{ $json.params.target }}', 'parent:{{ $json.params.parentStage }}'],
+        [
+            'ci',
+            '{{ $json.params.reqId }}',
+            'target:{{ $json.params.target }}',
+            'parent:{{ $json.params.parentStage }}',
+            'parent-id:{{ $json.params.parentIssueId }}',
+        ],
         10),
     rpc_id=10, retry=True, on_error="continueErrorOutput",
 ))
@@ -362,7 +431,55 @@ nodes.append(http_node(
     "ci_fu", "[CI] Fu", 2020, y,
     follow_up_body(
         '{{ $json.iid }}',
-        '## CI 核验 (CI-RUNNER)\nAGENT_ROLE=ci-runner-agent\nREQ={{ $json.params.reqId }}\nTARGET={{ $json.params.target }}\nBRANCH={{ $json.params.branch }}\nWORKDIR={{ $json.params.workdir }}\nREPO_URL={{ $json.params.repoUrl }}\nPARENT_ISSUE={{ $json.params.parentIssueId }}\nPARENT_STAGE={{ $json.params.parentStage }}\n\n## 硬约束\n1. 所有命令只能通过 mcp__aissh-tao__exec_run 在 vm-node04 上执行。禁止本地 Bash。\n2. 每条 exec_run 命令必须以 cd $WORKDIR 开头。禁止 cd 到 $WORKDIR 之外。\n3. 禁改 repo 任何文件 (pre-commit ACL 会拦)。\n4. 仅许加 ci:pass 或 ci:fail tag (保留继承的 ci/REQ/target/parent)。禁 result/diagnosis/round。\n5. stderr_tail 原样贴 make output 最后 50 行，不总结不翻译。\n6. 失败不分析原因 —— 你是报告员不是诊断师。\n\n## 步骤\nStep 1 bootstrap (一条 exec_run, bash -c 包起来):\n  首次: git clone --branch $BRANCH $REPO_URL $WORKDIR\n  已存在: cd $WORKDIR && git fetch origin && git reset --hard origin/$BRANCH\n  两种情况幂等处理。\n\nStep 2 跑测试 (一条 exec_run):\n  cd $WORKDIR && time make ci-$TARGET 2>&1\n  记录 exit_code / duration_ms / stderr 最后 50 行 / 失败测试名列表。\n\nStep 3 写结果:\n  A. follow-up-issue 把下面 block 追加到本 issue 正文:\n\n## CI Result\ntarget: $TARGET\nbranch: $BRANCH\nworkdir: $WORKDIR\ncommit: <cd $WORKDIR && git rev-parse --short HEAD>\nexit_code: <0 或非 0>\nduration_ms: <ms>\ncoverage: <% 或空>\nfailed_tests:\n  - <name>\nstderr_tail: |\n  <原样最后 50 行>\n\n  B. update-issue tags=[ci, {{ $json.params.reqId }}, target:{{ $json.params.target }}, parent:{{ $json.params.parentStage }}, ci:pass 或 ci:fail]\n  C. move review',
+        "## CI 核验 (CI-RUNNER)\n"
+        "AGENT_ROLE=ci-runner-agent\n"
+        "REQ={{ $json.params.reqId }}\n"
+        "TARGET={{ $json.params.target }}\n"
+        "BRANCH={{ $json.params.branch }}\n"
+        "WORKDIR={{ $json.params.workdir }}\n"
+        "REPO_URL={{ $json.params.repoUrl }}\n"
+        "PARENT_ISSUE={{ $json.params.parentIssueId }}  # 只用于参考,禁止对它 update\n"
+        "PARENT_STAGE={{ $json.params.parentStage }}\n"
+        "\n"
+        "## 硬约束\n"
+        "1. 所有命令只能通过 mcp__aissh-tao__exec_run 在 vm-node04 上执行。禁止本地 Bash。\n"
+        "2. 每条 exec_run 命令必须以 cd $WORKDIR 开头。禁止 cd 到 $WORKDIR 之外。\n"
+        "3. 禁改 repo 任何文件 (pre-commit ACL 会拦)。\n"
+        "4. **update-issue 时 issueId 必须是本 session 所在 issue (即你自己),绝不是 PARENT_ISSUE**。PARENT_ISSUE 只是上下文参考值。\n"
+        "5. tags 覆盖语义:update-issue 会替换 tags 整个数组。必须完整列出所有要保留的 tag (含 parent-id)。\n"
+        "6. stderr_tail 原样贴 make output 最后 50 行,不总结不翻译。\n"
+        "7. 失败不分析原因 —— 你是报告员不是诊断师。\n"
+        "\n"
+        "## 步骤\n"
+        "Step 1 bootstrap (一条 exec_run, bash -c 包起来):\n"
+        "  首次: git clone --branch $BRANCH $REPO_URL $WORKDIR\n"
+        "  已存在: cd $WORKDIR && git fetch origin && git reset --hard origin/$BRANCH\n"
+        "  两种情况幂等处理。\n"
+        "\n"
+        "Step 2 跑测试 (一条 exec_run):\n"
+        "  cd $WORKDIR && time BASE_REV=origin/master make ci-$TARGET 2>&1\n"
+        "  **BASE_REV=origin/master 让 make ci-lint 只检查本分支相对 master 新增的 lint 问题**,不被 baseline 污染。\n"
+        "  记录 exit_code / duration_ms / stderr 最后 50 行 / 失败测试名列表。\n"
+        "\n"
+        "Step 3 写结果 (对**本 issue**操作,不是 PARENT_ISSUE):\n"
+        "  A. mcp__bkd__follow-up-issue 把下面 block 追加到本 issue 正文:\n"
+        "\n"
+        "## CI Result\n"
+        "target: $TARGET\n"
+        "branch: $BRANCH\n"
+        "workdir: $WORKDIR\n"
+        "commit: <cd $WORKDIR && git rev-parse --short HEAD>\n"
+        "exit_code: <0 或非 0>\n"
+        "duration_ms: <ms>\n"
+        "coverage: <% 或空>\n"
+        "failed_tests:\n"
+        "  - <name>\n"
+        "stderr_tail: |\n"
+        "  <原样最后 50 行>\n"
+        "\n"
+        "  B. mcp__bkd__update-issue 改**本 issue**的 tags (不是 PARENT_ISSUE)。tags 必须完整列:\n"
+        "     tags=[ci, {{ $json.params.reqId }}, target:{{ $json.params.target }}, parent:{{ $json.params.parentStage }}, parent-id:{{ $json.params.parentIssueId }}, <ci:pass 或 ci:fail>]\n"
+        "  C. mcp__bkd__update-issue 改**本 issue**状态: statusId=review",
         11),
     rpc_id=11, on_error="continueRegularOutput",
 ))
@@ -370,8 +487,14 @@ nodes.append(http_node(
     "ci_st", "[CI] St", 2240, y,
     update_issue_body(
         '{{ $node["[CI] Id"].json.iid }}',
-        ['ci', '{{ $node["[CI] Id"].json.params.reqId }}', 'target:{{ $node["[CI] Id"].json.params.target }}', 'parent:{{ $node["[CI] Id"].json.params.parentStage }}', 'awaiting-start'],
-        12),
+        [
+            'ci',
+            '{{ $node["[CI] Id"].json.params.reqId }}',
+            'target:{{ $node["[CI] Id"].json.params.target }}',
+            'parent:{{ $node["[CI] Id"].json.params.parentStage }}',
+            'parent-id:{{ $node["[CI] Id"].json.params.parentIssueId }}',
+        ],
+        12, status_id='working'),
     rpc_id=12, timeout=10000, on_error="continueRegularOutput",
 ))
 conns["[CI] Cr"] = {"main": [[{"node": "[CI] Id", "type": "main", "index": 0}]]}
@@ -426,8 +549,8 @@ nodes.append(http_node(
     "bug_st", "[BUG] St", 2240, y,
     update_issue_body(
         '{{ $node["[BUG] Id"].json.iid }}',
-        ['bugfix', '{{ $node["[BUG] Id"].json.params.reqId }}', 'round-{{ $node["[BUG] Id"].json.params.round }}', 'awaiting-start'],
-        32),
+        ['bugfix', '{{ $node["[BUG] Id"].json.params.reqId }}', 'round-{{ $node["[BUG] Id"].json.params.round }}'],
+        32, status_id='working'),
     rpc_id=32, timeout=10000, on_error="continueRegularOutput",
 ))
 conns["[BUG] Cr"] = {"main": [[{"node": "[BUG] Id", "type": "main", "index": 0}]]}
@@ -457,8 +580,8 @@ nodes.append(http_node(
     "tfix_st", "[TFIX] St", 2240, y,
     update_issue_body(
         '{{ $node["[TFIX] Id"].json.iid }}',
-        ['test-fix', '{{ $node["[TFIX] Id"].json.params.reqId }}', 'round-{{ $node["[TFIX] Id"].json.params.round }}', 'awaiting-start'],
-        42),
+        ['test-fix', '{{ $node["[TFIX] Id"].json.params.reqId }}', 'round-{{ $node["[TFIX] Id"].json.params.round }}'],
+        42, status_id='working'),
     rpc_id=42, timeout=10000, on_error="continueRegularOutput",
 ))
 conns["[TFIX] Cr"] = {"main": [[{"node": "[TFIX] Id", "type": "main", "index": 0}]]}
@@ -488,8 +611,8 @@ nodes.append(http_node(
     "rvw_st", "[RVW] St", 2240, y,
     update_issue_body(
         '{{ $node["[RVW] Id"].json.iid }}',
-        ['reviewer', '{{ $node["[RVW] Id"].json.params.reqId }}', 'round-{{ $node["[RVW] Id"].json.params.round }}', 'awaiting-start'],
-        52),
+        ['reviewer', '{{ $node["[RVW] Id"].json.params.reqId }}', 'round-{{ $node["[RVW] Id"].json.params.round }}'],
+        52, status_id='working'),
     rpc_id=52, timeout=10000, on_error="continueRegularOutput",
 ))
 conns["[RVW] Cr"] = {"main": [[{"node": "[RVW] Id", "type": "main", "index": 0}]]}
@@ -518,20 +641,26 @@ nodes.append(http_node(
 # (done inline below by post-fixing the expressions)
 nodes.append(code_node(
     "fan_id", "[FAN] Id", 2020, y,
-    """const prev = $node['[FAN] Cr'].json;
-const raw = (prev && (prev.data || prev.body || prev)) || '';
-const text = typeof raw === 'string' ? raw : String(raw);
-const m = text.match(/data:\\s*(\\{[\\s\\S]*?\\})\\s*$/m);
-let iid = '';
-if (m) {
-  try {
-    const env = JSON.parse(m[1]);
-    const c = env.result && Array.isArray(env.result.content) ? env.result.content[0] : null;
-    if (c && typeof c.text === 'string') iid = (JSON.parse(c.text).id) || '';
-  } catch {}
-}
-// Preserve specStage + Router params
-return [{ json: { specStage: $json.specStage, iid, reqId: $node['Router'].json.params.reqId } }];
+    """// After [FAN] Cr: N items (one per spec). Extract iid from each; recover specStage from Split Out by index.
+const crItems = $input.all();
+const splitItems = $('[FAN] Split specs').all();
+const reqId = $('Router').first().json.params.reqId;
+return crItems.map((item, idx) => {
+  const raw = item.json;
+  const text = String((raw && (raw.data || raw.body)) || raw || '');
+  const m = text.match(/data:\\s*(\\{[\\s\\S]*?\\})\\s*$/m);
+  let iid = '';
+  if (m) {
+    try {
+      const env = JSON.parse(m[1]);
+      const c = env.result && Array.isArray(env.result.content) ? env.result.content[0] : null;
+      if (c && typeof c.text === 'string') iid = (JSON.parse(c.text).id) || '';
+    } catch {}
+  }
+  const srcItem = splitItems[idx];
+  const specStage = (srcItem && srcItem.json && srcItem.json.specStage) || '';
+  return { json: { specStage, iid, reqId } };
+});
 """
 ))
 nodes.append(http_node(
@@ -545,15 +674,27 @@ nodes.append(http_node(
 nodes.append(http_node(
     "fan_st", "[FAN] St", 2460, y,
     update_issue_body(
-        '{{ $json.iid }}',
-        ['{{ $json.specStage }}', '{{ $json.reqId }}', 'awaiting-start'],
-        62),
+        # Fu returned HTTP response (no iid) — reach back to [FAN] Id via pairedItem
+        "{{ $('[FAN] Id').item.json.iid }}",
+        ["{{ $('[FAN] Id').item.json.specStage }}", "{{ $('[FAN] Id').item.json.reqId }}"],
+        62, status_id='working'),
     rpc_id=62, timeout=10000, on_error="continueRegularOutput",
+))
+# Mark the analyze parent issue as done so subsequent webhooks get skipped
+# by Router's `priorStatusId === 'done'` gate (prevents repeated fanout).
+nodes.append(http_node(
+    "fan_done", "[FAN] Mark analyze done", 2700, y,
+    ('={"jsonrpc":"2.0","id":63,"method":"tools/call","params":{"name":"update-issue","arguments":'
+     '{"projectId":"{{ $(\'[ENTRY] Ctx 提取\').first().json.projectId }}",'
+     '"issueId":"{{ $(\'[ENTRY] Ctx 提取\').first().json.issueId }}",'
+     '"statusId":"done"}}}'),
+    rpc_id=63, timeout=10000, on_error="continueRegularOutput",
 ))
 conns["[FAN] Split specs"] = {"main": [[{"node": "[FAN] Cr", "type": "main", "index": 0}]]}
 conns["[FAN] Cr"] = {"main": [[{"node": "[FAN] Id", "type": "main", "index": 0}]]}
 conns["[FAN] Id"] = {"main": [[{"node": "[FAN] Fu", "type": "main", "index": 0}]]}
 conns["[FAN] Fu"] = {"main": [[{"node": "[FAN] St", "type": "main", "index": 0}]]}
+conns["[FAN] St"] = {"main": [[{"node": "[FAN] Mark analyze done", "type": "main", "index": 0}]]}
 
 # Patch FAN nodes: $node["[ENTRY] Ctx 提取"] -> $('[ENTRY] Ctx 提取').first()
 # (Split Out breaks auto-pairing for $node refs on both body and headers)
@@ -660,8 +801,8 @@ nodes.append(http_node(
     "spg_dev_st", "[SPG] Dev St", 3120, y-60,
     update_issue_body(
         '{{ $node["[SPG] Dev Id"].json.iid }}',
-        ['dev', '{{ $node["[SPG] Dev Id"].json.reqId }}', 'awaiting-start'],
-        74),
+        ['dev', '{{ $node["[SPG] Dev Id"].json.reqId }}'],
+        74, status_id='working'),
     rpc_id=74, timeout=10000, on_error="continueRegularOutput",
 ))
 nodes.append(noop("spg_wait", "[SPG] Gate not yet ready", 2460, y+60))
@@ -749,7 +890,7 @@ LAYOUT = {
 #   ANZ → FAN → SPG → CI → CMT → BUG → TFIX → RVW → ESC (anomaly) → skip/unhandled (noops)
 ACTION_ROWS = [
     ('start_analyze',    [('[ANZ] Update title+tags','a1'), ('[ANZ] Send analyze prompt','a2'), ('[ANZ] Trigger agent','a3')]),
-    ('fanout_specs',     [('[FAN] Split specs','a1'), ('[FAN] Cr','a2'), ('[FAN] Id','a3'), ('[FAN] Fu','a4'), ('[FAN] St','a5')]),
+    ('fanout_specs',     [('[FAN] Split specs','a1'), ('[FAN] Cr','a2'), ('[FAN] Id','a3'), ('[FAN] Fu','a4'), ('[FAN] St','a5'), ('[FAN] Mark analyze done','a6')]),
     ('mark_spec_reviewed', [
         ('[SPG] Mark spec-reviewed','a1'),
         ('[SPG] List REQ specs','a2'),
