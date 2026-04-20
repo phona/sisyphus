@@ -45,8 +45,15 @@ sisyphus/
 ├── charts/n8n-workflows/   # n8n 工作流 JSON（v3-*.json）
 ├── docs/
 │   ├── architecture.md      # 架构设计（权威）
+│   ├── observability.md     # 可观测性设计
 │   ├── n8n-k3s-pitfalls.md  # n8n on K3s 踩坑手册
 │   └── n8n-workflow-usage.md
+├── observability/           # Postgres schema + Metabase 查询
+│   ├── schema.sql
+│   ├── README.md
+│   └── queries/             # 4 条 Alert SQL
+├── router/                  # Router 纯函数 + 单测
+├── values/                  # helm values（n8n / postgresql / metabase）
 ├── testcases/               # 测试用例
 └── Makefile
 ```
@@ -56,8 +63,10 @@ sisyphus/
 | 文档 | 内容 |
 |------|------|
 | [architecture.md](docs/architecture.md) | 架构设计 + 流程图（权威） |
+| [observability.md](docs/observability.md) | 可观测性设计（Postgres + Metabase + n8n tap） |
 | [n8n-k3s-pitfalls.md](docs/n8n-k3s-pitfalls.md) | n8n on K3s 踩坑手册（11 个坑）|
 | [n8n-workflow-usage.md](docs/n8n-workflow-usage.md) | n8n 使用说明 |
+| [observability/README.md](observability/README.md) | 观测系统部署 / 运维 / 查询速查 |
 
 ## 开发规范
 

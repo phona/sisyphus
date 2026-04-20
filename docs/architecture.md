@@ -338,6 +338,17 @@ Bug Fix 轮次 ≥ 3 → escalate（加 label + assign 人工 + 停自动 Bug Fi
 2. **ttpos-arch-lab ephemeral 环境 + Playwright/Android 工具链**：数据裁剪中，还没 ready。
 3. **Token 成本监控**：n8n 暂未汇总 agent token 消耗。
 4. **Regression suite 持续化**：archive 的测试不会自动纳入以后的全仓 regression suite。
+5. **设计缺陷兜底（观测中）**：layers 双真相源、幂等性软闸、action 无幂等 key、熔断粒度太粗等已识别缺陷通过可观测系统检测兜底，尚未从根源修复。见 [observability.md](./observability.md#覆盖的已知缺陷)。
+
+## 可观测性
+
+配套独立的观测系统支撑 **实时兜底 + 离线分析 + 可持续改进** 三个目标。组件：Postgres + Metabase + n8n tap 节点。
+
+- 设计：[observability.md](./observability.md)
+- 部署 / 运维：[../observability/README.md](../observability/README.md)
+- Schema：[../observability/schema.sql](../observability/schema.sql)
+
+**定位**：不是"日志收集"或"APM"，是**把 n8n 决策流水 + BKD 状态镜像做成 SQL 可查的账本**，让每次改 prompt / Router 规则都能用数据验证效果。改进循环通过 `config_version` + `improvement_log` 两张表固化。
 
 ## 未来扩展点（按优先级）
 

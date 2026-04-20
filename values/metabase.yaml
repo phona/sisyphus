@@ -1,0 +1,68 @@
+# pmint/metabase helm chart values for Sisyphus BI
+# helm install sisyphus-bi pmint/metabase -n sisyphus -f values/metabase.yaml
+#
+# chart 源：https://github.com/pmint93/helm-charts/tree/master/charts/metabase
+
+image:
+  tag: v0.50.0  # LTS
+
+replicaCount: 1
+
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 200m
+  limits:
+    memory: 1Gi
+    cpu: 1000m
+
+# Metabase 自己的元数据库（用户、看板、alert 定义）
+# 生产建议用独立 Postgres，避免和 event_log 混用
+# MVP 阶段共用 sisyphus-pg 也可以，但要手动建 metabase 库：
+#   CREATE DATABASE metabase OWNER sisyphus;
+database:
+  type: postgres
+  host: sisyphus-pg-postgresql.sisyphus.svc.cluster.local
+  port: 5432
+  dbname: metabase
+  username: sisyphus
+  existingSecret: sisyphus-pg-postgresql
+  existingSecretKey: password
+
+service:
+  type: ClusterIP
+  port: 3000
+
+ingress:
+  enabled: true
+  ingressClassName: traefik
+  hosts:
+    - host: metabase.43.239.84.24.nip.io
+      paths:
+        - path: /
+          pathType: Prefix
+
+persistence:
+  enabled: false  # 状态全在元数据库，Pod 无本地状态
+
+# 环境变量：设置 JVM 内存 + 站点 URL
+env:
+  MB_SITE_URL: "http://metabase.43.239.84.24.nip.io"
+  MB_JETTY_PORT: "3000"
+  JAVA_OPTS: "-Xmx768m -XX:+UseG1GC"
+  # 禁用匿名 telemetry
+  MB_ANON_TRACKING_ENABLED: "false"
+
+# 不装 metrics exporter
+serviceMonitor:
+  enabled: false
+
+# 部署后手动配置：
+# 1. 首次登录创建 admin 账号
+# 2. Admin → Databases → Add database
+#    - Engine: PostgreSQL
+#    - Host: sisyphus-pg-postgresql.sisyphus.svc.cluster.local
+#    - Port: 5432
+#    - Database name: sisyphus_obs
+#    - Username: sisyphus / Password: 见 postgresql values
+# 3. 按 docs/observability.md 导入 5 个看板 + 4 个 Alert

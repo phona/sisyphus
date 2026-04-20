@@ -1,0 +1,54 @@
+# Bitnami postgresql chart values for Sisyphus observability DB
+# helm install sisyphus-pg bitnami/postgresql -n sisyphus -f values/postgresql.yaml
+
+auth:
+  database: sisyphus_obs
+  username: sisyphus
+  # Production: 改用 existingSecret 引用 k8s Secret，不要 inline
+  password: change-me-in-prod
+
+primary:
+  # strategy: Recreate 避免新旧 pod 争抢 PVC
+  updateStrategy:
+    type: Recreate
+
+  persistence:
+    enabled: true
+    size: 10Gi
+    # 年增 < 100K 行，10Gi 撑 5+ 年
+
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 200m
+    limits:
+      memory: 1Gi
+      cpu: 1000m
+
+  # 开机自动执行 schema.sql
+  # 注意：initdb 只在首次初始化时跑，后续升级 schema 要手动 psql
+  initdb:
+    scriptsConfigMap: sisyphus-obs-schema
+    # configmap 创建命令：
+    #   kubectl create configmap sisyphus-obs-schema \
+    #     -n sisyphus \
+    #     --from-file=01-schema.sql=observability/schema.sql
+
+  extendedConfiguration: |
+    # 事件流 append-only + 读多写多的混合负载
+    max_connections = 100
+    shared_buffers = 128MB
+    work_mem = 8MB
+    maintenance_work_mem = 64MB
+    # 不用 WAL 远程归档，备份靠 pg_dump
+    wal_level = replica
+    # 日志足够排查慢查询
+    log_min_duration_statement = 500
+
+# 不启用 metrics exporter（我们自己不跑 Prometheus）
+metrics:
+  enabled: false
+
+# 不启用 read replica（当前规模单实例够）
+readReplicas:
+  replicaCount: 0
