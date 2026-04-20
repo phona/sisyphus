@@ -239,9 +239,18 @@ function routeCiDone(ctx, issueId, webhookBody) {
     if (parentStage === 'dev') {
       return ciRunnerAction(ctx, 'integration', 'verify', issueId, `feat/${ctx.reqId}`);
     }
-    // integration pass → accept (AI-QA, not implemented yet — escalate)
+    // integration pass → kick off accept (AI-QA) stage
     if (parentStage === 'verify' || ctx.target === 'integration') {
-      return { action: 'escalate', reason: 'accept stage (AI-QA) not yet implemented', params: { reqId: ctx.reqId, issueId } };
+      return {
+        action: 'create_accept',
+        params: {
+          reqId: ctx.reqId,
+          sourceIssueId: issueId,
+          branch: `feat/${ctx.reqId}`,
+          workdir: workdirFor(`feat/${ctx.reqId}`),
+          repoUrl: ctx._repoMap[ctx._projectId] || null,
+        },
+      };
     }
     // spec lint pass → gate: check if all required specs done, create dev if so
     if (parentStage && /-spec$/.test(parentStage)) {
@@ -298,8 +307,17 @@ function routeVerifyDone(ctx, issueId) {
 
 function routeAcceptDone(ctx, issueId) {
   if (ctx.resultKey === 'pass') {
-    // done_archive (openspec apply + gh pr create) not yet implemented — escalate for now
-    return { action: 'escalate', reason: 'accept pass; done_archive not yet implemented', params: { reqId: ctx.reqId, issueId } };
+    // accept pass → archive: openspec apply + gh pr create + mark parent done
+    return {
+      action: 'done_archive',
+      params: {
+        reqId: ctx.reqId,
+        acceptIssueId: issueId,
+        branch: `feat/${ctx.reqId}`,
+        workdir: workdirFor(`feat/${ctx.reqId}`),
+        repoUrl: ctx._repoMap[ctx._projectId] || null,
+      },
+    };
   }
   if (ctx.resultKey === 'fail') {
     if (ctx.round >= CB_THRESHOLD) {

@@ -221,7 +221,7 @@ return [{ json: {
 
 nodes.append(code_node("router", "Router", 1060, 1100, "{{ROUTER_JS}}"))
 
-# Switch with 11 outputs: 10 actions + fallback
+# Switch with 13 outputs: 12 actions + fallback
 action_order = [
     "skip",
     "start_analyze",
@@ -230,6 +230,8 @@ action_order = [
     "create_bugfix",
     "create_test_fix",
     "create_reviewer",
+    "create_accept",
+    "done_archive",
     "fanout_specs",
     "mark_spec_reviewed",
     "escalate",
@@ -623,6 +625,145 @@ conns["[RVW] Cr"] = {"main": [[{"node": "[RVW] Id", "type": "main", "index": 0}]
 conns["[RVW] Id"] = {"main": [[{"node": "[RVW] Fu", "type": "main", "index": 0}]]}
 conns["[RVW] Fu"] = {"main": [[{"node": "[RVW] St", "type": "main", "index": 0}]]}
 
+# === Action: create_accept (AI-QA) ===========================================
+# Router params: reqId, sourceIssueId, branch, workdir, repoUrl
+y = 880
+nodes.append(http_node(
+    "acc_cr", "[ACC] Cr", 1580, y,
+    create_issue_body(
+        '[{{ $json.params.reqId }}] [ACCEPT] AI-QA',
+        ['accept', '{{ $json.params.reqId }}'],
+        60),
+    rpc_id=60, retry=True, on_error="continueErrorOutput",
+))
+nodes.append(code_node("acc_id", "[ACC] Id", 1800, y, ID_EXTRACT.replace("{PREV}", "[ACC] Cr")))
+nodes.append(http_node(
+    "acc_fu", "[ACC] Fu", 2020, y,
+    follow_up_body(
+        "{{ $json.iid }}",
+        "## 工具白名单 (HARD CONSTRAINT — 第一优先级)\n"
+        "仅允许: mcp__bkd__* / mcp__aissh-tao__*\n"
+        "绝对禁止: mcp__vibe_kanban__* / mcp__erpnext__* / Task / Agent / 其他未列出 MCP\n"
+        "\n─────────\n"
+        "## 验收 (ACCEPT / AI-QA)\n"
+        "AGENT_ROLE=accept-agent\n"
+        "REQ={{ $json.params.reqId }}\n"
+        "BRANCH={{ $json.params.branch }}\n"
+        "WORKDIR={{ $json.params.workdir }}\n"
+        "REPO_URL={{ $json.params.repoUrl }}\n"
+        "\n"
+        "## 职责\n"
+        "你是 AI-QA。读 openspec/changes/$REQ/specs/*/spec.md 里标 FEATURE-A* 的 Acceptance Scenario，\n"
+        "在调试环境跑一遍产品验证场景（非测试代码，而是用户视角的行为），给出 pass/fail 判定。\n"
+        "\n"
+        "## 硬约束\n"
+        "1. 所有命令只能通过 mcp__aissh-tao__exec_run 在 vm-node04 上执行。\n"
+        "2. 每条 exec_run 以 cd $WORKDIR 开头。\n"
+        "3. 禁改 repo 任何文件（只做读 + 部署 + 调用）。\n"
+        "4. update-issue issueId 必须是本 issue（不是 ci issue 或父 issue）。\n"
+        "\n"
+        "## 步骤\n"
+        "Step 1 bootstrap（首次 clone, 已存在 reset）:\n"
+        "  git clone --branch $BRANCH $REPO_URL $WORKDIR\n"
+        "  或 cd $WORKDIR && git fetch origin && git reset --hard origin/$BRANCH\n"
+        "\n"
+        "Step 2 构建 + 本地部署（AI-QA 侧，不是线上）:\n"
+        "  cd $WORKDIR && make ci-build 2>&1\n"
+        "  选一种方式启后台: ./bin/<main> & 或 make run & (看 Makefile 约定)\n"
+        "\n"
+        "Step 3 跑所有 FEATURE-A* Acceptance Scenario:\n"
+        "  对每个场景用 curl / CLI / 真实 IO 走一遍 Given/When/Then。\n"
+        "  记录每个场景: name / pass-or-fail / evidence (curl 输出 + 状态码 / 文件内容 / ...)\n"
+        "\n"
+        "Step 4 stop 后台服务 (kill / docker stop)。\n"
+        "\n"
+        "Step 5 写结果到**本 issue**:\n"
+        "  A. follow-up-issue 追加 `## Accept Result` block: 每场景 name/result/evidence\n"
+        "  B. update-issue tags: [accept, $REQ, <result:pass 或 result:fail>]\n"
+        "  C. update-issue statusId=review",
+        61),
+    rpc_id=61, on_error="continueRegularOutput",
+))
+nodes.append(http_node(
+    "acc_st", "[ACC] St", 2240, y,
+    update_issue_body(
+        '{{ $node["[ACC] Id"].json.iid }}',
+        ['accept', '{{ $node["[ACC] Id"].json.params.reqId }}'],
+        62, status_id='working'),
+    rpc_id=62, timeout=10000, on_error="continueRegularOutput",
+))
+conns["[ACC] Cr"] = {"main": [[{"node": "[ACC] Id", "type": "main", "index": 0}]]}
+conns["[ACC] Id"] = {"main": [[{"node": "[ACC] Fu", "type": "main", "index": 0}]]}
+conns["[ACC] Fu"] = {"main": [[{"node": "[ACC] St", "type": "main", "index": 0}]]}
+
+# === Action: done_archive ====================================================
+# Accept pass → openspec apply + gh pr create + mark analyze parent done
+y = 960
+nodes.append(http_node(
+    "done_cr", "[DONE] Cr", 1580, y,
+    create_issue_body(
+        '[{{ $json.params.reqId }}] [DONE] archive & PR',
+        ['done-archive', '{{ $json.params.reqId }}'],
+        70),
+    rpc_id=70, retry=True, on_error="continueErrorOutput",
+))
+nodes.append(code_node("done_id", "[DONE] Id", 1800, y, ID_EXTRACT.replace("{PREV}", "[DONE] Cr")))
+nodes.append(http_node(
+    "done_fu", "[DONE] Fu", 2020, y,
+    follow_up_body(
+        "{{ $json.iid }}",
+        "## 工具白名单 (HARD CONSTRAINT — 第一优先级)\n"
+        "仅允许: mcp__bkd__* / mcp__aissh-tao__*\n"
+        "绝对禁止: mcp__vibe_kanban__* / mcp__erpnext__* / Task / Agent / 其他未列出 MCP\n"
+        "\n─────────\n"
+        "## 归档 (DONE ARCHIVE)\n"
+        "AGENT_ROLE=done-archive-agent\n"
+        "REQ={{ $json.params.reqId }}\n"
+        "BRANCH={{ $json.params.branch }}\n"
+        "WORKDIR={{ $json.params.workdir }}\n"
+        "REPO_URL={{ $json.params.repoUrl }}\n"
+        "ACCEPT_ISSUE={{ $json.params.acceptIssueId }}\n"
+        "\n"
+        "## 职责\n"
+        "验收通过后，把 $REQ 的变更正式固化：openspec apply + 创建 PR。\n"
+        "\n"
+        "## 步骤\n"
+        "Step 1 bootstrap:\n"
+        "  cd $WORKDIR && git fetch origin && git reset --hard origin/$BRANCH\n"
+        "\n"
+        "Step 2 openspec apply:\n"
+        "  cd $WORKDIR && openspec apply $REQ\n"
+        "  这会把 changes/$REQ/specs/* 里的 ADDED 块合并进 openspec/specs/*，\n"
+        "  删除 changes/$REQ 目录。produces a new commit。\n"
+        "  失败就贴 error 到本 issue description，加 tag archive-fail 并 move review。\n"
+        "\n"
+        "Step 3 push:\n"
+        "  cd $WORKDIR && git push origin $BRANCH\n"
+        "\n"
+        "Step 4 创 PR:\n"
+        "  cd $WORKDIR && gh pr create --base master --head $BRANCH \\\n"
+        "    --title \"$REQ: <一句话概括>\" --body \"$(cat openspec/changes/$REQ/proposal.md 2>/dev/null || echo done via sisyphus)\"\n"
+        "  记录 PR URL。\n"
+        "\n"
+        "Step 5 写结果到**本 issue**:\n"
+        "  A. follow-up-issue 追加 `## Archive Result`: pr_url / commit_sha\n"
+        "  B. update-issue tags: [done-archive, $REQ, result:pass, pr:<url>]\n"
+        "  C. update-issue statusId=done  # 归档完成直接 done，不 review\n",
+        71),
+    rpc_id=71, timeout=60000, on_error="continueRegularOutput",
+))
+nodes.append(http_node(
+    "done_st", "[DONE] St", 2240, y,
+    update_issue_body(
+        '{{ $node["[DONE] Id"].json.iid }}',
+        ['done-archive', '{{ $node["[DONE] Id"].json.params.reqId }}'],
+        72, status_id='working'),
+    rpc_id=72, timeout=10000, on_error="continueRegularOutput",
+))
+conns["[DONE] Cr"] = {"main": [[{"node": "[DONE] Id", "type": "main", "index": 0}]]}
+conns["[DONE] Id"] = {"main": [[{"node": "[DONE] Fu", "type": "main", "index": 0}]]}
+conns["[DONE] Fu"] = {"main": [[{"node": "[DONE] St", "type": "main", "index": 0}]]}
+
 # === Action: fanout_specs ====================================================
 # Uses n8n Split Out: expands params.specs[] into N items, each going through Cr/Fu/St
 y = 960
@@ -861,6 +1002,8 @@ conns["Dispatch Action"] = {"main": [
     [{"node": "[BUG] Cr", "type": "main", "index": 0}],
     [{"node": "[TFIX] Cr", "type": "main", "index": 0}],
     [{"node": "[RVW] Cr", "type": "main", "index": 0}],
+    [{"node": "[ACC] Cr", "type": "main", "index": 0}],
+    [{"node": "[DONE] Cr", "type": "main", "index": 0}],
     [{"node": "[FAN] Split specs", "type": "main", "index": 0}],
     [{"node": "[SPG] Mark spec-reviewed", "type": "main", "index": 0}],
     [{"node": "[ESC] St (add escalate tag)", "type": "main", "index": 0}],
@@ -922,6 +1065,8 @@ ACTION_ROWS = [
     ('create_bugfix',    [('[BUG] Cr','a1'), ('[BUG] Id','a2'), ('[BUG] Fu','a3'), ('[BUG] St','a4')]),
     ('create_test_fix',  [('[TFIX] Cr','a1'), ('[TFIX] Id','a2'), ('[TFIX] Fu','a3'), ('[TFIX] St','a4')]),
     ('create_reviewer',  [('[RVW] Cr','a1'), ('[RVW] Id','a2'), ('[RVW] Fu','a3'), ('[RVW] St','a4')]),
+    ('create_accept',    [('[ACC] Cr','a1'), ('[ACC] Id','a2'), ('[ACC] Fu','a3'), ('[ACC] St','a4')]),
+    ('done_archive',     [('[DONE] Cr','a1'), ('[DONE] Id','a2'), ('[DONE] Fu','a3'), ('[DONE] St','a4')]),
     ('escalate',         [('[ESC] St (add escalate tag)','a1')]),
     ('skip',             [('[A] skip',              'a1')]),
     ('fallback',         [('[A] unhandled','a1')]),

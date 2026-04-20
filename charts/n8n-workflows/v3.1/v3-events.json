@@ -205,7 +205,7 @@
       ],
       "parameters": {
         "language": "javaScript",
-        "jsCode": "// ── router/ci-diagnose.js ─────────────────────────────────────────────\n// Mechanical CI failure classifier — reads stderr_tail emitted by ci-runner\n// and maps to diagnosis categories so humans/agents don't self-report.\nfunction diagnoseCiFailure({ target, stderrTail = '', failedTests = [], history = [] } = {}) {\n  const text = String(stderrTail);\n\n  // compile errors bucketed by path\n  const compileErrInTests  = /^(tests\\/\\S+?\\.(?:go|ts|kt)):\\d+/m.test(text) && /undefined:|syntax error|expected|cannot find/i.test(text);\n  const compileErrInMain   = /^(main|internal|cmd)\\/\\S+?\\.go:\\d+/m.test(text) && /undefined:|syntax error|expected|cannot find/i.test(text);\n\n  // runtime test failures\n  const runtimeFail = /^(---\\s+FAIL|FAIL\\s+main|FAIL\\s+tests\\/)/m.test(text);\n\n  // recurrence → spec-bug suspicion\n  // history is [{round, failedTests: [...]}] from prior rounds\n  const sameTestRedThreeTimes = countRecurringFailures(history, failedTests) >= 3;\n\n  if (sameTestRedThreeTimes) {\n    return { diagnosis: 'spec-bug', confidence: 'high', reason: 'same test red for >=3 rounds' };\n  }\n  if (compileErrInTests && !compileErrInMain) {\n    return { diagnosis: 'test-bug', confidence: 'high', reason: 'compile error in tests/' };\n  }\n  if (compileErrInMain) {\n    return { diagnosis: 'code-bug', confidence: 'high', reason: 'compile error in main/internal/cmd' };\n  }\n  if (runtimeFail) {\n    // test compiles, code compiles, test red → code bug (default)\n    return { diagnosis: 'code-bug', confidence: 'medium', reason: 'runtime test failure, code defaults' };\n  }\n\n  // nothing matched → can't classify\n  return { diagnosis: 'unknown', confidence: 'low', reason: 'no recognizable pattern in stderr_tail' };\n}\n\nfunction countRecurringFailures(history, current) {\n  if (!Array.isArray(history) || history.length < 2) return 0;\n  const key = (t) => t.split(/\\s/).slice(-1)[0]; // last token = test name\n  const currentSet = new Set((current || []).map(key));\n  let streak = 0;\n  for (const round of history.slice().reverse()) {\n    const prev = new Set((round.failedTests || []).map(key));\n    const overlap = [...currentSet].some(k => prev.has(k));\n    if (overlap) streak += 1; else break;\n  }\n  return streak + 1; // +1 for current round\n}\n\n// Parse the `## CI Result` block that ci-runner writes into issue description.\n// Returns null if block missing or malformed.\nfunction parseCiResultBlock(issueDescription = '') {\n  const m = String(issueDescription).match(/##\\s*CI Result\\s*([\\s\\S]+?)(?=\\n##\\s|\\n\\s*$|$)/);\n  if (!m) return null;\n  const body = m[1];\n\n  const get = (k) => {\n    const rx = new RegExp(`^\\\\s*${k}\\\\s*:\\\\s*(.*?)\\\\s*$`, 'm');\n    const hit = body.match(rx);\n    return hit ? hit[1] : null;\n  };\n\n  const target     = get('target');\n  const branch     = get('branch');\n  const commit     = get('commit');\n  const exitCode   = get('exit_code');\n  const durationMs = get('duration_ms');\n  const coverage   = get('coverage');\n\n  const failedTests = [];\n  const ftMatch = body.match(/failed_tests\\s*:\\s*\\n([\\s\\S]*?)(?=\\n[a-z_]+:|$)/);\n  if (ftMatch) {\n    for (const line of ftMatch[1].split('\\n')) {\n      const m = line.match(/^\\s*-\\s+(.+?)\\s*$/);\n      if (m) failedTests.push(m[1]);\n    }\n  }\n\n  const tailMatch = body.match(/stderr_tail\\s*:\\s*\\|\\s*\\n([\\s\\S]+)$/);\n  const stderrTail = tailMatch ? tailMatch[1].replace(/^\\s{0,4}/gm, '') : '';\n\n  return {\n    target,\n    branch,\n    commit,\n    exitCode: exitCode === null ? null : parseInt(exitCode, 10),\n    durationMs: durationMs === null ? null : parseInt(durationMs, 10),\n    coverage,\n    failedTests,\n    stderrTail,\n  };\n}\n\n// ── router/router.js ─────────────────────────────────────────────\n// Sisyphus n8n router — pure functions, embeddable into n8n Code node.\n// Contract: `routeEvent(webhookBody, opts?) -> { action, params, reason? }`\n// Actions are executed by n8n Switch + HTTP nodes downstream.\nconst STAGE_PRIORITY = [\n  'ci',\n  'test-fix',\n  'bugfix',\n  'reviewer',\n  'verify',\n  'accept',\n  'dev',\n  'analyze',\n];\nconst SPEC_TAGS = new Set([\n  'dev-spec',\n  'contract-spec',\n  'accept-spec',\n  'ui-spec',\n  'migration-spec',\n]);\nconst CB_THRESHOLD = 3; // bugfix round >= N -> escalate\n\n// MVP: projectId → git repo URL mapping. Extend as more repos onboard.\n// The real source should be BKD project metadata (list-projects returns repositoryUrl),\n// but Router is a pure function — n8n can pass these in via opts.projectRepoMap.\nconst DEFAULT_PROJECT_REPO_MAP = {\n  '77k9z58j': 'https://github.com/phona/ubox-crosser.git', // workflowtest\n};\n\n// Work directory on the debug machine (vm-node04). One per branch, so different\n// branches are physically isolated. Same branch across rounds reuses the dir\n// via `git fetch && git reset --hard` to keep disk usage bounded.\nfunction workdirFor(branch) {\n  if (!branch) return null;\n  const safe = String(branch).replace(/[^\\w.-]+/g, '-').replace(/^-+|-+$/g, '');\n  return `/var/sisyphus-ci/${safe}`;\n}\nfunction parseTags(tags = []) {\n  const t = new Set(tags);\n\n  // routeKey: stage priority\n  let routeKey = 'unknown';\n  for (const p of STAGE_PRIORITY) {\n    if (t.has(p)) {\n      routeKey = p;\n      break;\n    }\n  }\n  if (routeKey === 'unknown') {\n    for (const s of SPEC_TAGS) {\n      if (t.has(s)) {\n        routeKey = 'spec';\n        break;\n      }\n    }\n  }\n\n  // resultKey: how the stage ended\n  let resultKey = '';\n  if (t.has('ci:pass')) resultKey = 'ci-pass';\n  else if (t.has('ci:fail')) resultKey = 'ci-fail';\n  else if (t.has('result:pass')) resultKey = 'pass';\n  else if (t.has('result:fail')) resultKey = 'fail';\n  else if (t.has('diagnosis:spec-bug')) resultKey = 'spec-bug';\n  else if (t.has('diagnosis:test-bug')) resultKey = 'test-bug';\n  else if (t.has('decision:unsupported')) resultKey = 'unsupported';\n  else if (t.has('decision:needs-clarify')) resultKey = 'needs-clarify';\n\n  // side channels\n  const reqId = [...t].find(x => /^REQ-[\\w-]+$/.test(x)) || null;\n  const roundTag = [...t].find(x => /^round-\\d+$/.test(x));\n  const round = roundTag ? parseInt(roundTag.slice(6), 10) : 0;\n  const targetTag = [...t].find(x => /^target:(lint|unit|integration|acceptance)$/.test(x));\n  const target = targetTag ? targetTag.split(':')[1] : null;\n  const layers = [...t]\n    .filter(x => /^layer:/.test(x))\n    .map(x => x.split(':')[1]);\n  const specStage = [...t].find(x => SPEC_TAGS.has(x)) || null;\n  const parentIdTag = [...t].find(x => /^parent-id:/.test(x));\n  const parentIssueId = parentIdTag ? parentIdTag.slice('parent-id:'.length) : null;\n  const parentStageTag = [...t].find(x => /^parent:/.test(x) && !/^parent-id:/.test(x));\n  const parentStage = parentStageTag ? parentStageTag.slice('parent:'.length) : null;\n\n  return { routeKey, resultKey, reqId, round, target, layers, specStage, parentIssueId, parentStage };\n}\nfunction routeEvent(webhookBody = {}, opts = {}) {\n  const { event, issueId, priorStatusId, projectId, originalTitle, issueNumber } = webhookBody;\n  const tags = Array.isArray(webhookBody.tags) ? webhookBody.tags : [];\n  const ctx = parseTags(tags);\n  ctx._projectId = projectId || webhookBody.projectId || '';\n  ctx._repoMap = opts.projectRepoMap || DEFAULT_PROJECT_REPO_MAP;\n\n  // L-1: dedup gate (set by upstream Ctx node based on workflowStaticData)\n  if (webhookBody._dedupSkip === true) {\n    return { action: 'skip', reason: 'duplicate event (dedup gate)', params: { issueId, dedupKey: webhookBody._dedupKey } };\n  }\n\n  // L0: intent:analyze entry — BKD UI tag trigger\n  if (event === 'issue.updated' && tags.includes('intent:analyze') && !tags.includes('analyze')) {\n    const reqId = ctx.reqId || (issueNumber ? `REQ-${issueNumber}` : null);\n    if (!reqId) {\n      return { action: 'escalate', reason: 'intent:analyze without issueNumber/reqId', params: { issueId, tags } };\n    }\n    return {\n      action: 'start_analyze',\n      params: {\n        issueId,\n        reqId,\n        originalTitle: originalTitle || webhookBody.title || '',\n        repoUrl: ctx._repoMap[ctx._projectId] || null,\n      },\n    };\n  }\n\n  // L1: session crash\n  if (event === 'session.failed') {\n    return {\n      action: 'escalate',\n      reason: 'session.failed',\n      params: { issueId, reqId: ctx.reqId, tags },\n    };\n  }\n\n  // L2: idempotency — already done\n  if (priorStatusId === 'done') {\n    return { action: 'skip', reason: 'already done', params: { issueId } };\n  }\n\n  // L2.5: analyze-layer fallback — if agent overwrote tags leaving only layer:*,\n  // we can still infer analyze completion from layer tags + a reqId. reqId can come\n  // from either existing REQ-xxx tag or the issueNumber fallback.\n  if (ctx.routeKey === 'unknown' && ctx.layers.length > 0) {\n    const reqId = ctx.reqId || (issueNumber ? `REQ-${issueNumber}` : null);\n    if (reqId) {\n      ctx.reqId = reqId;\n      return routeAnalyze(ctx, issueId);\n    }\n  }\n\n  // L3: dispatch by routeKey\n  switch (ctx.routeKey) {\n    case 'analyze':  return routeAnalyze(ctx, issueId);\n    case 'spec':     return routeSpecDone(ctx, issueId, opts);\n    case 'dev':      return routeDevDone(ctx, issueId);\n    case 'ci':       return routeCiDone(ctx, issueId, webhookBody);\n    case 'verify':   return routeVerifyDone(ctx, issueId); // kept for transition\n    case 'accept':   return routeAcceptDone(ctx, issueId);\n    case 'bugfix':   return routeBugfixDone(ctx, issueId);\n    case 'test-fix': return { action: 'create_reviewer', params: { reqId: ctx.reqId, round: ctx.round || 1, sourceIssueId: issueId } };\n    case 'reviewer': return routeReviewerDone(ctx, issueId);\n    default:         return { action: 'escalate', reason: 'unknown route', params: { issueId, tags } };\n  }\n}\n\nfunction routeAnalyze(ctx, issueId) {\n  if (ctx.resultKey === 'unsupported' || ctx.resultKey === 'needs-clarify') {\n    return { action: 'escalate', reason: `analyze:${ctx.resultKey}`, params: { issueId, reqId: ctx.reqId } };\n  }\n  if (!ctx.layers.length) {\n    return { action: 'escalate', reason: 'analyze missing layers tag', params: { issueId, reqId: ctx.reqId } };\n  }\n  return {\n    action: 'fanout_specs',\n    params: { reqId: ctx.reqId, layers: ctx.layers, specs: expectedSpecsFor(ctx.layers) },\n  };\n}\nfunction expectedSpecsFor(layers = []) {\n  const specs = ['dev-spec', 'accept-spec'];\n  if (layers.includes('backend'))  specs.push('contract-spec');\n  if (layers.includes('frontend')) specs.push('ui-spec');\n  if (layers.includes('data'))     specs.push('migration-spec');\n  return specs;\n}\n\nfunction routeSpecDone(ctx, issueId, opts) {\n  if (!ctx.specStage) {\n    return { action: 'skip', reason: 'spec without specStage tag', params: { issueId } };\n  }\n  // TEMP (integration-testing mode): bypass ci-lint at spec stage and let SPG gate open.\n  // Reason: ubox-crosser baseline lint + go vet not BASE_REV-scoped + spec→CI feedback loop\n  // keep blocking downstream stages (dev / ci-unit / ci-integration / accept). Skipping\n  // ci-lint lets the rest of the chain surface its own bugs in a single run.\n  return {\n    action: 'mark_spec_reviewed',\n    params: {\n      reqId: ctx.reqId,\n      specStage: ctx.specStage,\n      parentIssueId: issueId,\n    },\n  };\n}\n\nfunction routeDevDone(ctx, issueId) {\n  const branch = `stage/${ctx.reqId}-dev`;\n  return {\n    action: 'create_ci_runner',\n    params: {\n      reqId: ctx.reqId,\n      target: 'unit',\n      branch,\n      workdir: workdirFor(branch),\n      repoUrl: ctx._repoMap[ctx._projectId] || null,\n      parentIssueId: issueId,\n      parentStage: 'dev',\n    },\n  };\n}\n\nfunction ciRunnerAction(ctx, target, parentStage, parentIssueId, branchOverride) {\n  const branch = branchOverride || `stage/${ctx.reqId}-${parentStage}`;\n  return {\n    action: 'create_ci_runner',\n    params: {\n      reqId: ctx.reqId,\n      target,\n      branch,\n      workdir: workdirFor(branch),\n      repoUrl: ctx._repoMap[ctx._projectId] || null,\n      parentIssueId,\n      parentStage,\n    },\n  };\n}\n\nfunction routeCiDone(ctx, issueId, webhookBody) {\n  // Parent info now comes from tags (`parent:xxx` + `parent-id:xxx`), not webhook metadata.\n  // BKD webhooks don't ship metadata; tags travel with the issue and survive round-trips.\n  const parentStage = ctx.parentStage || webhookBody?.metadata?.parentStage || null;\n  const parentIssueId = ctx.parentIssueId || webhookBody?.metadata?.parentIssueId || null;\n\n  if (ctx.resultKey === 'ci-pass') {\n    // dev unit pass → run integration CI on feat branch\n    if (parentStage === 'dev') {\n      return ciRunnerAction(ctx, 'integration', 'verify', issueId, `feat/${ctx.reqId}`);\n    }\n    // integration pass → accept (AI-QA, not implemented yet — escalate)\n    if (parentStage === 'verify' || ctx.target === 'integration') {\n      return { action: 'escalate', reason: 'accept stage (AI-QA) not yet implemented', params: { reqId: ctx.reqId, issueId } };\n    }\n    // spec lint pass → gate: check if all required specs done, create dev if so\n    if (parentStage && /-spec$/.test(parentStage)) {\n      return { action: 'mark_spec_reviewed', params: { reqId: ctx.reqId, specStage: parentStage, parentIssueId } };\n    }\n    return { action: 'skip', reason: 'ci:pass with unknown parent', params: { issueId } };\n  }\n\n  if (ctx.resultKey === 'ci-fail') {\n    // lint / unit failures are lightweight — bounce back to the originating issue\n    if (ctx.target === 'lint' || ctx.target === 'unit') {\n      return {\n        action: 'comment_back',\n        params: {\n          targetIssueId: parentIssueId,\n          reqId: ctx.reqId,\n          reason: `ci:${ctx.target} fail`,\n          ciIssueId: issueId,\n        },\n      };\n    }\n    // integration failure = real bug → open a bugfix issue (round N)\n    if (ctx.target === 'integration') {\n      return {\n        action: 'create_bugfix',\n        params: {\n          reqId: ctx.reqId,\n          round: 1,\n          sourceIssueId: issueId,\n          reason: 'ci:integration fail',\n          branch: `feat/${ctx.reqId}`,\n        },\n      };\n    }\n    return { action: 'escalate', reason: `ci:fail unknown target ${ctx.target}`, params: { issueId } };\n  }\n\n  return { action: 'escalate', reason: 'ci without ci:pass/ci:fail tag', params: { issueId } };\n}\n\nfunction routeVerifyDone(ctx, issueId) {\n  // legacy verify-agent path; ci-runner eventually supersedes.\n  if (ctx.resultKey === 'pass') {\n    return { action: 'escalate', reason: 'legacy verify pass; accept stage not yet implemented', params: { reqId: ctx.reqId, issueId } };\n  }\n  if (ctx.resultKey === 'fail') {\n    return {\n      action: 'create_bugfix',\n      params: { reqId: ctx.reqId, round: Math.max(ctx.round, 1), sourceIssueId: issueId, reason: 'verify fail', branch: `feat/${ctx.reqId}` },\n    };\n  }\n  return { action: 'escalate', reason: 'verify without result tag', params: { issueId } };\n}\n\nfunction routeAcceptDone(ctx, issueId) {\n  if (ctx.resultKey === 'pass') {\n    // done_archive (openspec apply + gh pr create) not yet implemented — escalate for now\n    return { action: 'escalate', reason: 'accept pass; done_archive not yet implemented', params: { reqId: ctx.reqId, issueId } };\n  }\n  if (ctx.resultKey === 'fail') {\n    if (ctx.round >= CB_THRESHOLD) {\n      return { action: 'escalate', reason: `circuit-breaker round>=${CB_THRESHOLD}`, params: { reqId: ctx.reqId, round: ctx.round } };\n    }\n    return {\n      action: 'create_bugfix',\n      params: { reqId: ctx.reqId, round: ctx.round + 1, sourceIssueId: issueId, reason: 'accept fail', branch: `feat/${ctx.reqId}` },\n    };\n  }\n  return { action: 'escalate', reason: 'accept without result tag', params: { issueId } };\n}\n\nfunction routeBugfixDone(ctx, issueId) {\n  if (ctx.resultKey === 'spec-bug') {\n    return { action: 'escalate', reason: 'diagnosis:spec-bug', params: { issueId, reqId: ctx.reqId, round: ctx.round } };\n  }\n  // dev-fix normal path → hand to test-fix for adversarial review\n  return { action: 'create_test_fix', params: { reqId: ctx.reqId, round: ctx.round || 1, sourceIssueId: issueId } };\n}\n\nfunction routeReviewerDone(ctx, issueId) {\n  if (ctx.resultKey === 'pass') {\n    // reviewer merged → re-run integration CI on feat branch\n    return ciRunnerAction(ctx, 'integration', 'verify', issueId, `feat/${ctx.reqId}`);\n  }\n  return { action: 'escalate', reason: 'reviewer failed to pick a winner', params: { issueId, reqId: ctx.reqId } };\n}\n\n\n// ─── n8n entry adapter (appended by build-workflow.js) ─────────────────────\nconst input = $input.first().json;\nconst body = input.body && typeof input.body === 'object' ? input.body : input;\nconst meta = input.metadata || body.metadata || {};\nif (!body.metadata && meta) body.metadata = meta;\ntry {\n  const result = routeEvent(body);\n  return [{ json: { ...result, _routedAt: new Date().toISOString(), _input: body } }];\n} catch (err) {\n  return [{ json: { action: 'escalate', reason: 'router_exception', error: String(err && err.message || err), _input: body } }];\n}\n"
+        "jsCode": "// ── router/ci-diagnose.js ─────────────────────────────────────────────\n// Mechanical CI failure classifier — reads stderr_tail emitted by ci-runner\n// and maps to diagnosis categories so humans/agents don't self-report.\nfunction diagnoseCiFailure({ target, stderrTail = '', failedTests = [], history = [] } = {}) {\n  const text = String(stderrTail);\n\n  // compile errors bucketed by path\n  const compileErrInTests  = /^(tests\\/\\S+?\\.(?:go|ts|kt)):\\d+/m.test(text) && /undefined:|syntax error|expected|cannot find/i.test(text);\n  const compileErrInMain   = /^(main|internal|cmd)\\/\\S+?\\.go:\\d+/m.test(text) && /undefined:|syntax error|expected|cannot find/i.test(text);\n\n  // runtime test failures\n  const runtimeFail = /^(---\\s+FAIL|FAIL\\s+main|FAIL\\s+tests\\/)/m.test(text);\n\n  // recurrence → spec-bug suspicion\n  // history is [{round, failedTests: [...]}] from prior rounds\n  const sameTestRedThreeTimes = countRecurringFailures(history, failedTests) >= 3;\n\n  if (sameTestRedThreeTimes) {\n    return { diagnosis: 'spec-bug', confidence: 'high', reason: 'same test red for >=3 rounds' };\n  }\n  if (compileErrInTests && !compileErrInMain) {\n    return { diagnosis: 'test-bug', confidence: 'high', reason: 'compile error in tests/' };\n  }\n  if (compileErrInMain) {\n    return { diagnosis: 'code-bug', confidence: 'high', reason: 'compile error in main/internal/cmd' };\n  }\n  if (runtimeFail) {\n    // test compiles, code compiles, test red → code bug (default)\n    return { diagnosis: 'code-bug', confidence: 'medium', reason: 'runtime test failure, code defaults' };\n  }\n\n  // nothing matched → can't classify\n  return { diagnosis: 'unknown', confidence: 'low', reason: 'no recognizable pattern in stderr_tail' };\n}\n\nfunction countRecurringFailures(history, current) {\n  if (!Array.isArray(history) || history.length < 2) return 0;\n  const key = (t) => t.split(/\\s/).slice(-1)[0]; // last token = test name\n  const currentSet = new Set((current || []).map(key));\n  let streak = 0;\n  for (const round of history.slice().reverse()) {\n    const prev = new Set((round.failedTests || []).map(key));\n    const overlap = [...currentSet].some(k => prev.has(k));\n    if (overlap) streak += 1; else break;\n  }\n  return streak + 1; // +1 for current round\n}\n\n// Parse the `## CI Result` block that ci-runner writes into issue description.\n// Returns null if block missing or malformed.\nfunction parseCiResultBlock(issueDescription = '') {\n  const m = String(issueDescription).match(/##\\s*CI Result\\s*([\\s\\S]+?)(?=\\n##\\s|\\n\\s*$|$)/);\n  if (!m) return null;\n  const body = m[1];\n\n  const get = (k) => {\n    const rx = new RegExp(`^\\\\s*${k}\\\\s*:\\\\s*(.*?)\\\\s*$`, 'm');\n    const hit = body.match(rx);\n    return hit ? hit[1] : null;\n  };\n\n  const target     = get('target');\n  const branch     = get('branch');\n  const commit     = get('commit');\n  const exitCode   = get('exit_code');\n  const durationMs = get('duration_ms');\n  const coverage   = get('coverage');\n\n  const failedTests = [];\n  const ftMatch = body.match(/failed_tests\\s*:\\s*\\n([\\s\\S]*?)(?=\\n[a-z_]+:|$)/);\n  if (ftMatch) {\n    for (const line of ftMatch[1].split('\\n')) {\n      const m = line.match(/^\\s*-\\s+(.+?)\\s*$/);\n      if (m) failedTests.push(m[1]);\n    }\n  }\n\n  const tailMatch = body.match(/stderr_tail\\s*:\\s*\\|\\s*\\n([\\s\\S]+)$/);\n  const stderrTail = tailMatch ? tailMatch[1].replace(/^\\s{0,4}/gm, '') : '';\n\n  return {\n    target,\n    branch,\n    commit,\n    exitCode: exitCode === null ? null : parseInt(exitCode, 10),\n    durationMs: durationMs === null ? null : parseInt(durationMs, 10),\n    coverage,\n    failedTests,\n    stderrTail,\n  };\n}\n\n// ── router/router.js ─────────────────────────────────────────────\n// Sisyphus n8n router — pure functions, embeddable into n8n Code node.\n// Contract: `routeEvent(webhookBody, opts?) -> { action, params, reason? }`\n// Actions are executed by n8n Switch + HTTP nodes downstream.\nconst STAGE_PRIORITY = [\n  'ci',\n  'test-fix',\n  'bugfix',\n  'reviewer',\n  'verify',\n  'accept',\n  'dev',\n  'analyze',\n];\nconst SPEC_TAGS = new Set([\n  'dev-spec',\n  'contract-spec',\n  'accept-spec',\n  'ui-spec',\n  'migration-spec',\n]);\nconst CB_THRESHOLD = 3; // bugfix round >= N -> escalate\n\n// MVP: projectId → git repo URL mapping. Extend as more repos onboard.\n// The real source should be BKD project metadata (list-projects returns repositoryUrl),\n// but Router is a pure function — n8n can pass these in via opts.projectRepoMap.\nconst DEFAULT_PROJECT_REPO_MAP = {\n  '77k9z58j': 'https://github.com/phona/ubox-crosser.git', // workflowtest\n};\n\n// Work directory on the debug machine (vm-node04). One per branch, so different\n// branches are physically isolated. Same branch across rounds reuses the dir\n// via `git fetch && git reset --hard` to keep disk usage bounded.\nfunction workdirFor(branch) {\n  if (!branch) return null;\n  const safe = String(branch).replace(/[^\\w.-]+/g, '-').replace(/^-+|-+$/g, '');\n  return `/var/sisyphus-ci/${safe}`;\n}\nfunction parseTags(tags = []) {\n  const t = new Set(tags);\n\n  // routeKey: stage priority\n  let routeKey = 'unknown';\n  for (const p of STAGE_PRIORITY) {\n    if (t.has(p)) {\n      routeKey = p;\n      break;\n    }\n  }\n  if (routeKey === 'unknown') {\n    for (const s of SPEC_TAGS) {\n      if (t.has(s)) {\n        routeKey = 'spec';\n        break;\n      }\n    }\n  }\n\n  // resultKey: how the stage ended\n  let resultKey = '';\n  if (t.has('ci:pass')) resultKey = 'ci-pass';\n  else if (t.has('ci:fail')) resultKey = 'ci-fail';\n  else if (t.has('result:pass')) resultKey = 'pass';\n  else if (t.has('result:fail')) resultKey = 'fail';\n  else if (t.has('diagnosis:spec-bug')) resultKey = 'spec-bug';\n  else if (t.has('diagnosis:test-bug')) resultKey = 'test-bug';\n  else if (t.has('decision:unsupported')) resultKey = 'unsupported';\n  else if (t.has('decision:needs-clarify')) resultKey = 'needs-clarify';\n\n  // side channels\n  const reqId = [...t].find(x => /^REQ-[\\w-]+$/.test(x)) || null;\n  const roundTag = [...t].find(x => /^round-\\d+$/.test(x));\n  const round = roundTag ? parseInt(roundTag.slice(6), 10) : 0;\n  const targetTag = [...t].find(x => /^target:(lint|unit|integration|acceptance)$/.test(x));\n  const target = targetTag ? targetTag.split(':')[1] : null;\n  const layers = [...t]\n    .filter(x => /^layer:/.test(x))\n    .map(x => x.split(':')[1]);\n  const specStage = [...t].find(x => SPEC_TAGS.has(x)) || null;\n  const parentIdTag = [...t].find(x => /^parent-id:/.test(x));\n  const parentIssueId = parentIdTag ? parentIdTag.slice('parent-id:'.length) : null;\n  const parentStageTag = [...t].find(x => /^parent:/.test(x) && !/^parent-id:/.test(x));\n  const parentStage = parentStageTag ? parentStageTag.slice('parent:'.length) : null;\n\n  return { routeKey, resultKey, reqId, round, target, layers, specStage, parentIssueId, parentStage };\n}\nfunction routeEvent(webhookBody = {}, opts = {}) {\n  const { event, issueId, priorStatusId, projectId, originalTitle, issueNumber } = webhookBody;\n  const tags = Array.isArray(webhookBody.tags) ? webhookBody.tags : [];\n  const ctx = parseTags(tags);\n  ctx._projectId = projectId || webhookBody.projectId || '';\n  ctx._repoMap = opts.projectRepoMap || DEFAULT_PROJECT_REPO_MAP;\n\n  // L-1: dedup gate (set by upstream Ctx node based on workflowStaticData)\n  if (webhookBody._dedupSkip === true) {\n    return { action: 'skip', reason: 'duplicate event (dedup gate)', params: { issueId, dedupKey: webhookBody._dedupKey } };\n  }\n\n  // L0: intent:analyze entry — BKD UI tag trigger\n  if (event === 'issue.updated' && tags.includes('intent:analyze') && !tags.includes('analyze')) {\n    const reqId = ctx.reqId || (issueNumber ? `REQ-${issueNumber}` : null);\n    if (!reqId) {\n      return { action: 'escalate', reason: 'intent:analyze without issueNumber/reqId', params: { issueId, tags } };\n    }\n    return {\n      action: 'start_analyze',\n      params: {\n        issueId,\n        reqId,\n        originalTitle: originalTitle || webhookBody.title || '',\n        repoUrl: ctx._repoMap[ctx._projectId] || null,\n      },\n    };\n  }\n\n  // L1: session crash\n  if (event === 'session.failed') {\n    return {\n      action: 'escalate',\n      reason: 'session.failed',\n      params: { issueId, reqId: ctx.reqId, tags },\n    };\n  }\n\n  // L2: idempotency — already done\n  if (priorStatusId === 'done') {\n    return { action: 'skip', reason: 'already done', params: { issueId } };\n  }\n\n  // L2.5: analyze-layer fallback — if agent overwrote tags leaving only layer:*,\n  // we can still infer analyze completion from layer tags + a reqId. reqId can come\n  // from either existing REQ-xxx tag or the issueNumber fallback.\n  if (ctx.routeKey === 'unknown' && ctx.layers.length > 0) {\n    const reqId = ctx.reqId || (issueNumber ? `REQ-${issueNumber}` : null);\n    if (reqId) {\n      ctx.reqId = reqId;\n      return routeAnalyze(ctx, issueId);\n    }\n  }\n\n  // L3: dispatch by routeKey\n  switch (ctx.routeKey) {\n    case 'analyze':  return routeAnalyze(ctx, issueId);\n    case 'spec':     return routeSpecDone(ctx, issueId, opts);\n    case 'dev':      return routeDevDone(ctx, issueId);\n    case 'ci':       return routeCiDone(ctx, issueId, webhookBody);\n    case 'verify':   return routeVerifyDone(ctx, issueId); // kept for transition\n    case 'accept':   return routeAcceptDone(ctx, issueId);\n    case 'bugfix':   return routeBugfixDone(ctx, issueId);\n    case 'test-fix': return { action: 'create_reviewer', params: { reqId: ctx.reqId, round: ctx.round || 1, sourceIssueId: issueId } };\n    case 'reviewer': return routeReviewerDone(ctx, issueId);\n    default:         return { action: 'escalate', reason: 'unknown route', params: { issueId, tags } };\n  }\n}\n\nfunction routeAnalyze(ctx, issueId) {\n  if (ctx.resultKey === 'unsupported' || ctx.resultKey === 'needs-clarify') {\n    return { action: 'escalate', reason: `analyze:${ctx.resultKey}`, params: { issueId, reqId: ctx.reqId } };\n  }\n  if (!ctx.layers.length) {\n    return { action: 'escalate', reason: 'analyze missing layers tag', params: { issueId, reqId: ctx.reqId } };\n  }\n  return {\n    action: 'fanout_specs',\n    params: { reqId: ctx.reqId, layers: ctx.layers, specs: expectedSpecsFor(ctx.layers) },\n  };\n}\nfunction expectedSpecsFor(layers = []) {\n  const specs = ['dev-spec', 'accept-spec'];\n  if (layers.includes('backend'))  specs.push('contract-spec');\n  if (layers.includes('frontend')) specs.push('ui-spec');\n  if (layers.includes('data'))     specs.push('migration-spec');\n  return specs;\n}\n\nfunction routeSpecDone(ctx, issueId, opts) {\n  if (!ctx.specStage) {\n    return { action: 'skip', reason: 'spec without specStage tag', params: { issueId } };\n  }\n  // TEMP (integration-testing mode): bypass ci-lint at spec stage and let SPG gate open.\n  // Reason: ubox-crosser baseline lint + go vet not BASE_REV-scoped + spec→CI feedback loop\n  // keep blocking downstream stages (dev / ci-unit / ci-integration / accept). Skipping\n  // ci-lint lets the rest of the chain surface its own bugs in a single run.\n  return {\n    action: 'mark_spec_reviewed',\n    params: {\n      reqId: ctx.reqId,\n      specStage: ctx.specStage,\n      parentIssueId: issueId,\n    },\n  };\n}\n\nfunction routeDevDone(ctx, issueId) {\n  const branch = `stage/${ctx.reqId}-dev`;\n  return {\n    action: 'create_ci_runner',\n    params: {\n      reqId: ctx.reqId,\n      target: 'unit',\n      branch,\n      workdir: workdirFor(branch),\n      repoUrl: ctx._repoMap[ctx._projectId] || null,\n      parentIssueId: issueId,\n      parentStage: 'dev',\n    },\n  };\n}\n\nfunction ciRunnerAction(ctx, target, parentStage, parentIssueId, branchOverride) {\n  const branch = branchOverride || `stage/${ctx.reqId}-${parentStage}`;\n  return {\n    action: 'create_ci_runner',\n    params: {\n      reqId: ctx.reqId,\n      target,\n      branch,\n      workdir: workdirFor(branch),\n      repoUrl: ctx._repoMap[ctx._projectId] || null,\n      parentIssueId,\n      parentStage,\n    },\n  };\n}\n\nfunction routeCiDone(ctx, issueId, webhookBody) {\n  // Parent info now comes from tags (`parent:xxx` + `parent-id:xxx`), not webhook metadata.\n  // BKD webhooks don't ship metadata; tags travel with the issue and survive round-trips.\n  const parentStage = ctx.parentStage || webhookBody?.metadata?.parentStage || null;\n  const parentIssueId = ctx.parentIssueId || webhookBody?.metadata?.parentIssueId || null;\n\n  if (ctx.resultKey === 'ci-pass') {\n    // dev unit pass → run integration CI on feat branch\n    if (parentStage === 'dev') {\n      return ciRunnerAction(ctx, 'integration', 'verify', issueId, `feat/${ctx.reqId}`);\n    }\n    // integration pass → kick off accept (AI-QA) stage\n    if (parentStage === 'verify' || ctx.target === 'integration') {\n      return {\n        action: 'create_accept',\n        params: {\n          reqId: ctx.reqId,\n          sourceIssueId: issueId,\n          branch: `feat/${ctx.reqId}`,\n          workdir: workdirFor(`feat/${ctx.reqId}`),\n          repoUrl: ctx._repoMap[ctx._projectId] || null,\n        },\n      };\n    }\n    // spec lint pass → gate: check if all required specs done, create dev if so\n    if (parentStage && /-spec$/.test(parentStage)) {\n      return { action: 'mark_spec_reviewed', params: { reqId: ctx.reqId, specStage: parentStage, parentIssueId } };\n    }\n    return { action: 'skip', reason: 'ci:pass with unknown parent', params: { issueId } };\n  }\n\n  if (ctx.resultKey === 'ci-fail') {\n    // lint / unit failures are lightweight — bounce back to the originating issue\n    if (ctx.target === 'lint' || ctx.target === 'unit') {\n      return {\n        action: 'comment_back',\n        params: {\n          targetIssueId: parentIssueId,\n          reqId: ctx.reqId,\n          reason: `ci:${ctx.target} fail`,\n          ciIssueId: issueId,\n        },\n      };\n    }\n    // integration failure = real bug → open a bugfix issue (round N)\n    if (ctx.target === 'integration') {\n      return {\n        action: 'create_bugfix',\n        params: {\n          reqId: ctx.reqId,\n          round: 1,\n          sourceIssueId: issueId,\n          reason: 'ci:integration fail',\n          branch: `feat/${ctx.reqId}`,\n        },\n      };\n    }\n    return { action: 'escalate', reason: `ci:fail unknown target ${ctx.target}`, params: { issueId } };\n  }\n\n  return { action: 'escalate', reason: 'ci without ci:pass/ci:fail tag', params: { issueId } };\n}\n\nfunction routeVerifyDone(ctx, issueId) {\n  // legacy verify-agent path; ci-runner eventually supersedes.\n  if (ctx.resultKey === 'pass') {\n    return { action: 'escalate', reason: 'legacy verify pass; accept stage not yet implemented', params: { reqId: ctx.reqId, issueId } };\n  }\n  if (ctx.resultKey === 'fail') {\n    return {\n      action: 'create_bugfix',\n      params: { reqId: ctx.reqId, round: Math.max(ctx.round, 1), sourceIssueId: issueId, reason: 'verify fail', branch: `feat/${ctx.reqId}` },\n    };\n  }\n  return { action: 'escalate', reason: 'verify without result tag', params: { issueId } };\n}\n\nfunction routeAcceptDone(ctx, issueId) {\n  if (ctx.resultKey === 'pass') {\n    // accept pass → archive: openspec apply + gh pr create + mark parent done\n    return {\n      action: 'done_archive',\n      params: {\n        reqId: ctx.reqId,\n        acceptIssueId: issueId,\n        branch: `feat/${ctx.reqId}`,\n        workdir: workdirFor(`feat/${ctx.reqId}`),\n        repoUrl: ctx._repoMap[ctx._projectId] || null,\n      },\n    };\n  }\n  if (ctx.resultKey === 'fail') {\n    if (ctx.round >= CB_THRESHOLD) {\n      return { action: 'escalate', reason: `circuit-breaker round>=${CB_THRESHOLD}`, params: { reqId: ctx.reqId, round: ctx.round } };\n    }\n    return {\n      action: 'create_bugfix',\n      params: { reqId: ctx.reqId, round: ctx.round + 1, sourceIssueId: issueId, reason: 'accept fail', branch: `feat/${ctx.reqId}` },\n    };\n  }\n  return { action: 'escalate', reason: 'accept without result tag', params: { issueId } };\n}\n\nfunction routeBugfixDone(ctx, issueId) {\n  if (ctx.resultKey === 'spec-bug') {\n    return { action: 'escalate', reason: 'diagnosis:spec-bug', params: { issueId, reqId: ctx.reqId, round: ctx.round } };\n  }\n  // dev-fix normal path → hand to test-fix for adversarial review\n  return { action: 'create_test_fix', params: { reqId: ctx.reqId, round: ctx.round || 1, sourceIssueId: issueId } };\n}\n\nfunction routeReviewerDone(ctx, issueId) {\n  if (ctx.resultKey === 'pass') {\n    // reviewer merged → re-run integration CI on feat branch\n    return ciRunnerAction(ctx, 'integration', 'verify', issueId, `feat/${ctx.reqId}`);\n  }\n  return { action: 'escalate', reason: 'reviewer failed to pick a winner', params: { issueId, reqId: ctx.reqId } };\n}\n\n\n// ─── n8n entry adapter (appended by build-workflow.js) ─────────────────────\nconst input = $input.first().json;\nconst body = input.body && typeof input.body === 'object' ? input.body : input;\nconst meta = input.metadata || body.metadata || {};\nif (!body.metadata && meta) body.metadata = meta;\ntry {\n  const result = routeEvent(body);\n  return [{ json: { ...result, _routedAt: new Date().toISOString(), _input: body } }];\n} catch (err) {\n  return [{ json: { action: 'escalate', reason: 'router_exception', error: String(err && err.message || err), _input: body } }];\n}\n"
       }
     },
     {
@@ -375,6 +375,46 @@
                       "operation": "equals"
                     },
                     "leftValue": "={{ $json.action }}",
+                    "rightValue": "create_accept"
+                  }
+                ]
+              },
+              "outputKey": "create_accept"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "done_archive"
+                  }
+                ]
+              },
+              "outputKey": "done_archive"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.action }}",
                     "rightValue": "fanout_specs"
                   }
                 ]
@@ -436,7 +476,7 @@
       "typeVersion": 1,
       "position": [
         1680,
-        2240
+        2600
       ],
       "parameters": {}
     },
@@ -1274,6 +1314,310 @@
       }
     },
     {
+      "id": "acc_cr",
+      "name": "[ACC] Cr",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        2060
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":60,\"method\":\"tools/call\",\"params\":{\"name\":\"create-issue\",\"arguments\":{\"projectId\":\"{{ $node[\"[ENTRY] Ctx 提取\"].json.projectId }}\",\"title\":\"[{{ $json.params.reqId }}] [ACCEPT] AI-QA\",\"statusId\":\"todo\",\"useWorktree\":false,\"tags\":[\"accept\",\"{{ $json.params.reqId }}\"]}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        },
+        "onError": "continueErrorOutput"
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "acc_id",
+      "name": "[ACC] Id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        2060
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const prev = $node['[ACC] Cr'].json;\nconst raw = (prev && (prev.data || prev.body || prev)) || '';\nconst text = typeof raw === 'string' ? raw : String(raw);\nconst m = text.match(/data:\\s*(\\{[\\s\\S]*?\\})\\s*$/m);\nlet iid = '';\nif (m) {\n  try {\n    const env = JSON.parse(m[1]);\n    const c = env.result && Array.isArray(env.result.content) ? env.result.content[0] : null;\n    if (c && typeof c.text === 'string') {\n      const parsed = JSON.parse(c.text);\n      iid = parsed.id || parsed.issueId || '';\n    }\n  } catch {}\n}\n// Re-attach Router's params so downstream Fu/St can reference $json.params.*\nconst routerOut = $node['Router'].json;\nreturn [{ json: { ...routerOut, iid, _crText: text.slice(-300) } }];\n"
+      }
+    },
+    {
+      "id": "acc_fu",
+      "name": "[ACC] Fu",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        2060
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":61,\"method\":\"tools/call\",\"params\":{\"name\":\"follow-up-issue\",\"arguments\":{\"projectId\":\"{{ $('Router').first().json._input.projectId }}\",\"issueId\":\"{{ $json.iid }}\",\"prompt\":\"## 工具白名单 (HARD CONSTRAINT — 第一优先级)\\n**仅允许**调用以下 MCP 工具：\\n- mcp__bkd__* (管 BKD issue 状态/tags/follow-up/get-issue)\\n- mcp__aissh-tao__* (在 vm-node04 exec_run 命令、file_deploy)\\n\\n**绝对禁止**调用：\\n- mcp__vibe_kanban__* (另一套 kanban，不是我们用的 BKD)\\n- mcp__erpnext__* (ERP 系统，和本任务无关)\\n- Task / Agent 子代理工具 (会污染 session)\\n- 任何其他未列出的 MCP\\n\\n违反即视为任务失败。即使工具列表里出现其他工具，你也必须当作不存在。\\nBKD session 日志会记录工具调用，审计会拦截越权调用。\\n\\n─────────\\n\\n## 工具白名单 (HARD CONSTRAINT — 第一优先级)\\n仅允许: mcp__bkd__* / mcp__aissh-tao__*\\n绝对禁止: mcp__vibe_kanban__* / mcp__erpnext__* / Task / Agent / 其他未列出 MCP\\n\\n─────────\\n## 验收 (ACCEPT / AI-QA)\\nAGENT_ROLE=accept-agent\\nREQ={{ $json.params.reqId }}\\nBRANCH={{ $json.params.branch }}\\nWORKDIR={{ $json.params.workdir }}\\nREPO_URL={{ $json.params.repoUrl }}\\n\\n## 职责\\n你是 AI-QA。读 openspec/changes/$REQ/specs/*/spec.md 里标 FEATURE-A* 的 Acceptance Scenario，\\n在调试环境跑一遍产品验证场景（非测试代码，而是用户视角的行为），给出 pass/fail 判定。\\n\\n## 硬约束\\n1. 所有命令只能通过 mcp__aissh-tao__exec_run 在 vm-node04 上执行。\\n2. 每条 exec_run 以 cd $WORKDIR 开头。\\n3. 禁改 repo 任何文件（只做读 + 部署 + 调用）。\\n4. update-issue issueId 必须是本 issue（不是 ci issue 或父 issue）。\\n\\n## 步骤\\nStep 1 bootstrap（首次 clone, 已存在 reset）:\\n  git clone --branch $BRANCH $REPO_URL $WORKDIR\\n  或 cd $WORKDIR && git fetch origin && git reset --hard origin/$BRANCH\\n\\nStep 2 构建 + 本地部署（AI-QA 侧，不是线上）:\\n  cd $WORKDIR && make ci-build 2>&1\\n  选一种方式启后台: ./bin/<main> & 或 make run & (看 Makefile 约定)\\n\\nStep 3 跑所有 FEATURE-A* Acceptance Scenario:\\n  对每个场景用 curl / CLI / 真实 IO 走一遍 Given/When/Then。\\n  记录每个场景: name / pass-or-fail / evidence (curl 输出 + 状态码 / 文件内容 / ...)\\n\\nStep 4 stop 后台服务 (kill / docker stop)。\\n\\nStep 5 写结果到**本 issue**:\\n  A. follow-up-issue 追加 `## Accept Result` block: 每场景 name/result/evidence\\n  B. update-issue tags: [accept, $REQ, <result:pass 或 result:fail>]\\n  C. update-issue statusId=review\"}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "acc_st",
+      "name": "[ACC] St",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        2060
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":62,\"method\":\"tools/call\",\"params\":{\"name\":\"update-issue\",\"arguments\":{\"projectId\":\"{{ $node[\"[ENTRY] Ctx 提取\"].json.projectId }}\",\"issueId\":\"{{ $node[\"[ACC] Id\"].json.iid }}\",\"statusId\":\"working\",\"tags\":[\"accept\",\"{{ $node[\"[ACC] Id\"].json.params.reqId }}\"]}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 10000
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "done_cr",
+      "name": "[DONE] Cr",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        2240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":70,\"method\":\"tools/call\",\"params\":{\"name\":\"create-issue\",\"arguments\":{\"projectId\":\"{{ $node[\"[ENTRY] Ctx 提取\"].json.projectId }}\",\"title\":\"[{{ $json.params.reqId }}] [DONE] archive & PR\",\"statusId\":\"todo\",\"useWorktree\":false,\"tags\":[\"done-archive\",\"{{ $json.params.reqId }}\"]}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        },
+        "onError": "continueErrorOutput"
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "done_id",
+      "name": "[DONE] Id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        2240
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const prev = $node['[DONE] Cr'].json;\nconst raw = (prev && (prev.data || prev.body || prev)) || '';\nconst text = typeof raw === 'string' ? raw : String(raw);\nconst m = text.match(/data:\\s*(\\{[\\s\\S]*?\\})\\s*$/m);\nlet iid = '';\nif (m) {\n  try {\n    const env = JSON.parse(m[1]);\n    const c = env.result && Array.isArray(env.result.content) ? env.result.content[0] : null;\n    if (c && typeof c.text === 'string') {\n      const parsed = JSON.parse(c.text);\n      iid = parsed.id || parsed.issueId || '';\n    }\n  } catch {}\n}\n// Re-attach Router's params so downstream Fu/St can reference $json.params.*\nconst routerOut = $node['Router'].json;\nreturn [{ json: { ...routerOut, iid, _crText: text.slice(-300) } }];\n"
+      }
+    },
+    {
+      "id": "done_fu",
+      "name": "[DONE] Fu",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        2240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":71,\"method\":\"tools/call\",\"params\":{\"name\":\"follow-up-issue\",\"arguments\":{\"projectId\":\"{{ $('Router').first().json._input.projectId }}\",\"issueId\":\"{{ $json.iid }}\",\"prompt\":\"## 工具白名单 (HARD CONSTRAINT — 第一优先级)\\n**仅允许**调用以下 MCP 工具：\\n- mcp__bkd__* (管 BKD issue 状态/tags/follow-up/get-issue)\\n- mcp__aissh-tao__* (在 vm-node04 exec_run 命令、file_deploy)\\n\\n**绝对禁止**调用：\\n- mcp__vibe_kanban__* (另一套 kanban，不是我们用的 BKD)\\n- mcp__erpnext__* (ERP 系统，和本任务无关)\\n- Task / Agent 子代理工具 (会污染 session)\\n- 任何其他未列出的 MCP\\n\\n违反即视为任务失败。即使工具列表里出现其他工具，你也必须当作不存在。\\nBKD session 日志会记录工具调用，审计会拦截越权调用。\\n\\n─────────\\n\\n## 工具白名单 (HARD CONSTRAINT — 第一优先级)\\n仅允许: mcp__bkd__* / mcp__aissh-tao__*\\n绝对禁止: mcp__vibe_kanban__* / mcp__erpnext__* / Task / Agent / 其他未列出 MCP\\n\\n─────────\\n## 归档 (DONE ARCHIVE)\\nAGENT_ROLE=done-archive-agent\\nREQ={{ $json.params.reqId }}\\nBRANCH={{ $json.params.branch }}\\nWORKDIR={{ $json.params.workdir }}\\nREPO_URL={{ $json.params.repoUrl }}\\nACCEPT_ISSUE={{ $json.params.acceptIssueId }}\\n\\n## 职责\\n验收通过后，把 $REQ 的变更正式固化：openspec apply + 创建 PR。\\n\\n## 步骤\\nStep 1 bootstrap:\\n  cd $WORKDIR && git fetch origin && git reset --hard origin/$BRANCH\\n\\nStep 2 openspec apply:\\n  cd $WORKDIR && openspec apply $REQ\\n  这会把 changes/$REQ/specs/* 里的 ADDED 块合并进 openspec/specs/*，\\n  删除 changes/$REQ 目录。produces a new commit。\\n  失败就贴 error 到本 issue description，加 tag archive-fail 并 move review。\\n\\nStep 3 push:\\n  cd $WORKDIR && git push origin $BRANCH\\n\\nStep 4 创 PR:\\n  cd $WORKDIR && gh pr create --base master --head $BRANCH \\\\\\n    --title \\\"$REQ: <一句话概括>\\\" --body \\\"$(cat openspec/changes/$REQ/proposal.md 2>/dev/null || echo done via sisyphus)\\\"\\n  记录 PR URL。\\n\\nStep 5 写结果到**本 issue**:\\n  A. follow-up-issue 追加 `## Archive Result`: pr_url / commit_sha\\n  B. update-issue tags: [done-archive, $REQ, result:pass, pr:<url>]\\n  C. update-issue statusId=done  # 归档完成直接 done，不 review\\n\"}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 60000
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "done_st",
+      "name": "[DONE] St",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        2240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":72,\"method\":\"tools/call\",\"params\":{\"name\":\"update-issue\",\"arguments\":{\"projectId\":\"{{ $node[\"[ENTRY] Ctx 提取\"].json.projectId }}\",\"issueId\":\"{{ $node[\"[DONE] Id\"].json.iid }}\",\"statusId\":\"working\",\"tags\":[\"done-archive\",\"{{ $node[\"[DONE] Id\"].json.params.reqId }}\"]}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 10000
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
       "id": "fan_split",
       "name": "[FAN] Split specs",
       "type": "n8n-nodes-base.splitOut",
@@ -1789,7 +2133,7 @@
       "typeVersion": 4.2,
       "position": [
         1680,
-        2060
+        2420
       ],
       "parameters": {
         "method": "POST",
@@ -1834,7 +2178,7 @@
       "typeVersion": 1,
       "position": [
         1680,
-        2420
+        2780
       ],
       "parameters": {}
     }
@@ -2093,6 +2437,72 @@
         ]
       ]
     },
+    "[ACC] Cr": {
+      "main": [
+        [
+          {
+            "node": "[ACC] Id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[ACC] Id": {
+      "main": [
+        [
+          {
+            "node": "[ACC] Fu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[ACC] Fu": {
+      "main": [
+        [
+          {
+            "node": "[ACC] St",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[DONE] Cr": {
+      "main": [
+        [
+          {
+            "node": "[DONE] Id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[DONE] Id": {
+      "main": [
+        [
+          {
+            "node": "[DONE] Fu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[DONE] Fu": {
+      "main": [
+        [
+          {
+            "node": "[DONE] St",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "[FAN] Split specs": {
       "main": [
         [
@@ -2279,6 +2689,20 @@
         [
           {
             "node": "[RVW] Cr",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[ACC] Cr",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[DONE] Cr",
             "type": "main",
             "index": 0
           }

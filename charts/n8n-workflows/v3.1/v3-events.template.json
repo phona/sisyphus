@@ -375,6 +375,46 @@
                       "operation": "equals"
                     },
                     "leftValue": "={{ $json.action }}",
+                    "rightValue": "create_accept"
+                  }
+                ]
+              },
+              "outputKey": "create_accept"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "done_archive"
+                  }
+                ]
+              },
+              "outputKey": "done_archive"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.action }}",
                     "rightValue": "fanout_specs"
                   }
                 ]
@@ -436,7 +476,7 @@
       "typeVersion": 1,
       "position": [
         1680,
-        2240
+        2600
       ],
       "parameters": {}
     },
@@ -1274,6 +1314,310 @@
       }
     },
     {
+      "id": "acc_cr",
+      "name": "[ACC] Cr",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        2060
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":60,\"method\":\"tools/call\",\"params\":{\"name\":\"create-issue\",\"arguments\":{\"projectId\":\"{{ $node[\"[ENTRY] Ctx 提取\"].json.projectId }}\",\"title\":\"[{{ $json.params.reqId }}] [ACCEPT] AI-QA\",\"statusId\":\"todo\",\"useWorktree\":false,\"tags\":[\"accept\",\"{{ $json.params.reqId }}\"]}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        },
+        "onError": "continueErrorOutput"
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "acc_id",
+      "name": "[ACC] Id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        2060
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const prev = $node['[ACC] Cr'].json;\nconst raw = (prev && (prev.data || prev.body || prev)) || '';\nconst text = typeof raw === 'string' ? raw : String(raw);\nconst m = text.match(/data:\\s*(\\{[\\s\\S]*?\\})\\s*$/m);\nlet iid = '';\nif (m) {\n  try {\n    const env = JSON.parse(m[1]);\n    const c = env.result && Array.isArray(env.result.content) ? env.result.content[0] : null;\n    if (c && typeof c.text === 'string') {\n      const parsed = JSON.parse(c.text);\n      iid = parsed.id || parsed.issueId || '';\n    }\n  } catch {}\n}\n// Re-attach Router's params so downstream Fu/St can reference $json.params.*\nconst routerOut = $node['Router'].json;\nreturn [{ json: { ...routerOut, iid, _crText: text.slice(-300) } }];\n"
+      }
+    },
+    {
+      "id": "acc_fu",
+      "name": "[ACC] Fu",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        2060
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":61,\"method\":\"tools/call\",\"params\":{\"name\":\"follow-up-issue\",\"arguments\":{\"projectId\":\"{{ $('Router').first().json._input.projectId }}\",\"issueId\":\"{{ $json.iid }}\",\"prompt\":\"## 工具白名单 (HARD CONSTRAINT — 第一优先级)\\n**仅允许**调用以下 MCP 工具：\\n- mcp__bkd__* (管 BKD issue 状态/tags/follow-up/get-issue)\\n- mcp__aissh-tao__* (在 vm-node04 exec_run 命令、file_deploy)\\n\\n**绝对禁止**调用：\\n- mcp__vibe_kanban__* (另一套 kanban，不是我们用的 BKD)\\n- mcp__erpnext__* (ERP 系统，和本任务无关)\\n- Task / Agent 子代理工具 (会污染 session)\\n- 任何其他未列出的 MCP\\n\\n违反即视为任务失败。即使工具列表里出现其他工具，你也必须当作不存在。\\nBKD session 日志会记录工具调用，审计会拦截越权调用。\\n\\n─────────\\n\\n## 工具白名单 (HARD CONSTRAINT — 第一优先级)\\n仅允许: mcp__bkd__* / mcp__aissh-tao__*\\n绝对禁止: mcp__vibe_kanban__* / mcp__erpnext__* / Task / Agent / 其他未列出 MCP\\n\\n─────────\\n## 验收 (ACCEPT / AI-QA)\\nAGENT_ROLE=accept-agent\\nREQ={{ $json.params.reqId }}\\nBRANCH={{ $json.params.branch }}\\nWORKDIR={{ $json.params.workdir }}\\nREPO_URL={{ $json.params.repoUrl }}\\n\\n## 职责\\n你是 AI-QA。读 openspec/changes/$REQ/specs/*/spec.md 里标 FEATURE-A* 的 Acceptance Scenario，\\n在调试环境跑一遍产品验证场景（非测试代码，而是用户视角的行为），给出 pass/fail 判定。\\n\\n## 硬约束\\n1. 所有命令只能通过 mcp__aissh-tao__exec_run 在 vm-node04 上执行。\\n2. 每条 exec_run 以 cd $WORKDIR 开头。\\n3. 禁改 repo 任何文件（只做读 + 部署 + 调用）。\\n4. update-issue issueId 必须是本 issue（不是 ci issue 或父 issue）。\\n\\n## 步骤\\nStep 1 bootstrap（首次 clone, 已存在 reset）:\\n  git clone --branch $BRANCH $REPO_URL $WORKDIR\\n  或 cd $WORKDIR && git fetch origin && git reset --hard origin/$BRANCH\\n\\nStep 2 构建 + 本地部署（AI-QA 侧，不是线上）:\\n  cd $WORKDIR && make ci-build 2>&1\\n  选一种方式启后台: ./bin/<main> & 或 make run & (看 Makefile 约定)\\n\\nStep 3 跑所有 FEATURE-A* Acceptance Scenario:\\n  对每个场景用 curl / CLI / 真实 IO 走一遍 Given/When/Then。\\n  记录每个场景: name / pass-or-fail / evidence (curl 输出 + 状态码 / 文件内容 / ...)\\n\\nStep 4 stop 后台服务 (kill / docker stop)。\\n\\nStep 5 写结果到**本 issue**:\\n  A. follow-up-issue 追加 `## Accept Result` block: 每场景 name/result/evidence\\n  B. update-issue tags: [accept, $REQ, <result:pass 或 result:fail>]\\n  C. update-issue statusId=review\"}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "acc_st",
+      "name": "[ACC] St",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        2060
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":62,\"method\":\"tools/call\",\"params\":{\"name\":\"update-issue\",\"arguments\":{\"projectId\":\"{{ $node[\"[ENTRY] Ctx 提取\"].json.projectId }}\",\"issueId\":\"{{ $node[\"[ACC] Id\"].json.iid }}\",\"statusId\":\"working\",\"tags\":[\"accept\",\"{{ $node[\"[ACC] Id\"].json.params.reqId }}\"]}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 10000
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "done_cr",
+      "name": "[DONE] Cr",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        2240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":70,\"method\":\"tools/call\",\"params\":{\"name\":\"create-issue\",\"arguments\":{\"projectId\":\"{{ $node[\"[ENTRY] Ctx 提取\"].json.projectId }}\",\"title\":\"[{{ $json.params.reqId }}] [DONE] archive & PR\",\"statusId\":\"todo\",\"useWorktree\":false,\"tags\":[\"done-archive\",\"{{ $json.params.reqId }}\"]}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        },
+        "onError": "continueErrorOutput"
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "done_id",
+      "name": "[DONE] Id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        2240
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const prev = $node['[DONE] Cr'].json;\nconst raw = (prev && (prev.data || prev.body || prev)) || '';\nconst text = typeof raw === 'string' ? raw : String(raw);\nconst m = text.match(/data:\\s*(\\{[\\s\\S]*?\\})\\s*$/m);\nlet iid = '';\nif (m) {\n  try {\n    const env = JSON.parse(m[1]);\n    const c = env.result && Array.isArray(env.result.content) ? env.result.content[0] : null;\n    if (c && typeof c.text === 'string') {\n      const parsed = JSON.parse(c.text);\n      iid = parsed.id || parsed.issueId || '';\n    }\n  } catch {}\n}\n// Re-attach Router's params so downstream Fu/St can reference $json.params.*\nconst routerOut = $node['Router'].json;\nreturn [{ json: { ...routerOut, iid, _crText: text.slice(-300) } }];\n"
+      }
+    },
+    {
+      "id": "done_fu",
+      "name": "[DONE] Fu",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        2240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":71,\"method\":\"tools/call\",\"params\":{\"name\":\"follow-up-issue\",\"arguments\":{\"projectId\":\"{{ $('Router').first().json._input.projectId }}\",\"issueId\":\"{{ $json.iid }}\",\"prompt\":\"## 工具白名单 (HARD CONSTRAINT — 第一优先级)\\n**仅允许**调用以下 MCP 工具：\\n- mcp__bkd__* (管 BKD issue 状态/tags/follow-up/get-issue)\\n- mcp__aissh-tao__* (在 vm-node04 exec_run 命令、file_deploy)\\n\\n**绝对禁止**调用：\\n- mcp__vibe_kanban__* (另一套 kanban，不是我们用的 BKD)\\n- mcp__erpnext__* (ERP 系统，和本任务无关)\\n- Task / Agent 子代理工具 (会污染 session)\\n- 任何其他未列出的 MCP\\n\\n违反即视为任务失败。即使工具列表里出现其他工具，你也必须当作不存在。\\nBKD session 日志会记录工具调用，审计会拦截越权调用。\\n\\n─────────\\n\\n## 工具白名单 (HARD CONSTRAINT — 第一优先级)\\n仅允许: mcp__bkd__* / mcp__aissh-tao__*\\n绝对禁止: mcp__vibe_kanban__* / mcp__erpnext__* / Task / Agent / 其他未列出 MCP\\n\\n─────────\\n## 归档 (DONE ARCHIVE)\\nAGENT_ROLE=done-archive-agent\\nREQ={{ $json.params.reqId }}\\nBRANCH={{ $json.params.branch }}\\nWORKDIR={{ $json.params.workdir }}\\nREPO_URL={{ $json.params.repoUrl }}\\nACCEPT_ISSUE={{ $json.params.acceptIssueId }}\\n\\n## 职责\\n验收通过后，把 $REQ 的变更正式固化：openspec apply + 创建 PR。\\n\\n## 步骤\\nStep 1 bootstrap:\\n  cd $WORKDIR && git fetch origin && git reset --hard origin/$BRANCH\\n\\nStep 2 openspec apply:\\n  cd $WORKDIR && openspec apply $REQ\\n  这会把 changes/$REQ/specs/* 里的 ADDED 块合并进 openspec/specs/*，\\n  删除 changes/$REQ 目录。produces a new commit。\\n  失败就贴 error 到本 issue description，加 tag archive-fail 并 move review。\\n\\nStep 3 push:\\n  cd $WORKDIR && git push origin $BRANCH\\n\\nStep 4 创 PR:\\n  cd $WORKDIR && gh pr create --base master --head $BRANCH \\\\\\n    --title \\\"$REQ: <一句话概括>\\\" --body \\\"$(cat openspec/changes/$REQ/proposal.md 2>/dev/null || echo done via sisyphus)\\\"\\n  记录 PR URL。\\n\\nStep 5 写结果到**本 issue**:\\n  A. follow-up-issue 追加 `## Archive Result`: pr_url / commit_sha\\n  B. update-issue tags: [done-archive, $REQ, result:pass, pr:<url>]\\n  C. update-issue statusId=done  # 归档完成直接 done，不 review\\n\"}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 60000
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "done_st",
+      "name": "[DONE] St",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        2240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":72,\"method\":\"tools/call\",\"params\":{\"name\":\"update-issue\",\"arguments\":{\"projectId\":\"{{ $node[\"[ENTRY] Ctx 提取\"].json.projectId }}\",\"issueId\":\"{{ $node[\"[DONE] Id\"].json.iid }}\",\"statusId\":\"working\",\"tags\":[\"done-archive\",\"{{ $node[\"[DONE] Id\"].json.params.reqId }}\"]}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 10000
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
       "id": "fan_split",
       "name": "[FAN] Split specs",
       "type": "n8n-nodes-base.splitOut",
@@ -1789,7 +2133,7 @@
       "typeVersion": 4.2,
       "position": [
         1680,
-        2060
+        2420
       ],
       "parameters": {
         "method": "POST",
@@ -1834,7 +2178,7 @@
       "typeVersion": 1,
       "position": [
         1680,
-        2420
+        2780
       ],
       "parameters": {}
     }
@@ -2093,6 +2437,72 @@
         ]
       ]
     },
+    "[ACC] Cr": {
+      "main": [
+        [
+          {
+            "node": "[ACC] Id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[ACC] Id": {
+      "main": [
+        [
+          {
+            "node": "[ACC] Fu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[ACC] Fu": {
+      "main": [
+        [
+          {
+            "node": "[ACC] St",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[DONE] Cr": {
+      "main": [
+        [
+          {
+            "node": "[DONE] Id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[DONE] Id": {
+      "main": [
+        [
+          {
+            "node": "[DONE] Fu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[DONE] Fu": {
+      "main": [
+        [
+          {
+            "node": "[DONE] St",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "[FAN] Split specs": {
       "main": [
         [
@@ -2279,6 +2689,20 @@
         [
           {
             "node": "[RVW] Cr",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[ACC] Cr",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[DONE] Cr",
             "type": "main",
             "index": 0
           }

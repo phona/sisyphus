@@ -89,11 +89,13 @@ test('routeEvent: ci(unit) fail → comment back to dev (no round)', () => {
   assert.equal(r.params.ciIssueId, 'ci-1');
 });
 
-test('routeEvent: ci(integration) pass → escalate (AI-QA pending)', () => {
-  const body = { tags: ['ci', 'REQ-10', 'ci:pass', 'target:integration'] };
+test('routeEvent: ci(integration) pass → create_accept', () => {
+  const body = { tags: ['ci', 'REQ-10', 'ci:pass', 'target:integration'], issueId: 'ci-int', projectId: '77k9z58j' };
   const r = routeEvent(body);
-  assert.equal(r.action, 'escalate');
-  assert.match(r.reason, /AI-QA/);
+  assert.equal(r.action, 'create_accept');
+  assert.equal(r.params.reqId, 'REQ-10');
+  assert.equal(r.params.branch, 'feat/REQ-10');
+  assert.equal(r.params.repoUrl, 'https://github.com/phona/ubox-crosser.git');
 });
 
 test('routeEvent: ci(integration) fail → create_bugfix round 1', () => {
@@ -164,10 +166,12 @@ test('routeEvent: reviewer fail → escalate', () => {
   assert.equal(r.action, 'escalate');
 });
 
-test('routeEvent: accept pass → escalate (done_archive pending)', () => {
-  const r = routeEvent({ tags: ['accept', 'REQ-9', 'result:pass'] });
-  assert.equal(r.action, 'escalate');
-  assert.match(r.reason, /done_archive/);
+test('routeEvent: accept pass → done_archive', () => {
+  const r = routeEvent({ tags: ['accept', 'REQ-9', 'result:pass'], issueId: 'acc-1', projectId: '77k9z58j' });
+  assert.equal(r.action, 'done_archive');
+  assert.equal(r.params.reqId, 'REQ-9');
+  assert.equal(r.params.branch, 'feat/REQ-9');
+  assert.equal(r.params.acceptIssueId, 'acc-1');
 });
 
 test('routeEvent: accept fail + round<3 → new bugfix with round+1', () => {
