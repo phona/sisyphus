@@ -222,6 +222,17 @@ test('routeEvent: unknown routing → escalate', () => {
   assert.equal(r.action, 'escalate');
 });
 
+test('routeEvent: done-archive terminal → skip', () => {
+  const r = routeEvent({ event: 'session.completed', issueId: 'done-1', tags: ['done-archive', 'REQ-9', 'result:pass', 'pr:foo/bar#1'] });
+  assert.equal(r.action, 'skip');
+  assert.match(r.reason, /terminal/);
+});
+
+test('routeEvent: github-incident terminal → skip', () => {
+  const r = routeEvent({ event: 'session.completed', issueId: 'gh-1', tags: ['github-incident', 'REQ-9', 'kind:accept-fail'] });
+  assert.equal(r.action, 'skip');
+});
+
 test('routeEvent: analyze agent dropped analyze tag → layer fallback fanout', () => {
   const r = routeEvent({ event: 'session.completed', issueId: 'anz-1', issueNumber: 685, tags: ['layer:backend'] });
   assert.equal(r.action, 'fanout_specs');

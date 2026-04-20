@@ -135,6 +135,12 @@ export function routeEvent(webhookBody = {}, opts = {}) {
     return { action: 'skip', reason: 'already done', params: { issueId } };
   }
 
+  // L2.4: terminal states — done-archive and github-incident issues are already "terminal",
+  // their session.completed should NOT re-dispatch through the action switch.
+  if (tags.includes('done-archive') || tags.includes('github-incident')) {
+    return { action: 'skip', reason: `terminal stage: ${tags.find(t => ['done-archive', 'github-incident'].includes(t))}`, params: { issueId } };
+  }
+
   // L2.5: analyze-layer fallback — if agent overwrote tags leaving only layer:*,
   // we can still infer analyze completion from layer tags + a reqId. reqId can come
   // from either existing REQ-xxx tag or the issueNumber fallback.
