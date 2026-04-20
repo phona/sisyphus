@@ -324,13 +324,17 @@ if (m) {
     }
   } catch {}
 }
-// Carry forward params: prefer the IMMEDIATE input (gate/if node may have reshaped them,
-// e.g. [GH Bugfix Gate] emits {params:{round:N,...}} that Router didn't have). Fall back
-// to Router output if input doesn't carry params.
+// Carry forward params to downstream Fu/St. Router is the default source, but when the
+// chain entered via [GH Bugfix Gate] (GH → BUG), that gate reshaped params (added round).
+// Prefer gate's params if the gate node executed in this run.
 const routerOut = $node['Router'].json || {};
-const inputJson = ($input && $input.first && $input.first().json) || {};
-const params = (inputJson.params && typeof inputJson.params === 'object') ? inputJson.params : (routerOut.params || {});
-return [{ json: { ...routerOut, ...inputJson, params, iid, _crText: text.slice(-300) } }];
+let gateParams = null;
+try {
+  const g = $node['[GH Bugfix Gate]'];
+  if (g && g.json && g.json.params) gateParams = g.json.params;
+} catch (_) {}
+const params = gateParams || routerOut.params || {};
+return [{ json: { ...routerOut, params, iid, _crText: text.slice(-300) } }];
 """
 
 def create_issue_body(title_expr, tags_list, rpc_id):
