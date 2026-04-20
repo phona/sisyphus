@@ -31,6 +31,7 @@
 #   test-bugfix-agent   : 只许改 tests/**（contract / ui / acceptance / mobile）
 #                         内部代码、migrations、openspec 都禁
 #   verify-agent        : 所有文件（只读模式，不应 commit）
+#   ci-runner-agent     : 所有文件（只跑 make ci-*，绝不 commit）
 #   qa-agent            : 只允许 reports/qa.md，其它一律禁
 #
 # 配套校验：tasks.md section 归属由 check-tasks-section-ownership.sh 单独跑。
@@ -147,6 +148,13 @@ forbid_others "qa-agent bugfix-agent test-bugfix-agent analyze-agent" \
 # ---- verify-agent 不该 commit 任何文件 ----
 if [[ "$AGENT_ROLE" == "verify-agent" ]]; then
   echo "FAIL: [verify-agent] 不应 commit 任何文件（只跑测试写 title）"
+  echo "$CHANGED" | sed 's/^/  /'
+  FAILED=1
+fi
+
+# ---- ci-runner-agent 不该 commit 任何文件（只跑 make ci-* + 写 issue） ----
+if [[ "$AGENT_ROLE" == "ci-runner-agent" ]]; then
+  echo "FAIL: [ci-runner-agent] 不应 commit 任何文件（只跑 make ci-*，结果写进 BKD issue 不写 repo）"
   echo "$CHANGED" | sed 's/^/  /'
   FAILED=1
 fi

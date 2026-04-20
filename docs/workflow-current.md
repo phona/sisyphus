@@ -56,7 +56,34 @@ BKD (Coder Workspace)
     FAIL → 创建 Bug Fix → battle
 ```
 
-## BUGFIX 双 agent 投票链（新）
+## CI 核验 gate（新）
+
+**动机**：之前 `result:pass` / `result:fail` 完全由干活 agent 自报，存在"agent 撒谎/幻觉/偷懒"的可信度问题。引入独立的 `ci-runner-agent` 做第三方机械核验：只跑 `make ci-*`，原样贴 exit code，不做业务判断。
+
+**触发点（小步快跑，挂了马上回）**：
+
+| 上游阶段完成 | n8n 创 ci-runner issue 跑 | 成功路由 | 失败路由 |
+|---|---|---|---|
+| `dev` session.completed | `CI_TARGET=unit`（`ci-lint` + `ci-unit-test`）| 进 verify 阶段 | **回原 dev issue 加评论**，不算 bugfix round |
+| `contract-spec` / `accept-spec` / `dev-spec` session.completed | `CI_TARGET=lint`（仅编译，挡 spec 阶段低级错）| 进 Spec Gate 汇合 | 回原 spec issue 加评论 |
+| verify 阶段触发 | `CI_TARGET=integration`（`ci-lint` + `ci-integration-test`，契约测试 L2）| 进 accept 阶段 | 创新 bugfix issue，走 round-N 熔断 |
+| accept 阶段 | **暂不用 ci-runner**（AI-QA 路线，验收用例产出为 AI 友好 markdown）| — | — |
+
+**路由实现**：ci-runner 完成后 n8n 读 tags：
+- `ci:pass` + `target:unit` → routeKey=ci，action=proceed-to-verify
+- `ci:fail` + `target:unit` → routeKey=ci，action=comment-back-to-dev（不创新 issue）
+- `ci:pass` + `target:integration` → proceed-to-accept
+- `ci:fail` + `target:integration` → create-bugfix-issue
+
+**诊断自动分类（替代 agent 自判）**：n8n 从 ci-runner 写的 `## CI Result` block 里抓 `stderr_tail`，机械 grep：
+- `FAIL\s+.*tests/contract/` + 编译过 → `diagnosis:code-bug`
+- 编译错在 `tests/**` → `diagnosis:test-bug`
+- 编译错在 `main/**` → `diagnosis:code-bug`
+- 同一 scenario 连续 3 轮失败位置一致 → `diagnosis:spec-bug`（触发熔断 / Escalate）
+
+**关键性质**：ci-runner 不加 `result:*` / `diagnosis:*` tag，它只报 `ci:pass/fail`。诊断由 n8n 独立从客观输出抠，不信任任何 agent 的主观判断。
+
+## BUGFIX 双 agent 投票链（旧，保留但降级为兜底）
 
 verify/accept fail 后**不再由单个 bugfix-agent 决定改 code 还是 test**，改成对抗投票：
 

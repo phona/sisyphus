@@ -31,6 +31,8 @@ n8n /bkd-events 路由完全依赖 tags。每个阶段除已有的阶段 tag（`
 | **test-fix (TEST-FIX)** | 改完测试 | （无 result tag；可选 diagnosis tag）|
 | **reviewer** | 采纳了某边 merge 到 feat | `result:pass` |
 | **reviewer** | 两边都不过 / 弃权 | `result:fail` |
+| **ci-runner** | `make` exit 0 | `ci:pass` + `target:unit` / `target:integration`（按本次跑的 target）|
+| **ci-runner** | `make` exit != 0 | `ci:fail` + `target:unit` / `target:integration`|
 | 其它（dev-spec / dev / spec 类）| —— | （无结果 tag，路由只看阶段 tag）|
 
 加 tag 用 BKD MCP `update-issue`（保留现有 tag，追加新 tag）：
@@ -367,6 +369,98 @@ AGENT_ROLE=dev-agent
 stage/{reqId}-dev 子分支，干完 push + merge 回 feat/{reqId}。
 
 move review（进入转测）
+```
+
+---
+
+## 阶段 3.5 / 4：CI 核验（ci-runner-agent）
+
+**定位**：独立第三方机械执行器。**不改任何文件、不做业务判断、不写 diagnosis**。只做一件事：在调试环境跑指定 `make ci-*` target，把 exit code + 关键输出原样写回 BKD issue。
+
+**何时用**：
+- `dev` 阶段 session.completed → n8n 创 ci-runner issue，`CI_TARGET=unit`（跑 `ci-lint` + `ci-unit-test`）作为"dev 自检 gate"
+- `verify` 阶段 → n8n 创 ci-runner issue，`CI_TARGET=integration`（跑 `ci-lint` + `ci-integration-test`，即契约测试 L2）
+- `accept` 阶段 → 暂不接入（验收用 AI-QA，不用 make target）
+- `*-spec` 阶段 session.completed → n8n 创 ci-runner issue，`CI_TARGET=lint`（只编译，挡低级错）
+
+**成败路由**：
+- `ci:pass` → n8n 进下一阶段
+- `ci:fail` + `target:unit` → 回原 dev issue 追加评论（轻量反馈，**不算 bugfix round**），同一 dev issue 在 review 状态下继续改
+- `ci:fail` + `target:integration` → 创新 bugfix issue（走 round-N 熔断链）
+- `ci:fail` + `target:lint`（spec 阶段）→ 回原 spec issue 追加评论
+
+```
+## CI 核验 (CI-RUNNER)
+AGENT_ROLE=ci-runner-agent
+REQ={reqId}                                       # n8n 注入
+TARGET={lint|unit|integration}                    # n8n 注入
+BRANCH={stage/REQ-xx-{stage} 或 feat/REQ-xx}      # n8n 注入
+WORKDIR=/var/sisyphus-ci/{branch 替 / 为 -}       # n8n 注入，按 branch 物理隔离
+REPO_URL={git 远程 url}                           # n8n 从 Router 的 projectRepoMap 查
+PARENT_ISSUE={触发 CI 的上游 issue id}
+PARENT_STAGE={dev / contract-spec / verify ...}
+
+## 硬约束（违反即视为报告失败）
+1. **所有命令只能通过 mcp__aissh-tao__exec_run 在 vm-node04 上执行**。禁止本地 Bash / BKD worktree 内执行。
+2. **每条 exec_run 命令必须以 `cd $WORKDIR` 开头**。禁止 cd 到 $WORKDIR 之外（WORKDIR 按 branch 隔离，防并发踩踏）。
+3. **禁改 repo 任何文件**（pre-commit ACL 拒 ci-runner 任何 commit）。
+4. **仅许加 `ci:pass` 或 `ci:fail` tag**（保留继承的 ci/REQ/target/parent）。禁 `result:*` / `diagnosis:*` / `round-*`。
+5. **stderr_tail 原样贴最后 50 行**，不总结、不翻译、不改写。
+6. **失败不分析原因**——你是报告员不是诊断师，原因交给 bugfix-agent。
+
+## 步骤（仅 3 步，按顺序）
+
+### Step 1 — bootstrap WORKDIR（一条 exec_run，bash -c 包起来，幂等）
+```bash
+mkdir -p $(dirname $WORKDIR) && \
+  if [ -d $WORKDIR/.git ]; then
+    cd $WORKDIR && git fetch origin && git reset --hard origin/$BRANCH
+  else
+    git clone --branch $BRANCH $REPO_URL $WORKDIR
+  fi
+```
+失败即报 `ci:fail`，stderr_tail 贴 git 报错，收尾。
+
+### Step 2 — 跑 CI target（一条 exec_run）
+```bash
+cd $WORKDIR && time make ci-$TARGET 2>&1
+```
+记录：
+- `exit_code`（`echo $?`）
+- `duration_ms`（time 的 real）
+- `failed_tests`（grep `^--- FAIL:` / `FAIL\t` 行）
+- `stderr_tail`（完整 output 的最后 50 行，不截断要保真）
+- 可选 `coverage`（unit/integration 有 `coverage/*.out` 时 `go tool cover -func=...` 取总行）
+
+### Step 3 — 写结果
+**A. follow-up-issue 把下面 block 原样追加到本 issue 正文**（n8n 机读，格式严格）：
+```
+## CI Result
+target: $TARGET
+branch: $BRANCH
+workdir: $WORKDIR
+commit: <cd $WORKDIR && git rev-parse --short HEAD>
+exit_code: <0 或非 0>
+duration_ms: <ms>
+coverage: <% 或空>
+failed_tests:
+  - <测试名>
+stderr_tail: |
+  <最后 50 行原样>
+```
+**B. update-issue 追加 tag**（保留继承的）：
+- exit=0 → `tags=[ci, $REQ, target:$TARGET, parent:$PARENT_STAGE, ci:pass]`
+- exit≠0 → `tags=[ci, $REQ, target:$TARGET, parent:$PARENT_STAGE, ci:fail]`
+
+**C. move review**
+
+## n8n 怎么用 ci-runner 的输出
+session.completed 后 Router 从 tags 抽 `ci:pass/fail` + `target:X` + `parent:Y`，自动路由：
+- `ci:pass + parent=dev` → 创 ci-runner(target=integration, branch=feat/REQ-xx)
+- `ci:pass + parent=verify / target=integration` → 创 accept（AI-QA，MVP 未接 → escalate）
+- `ci:pass + parent=*-spec` → mark_spec_reviewed；所有 expected specs 都过 → 创 dev
+- `ci:fail + target=lint/unit` → comment_back 到 PARENT_ISSUE，不开新 bugfix，不计 round
+- `ci:fail + target=integration` → 创 bugfix-dev issue（round=1）
 ```
 
 ---
