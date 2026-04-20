@@ -1,6 +1,10 @@
 // Sisyphus n8n router — pure functions, embeddable into n8n Code node.
 // Contract: `routeEvent(webhookBody, opts?) -> { action, params, reason? }`
 // Actions are executed by n8n Switch + HTTP nodes downstream.
+//
+// Note: ci-diagnose.js is bundled alongside router.js in the n8n Code node,
+// so `diagnoseCiFailure` is in scope at runtime. For unit tests we import it.
+import { diagnoseCiFailure } from './ci-diagnose.js';
 
 export const STAGE_PRIORITY = [
   'ci',
@@ -272,16 +276,38 @@ function routeCiDone(ctx, issueId, webhookBody) {
         },
       };
     }
-    // integration failure = real bug → open a bugfix issue (round N)
+    // integration failure = contract/acceptance assertions broke.
+    // Diagnose via stderr_tail: code-bug → bugfix; spec|test|unknown → GitHub issue (human).
     if (ctx.target === 'integration') {
+      const ciResult = webhookBody._ciResult || {};
+      const diag = diagnoseCiFailure({ target: 'integration', stderrTail: ciResult.stderrTail, failedTests: ciResult.failedTests });
+      if (diag.diagnosis === 'code-bug') {
+        return {
+          action: 'create_bugfix',
+          params: {
+            reqId: ctx.reqId,
+            round: 1,
+            sourceIssueId: issueId,
+            reason: 'ci:integration fail (code-bug)',
+            branch: `feat/${ctx.reqId}`,
+            diagnosis: diag.diagnosis,
+          },
+        };
+      }
+      // spec-bug / test-bug / unknown → human decides via GitHub issue
       return {
-        action: 'create_bugfix',
+        action: 'open_github_issue',
         params: {
           reqId: ctx.reqId,
-          round: 1,
           sourceIssueId: issueId,
-          reason: 'ci:integration fail',
+          kind: 'ci-integration-fail',
+          diagnosis: diag.diagnosis,
+          diagnosisReason: diag.reason,
           branch: `feat/${ctx.reqId}`,
+          repoUrl: ctx._repoMap[ctx._projectId] || null,
+          workdir: workdirFor(`feat/${ctx.reqId}`),
+          stderrTail: ciResult.stderrTail || '',
+          failedTests: ciResult.failedTests || [],
         },
       };
     }
@@ -320,12 +346,20 @@ function routeAcceptDone(ctx, issueId) {
     };
   }
   if (ctx.resultKey === 'fail') {
-    if (ctx.round >= CB_THRESHOLD) {
-      return { action: 'escalate', reason: `circuit-breaker round>=${CB_THRESHOLD}`, params: { reqId: ctx.reqId, round: ctx.round } };
-    }
+    // Acceptance fail = human must decide (spec ambiguity vs code bug).
+    // Accept tests are the contract-with-user layer; auto-bugfix here risks diverging
+    // from the real intent. Route to GitHub issue for repo owner review.
     return {
-      action: 'create_bugfix',
-      params: { reqId: ctx.reqId, round: ctx.round + 1, sourceIssueId: issueId, reason: 'accept fail', branch: `feat/${ctx.reqId}` },
+      action: 'open_github_issue',
+      params: {
+        reqId: ctx.reqId,
+        sourceIssueId: issueId,
+        kind: 'accept-fail',
+        round: ctx.round,
+        branch: `feat/${ctx.reqId}`,
+        repoUrl: ctx._repoMap[ctx._projectId] || null,
+        workdir: workdirFor(`feat/${ctx.reqId}`),
+      },
     };
   }
   return { action: 'escalate', reason: 'accept without result tag', params: { issueId } };

@@ -98,11 +98,41 @@ test('routeEvent: ci(integration) pass → create_accept', () => {
   assert.equal(r.params.repoUrl, 'https://github.com/phona/ubox-crosser.git');
 });
 
-test('routeEvent: ci(integration) fail → create_bugfix round 1', () => {
-  const body = { tags: ['ci', 'REQ-10', 'ci:fail', 'target:integration'], issueId: 'ci-x' };
+test('routeEvent: ci(integration) fail code-bug (runtime FAIL) → create_bugfix', () => {
+  const body = {
+    tags: ['ci', 'REQ-10', 'ci:fail', 'target:integration'],
+    issueId: 'ci-x',
+    _ciResult: { stderrTail: '--- FAIL: TestHealthz\nexpected 200 got 500', failedTests: ['TestHealthz'] },
+  };
   const r = routeEvent(body);
   assert.equal(r.action, 'create_bugfix');
   assert.equal(r.params.round, 1);
+  assert.equal(r.params.diagnosis, 'code-bug');
+});
+
+test('routeEvent: ci(integration) fail test-bug (compile err in tests/) → open_github_issue', () => {
+  const body = {
+    tags: ['ci', 'REQ-10', 'ci:fail', 'target:integration'],
+    issueId: 'ci-y',
+    projectId: '77k9z58j',
+    _ciResult: { stderrTail: 'tests/contract/ping_test.go:12: undefined: SomeHelper', failedTests: [] },
+  };
+  const r = routeEvent(body);
+  assert.equal(r.action, 'open_github_issue');
+  assert.equal(r.params.kind, 'ci-integration-fail');
+  assert.equal(r.params.diagnosis, 'test-bug');
+  assert.equal(r.params.repoUrl, 'https://github.com/phona/ubox-crosser.git');
+});
+
+test('routeEvent: ci(integration) fail unknown (no stderr) → open_github_issue', () => {
+  const body = {
+    tags: ['ci', 'REQ-10', 'ci:fail', 'target:integration'],
+    issueId: 'ci-z',
+    _ciResult: { stderrTail: '', failedTests: [] },
+  };
+  const r = routeEvent(body);
+  assert.equal(r.action, 'open_github_issue');
+  assert.equal(r.params.diagnosis, 'unknown');
 });
 
 test('routeEvent: ci(lint) pass on spec → mark_spec_reviewed', () => {
@@ -174,21 +204,17 @@ test('routeEvent: accept pass → done_archive', () => {
   assert.equal(r.params.acceptIssueId, 'acc-1');
 });
 
-test('routeEvent: accept fail + round<3 → new bugfix with round+1', () => {
-  const r = routeEvent({ tags: ['accept', 'REQ-9', 'result:fail', 'round-1'] });
-  assert.equal(r.action, 'create_bugfix');
-  assert.equal(r.params.round, 2);
+test('routeEvent: accept fail → open_github_issue (human decides spec vs code)', () => {
+  const r = routeEvent({ tags: ['accept', 'REQ-9', 'result:fail'], issueId: 'acc-f', projectId: '77k9z58j' });
+  assert.equal(r.action, 'open_github_issue');
+  assert.equal(r.params.kind, 'accept-fail');
+  assert.equal(r.params.branch, 'feat/REQ-9');
+  assert.equal(r.params.repoUrl, 'https://github.com/phona/ubox-crosser.git');
 });
 
-test('routeEvent: accept fail + round>=3 → escalate (circuit breaker)', () => {
-  const r = routeEvent({ tags: ['accept', 'REQ-9', 'result:fail', 'round-3'] });
-  assert.equal(r.action, 'escalate');
-  assert.match(r.reason, /circuit-breaker/);
-});
-
-test('routeEvent: title lies — accept + result:fail still creates bugfix regardless of title', () => {
+test('routeEvent: title lies — accept + result:fail still routes to github issue', () => {
   const r = routeEvent({ title: 'PASS [REQ-9] 验收', tags: ['accept', 'REQ-9', 'result:fail'] });
-  assert.equal(r.action, 'create_bugfix');
+  assert.equal(r.action, 'open_github_issue');
 });
 
 test('routeEvent: unknown routing → escalate', () => {

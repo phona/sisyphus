@@ -124,6 +124,32 @@ const title = hookBody.title || issue.title || '';
 const event = hookBody.event || 'session.completed';
 const issueId = hookBody.issueId || issue.id || '';
 
+// Parse `## CI Result` block from issue description so Router can diagnose CI failures.
+// ci-runner appends this block via follow-up-issue; BKD stores it on issue.description.
+function parseCiResult(desc) {
+  const s = typeof desc === 'string' ? desc : '';
+  const m = s.match(/##\\s*CI Result\\s*([\\s\\S]+?)(?=\\n##\\s|\\n\\s*$|$)/);
+  if (!m) return null;
+  const body = m[1];
+  const pick = (k) => (body.match(new RegExp('^\\\\s*' + k + '\\\\s*:\\\\s*(.*?)\\\\s*$', 'm')) || [])[1] || null;
+  const failedTests = [];
+  const ft = body.match(/failed_tests\\s*:\\s*\\n([\\s\\S]*?)(?=\\n[a-z_]+:|$)/);
+  if (ft) {
+    for (const line of ft[1].split('\\n')) {
+      const mm = line.match(/^\\s*-\\s+(.+?)\\s*$/);
+      if (mm) failedTests.push(mm[1]);
+    }
+  }
+  const tail = body.match(/stderr_tail\\s*:\\s*\\|\\s*\\n([\\s\\S]+)$/);
+  return {
+    target: pick('target'),
+    exitCode: pick('exit_code') === null ? null : parseInt(pick('exit_code'), 10),
+    failedTests,
+    stderrTail: tail ? tail[1].replace(/^\\s{0,4}/gm, '') : '',
+  };
+}
+const _ciResult = parseCiResult(issue.description);
+
 // Dedup: skip if same (issueId + event + sorted-tags) seen within last 2 minutes.
 // Protects against feedback loops like spec→CI→comment_back→spec review again.
 const dedupKey = issueId + '|' + event + '|' + [...tags].sort().join(',');
@@ -150,6 +176,7 @@ return [{ json: {
   metadata: hookBody.metadata || {},
   _dedupSkip: !!dedupSkip,
   _dedupKey: dedupKey,
+  _ciResult,
 }}];
 """
 ))
@@ -231,6 +258,7 @@ action_order = [
     "create_test_fix",
     "create_reviewer",
     "create_accept",
+    "open_github_issue",
     "done_archive",
     "fanout_specs",
     "mark_spec_reviewed",
@@ -696,6 +724,89 @@ conns["[ACC] Cr"] = {"main": [[{"node": "[ACC] Id", "type": "main", "index": 0}]
 conns["[ACC] Id"] = {"main": [[{"node": "[ACC] Fu", "type": "main", "index": 0}]]}
 conns["[ACC] Fu"] = {"main": [[{"node": "[ACC] St", "type": "main", "index": 0}]]}
 
+# === Action: open_github_issue ===============================================
+# ci-integration fail (spec/test/unknown diag) 和 accept fail 都走这里。
+# 让一个 agent 用 gh CLI 在 repo 开 issue，把 BKD 里的 CI/Accept Result 转贴过去，
+# 让 repo owner 评审决定 spec 改动还是 code 改动，不再 auto-bugfix。
+y = 1040
+nodes.append(http_node(
+    "gh_cr", "[GH] Cr", 1580, y,
+    create_issue_body(
+        '[{{ $json.params.reqId }}] [GH-ISSUE] {{ $json.params.kind }}',
+        ['github-incident', '{{ $json.params.reqId }}', 'kind:{{ $json.params.kind }}'],
+        80),
+    rpc_id=80, retry=True, on_error="continueErrorOutput",
+))
+nodes.append(code_node("gh_id", "[GH] Id", 1800, y, ID_EXTRACT.replace("{PREV}", "[GH] Cr")))
+nodes.append(http_node(
+    "gh_fu", "[GH] Fu", 2020, y,
+    follow_up_body(
+        "{{ $json.iid }}",
+        "## 工具白名单 (HARD CONSTRAINT — 第一优先级)\n"
+        "仅允许: mcp__bkd__* / mcp__aissh-tao__*\n"
+        "绝对禁止: mcp__vibe_kanban__* / mcp__erpnext__* / Task / Agent / 其他未列出 MCP\n"
+        "\n─────────\n"
+        "## GitHub 工单 (GH-ISCALATOR)\n"
+        "AGENT_ROLE=gh-escalator-agent\n"
+        "REQ={{ $json.params.reqId }}\n"
+        "KIND={{ $json.params.kind }}        # ci-integration-fail | accept-fail\n"
+        "DIAGNOSIS={{ $json.params.diagnosis }}  # spec-bug | test-bug | unknown | (empty for accept)\n"
+        "SRC_ISSUE={{ $json.params.sourceIssueId }}\n"
+        "BRANCH={{ $json.params.branch }}\n"
+        "WORKDIR={{ $json.params.workdir }}\n"
+        "REPO_URL={{ $json.params.repoUrl }}\n"
+        "\n"
+        "## 职责\n"
+        "契约测试 / 验收测试 fail，不确定是代码错 (AI 能自修) 还是 spec/test 本身错 (需要人判)。\n"
+        "你的活: 把关键上下文转贴到 repo 的 GitHub issue，让 repo owner 评审。\n"
+        "本 BKD issue 保留为 incident 索引，不做实际修复。\n"
+        "\n"
+        "## 步骤\n"
+        "Step 1 拉 SRC_ISSUE 上下文 (mcp__bkd__get-issue):\n"
+        "  读 SRC_ISSUE title / tags / description / logs，提取 ## CI Result 或 ## Accept Result block。\n"
+        "\n"
+        "Step 2 (仅对 ci-integration-fail) 拉 stderr_tail + failed_tests 精华。\n"
+        "\n"
+        "Step 3 用 gh CLI 开 GitHub issue (通过 aissh 在 WORKDIR 下跑):\n"
+        "  cd $WORKDIR && gh issue create \\\n"
+        "    --repo $(git remote get-url origin | sed -E 's#.*[:/]([^/]+/[^/.]+)(\\.git)?$#\\1#') \\\n"
+        "    --title \"$REQ: $KIND ($DIAGNOSIS) needs human review\" \\\n"
+        "    --body \"$(cat <<EOF\n"
+        "$REQ 在 sisyphus 无人值守链路中卡在 **$KIND**，机械诊断为 **$DIAGNOSIS**。\n"
+        "因 契约测试/验收测试 是 LOCKED 边界，不能让 AI 自改；请人工判定：\n"
+        "- 是代码错 → 合并 fix 到 $BRANCH\n"
+        "- 是 spec 或 test 错 → 改 openspec/changes/$REQ/specs/ 或对应 test，重新跑 sisyphus\n"
+        "\n"
+        "### 上下文\n"
+        "- 触发 issue (BKD): $SRC_ISSUE\n"
+        "- 分支: $BRANCH\n"
+        "- 诊断: $DIAGNOSIS\n"
+        "\n"
+        "### 失败详情 (取自 BKD issue)\n"
+        "<贴 ## CI Result 或 ## Accept Result>\n"
+        "EOF\n"
+        ")\"\n"
+        "  记录 GitHub issue URL。\n"
+        "\n"
+        "Step 4 回写到本 BKD issue:\n"
+        "  A. follow-up-issue 贴 `## GH Issue`: url / created_at\n"
+        "  B. update-issue tags: [github-incident, $REQ, kind:$KIND, gh:<issue-number>]\n"
+        "  C. update-issue statusId=review  # 等人跟进",
+        81),
+    rpc_id=81, timeout=60000, on_error="continueRegularOutput",
+))
+nodes.append(http_node(
+    "gh_st", "[GH] St", 2240, y,
+    update_issue_body(
+        '{{ $node["[GH] Id"].json.iid }}',
+        ['github-incident', '{{ $node["[GH] Id"].json.params.reqId }}', 'kind:{{ $node["[GH] Id"].json.params.kind }}'],
+        82, status_id='working'),
+    rpc_id=82, timeout=10000, on_error="continueRegularOutput",
+))
+conns["[GH] Cr"] = {"main": [[{"node": "[GH] Id", "type": "main", "index": 0}]]}
+conns["[GH] Id"] = {"main": [[{"node": "[GH] Fu", "type": "main", "index": 0}]]}
+conns["[GH] Fu"] = {"main": [[{"node": "[GH] St", "type": "main", "index": 0}]]}
+
 # === Action: done_archive ====================================================
 # Accept pass → openspec apply + gh pr create + mark analyze parent done
 y = 960
@@ -1003,6 +1114,7 @@ conns["Dispatch Action"] = {"main": [
     [{"node": "[TFIX] Cr", "type": "main", "index": 0}],
     [{"node": "[RVW] Cr", "type": "main", "index": 0}],
     [{"node": "[ACC] Cr", "type": "main", "index": 0}],
+    [{"node": "[GH] Cr", "type": "main", "index": 0}],
     [{"node": "[DONE] Cr", "type": "main", "index": 0}],
     [{"node": "[FAN] Split specs", "type": "main", "index": 0}],
     [{"node": "[SPG] Mark spec-reviewed", "type": "main", "index": 0}],
@@ -1066,6 +1178,7 @@ ACTION_ROWS = [
     ('create_test_fix',  [('[TFIX] Cr','a1'), ('[TFIX] Id','a2'), ('[TFIX] Fu','a3'), ('[TFIX] St','a4')]),
     ('create_reviewer',  [('[RVW] Cr','a1'), ('[RVW] Id','a2'), ('[RVW] Fu','a3'), ('[RVW] St','a4')]),
     ('create_accept',    [('[ACC] Cr','a1'), ('[ACC] Id','a2'), ('[ACC] Fu','a3'), ('[ACC] St','a4')]),
+    ('open_github_issue', [('[GH] Cr','a1'), ('[GH] Id','a2'), ('[GH] Fu','a3'), ('[GH] St','a4')]),
     ('done_archive',     [('[DONE] Cr','a1'), ('[DONE] Id','a2'), ('[DONE] Fu','a3'), ('[DONE] St','a4')]),
     ('escalate',         [('[ESC] St (add escalate tag)','a1')]),
     ('skip',             [('[A] skip',              'a1')]),
