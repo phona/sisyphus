@@ -153,23 +153,26 @@ const _ciResult = (hookBody && hookBody._ciResult && typeof hookBody._ciResult =
   ? hookBody._ciResult
   : parseCiResult(issue.description);
 
-// Dedup: skip if same (issueId + event + sorted-tags + statusUpdatedAt) seen within TTL.
-// statusUpdatedAt is included so that legitimate retries (comment_back 把 issue 拉回
-// working 然后 agent 再跑一遍完成) 不被吃——每次 review/working 来回，status 会翻
-// 新的 timestamp。同时真重发（BKD 对同一事件重试投递）统一三元组，会被抓住。
-const statusUpdatedAt = issue.statusUpdatedAt || '';
-const dedupKey = issueId + '|' + event + '|' + [...tags].sort().join(',') + '|' + statusUpdatedAt;
+// Dedup by BKD-native event ID.
+//   session.completed 携带 executionId (UUID，session 唯一)；
+//   issue.updated 没 UUID，用 timestamp|issueId|event 作复合 ID（毫秒精度足够）。
+// True duplicates (BKD 重投递) 共享同 eventId；合法 agent 再跑会产生新 executionId。
+// 无 TTL、无 tags 对比、不需要 statusUpdatedAt 兜底。
+const eventId = hookBody.executionId
+              || ((hookBody.timestamp || '') + '|' + issueId + '|' + event);
 const staticData = $getWorkflowStaticData('global');
-staticData.dedup = staticData.dedup || {};
-const now = Date.now();
-const TTL = 30 * 60 * 1000;  // 30 min: spec agent fix cycles take 5-10 min
-// GC old entries
-for (const k of Object.keys(staticData.dedup)) {
-  if (now - staticData.dedup[k] > TTL) delete staticData.dedup[k];
+staticData.seen = staticData.seen || {};
+const dedupSkip = !!staticData.seen[eventId];
+if (!dedupSkip) {
+  staticData.seen[eventId] = Date.now();
+  // Cap at 5000 entries to bound memory; evict oldest 500 on overflow.
+  const keys = Object.keys(staticData.seen);
+  if (keys.length > 5000) {
+    keys.sort((a, b) => staticData.seen[a] - staticData.seen[b])
+        .slice(0, 500)
+        .forEach(k => delete staticData.seen[k]);
+  }
 }
-const lastSeen = staticData.dedup[dedupKey];
-const dedupSkip = lastSeen && (now - lastSeen < TTL);
-if (!dedupSkip) staticData.dedup[dedupKey] = now;
 
 return [{ json: {
   sid,
@@ -181,7 +184,7 @@ return [{ json: {
   priorStatusId,
   metadata: hookBody.metadata || {},
   _dedupSkip: !!dedupSkip,
-  _dedupKey: dedupKey,
+  _dedupKey: eventId,
   _ciResult,
 }}];
 """
