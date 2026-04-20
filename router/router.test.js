@@ -192,6 +192,13 @@ test('routeEvent: unknown routing → escalate', () => {
   assert.equal(r.action, 'escalate');
 });
 
+test('routeEvent: analyze agent dropped analyze tag → layer fallback fanout', () => {
+  const r = routeEvent({ event: 'session.completed', issueId: 'anz-1', issueNumber: 685, tags: ['layer:backend'] });
+  assert.equal(r.action, 'fanout_specs');
+  assert.equal(r.params.reqId, 'REQ-685');
+  assert.deepEqual(r.params.specs.sort(), ['accept-spec', 'contract-spec', 'dev-spec']);
+});
+
 test('expectedSpecsFor: all three layers → 5 specs', () => {
   const specs = expectedSpecsFor(['backend', 'frontend', 'data']);
   assert.deepEqual(specs.sort(), ['accept-spec', 'contract-spec', 'dev-spec', 'migration-spec', 'ui-spec']);

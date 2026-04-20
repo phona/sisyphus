@@ -131,6 +131,17 @@ export function routeEvent(webhookBody = {}, opts = {}) {
     return { action: 'skip', reason: 'already done', params: { issueId } };
   }
 
+  // L2.5: analyze-layer fallback — if agent overwrote tags leaving only layer:*,
+  // we can still infer analyze completion from layer tags + a reqId. reqId can come
+  // from either existing REQ-xxx tag or the issueNumber fallback.
+  if (ctx.routeKey === 'unknown' && ctx.layers.length > 0) {
+    const reqId = ctx.reqId || (issueNumber ? `REQ-${issueNumber}` : null);
+    if (reqId) {
+      ctx.reqId = reqId;
+      return routeAnalyze(ctx, issueId);
+    }
+  }
+
   // L3: dispatch by routeKey
   switch (ctx.routeKey) {
     case 'analyze':  return routeAnalyze(ctx, issueId);
