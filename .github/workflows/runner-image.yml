@@ -1,0 +1,69 @@
+name: runner-image
+
+on:
+  pull_request:
+    paths:
+      - 'runner/**'
+      - 'scripts/check-scenario-refs.sh'
+      - 'scripts/check-tasks-section-ownership.sh'
+      - 'scripts/pre-commit-acl.sh'
+      - '.github/workflows/runner-image.yml'
+  push:
+    branches: [main]
+    tags: ['runner-v*']
+    paths:
+      - 'runner/**'
+      - 'scripts/check-scenario-refs.sh'
+      - 'scripts/check-tasks-section-ownership.sh'
+      - 'scripts/pre-commit-acl.sh'
+      - '.github/workflows/runner-image.yml'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/sisyphus-runner
+
+jobs:
+  build:
+    # PR 只 build；push 到 main / tag 才推
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=match,pattern=runner-v(.*),group=1
+            type=match,pattern=runner-v(\d+\.\d+),group=1
+            type=match,pattern=runner-v(\d+),group=1
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/runner-v') }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          # context = repo root（Dockerfile 里 COPY scripts/... 走 repo 相对路径）
+          context: .
+          file: runner/Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=runner
+          cache-to: type=gha,scope=runner,mode=max
