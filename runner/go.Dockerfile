@@ -10,13 +10,21 @@ LABEL org.opencontainers.image.source=https://github.com/phona/sisyphus
 LABEL org.opencontainers.image.description="Sisyphus Go-only runner: Go + Docker DinD + openspec + sisyphus tools"
 LABEL org.opencontainers.image.licenses=MIT
 
-# ─── 1. 基础工具 + dockerd（DinD） ──────────────────────────────────────
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        docker.io iptables \
-        git curl jq make bash sudo \
-        ca-certificates gnupg \
-        nodejs npm \
-        ssh-client \
+# ─── 1. 基础工具 + Docker 官方仓库（DinD + compose v2 plugin） ──────────
+# Debian 自带的 docker.io 是 20.10，缺 docker-compose-plugin（v2 syntax `docker compose` 不可用）。
+# 走官方仓库装 docker-ce + docker-compose-plugin + buildx，跟生产 CI 对齐。
+RUN install -m 0755 -d /etc/apt/keyrings \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates gnupg curl iptables \
+        git jq make bash sudo nodejs npm ssh-client \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg \
+        -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+        > /etc/apt/sources.list.d/docker.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        docker-ce docker-ce-cli containerd.io \
+        docker-buildx-plugin docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/*
 
 # gh CLI（apt 仓库装）

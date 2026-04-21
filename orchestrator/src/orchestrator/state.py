@@ -46,6 +46,7 @@ class Event(StrEnum):
     ACCEPT_FAIL = "accept.fail"
     BUGFIX_DONE = "bugfix.done"
     BUGFIX_SPEC_BUG = "bugfix.spec-bug"         # diagnosis:spec-bug → 直接 escalate
+    BUGFIX_ENV_BUG = "bugfix.env-bug"           # diagnosis:env-bug → 直接 escalate（runner 镜像/调试机器问题，sisyphus 自身要修）
     TEST_FIX_DONE = "test-fix.done"
     REVIEWER_PASS = "reviewer.pass"
     REVIEWER_FAIL = "reviewer.fail"
@@ -109,6 +110,11 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     (ReqState.BUGFIX_RUNNING, Event.BUGFIX_SPEC_BUG):
         # bugfix-agent 自判 spec-bug：AI 不能动 spec，escalate 给人
         Transition(ReqState.ESCALATED, "escalate", "spec-bug needs human"),
+
+    (ReqState.BUGFIX_RUNNING, Event.BUGFIX_ENV_BUG):
+        # bugfix-agent 自判 env-bug：runner 镜像 / 调试机器问题，
+        # AI 改不动 sisyphus 自身环境 → escalate 通知运维修 runner
+        Transition(ReqState.ESCALATED, "escalate", "env-bug needs sisyphus runner fix"),
 
     (ReqState.TEST_FIX_RUNNING, Event.TEST_FIX_DONE):
         Transition(ReqState.REVIEWER_RUNNING, "create_reviewer"),

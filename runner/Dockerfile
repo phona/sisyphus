@@ -16,13 +16,21 @@ LABEL org.opencontainers.image.source=https://github.com/phona/sisyphus
 LABEL org.opencontainers.image.description="Sisyphus per-REQ runner: Flutter + Go + Docker DinD + openspec"
 LABEL org.opencontainers.image.licenses=MIT
 
-# ─── 1. 基础工具 + dockerd（DinD） ──────────────────────────────────────
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        docker.io iptables \
-        git gh curl jq make bash sudo \
-        ca-certificates gnupg \
-        nodejs npm \
-        ssh-client \
+# ─── 1. 基础工具 + Docker 官方仓库（含 docker-compose-plugin v2） ──────
+# Debian/Ubuntu 自带 docker.io 是 20.10，缺 docker-compose-plugin。
+# 走官方源装 docker-ce + compose plugin + buildx。
+RUN install -m 0755 -d /etc/apt/keyrings \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates gnupg curl iptables \
+        git gh jq make bash sudo nodejs npm ssh-client \
+    && curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+        > /etc/apt/sources.list.d/docker.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        docker-ce docker-ce-cli containerd.io \
+        docker-buildx-plugin docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/*
 
 # ─── 2. Go 1.22 ─────────────────────────────────────────────────────────

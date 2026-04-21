@@ -22,10 +22,14 @@ BRANCH_WORK=stage/bugfix-dev-{{ req_id }}-round-{{ round_n }}
 按"干活容器"段先 idempotent 拉起 sisyphus-runner-{{ req_id }}。
 
 ## 职责
-- 诊断 BUG 类型（CODE / TEST / SPEC）
+- 诊断 BUG 类型（CODE / TEST / SPEC / ENV）
 - 只能改业务代码（internal/ cmd/ main/），禁改 tests/, openspec/
 - 诊断到 TEST BUG: 加 tag `diagnosis:test-bug` 直接 move review（交 test-fix-agent）
 - 诊断到 SPEC BUG: 加 tag `diagnosis:spec-bug` 直接 move review（→ Escalate）
+- 诊断到 **ENV BUG**: 加 tag `diagnosis:env-bug` 直接 move review（→ Escalate）
+  - 例：runner 镜像缺工具/版本不对、调试机器磁盘满、网络断、外部依赖挂
+  - 凡是"代码/测试/spec 都没毛病，是 sisyphus 自身环境问题"就是 env-bug
+  - AI 改不动 sisyphus 自身环境（runner Dockerfile 在 sisyphus repo），escalate 通知运维
 - CODE BUG: 从 $BRANCH_BASE 拉 $BRANCH_WORK 子分支，改代码 commit push，**不 merge 到 feat**
 
 ## 步骤

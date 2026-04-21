@@ -21,6 +21,7 @@ EXPECTED = [
     (ReqState.ACCEPT_RUNNING,   Event.ACCEPT_FAIL,       ReqState.BUGFIX_RUNNING,   "open_gh_and_bugfix"),
     (ReqState.BUGFIX_RUNNING,   Event.BUGFIX_DONE,       ReqState.TEST_FIX_RUNNING, "create_test_fix"),
     (ReqState.BUGFIX_RUNNING,   Event.BUGFIX_SPEC_BUG,   ReqState.ESCALATED,        "escalate"),
+    (ReqState.BUGFIX_RUNNING,   Event.BUGFIX_ENV_BUG,    ReqState.ESCALATED,        "escalate"),
     (ReqState.TEST_FIX_RUNNING, Event.TEST_FIX_DONE,     ReqState.REVIEWER_RUNNING, "create_reviewer"),
     # 关键死锁修复：reviewer.pass → 重跑 ci-int（不是 dev）
     (ReqState.REVIEWER_RUNNING, Event.REVIEWER_PASS,     ReqState.CI_INT_RUNNING,   "create_ci_runner_integration"),

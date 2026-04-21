@@ -30,6 +30,7 @@ CASES: list[tuple[str, list[str], Event | None]] = [
     ("session.completed", ["accept", "REQ-1", "result:fail"],                Event.ACCEPT_FAIL),
     ("session.completed", ["bugfix", "REQ-1", "round-1"],                    Event.BUGFIX_DONE),
     ("session.completed", ["bugfix", "REQ-1", "diagnosis:spec-bug"],         Event.BUGFIX_SPEC_BUG),
+    ("session.completed", ["bugfix", "REQ-1", "diagnosis:env-bug"],          Event.BUGFIX_ENV_BUG),
     ("session.completed", ["test-fix", "REQ-1", "round-1"],                  Event.TEST_FIX_DONE),
     ("session.completed", ["reviewer", "REQ-1", "result:pass"],              Event.REVIEWER_PASS),
     ("session.completed", ["reviewer", "REQ-1", "result:fail"],              Event.REVIEWER_FAIL),

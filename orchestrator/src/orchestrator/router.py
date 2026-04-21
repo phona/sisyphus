@@ -43,6 +43,8 @@ def derive_event(event_type: str, tags: Iterable[str], result_tags_only: bool = 
     if "bugfix" in tagset:
         if "diagnosis:spec-bug" in tagset:
             return Event.BUGFIX_SPEC_BUG
+        if "diagnosis:env-bug" in tagset:
+            return Event.BUGFIX_ENV_BUG
         return Event.BUGFIX_DONE
 
     if "test-fix" in tagset:
