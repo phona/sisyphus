@@ -40,9 +40,21 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = True
 
-    # 临时开关：accept 阶段不调 BKD agent，直接 emit accept.pass 走到 done_archive
-    # 用于 ttpos-arch-lab 集成完成前测整链路。生产 / 真验收时设 false
-    skip_accept: bool = False
+    # ─── Mock / 调试开关 ──────────────────────────────────────────────────
+    # 临时跳过某 stage：对应 create_* action 不调 BKD agent，直接 emit *.done/.pass
+    # 用于：ttpos-arch-lab 没接 → skip_accept；调试状态机 / done_archive → skip 全部
+    # 生产环境全设 false
+    skip_analyze: bool = False        # analyze.done
+    skip_spec: bool = False           # spec.all-passed (跳整 spec stage)
+    skip_dev: bool = False            # dev.done
+    skip_ci_unit: bool = False        # ci-unit.pass
+    skip_ci_int: bool = False         # ci-int.pass
+    skip_accept: bool = False         # accept.pass (ttpos-arch-lab 接好前默认 true)
+    skip_reviewer: bool = False       # reviewer.pass (bugfix 子链)
+    skip_archive: bool = False        # archive.done (跳过真 PR 创建)
+
+    # 全部 skip = 状态机几秒走完，验 transition + cleanup，不动 BKD agent
+    test_mode: bool = False           # 等价于全部 skip_* = true
 
 
 settings = Settings()  # type: ignore[call-arg]

@@ -9,4 +9,12 @@ data:
   SISYPHUS_LOG_JSON: {{ .Values.env.log_json | quote }}
   SISYPHUS_BKD_BASE_URL: {{ .Values.env.bkd_base_url | quote }}
   SISYPHUS_WORKDIR_ROOT: {{ .Values.env.workdir_root | quote }}
+  SISYPHUS_SKIP_ANALYZE: {{ .Values.env.skip_analyze | quote }}
+  SISYPHUS_SKIP_SPEC: {{ .Values.env.skip_spec | quote }}
+  SISYPHUS_SKIP_DEV: {{ .Values.env.skip_dev | quote }}
+  SISYPHUS_SKIP_CI_UNIT: {{ .Values.env.skip_ci_unit | quote }}
+  SISYPHUS_SKIP_CI_INT: {{ .Values.env.skip_ci_int | quote }}
   SISYPHUS_SKIP_ACCEPT: {{ .Values.env.skip_accept | quote }}
+  SISYPHUS_SKIP_REVIEWER: {{ .Values.env.skip_reviewer | quote }}
+  SISYPHUS_SKIP_ARCHIVE: {{ .Values.env.skip_archive | quote }}
+  SISYPHUS_TEST_MODE: {{ .Values.env.test_mode | quote }}

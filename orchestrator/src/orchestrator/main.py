@@ -8,6 +8,7 @@ import structlog
 from fastapi import FastAPI
 
 from . import snapshot
+from .admin import admin as admin_api
 from .config import settings
 from .migrate import apply_pending
 from .store import db
@@ -30,6 +31,7 @@ _configure_logging()
 log = structlog.get_logger(__name__)
 app = FastAPI(title="sisyphus-orchestrator", version="0.1.0")
 app.include_router(webhook_api)
+app.include_router(admin_api)
 
 # 后台 task 句柄（shutdown 时取消）
 _bg_tasks: list[asyncio.Task] = []

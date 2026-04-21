@@ -6,14 +6,18 @@ import structlog
 from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
+from ..state import Event
 from ..store import db, req_state
 from . import register, short_title
+from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
 
 
 @register("create_reviewer")
 async def create_reviewer(*, body, req_id, tags, ctx):
+    if rv := skip_if_enabled("reviewer", Event.REVIEWER_PASS, req_id=req_id):
+        return rv
     proj = body.projectId
     round_n = (ctx or {}).get("bugfix_round") or 1
     branch = (ctx or {}).get("branch") or f"feat/{req_id}"

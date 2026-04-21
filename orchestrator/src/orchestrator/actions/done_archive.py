@@ -6,14 +6,18 @@ import structlog
 from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
+from ..state import Event
 from ..store import db, req_state
 from . import register, short_title
+from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
 
 
 @register("done_archive")
 async def done_archive(*, body, req_id, tags, ctx):
+    if rv := skip_if_enabled("archive", Event.ARCHIVE_DONE, req_id=req_id):
+        return rv
     proj = body.projectId
     branch = (ctx or {}).get("branch") or f"feat/{req_id}"
     workdir = (ctx or {}).get("workdir") or f"{settings.workdir_root}/feat-{req_id}"

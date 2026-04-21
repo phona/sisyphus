@@ -352,7 +352,8 @@ async def test_create_accept_skipped(monkeypatch):
     out = await mod.create_accept(
         body=make_body(issue_id="ci-int-1"), req_id="REQ-9", tags=["ci"], ctx={},
     )
-    assert out == {"skipped": True, "emit": "accept.pass"}
+    assert out["skipped"] is True
+    assert out["emit"] == "accept.pass"
     fake.create_issue.assert_not_called()
 
 

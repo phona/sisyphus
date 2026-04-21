@@ -13,13 +13,19 @@ import structlog
 from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
+from ..state import Event
 from ..store import db, req_state
 from . import register, short_title
+from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
 
 
 async def _create(*, body, req_id, tags, ctx, target: str):
+    skip_stage = "ci_unit" if target == "unit" else "ci_int"
+    emit_event = Event.CI_UNIT_PASS if target == "unit" else Event.CI_INT_PASS
+    if rv := skip_if_enabled(skip_stage, emit_event, req_id=req_id):
+        return rv
     proj = body.projectId
     branch = (ctx or {}).get("branch") or f"feat/{req_id}"
     workdir = f"{settings.workdir_root}/ci-{req_id}-{target}-{int(time.time())}"

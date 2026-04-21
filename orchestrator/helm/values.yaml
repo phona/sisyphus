@@ -74,9 +74,18 @@ env:
   workdir_root: /var/sisyphus-ci
   # 不存任何 project_id / repo_url —— project_id 来自 webhook，
   # repo_url 来自 agent 自己 `git remote get-url origin`
-  # 临时开关：true 时 accept stage 跳过 BKD agent 直接 emit accept.pass
-  # 用于 ttpos-arch-lab 集成完成前测整链路。生产设 false
-  skip_accept: false
+  # ─── Mock / 调试开关（生产全 false）─────────────────────────────
+  # 任一 stage skip = create_<stage> 不调 BKD agent，直接 emit done/pass
+  # test_mode: true = 全部 skip，秒级走完整 state 机
+  skip_analyze: false
+  skip_spec: false
+  skip_dev: false
+  skip_ci_unit: false
+  skip_ci_int: false
+  skip_accept: false       # ttpos-arch-lab 没接前可设 true
+  skip_reviewer: false
+  skip_archive: false
+  test_mode: false
 
 # ─── 敏感信息 ─────────────────────────────────────────────────────────────
 # 选 A：让 chart 自建 Secret（适合小规模 / dev）

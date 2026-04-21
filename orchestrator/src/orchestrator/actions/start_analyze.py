@@ -12,13 +12,17 @@ import structlog
 from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
+from ..state import Event
 from . import register
+from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
 
 
 @register("start_analyze")
 async def start_analyze(*, body, req_id, tags, ctx):
+    if rv := skip_if_enabled("analyze", Event.ANALYZE_DONE, req_id=req_id):
+        return rv
     proj = body.projectId
     issue_id = body.issueId
     # intent 触发时 title 是用户输入的原文（无 [REQ-xxx] [ANALYZE] 前缀）

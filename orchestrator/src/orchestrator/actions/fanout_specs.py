@@ -9,8 +9,10 @@ import structlog
 from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
+from ..state import Event
 from ..store import db, req_state
 from . import register, short_title
+from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
 
@@ -19,6 +21,8 @@ SPEC_STAGES = ("contract-spec", "acceptance-spec")
 
 @register("fanout_specs")
 async def fanout_specs(*, body, req_id, tags, ctx):
+    if rv := skip_if_enabled("spec", Event.SPEC_ALL_PASSED, req_id=req_id):
+        return rv
     proj = body.projectId
     workdir = f"{settings.workdir_root}/feat-{req_id}"
     spec_issue_ids = {}
