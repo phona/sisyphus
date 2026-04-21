@@ -6,6 +6,10 @@
 
 ─────────
 
+{% include "_shared/runner_container.md.j2" %}
+
+─────────
+
 ## BUG FIX (DEV-FIX)
 AGENT_ROLE=dev-fix-agent
 REQ={{ req_id }}
@@ -14,10 +18,8 @@ KIND={{ kind }}                 # ci-integration-fail | accept-fail
 SOURCE_ISSUE={{ source_issue_id }}
 BRANCH_BASE={{ branch }}
 BRANCH_WORK=stage/bugfix-dev-{{ req_id }}-round-{{ round_n }}
-WORKDIR={{ workdir }}
 
-> repo URL：在 session cwd 里 `REPO_URL=$(git remote get-url origin)`。
-> 多 repo 工作区下，先 cd 进 proposal.md 指定的 repo 子目录再取。
+按"干活容器"段先 idempotent 拉起 sisyphus-runner-{{ req_id }}。
 
 ## 职责
 - 诊断 BUG 类型（CODE / TEST / SPEC）
@@ -27,16 +29,13 @@ WORKDIR={{ workdir }}
 - CODE BUG: 从 $BRANCH_BASE 拉 $BRANCH_WORK 子分支，改代码 commit push，**不 merge 到 feat**
 
 ## 步骤
-Step 1 bootstrap:
-  REPO_URL=$(git remote get-url origin)   # 在 session cwd 里
-  cd $WORKDIR 不存在: git clone --branch $BRANCH_BASE $REPO_URL $WORKDIR
-  存在: cd $WORKDIR && git fetch origin && git reset --hard origin/$BRANCH_BASE
-  cd $WORKDIR && git checkout -B $BRANCH_WORK origin/$BRANCH_BASE
+Step 1 切到 work 分支:
+  docker exec $CONTAINER bash -c "git fetch origin && git checkout -B $BRANCH_WORK origin/$BRANCH_BASE"
 
 Step 2 读 SOURCE_ISSUE（mcp__bkd__get-issue）取 `## CI Result` 或 `## Accept Result`，
        看 stderr_tail / failed_tests 推断 root cause。
 
-Step 3 改代码（只改 internal/ cmd/ main/）→ commit → push 到 $BRANCH_WORK。
+Step 3 改代码（只改 internal/ cmd/ main/）→ docker exec 内 commit → push 到 $BRANCH_WORK。
 
 Step 4 写结果到**本 issue**：
   A. follow-up-issue 追加 `## Bugfix Result`: diagnosis / branch / commit_sha

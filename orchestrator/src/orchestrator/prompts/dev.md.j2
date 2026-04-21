@@ -6,14 +6,17 @@
 
 ─────────
 
+{% include "_shared/runner_container.md.j2" %}
+
+─────────
+
 ## 开发 (DEV)
 AGENT_ROLE=dev-agent
 REQ={{ req_id }}
 BRANCH={{ branch }}
-WORKDIR={{ workdir }}
 
-> repo URL：在 session cwd 里 `REPO_URL=$(git remote get-url origin)`。
-> 多 repo 工作区下，先 cd 进 proposal.md 指定的 repo 子目录再取。
+按"干活容器"段先 idempotent 拉起 sisyphus-runner-{{ req_id }}。spec/analyze 已经把
+/workspace bootstrap 好；你直接 docker exec 进去干。
 
 前置：contract-test-agent + accept-test-agent 已产出契约/验收 spec + 测试骨架。
 你负责实现业务代码 + unit test，让上游契约和验收测试全部跑绿。
@@ -24,20 +27,23 @@ WORKDIR={{ workdir }}
    - contract.spec.yaml（若有，是 API/IO LOCKED 定义）
    - specs/<capability>/spec.md（Scenario 列表，LOCKED）
    - tasks.md 的 `## Stage: implementation` section（待你填细节 + 勾完成）
-2. bootstrap WORKDIR（在 vm-node04 上）：
-   - REPO_URL 来自 session cwd 的 `git remote get-url origin`
-   - 不存在：`git clone --branch $BRANCH $REPO_URL $WORKDIR`
-   - 存在：`cd $WORKDIR && git fetch origin && git reset --hard origin/$BRANCH`
-3. 从 $BRANCH 拉 stage/$REQ-dev 子分支
-4. **填 tasks.md 的 Stage: implementation section**：先把 analyze 留的
+2. 同步分支：
+   ```
+   docker exec $CONTAINER bash -c "git fetch origin && git reset --hard origin/$BRANCH"
+   docker exec $CONTAINER bash -c "git checkout -B stage/$REQ-dev origin/$BRANCH"
+   ```
+3. **填 tasks.md 的 Stage: implementation section**：先把 analyze 留的
    `- [ ] TODO: ...` 换成具体任务清单（依然 `- [ ]` 开头）
-5. 实现业务代码（internal/ cmd/）+ 同目录 unit test
-6. 通过 mcp__aissh-tao__exec_run 在 vm-node04 跑 `go vet` / `go build` /
-   `make ci-unit-test` 验证
-7. **每完成一条就把对应 checkbox 改成 `- [x]`**（PR 审查的人要看 tick 率
+4. 实现业务代码（internal/ cmd/）+ 同目录 unit test
+5. 容器内验证：`docker exec $CONTAINER bash -c "go vet ./... && go build ./... && make ci-unit-test"`
+6. **每完成一条就把对应 checkbox 改成 `- [x]`**（PR 审查的人要看 tick 率
    判断完成度）。最终 commit 里所有 Stage: implementation 下的 checkbox 都
    应是 `[x]`。某条做不完、放弃，改成 `- [~] <原因>` 标注。
-8. ONE 干净 commit + push 到 stage/$REQ-dev
+7. ONE 干净 commit + push 到 stage/$REQ-dev
+8. **transit-test 前提 PR**：CI 流水会 build image push 到
+   `ghcr.io/zoneasetech/<service>:REQ-{{ req_id }}-sha-<8>`。push 完
+   你必须 `update-issue` 给本 dev issue 加 tag `image-tag:REQ-{{ req_id }}-sha-<8>`，
+   sisyphus accept stage 要读这个 tag 拉 lab。
 9. move review
 
 ## 禁改（pre-commit ACL 会拦）

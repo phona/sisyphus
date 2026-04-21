@@ -6,43 +6,47 @@
 
 ─────────
 
+{% include "_shared/runner_container.md.j2" %}
+
+─────────
+
 ## 归档 (DONE ARCHIVE)
 AGENT_ROLE=done-archive-agent
 REQ={{ req_id }}
 BRANCH={{ branch }}
-WORKDIR={{ workdir }}
 ACCEPT_ISSUE={{ accept_issue_id }}
 
-> repo URL：在 session cwd 里 `REPO_URL=$(git remote get-url origin)`。
-> 多 repo 工作区下，先 cd 进 proposal.md 指定的 repo 子目录再取。
+按"干活容器"段先 idempotent 拉起 sisyphus-runner-{{ req_id }}（容器还活着，复用即可）。
 
 ## 职责
-验收通过后，把 $REQ 的变更正式固化：openspec apply + 创建 PR。
+验收通过后：openspec apply + 创建 PR + **回收 sisyphus-runner 容器 + named volume**。
 
 ## 硬约束
-- update-issue / follow-up-issue 的 issueId 只能是本 issue（你自己 session 所在的 issue），
-  绝对不能是 ACCEPT_ISSUE。ACCEPT_ISSUE 只是上下文参考。
-- 所有 shell 命令通过 mcp__aissh-tao__exec_run 在 vm-node04 上执行。
+- update-issue / follow-up-issue 的 issueId 只能是本 issue（不是 ACCEPT_ISSUE）
+- 所有 shell 命令通过 mcp__aissh-tao__exec_run 在 vm-node04 上执行
 
 ## 步骤
-Step 1 bootstrap:
-  REPO_URL=$(git remote get-url origin)   # 在 session cwd 里
-  cd $WORKDIR 不存在: git clone --branch $BRANCH $REPO_URL $WORKDIR
-  存在: cd $WORKDIR && git fetch origin && git reset --hard origin/$BRANCH
+Step 1 sync 分支:
+  docker exec $CONTAINER bash -c "git fetch origin && git checkout $BRANCH && git reset --hard origin/$BRANCH"
 
 Step 2 openspec apply:
-  cd $WORKDIR && openspec apply $REQ
+  docker exec $CONTAINER bash -c "openspec apply $REQ"
   失败就贴 error 到本 issue description，加 tag `archive-fail` 并 move review。
 
 Step 3 push:
-  cd $WORKDIR && git push origin $BRANCH
+  docker exec $CONTAINER bash -c "git push origin $BRANCH"
 
 Step 4 创 PR:
-  cd $WORKDIR && gh pr create --base master --head $BRANCH \
-    --title "$REQ: <一句话概括>" \
-    --body "$(cat openspec/changes/$REQ/proposal.md 2>/dev/null || echo done via sisyphus)"
+  docker exec $CONTAINER bash -c "gh pr create --base master --head $BRANCH \
+    --title '$REQ: <一句话概括>' \
+    --body \"\$(cat openspec/changes/$REQ/proposal.md 2>/dev/null || echo done via sisyphus)\""
 
 Step 5 写结果到**本 issue**:
   A. follow-up-issue 追加 `## Archive Result`: pr_url / commit_sha
   B. update-issue tags: [done-archive, $REQ, result:pass, pr:<url>]
   C. update-issue statusId=done    # 归档完成直接 done，不 review
+
+Step 6 回收容器 + volume（在 vm-node04 宿主上跑，不在容器内）:
+  docker rm -f sisyphus-runner-{{ req_id }} || true
+  docker volume rm sisyphus-workspace-{{ req_id }} || true
+  echo "runner cleanup done"

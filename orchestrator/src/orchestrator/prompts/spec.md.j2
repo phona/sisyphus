@@ -6,6 +6,10 @@
 
 ─────────
 
+{% include "_shared/runner_container.md.j2" %}
+
+─────────
+
 ## SPEC ({{ spec_stage }})
 AGENT_ROLE={{ spec_stage }}-agent
 REQ={{ req_id }}
@@ -38,11 +42,20 @@ Scenario 命名 `FEATURE-A<N>`（Given/When/Then，**用户视角**）。
 {% endif %}
 
 ## 自检 lint（move review 前必须做，不起独立 CI issue）
-通过 aissh 在 vm-node04 上跑：
+
+按"干活容器"段：先 idempotent 拉起 sisyphus-runner，然后所有命令包成 `docker exec`：
+
+**sisyphus 合约校验（不依赖 repo Makefile）**：
+```bash
+docker exec $CONTAINER bash -c "openspec validate openspec/changes/$REQ"
+docker exec $CONTAINER bash -c "check-scenario-refs.sh"
 ```
-WORKDIR={{ workdir }}
-cd $WORKDIR && BASE_REV=origin/master make ci-lint
+
+**repo 自检（如果 repo 自带）**：
+```bash
+docker exec $CONTAINER bash -c "BASE_REV=origin/master make ci-lint" || true
 ```
+
 任一挂了 → 修 → commit + push → 再跑，直到绿。
 
 ## 完成时

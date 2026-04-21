@@ -6,15 +6,17 @@
 
 ─────────
 
+{% include "_shared/runner_container.md.j2" %}
+
+─────────
+
 ## REVIEWER
 AGENT_ROLE=reviewer-agent
 REQ={{ req_id }}
 ROUND={{ round_n }}
 BRANCH_BASE={{ branch }}
-WORKDIR={{ workdir }}
 
-> repo URL：在 session cwd 里 `REPO_URL=$(git remote get-url origin)`。
-> 多 repo 工作区下，先 cd 进 proposal.md 指定的 repo 子目录再取。
+按"干活容器"段先 idempotent 拉起 sisyphus-runner-{{ req_id }}。
 
 ## 职责
 比较两条分支 diff 选胜者 merge 到 $BRANCH_BASE：
@@ -28,16 +30,14 @@ WORKDIR={{ workdir }}
 4. 看能不能都合（不冲突）：都合
 
 ## 步骤
-Step 1 bootstrap:
-  REPO_URL=$(git remote get-url origin)   # 在 session cwd 里
-  cd $WORKDIR 不存在: git clone --branch $BRANCH_BASE $REPO_URL $WORKDIR
-  存在: cd $WORKDIR && git fetch origin && git reset --hard origin/$BRANCH_BASE
+Step 1 sync base:
+  docker exec $CONTAINER bash -c "git fetch origin && git checkout $BRANCH_BASE && git reset --hard origin/$BRANCH_BASE"
 
 Step 2 fetch 两条候选分支:
-  cd $WORKDIR && git fetch origin stage/bugfix-dev-$REQ-round-$ROUND stage/bugfix-test-$REQ-round-$ROUND
+  docker exec $CONTAINER bash -c "git fetch origin stage/bugfix-dev-$REQ-round-$ROUND stage/bugfix-test-$REQ-round-$ROUND"
 
 Step 3 对照 spec 比较 diff，选胜者：
-  cd $WORKDIR && git merge --no-ff origin/<胜者分支>
+  docker exec $CONTAINER bash -c "git merge --no-ff origin/<胜者分支>"
   解冲突（若有）→ commit → push origin $BRANCH_BASE
 
 Step 4 写结果到**本 issue**：

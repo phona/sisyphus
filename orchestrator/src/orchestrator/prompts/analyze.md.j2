@@ -6,12 +6,17 @@
 
 ─────────
 
+{% include "_shared/runner_container.md.j2" %}
+
+─────────
+
 ## 需求分析 (ANALYZE)
 AGENT_ROLE=analyze-agent
 REQ={{ req_id }}
 
-你的工作目录已 checkout 好对应仓库（多 repo 工作区下，按需 cd 进 repo 子目录）。
-需要 repo URL 时自己 `git remote get-url origin`。
+按"干活容器"段先拉起 sisyphus-runner-{{ req_id }} + bootstrap /workspace（你是 analyze
+stage，是首次进 REQ，要走完 bootstrap 把 repo clone 进去）。
+后续每条命令都是 `docker exec $CONTAINER bash -c "..."`。
 
 ## 职责：需求拆解 + 立框架
 - 看清需求要改什么 / 怎么改 / 联动哪些仓库
