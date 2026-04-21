@@ -46,8 +46,6 @@ ingress:
       paths:
         - path: /bkd-events
           pathType: Prefix
-        - path: /bkd-issue-updated
-          pathType: Prefix
         - path: /healthz
           pathType: Prefix
   tls: []

@@ -10,12 +10,11 @@
 {{- $scheme := $.Values.ingress.tls | empty | ternary "http" "https" }}
    {{ $scheme }}://{{ .host }}/healthz
    {{ $scheme }}://{{ .host }}/bkd-events
-   {{ $scheme }}://{{ .host }}/bkd-issue-updated
 {{- end }}
 {{- end }}
 
-3. BKD webhook 配置：
-   - URL：上面的 /bkd-events 和 /bkd-issue-updated
+3. BKD webhook 配置（所有事件类型都打这一个 URL）：
+   - URL：上面的 /bkd-events
    - 请求头必须带：X-Sisyphus-Token: <你设的 webhook_token>
 {{- if .Values.secret.create }}
    （chart 自建的 Secret，token 来自 values.secret.webhook_token）

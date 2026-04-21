@@ -1,6 +1,7 @@
 """Webhook handler：BKD → 状态机 → action dispatch。
 
-唯一入口。/bkd-events 收 session.completed/failed，/bkd-issue-updated 收 issue.updated。
+唯一入口 /bkd-events，收所有 BKD webhook（issue.updated / session.completed / session.failed）。
+handler 内部按 body.event 字段分流。
 内部 decide+CAS+dispatch 走 engine.step（让 action 也能链式 emit 事件）。
 """
 from __future__ import annotations
@@ -53,7 +54,6 @@ class WebhookBody(BaseModel):
 
 
 @api.post("/bkd-events")
-@api.post("/bkd-issue-updated")
 async def webhook(
     body: WebhookBody,
     x_sisyphus_token: str | None = Header(default=None),
