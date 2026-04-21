@@ -40,5 +40,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = True
 
+    # 临时开关：accept 阶段不调 BKD agent，直接 emit accept.pass 走到 done_archive
+    # 用于 ttpos-arch-lab 集成完成前测整链路。生产 / 真验收时设 false
+    skip_accept: bool = False
+
 
 settings = Settings()  # type: ignore[call-arg]

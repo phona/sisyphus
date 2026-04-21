@@ -74,6 +74,9 @@ env:
   workdir_root: /var/sisyphus-ci
   # 不存任何 project_id / repo_url —— project_id 来自 webhook，
   # repo_url 来自 agent 自己 `git remote get-url origin`
+  # 临时开关：true 时 accept stage 跳过 BKD agent 直接 emit accept.pass
+  # 用于 ttpos-arch-lab 集成完成前测整链路。生产设 false
+  skip_accept: false
 
 # ─── 敏感信息 ─────────────────────────────────────────────────────────────
 # 选 A：让 chart 自建 Secret（适合小规模 / dev）

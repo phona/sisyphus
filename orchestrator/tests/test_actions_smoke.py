@@ -333,11 +333,27 @@ async def test_create_accept(monkeypatch):
     fake.create_issue.return_value = FakeIssue(id="acc-1")
     patch_bkd(monkeypatch, "create_accept", fake)
     patch_db(monkeypatch, "create_accept")
+    monkeypatch.setattr("orchestrator.actions.create_accept.settings.skip_accept", False)
     out = await mod.create_accept(
         body=make_body(issue_id="ci-int-1"), req_id="REQ-9", tags=["ci"],
         ctx={"branch": "feat/REQ-9"},
     )
     assert out == {"accept_issue_id": "acc-1"}
+
+
+@pytest.mark.asyncio
+async def test_create_accept_skipped(monkeypatch):
+    """skip_accept=True 直接 emit accept.pass，不调 BKD"""
+    from orchestrator.actions import create_accept as mod
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, "create_accept", fake)
+    patch_db(monkeypatch, "create_accept")
+    monkeypatch.setattr("orchestrator.actions.create_accept.settings.skip_accept", True)
+    out = await mod.create_accept(
+        body=make_body(issue_id="ci-int-1"), req_id="REQ-9", tags=["ci"], ctx={},
+    )
+    assert out == {"skipped": True, "emit": "accept.pass"}
+    fake.create_issue.assert_not_called()
 
 
 # ─── 重要：BKD merge_tags_and_update 的 tag merge 逻辑 ─────────────────────
