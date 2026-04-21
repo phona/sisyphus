@@ -35,9 +35,11 @@ async def step(
 
     返回最后一次 dispatch 的结果 dict。
     """
-    if depth > 4:
+    # 12 足够：test_mode 全跳要 7 emit 才到 done；正常流程 emit 一般 ≤2。
+    # 用来防 emit 死循环，不是常规流量限制。
+    if depth > 12:
         log.error("engine.recursion_too_deep", req_id=req_id, evt=event.value)
-        return {"action": "error", "reason": "engine recursion >4"}
+        return {"action": "error", "reason": "engine recursion >12"}
 
     transition = decide(cur_state, event)
     if transition is None:

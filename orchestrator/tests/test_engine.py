@@ -172,5 +172,5 @@ async def test_recursion_depth_guard(stub_actions, monkeypatch):
         pool, body=body, req_id="REQ-1", project_id="p", tags=[],
         cur_state=ReqState.SPECS_RUNNING, ctx={}, event=Event.SPEC_DONE,
     )
-    # depth 限制 4 次，加上首次共 5 次以内
-    assert len(calls) <= 6
+    # depth 限制 12 次，加上首次共 13 次以内（比例足以容纳 test_mode 全跳 7 emit）
+    assert len(calls) <= 14
