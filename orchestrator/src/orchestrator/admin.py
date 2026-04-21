@@ -110,11 +110,12 @@ async def force_escalate(
 async def metrics(
     authorization: str | None = Header(default=None),
 ) -> dict:
-    """关键运行指标（JSON）。curl / Prometheus textfile 都能用。
+    """关键运行指标（JSON），就是 SQL view 的包装便于 curl / UI 拉。
 
     - 状态分布
     - per-stage 聚合（平均 + P50 + P95 + 次数，从 stage_stats view 来）
     - escalated REQ 的失败原因 Top N
+    - 最近 20 个 REQ 简表
     """
     _verify_token(authorization)
     pool = db.get_pool()
