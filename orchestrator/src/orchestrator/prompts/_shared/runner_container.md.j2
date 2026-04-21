@@ -18,6 +18,7 @@ Flutter 项目用 `ghcr.io/phona/sisyphus-runner:main`（~5GB，加 Flutter SDK 
 CONTAINER=sisyphus-runner-{{ req_id }}
 docker inspect $CONTAINER >/dev/null 2>&1 || docker run -d --name $CONTAINER \
   --privileged --restart=unless-stopped \
+  --device /dev/fuse \
   -v sisyphus-workspace-{{ req_id }}:/workspace -w /workspace \
   ghcr.io/phona/sisyphus-runner-go:main sleep infinity
 ```

@@ -8,11 +8,18 @@ set -euo pipefail
 if [[ "${SISYPHUS_NO_DOCKER:-0}" != "1" ]]; then
   if [[ ! -S /var/run/docker.sock ]]; then
     echo "[sisyphus-entrypoint] starting dockerd in background..."
-    # 在 K3s/K8s 嵌套环境里 overlay2 不可用（双层 overlayfs），用 vfs 兜底
-    # vfs 性能差但 nested 安全。要更快可装 fuse-overlayfs 包并改成它。
+    # 嵌套 overlayfs 内核不允许叠两层 → 用 fuse-overlayfs（用户态实现，3-5x 省空间 vs vfs）
+    # 前提：宿主有 /dev/fuse，docker run 时 --device /dev/fuse 挂进来
+    # 没有 /dev/fuse 时自动退回 vfs（容灾）
+    if [[ -c /dev/fuse ]]; then
+      DRIVER=fuse-overlayfs
+    else
+      echo "[sisyphus-entrypoint] /dev/fuse missing, falling back to vfs (slow, 10x disk)" >&2
+      DRIVER=vfs
+    fi
     nohup dockerd \
       --host=unix:///var/run/docker.sock \
-      --storage-driver=vfs \
+      --storage-driver=$DRIVER \
       > /var/log/dockerd.log 2>&1 &
     # 等 socket（最多 30s）
     for _ in $(seq 1 30); do

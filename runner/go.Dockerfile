@@ -25,6 +25,7 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && apt-get update && apt-get install -y --no-install-recommends \
         docker-ce docker-ce-cli containerd.io \
         docker-buildx-plugin docker-compose-plugin \
+        fuse-overlayfs \
     && rm -rf /var/lib/apt/lists/*
 
 # gh CLI（apt 仓库装）

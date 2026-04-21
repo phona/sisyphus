@@ -184,6 +184,29 @@ Settings → Change visibility → Public。
 
 ---
 
+## 11. DinD 嵌套 overlayfs 只能 vfs / fuse-overlayfs
+
+**症状**：runner 容器里 `dockerd --storage-driver=overlay2` 启动挂：
+```
+failed to mount overlay: operation not permitted storage-driver=overlay2
+```
+
+**根因**：Linux overlayfs 内核实现不允许嵌套——宿主（K3s pod）已是 overlayfs 之上了，
+再在里面叠一层不给过。
+
+**初期修复（v0.1.0）**：`--storage-driver=vfs` 兜底。能跑但每层完整复制，空间放大 10x。
+vm-node04 49GB 只能扛 1 并发 REQ，ci-int 跑几次就 disk-pressure。
+
+**v0.1.1 改造**：换 fuse-overlayfs（用户态 overlay 实现，podman/buildah 默认用）。
+- runner Dockerfile：`apt-get install -y fuse-overlayfs`
+- entrypoint.sh：`--storage-driver=fuse-overlayfs`（检测 `/dev/fuse` 存在，不存在退回 vfs）
+- runner_container.md.j2：`docker run` 加 `--device /dev/fuse`
+
+宿主（vm-node04）要求：`ls /dev/fuse && lsmod | grep fuse`。Ubuntu/Debian 默认都有。
+空间从 10x 放大降到 ~1.2x，单 REQ 峰值 15GB → 5GB。性能比 overlay2 慢 20-30%，可接受。
+
+---
+
 ## 10. asyncpg placeholder 计数严格 / datetime 不接 ISO 字符串
 
 **a. SQL 里有 `$N` placeholder 就必须传足 N 个 arg**，否则
