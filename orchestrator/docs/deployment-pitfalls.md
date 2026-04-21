@@ -62,19 +62,39 @@ commit `bf5e8c2`。
 
 ---
 
-## 4. psql 把 yoyo 的 `-- !rollback` 当注释跑了 DROP
+## 4. yoyo SQL migration **不支持** 内联 `-- !rollback` 段（关键坑）
 
-**症状**：手工 `psql -f 0001_init.sql` 后 `\dt` 显示 `Did not find any tables`。
+**症状**：
+- 手工 `psql -f 0001_init.sql` 后 `\dt` 全空
+- 让 yoyo 自己 apply 也一样 —— 日志看 "applying step 0...6" 一共 7 步，DB 却没表
+- snapshot loop 报 `relation "req_state" does not exist`
 
-**根因**：`-- !rollback` 是 yoyo 的分段约定，psql 完全不理，把它后面的 `DROP TABLE` 也当成 forward SQL 执行了。
+**根因**：yoyo 的 SQL migration 解析器**不识别** `-- !rollback` 作为分段标记。
+它把整个 .sql 文件当 forward 一把跑 —— 含我写的 DROP 段。所以 yoyo apply 真把表
+建了又立刻 drop 了，但 yoyo 仍记录"apply 成功"，下次启动就以为已 apply 跳过，
+表永远不会回来。
 
-**修复**：手工 apply 时只取 `-- !rollback` 之前的 forward 段：
-```bash
-awk '/^-- !rollback/{exit} {print}' migrations/0001_init.sql > /tmp/forward.sql
-psql ... -f /tmp/forward.sql
+**正确做法**：rollback 必须放**单独文件** `<id>.rollback.sql`：
+```
+migrations/
+  0001_init.sql            # 只 forward (CREATE TABLE...)
+  0001_init.rollback.sql   # rollback (DROP TABLE...) — yoyo apply 不读这个
 ```
 
-正常情况让 yoyo 自己跑（`apply_pending` 在容器 startup 调），不要手工 psql。
+**踩了之后怎么救**（DB 状态卡住了）：
+```bash
+# 1. 清掉 yoyo 的"已 apply"假记录
+PG_PASS=$(kubectl -n sisyphus get secret sisyphus-postgresql -o jsonpath='{.data.password}' | base64 -d)
+kubectl -n sisyphus exec sisyphus-postgresql-0 -- env PGPASSWORD="$PG_PASS" \
+  psql -U sisyphus -d sisyphus -c "DELETE FROM _yoyo_migration WHERE migration_id LIKE '0001%';"
+# 2. 推一份正确格式的 0001_init.sql + 0001_init.rollback.sql
+# 3. 重启 pod，yoyo 重新 apply forward → 表回来
+
+# 真要紧急手工 apply（不走 yoyo），用 awk 只取 forward：
+# （新格式不需要这一步，已无内联 rollback）
+```
+
+commit `<本次 fix>`。
 
 ---
 

@@ -27,6 +27,14 @@ def test_migrations_parseable():
     assert ids and ids == sorted(ids), ids
 
 
-def test_0001_has_rollback():
-    body = (Path(_DEFAULT_MIGRATIONS_DIR) / "0001_init.sql").read_text()
-    assert "CREATE TABLE" in body and "-- !rollback" in body
+def test_0001_forward_only_no_inline_rollback():
+    """yoyo SQL 不支持内联 -- !rollback 段（会被当 forward 跑）；
+    rollback 必须放单独 .rollback.sql 文件。"""
+    base = Path(_DEFAULT_MIGRATIONS_DIR) / "0001_init.sql"
+    body = base.read_text()
+    assert "CREATE TABLE" in body
+    assert "-- !rollback" not in body
+    assert "DROP TABLE" not in body
+    rb = Path(_DEFAULT_MIGRATIONS_DIR) / "0001_init.rollback.sql"
+    assert rb.is_file()
+    assert "DROP TABLE" in rb.read_text()
