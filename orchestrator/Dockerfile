@@ -4,21 +4,25 @@ FROM python:3.12-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.5.4 /uv /usr/local/bin/uv
 
 WORKDIR /app
+# VIRTUAL_ENV 让 uv pip install 默认装到 /opt/venv（不传 --python 也行）
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=never \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:$PATH"
 
-# 单独 copy pyproject 利于 docker layer 缓存
+# 先建 venv + 装运行依赖（独立 layer，pyproject 不变就走缓存）
 COPY pyproject.toml ./
-RUN uv venv /opt/venv && \
-    UV_PROJECT_ENVIRONMENT=/opt/venv uv pip install \
+RUN uv venv $VIRTUAL_ENV && \
+    uv pip install \
         fastapi 'uvicorn[standard]' pydantic pydantic-settings httpx \
         asyncpg jinja2 structlog yoyo-migrations psycopg2-binary
 
+# 装本包（不重装 deps）
 COPY src/ ./src/
 COPY migrations/ ./migrations/
-RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv pip install --no-deps .
+RUN uv pip install --no-deps .
 
 # ─── runtime ────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
