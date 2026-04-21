@@ -73,6 +73,8 @@ BKD webhook 配置改为指向：
 
 每个 webhook 必须带 header `X-Sisyphus-Token: <你 values 里 webhook_token>`。
 
+> 部署踩过的坑（uv/yoyo/helm/GHCR）见 [docs/deployment-pitfalls.md](docs/deployment-pitfalls.md)。
+
 ## 开发
 
 ```
