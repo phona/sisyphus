@@ -1878,6 +1878,270 @@
       }
     },
     {
+      "id": "ci_gate_list",
+      "name": "[CI Gate] List",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        1130
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":91,\"method\":\"tools/call\",\"params\":{\"name\":\"list-issues\",\"arguments\":{\"projectId\":\"{{ $node[\"[ENTRY] Ctx 提取\"].json.projectId }}\",\"limit\":200}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 10000
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "ci_gate_check",
+      "name": "[CI Gate] Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1530,
+        1130
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const raw = $node['[CI Gate] List'].json;\nconst src = raw && (raw.data || raw.body || raw);\nconst text = typeof src === 'string' ? src : String(src);\nconst m = text.match(/data:\\s*(\\{[\\s\\S]*?\\})\\s*$/m);\nlet issues = [];\nif (m) {\n  try {\n    const env = JSON.parse(m[1]);\n    const c = env.result && Array.isArray(env.result.content) ? env.result.content[0] : null;\n    if (c && typeof c.text === 'string') issues = JSON.parse(c.text);\n  } catch {}\n}\nif (!Array.isArray(issues)) issues = [];\nconst p = $node['Router'].json.params || {};\n\nconst existing = issues.filter(i =>\n  Array.isArray(i.tags) &&\n  i.tags.includes('ci') &&\n  i.tags.includes(p.reqId) &&\n  i.tags.includes('target:' + p.target) &&\n  i.statusId !== 'done'\n);\nreturn [{ json: { ...$node['Router'].json, shouldProceed: existing.length === 0, existingCount: existing.length } }];\n"
+      }
+    },
+    {
+      "id": "ci_gate_if",
+      "name": "[CI Gate] If",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1620,
+        1130
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              },
+              "leftValue": "={{ $json.shouldProceed }}",
+              "rightValue": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "acc_gate_list",
+      "name": "[ACC Gate] List",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        2030
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":92,\"method\":\"tools/call\",\"params\":{\"name\":\"list-issues\",\"arguments\":{\"projectId\":\"{{ $node[\"[ENTRY] Ctx 提取\"].json.projectId }}\",\"limit\":200}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 10000
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "acc_gate_check",
+      "name": "[ACC Gate] Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1530,
+        2030
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const raw = $node['[ACC Gate] List'].json;\nconst src = raw && (raw.data || raw.body || raw);\nconst text = typeof src === 'string' ? src : String(src);\nconst m = text.match(/data:\\s*(\\{[\\s\\S]*?\\})\\s*$/m);\nlet issues = [];\nif (m) {\n  try {\n    const env = JSON.parse(m[1]);\n    const c = env.result && Array.isArray(env.result.content) ? env.result.content[0] : null;\n    if (c && typeof c.text === 'string') issues = JSON.parse(c.text);\n  } catch {}\n}\nif (!Array.isArray(issues)) issues = [];\nconst p = $node['Router'].json.params || {};\n\nconst existing = issues.filter(i =>\n  Array.isArray(i.tags) &&\n  i.tags.includes('accept') &&\n  i.tags.includes(p.reqId) &&\n  i.statusId !== 'done'\n);\nreturn [{ json: { ...$node['Router'].json, shouldProceed: existing.length === 0, existingCount: existing.length } }];\n"
+      }
+    },
+    {
+      "id": "acc_gate_if",
+      "name": "[ACC Gate] If",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1620,
+        2030
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              },
+              "leftValue": "={{ $json.shouldProceed }}",
+              "rightValue": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "gh_gate_list",
+      "name": "[GH Gate] List",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        2210
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api/mcp",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={\"jsonrpc\":\"2.0\",\"id\":93,\"method\":\"tools/call\",\"params\":{\"name\":\"list-issues\",\"arguments\":{\"projectId\":\"{{ $node[\"[ENTRY] Ctx 提取\"].json.projectId }}\",\"limit\":200}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json, text/event-stream"
+            },
+            {
+              "name": "Coder-Session-Token",
+              "value": "GRvtsFrbNV-7fX1P2rwfDRKwnmXsSYQEn"
+            },
+            {
+              "name": "Mcp-Session-Id",
+              "value": "={{ $node[\"[ENTRY] Ctx 提取\"].json.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 10000
+        },
+        "onError": "continueRegularOutput"
+      }
+    },
+    {
+      "id": "gh_gate_check",
+      "name": "[GH Gate] Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1530,
+        2210
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const raw = $node['[GH Gate] List'].json;\nconst src = raw && (raw.data || raw.body || raw);\nconst text = typeof src === 'string' ? src : String(src);\nconst m = text.match(/data:\\s*(\\{[\\s\\S]*?\\})\\s*$/m);\nlet issues = [];\nif (m) {\n  try {\n    const env = JSON.parse(m[1]);\n    const c = env.result && Array.isArray(env.result.content) ? env.result.content[0] : null;\n    if (c && typeof c.text === 'string') issues = JSON.parse(c.text);\n  } catch {}\n}\nif (!Array.isArray(issues)) issues = [];\nconst p = $node['Router'].json.params || {};\n\nconst existing = issues.filter(i =>\n  Array.isArray(i.tags) &&\n  i.tags.includes('github-incident') &&\n  i.tags.includes(p.reqId) &&\n  i.tags.includes('kind:' + p.kind) &&\n  i.statusId !== 'done'\n);\nreturn [{ json: { ...$node['Router'].json, shouldProceed: existing.length === 0, existingCount: existing.length } }];\n"
+      }
+    },
+    {
+      "id": "gh_gate_if",
+      "name": "[GH Gate] If",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1620,
+        2210
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              },
+              "leftValue": "={{ $json.shouldProceed }}",
+              "rightValue": true
+            }
+          ]
+        }
+      }
+    },
+    {
       "id": "fan_split",
       "name": "[FAN] Split specs",
       "type": "n8n-nodes-base.splitOut",
@@ -2847,6 +3111,126 @@
         ]
       ]
     },
+    "[CI Gate] List": {
+      "main": [
+        [
+          {
+            "node": "[CI Gate] Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[CI Gate] Check": {
+      "main": [
+        [
+          {
+            "node": "[CI Gate] If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[CI Gate] If": {
+      "main": [
+        [
+          {
+            "node": "[CI] Cr",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[A] skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[ACC Gate] List": {
+      "main": [
+        [
+          {
+            "node": "[ACC Gate] Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[ACC Gate] Check": {
+      "main": [
+        [
+          {
+            "node": "[ACC Gate] If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[ACC Gate] If": {
+      "main": [
+        [
+          {
+            "node": "[ACC] Cr",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[A] skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[GH Gate] List": {
+      "main": [
+        [
+          {
+            "node": "[GH Gate] Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[GH Gate] Check": {
+      "main": [
+        [
+          {
+            "node": "[GH Gate] If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[GH Gate] If": {
+      "main": [
+        [
+          {
+            "node": "[GH] Cr",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[A] skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "[FAN] Split specs": {
       "main": [
         [
@@ -3004,7 +3388,7 @@
         ],
         [
           {
-            "node": "[CI] Cr",
+            "node": "[CI Gate] List",
             "type": "main",
             "index": 0
           }
@@ -3039,14 +3423,14 @@
         ],
         [
           {
-            "node": "[ACC] Cr",
+            "node": "[ACC Gate] List",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "[GH] Cr",
+            "node": "[GH Gate] List",
             "type": "main",
             "index": 0
           }

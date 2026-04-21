@@ -1044,6 +1044,104 @@ conns["[DONE] Cr"] = {"main": [[{"node": "[DONE] Id", "type": "main", "index": 0
 conns["[DONE] Id"] = {"main": [[{"node": "[DONE] Fu", "type": "main", "index": 0}]]}
 conns["[DONE] Fu"] = {"main": [[{"node": "[DONE] St", "type": "main", "index": 0}]]}
 
+# ─── create_* 幂等 Gate 块 ────────────────────────────────────────────────
+# 插在 Dispatch output 和各 [X] Cr 之间，查 BKD 看同 REQ 同 stage 的 non-done issue
+# 是否已存在，存在就 skip（不派重复 issue）。
+# 三路：CI / ACC / GH。其他（BUGFIX 用 [GH Bugfix Gate] 已 round 去重；DONE 走终态
+# skip；TFIX/RVW 单链一一对应不易重）暂不 Gate。
+def _add_idempotency_gate(prefix, short, rpc_base, gate_js_filter, target_cr_node, y):
+    """Build 3 nodes: [X Gate] List / [X Gate] Check / [X Gate] If.
+    gate_js_filter is the Code node body computing `shouldProceed` bool and propagating params."""
+    list_node = http_node(
+        f"{prefix}_gate_list", f"[{short} Gate] List", 1380, y,
+        ('={"jsonrpc":"2.0","id":' + str(rpc_base) +
+         ',"method":"tools/call","params":{"name":"list-issues","arguments":'
+         '{"projectId":"{{ $node["[ENTRY] Ctx 提取"].json.projectId }}","limit":200}}}'),
+        rpc_id=rpc_base, timeout=10000, on_error="continueRegularOutput",
+    )
+    gate_node = code_node(f"{prefix}_gate_check", f"[{short} Gate] Check", 1460, y, gate_js_filter)
+    if_node = {
+        "id": f"{prefix}_gate_if", "name": f"[{short} Gate] If",
+        "type": "n8n-nodes-base.if", "typeVersion": 2.2,
+        "position": [1520, y],
+        "parameters": {
+            "conditions": {
+                "options": {"caseSensitive": True, "typeValidation": "loose"},
+                "combinator": "and",
+                "conditions": [{
+                    "operator": {"type": "boolean", "operation": "true"},
+                    "leftValue": "={{ $json.shouldProceed }}",
+                    "rightValue": True,
+                }],
+            },
+        },
+    }
+    nodes.extend([list_node, gate_node, if_node])
+    conns[list_node["name"]] = {"main": [[{"node": gate_node["name"], "type": "main", "index": 0}]]}
+    conns[gate_node["name"]] = {"main": [[{"node": if_node["name"], "type": "main", "index": 0}]]}
+    conns[if_node["name"]] = {"main": [
+        [{"node": target_cr_node, "type": "main", "index": 0}],    # true → proceed
+        [{"node": "[A] skip", "type": "main", "index": 0}],          # false → skip
+    ]}
+    return list_node["name"]  # return entry node name so Dispatch rewire can point here
+
+# Shared parse helper (inlined into each gate js)
+_PARSE_LIST_JS = """const raw = $node['{LIST_NODE}'].json;
+const src = raw && (raw.data || raw.body || raw);
+const text = typeof src === 'string' ? src : String(src);
+const m = text.match(/data:\\s*(\\{[\\s\\S]*?\\})\\s*$/m);
+let issues = [];
+if (m) {
+  try {
+    const env = JSON.parse(m[1]);
+    const c = env.result && Array.isArray(env.result.content) ? env.result.content[0] : null;
+    if (c && typeof c.text === 'string') issues = JSON.parse(c.text);
+  } catch {}
+}
+if (!Array.isArray(issues)) issues = [];
+const p = $node['Router'].json.params || {};
+"""
+
+# [CI Gate]: skip if any issue with tags [ci, $REQ, target:$target] and statusId != done
+_CI_GATE_JS = _PARSE_LIST_JS.replace("{LIST_NODE}", "[CI Gate] List") + """
+const existing = issues.filter(i =>
+  Array.isArray(i.tags) &&
+  i.tags.includes('ci') &&
+  i.tags.includes(p.reqId) &&
+  i.tags.includes('target:' + p.target) &&
+  i.statusId !== 'done'
+);
+return [{ json: { ...$node['Router'].json, shouldProceed: existing.length === 0, existingCount: existing.length } }];
+"""
+
+# [ACC Gate]: skip if any issue with tags [accept, $REQ] and statusId != done
+_ACC_GATE_JS = _PARSE_LIST_JS.replace("{LIST_NODE}", "[ACC Gate] List") + """
+const existing = issues.filter(i =>
+  Array.isArray(i.tags) &&
+  i.tags.includes('accept') &&
+  i.tags.includes(p.reqId) &&
+  i.statusId !== 'done'
+);
+return [{ json: { ...$node['Router'].json, shouldProceed: existing.length === 0, existingCount: existing.length } }];
+"""
+
+# [GH Gate]: skip if any issue with tags [github-incident, $REQ, kind:$kind] and statusId != done
+_GH_GATE_JS = _PARSE_LIST_JS.replace("{LIST_NODE}", "[GH Gate] List") + """
+const existing = issues.filter(i =>
+  Array.isArray(i.tags) &&
+  i.tags.includes('github-incident') &&
+  i.tags.includes(p.reqId) &&
+  i.tags.includes('kind:' + p.kind) &&
+  i.statusId !== 'done'
+);
+return [{ json: { ...$node['Router'].json, shouldProceed: existing.length === 0, existingCount: existing.length } }];
+"""
+
+# Build the 3 gates (y chosen to fit layout, will be re-laid out later)
+_add_idempotency_gate("ci",  "CI",  91, _CI_GATE_JS,  "[CI] Cr",   260)
+_add_idempotency_gate("acc", "ACC", 92, _ACC_GATE_JS, "[ACC] Cr",  880)
+_add_idempotency_gate("gh",  "GH",  93, _GH_GATE_JS,  "[GH] Cr",  1040)
+
 # === Action: fanout_specs ====================================================
 # Uses n8n Split Out: expands params.specs[] into N items, each going through Cr/Fu/St
 y = 960
@@ -1367,13 +1465,13 @@ nodes.append(noop("a_other", "[A] unhandled", 1580, 1340))
 conns["Dispatch Action"] = {"main": [
     [{"node": "[A] skip", "type": "main", "index": 0}],
     [{"node": "[ANZ] Update title+tags", "type": "main", "index": 0}],
-    [{"node": "[CI] Cr", "type": "main", "index": 0}],
+    [{"node": "[CI Gate] List", "type": "main", "index": 0}],     # create_ci_runner → gate → [CI] Cr
     [{"node": "[CMT] Fu", "type": "main", "index": 0}],
-    [{"node": "[BUG] Cr", "type": "main", "index": 0}],
+    [{"node": "[BUG] Cr", "type": "main", "index": 0}],            # bugfix 已由 [GH Bugfix Gate] round 去重
     [{"node": "[TFIX] Cr", "type": "main", "index": 0}],
     [{"node": "[RVW] Cr", "type": "main", "index": 0}],
-    [{"node": "[ACC] Cr", "type": "main", "index": 0}],
-    [{"node": "[GH] Cr", "type": "main", "index": 0}],
+    [{"node": "[ACC Gate] List", "type": "main", "index": 0}],    # create_accept → gate → [ACC] Cr
+    [{"node": "[GH Gate] List", "type": "main", "index": 0}],     # open_github_issue → gate → [GH] Cr
     [{"node": "[DONE] Cr", "type": "main", "index": 0}],
     [{"node": "[FAN] Split specs", "type": "main", "index": 0}],
     [{"node": "[SPG] Mark spec-reviewed", "type": "main", "index": 0}],
@@ -1464,6 +1562,16 @@ _gh_y = ACTION_ROW_Y_START + _gh_row_idx * ACTION_ROW_SPACING
 LAYOUT['[GH Bugfix List]'] = (COL['a1'], _gh_y + 100)
 LAYOUT['[GH Bugfix Gate]'] = (COL['a2'], _gh_y + 100)
 LAYOUT['[GH Bugfix If]']   = (COL['a3'], _gh_y + 100)
+
+# 幂等 Gate 块（position: dispatch 和 [X] Cr 之间）
+# 用 "switch 左侧" 专门列（COL['switch'] + 60 ~ a1 之间）
+_GATE_X_START = COL['switch'] + 40  # 1320
+for short, row_name in [('CI', 'create_ci_runner'), ('ACC', 'create_accept'), ('GH', 'open_github_issue')]:
+    row_idx = next(i for i, (name, _) in enumerate(ACTION_ROWS) if name == row_name)
+    row_y = ACTION_ROW_Y_START + row_idx * ACTION_ROW_SPACING
+    LAYOUT[f'[{short} Gate] List']  = (_GATE_X_START,        row_y - 30)
+    LAYOUT[f'[{short} Gate] Check'] = (_GATE_X_START + 90,   row_y - 30)
+    LAYOUT[f'[{short} Gate] If']    = (_GATE_X_START + 180,  row_y - 30)
 
 # Apply layout
 missing = []
