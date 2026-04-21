@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     bkd_base_url: str = "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api"
     bkd_token: str = Field(..., description="Coder-Session-Token")
 
-    # 入站 webhook 共享 token（BKD webhook 配置里加 X-Sisyphus-Token header）
-    webhook_token: str = Field(..., description="X-Sisyphus-Token expected on /bkd-* webhooks")
+    # 入站 webhook 共享 token（BKD webhook 配置里加 `Authorization: Bearer <token>` header）
+    webhook_token: str = Field(..., description="Bearer token expected in Authorization header on /bkd-events")
 
     # Postgres
     pg_dsn: str = Field(..., description="postgresql://user:pass@host:5432/sisyphus")

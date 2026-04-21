@@ -70,7 +70,7 @@ helm install orch ./helm -n sisyphus -f my.yaml
 BKD webhook 配置改为指向（一个 URL 收所有事件类型）：
 - `https://sisyphus.coder.tbc.5ok.co/bkd-events`
 
-必须带 header `X-Sisyphus-Token: <你 values 里 webhook_token>`。
+必须带 header `Authorization: Bearer <你 values 里 webhook_token>`。
 
 > 部署踩过的坑（uv/yoyo/helm/GHCR）见 [docs/deployment-pitfalls.md](docs/deployment-pitfalls.md)。
 

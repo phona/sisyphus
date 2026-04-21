@@ -25,15 +25,21 @@ log = structlog.get_logger(__name__)
 api = APIRouter()
 
 
-def _verify_token(x_sisyphus_token: str | None = Header(default=None)) -> None:
-    """共享 token 校验。常量时间比较防 timing。"""
+_BEARER = "bearer "
+
+
+def _verify_token(authorization: str | None = Header(default=None)) -> None:
+    """共享 token 校验：Authorization: Bearer <token>。常量时间比较防 timing。"""
     expected = settings.webhook_token
-    provided = x_sisyphus_token or ""
-    if not expected or not hmac.compare_digest(expected, provided):
-        log.warning("webhook.auth_failed", has_header=bool(x_sisyphus_token))
+    provided = ""
+    if authorization and authorization.lower().startswith(_BEARER):
+        provided = authorization[len(_BEARER):].strip()
+    if not expected or not provided or not hmac.compare_digest(expected, provided):
+        log.warning("webhook.auth_failed", has_header=bool(authorization))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid or missing X-Sisyphus-Token",
+            detail="missing or invalid Authorization: Bearer <token>",
+            headers={"WWW-Authenticate": 'Bearer realm="sisyphus"'},
         )
 
 
@@ -56,9 +62,9 @@ class WebhookBody(BaseModel):
 @api.post("/bkd-events")
 async def webhook(
     body: WebhookBody,
-    x_sisyphus_token: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
 ) -> dict:
-    _verify_token(x_sisyphus_token)
+    _verify_token(authorization)
     pool = db.get_pool()
 
     # ─── 1. Dedup ───────────────────────────────────────────────────────────

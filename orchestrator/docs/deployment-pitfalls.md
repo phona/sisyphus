@@ -171,6 +171,6 @@ Settings → Change visibility → Public。
 [ ] cp helm/values.dev.yaml my.yaml，填 secret.bkd_token + 生成 webhook_token
 [ ] helm install orch ./helm -n sisyphus -f my.yaml --wait
 [ ] 验 healthz：curl -H 'Host: sisyphus.coder.tbc.5ok.co' http://localhost/healthz
-[ ] 验 401：curl -H 'Host: ...' -d '{}' http://localhost/bkd-events  # 应该 401
-[ ] BKD 那边配 webhook，header 带 X-Sisyphus-Token
+[ ] 验 401：curl -H 'Host: ...' -d '{...valid body...}' http://localhost/bkd-events  # 应该 401（无 Authorization）
+[ ] BKD 那边配 webhook，header 带 `Authorization: Bearer <token>`
 ```
