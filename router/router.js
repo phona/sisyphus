@@ -123,6 +123,14 @@ export function routeEvent(webhookBody = {}, opts = {}) {
     };
   }
 
+  // L0.5: 其他 issue.updated 一律 skip。
+  // 业务阶段推进全由 session.completed 驱动；tag 更新（mark_spec_reviewed 打 ci-passed、
+  // [CMT] St 推 working 等）BKD 会回灌 issue.updated，若不拦会自指 loop：
+  //   mark_spec_reviewed → update-issue → issue.updated → routeSpecDone → mark_spec_reviewed → …
+  if (event === 'issue.updated') {
+    return { action: 'skip', reason: 'issue.updated not routable post-L0 (intent-only entry)', params: { issueId } };
+  }
+
   // L1: session crash
   if (event === 'session.failed') {
     return {

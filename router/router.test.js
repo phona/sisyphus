@@ -254,6 +254,12 @@ test('routeEvent: intent:analyze entry → start_analyze', () => {
   assert.equal(r.params.repoUrl, 'https://github.com/phona/ubox-crosser.git');
 });
 
+test('routeEvent: issue.updated without intent:analyze → skip (防自指 loop)', () => {
+  const r = routeEvent({ event: 'issue.updated', issueId: 'spec-1', tags: ['contract-test', 'REQ-9', 'ci-passed'] });
+  assert.equal(r.action, 'skip');
+  assert.match(r.reason, /not routable/);
+});
+
 test('routeEvent: intent:analyze + already has analyze tag → NOT trigger again', () => {
   const r = routeEvent({
     event: 'issue.updated',
