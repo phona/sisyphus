@@ -69,13 +69,15 @@ async def cas_transition(
         "event": event.value,
         "action": action,
     }
-    # JSON merge for context_patch
+    args: list = [
+        req_id, expected_state.value, next_state.value, json.dumps([history_entry]),
+    ]
     if context_patch:
         merged_ctx_sql = "context || $5::jsonb"
-        ctx_param = json.dumps(context_patch)
+        args.append(json.dumps(context_patch))
     else:
+        # 没 patch 就不带第 5 个参数（asyncpg 严格按 placeholder 计数）
         merged_ctx_sql = "context"
-        ctx_param = "{}"  # placeholder, not used; pass anyway to keep signature
 
     sql = f"""
         UPDATE req_state
@@ -86,8 +88,7 @@ async def cas_transition(
         WHERE req_id = $1 AND state = $2
         RETURNING req_id
     """
-    row = await pool.fetchrow(sql, req_id, expected_state.value, next_state.value,
-                              json.dumps([history_entry]), ctx_param)
+    row = await pool.fetchrow(sql, *args)
     return row is not None
 
 

@@ -41,18 +41,20 @@ class FakePool:
                 "created_at": None, "updated_at": None,
             }
         if sql.startswith("UPDATE req_state"):
-            req_id, expected, next_state, history_json, ctx_param = args
+            # 4 个参数（无 ctx_patch）或 5 个参数（带 ctx_patch）— 跟真实 cas_transition 对齐
+            req_id, expected, next_state, history_json, *rest = args
             r = self.rows.get(req_id)
             if r is None or r.state != expected:
                 return None
             r.state = next_state
             r.history.extend(json.loads(history_json))
-            try:
-                patch = json.loads(ctx_param)
-                if isinstance(patch, dict):
-                    r.context.update(patch)
-            except (json.JSONDecodeError, TypeError):
-                pass
+            if rest:
+                try:
+                    patch = json.loads(rest[0])
+                    if isinstance(patch, dict):
+                        r.context.update(patch)
+                except (json.JSONDecodeError, TypeError):
+                    pass
             return {"req_id": req_id}
         raise NotImplementedError(sql[:60])
 
