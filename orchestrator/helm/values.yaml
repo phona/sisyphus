@@ -5,8 +5,10 @@
 replicaCount: 1   # 状态机靠 PG CAS 串行，多副本无害但 dedup 无意义
 
 image:
-  repository: ghcr.io/weifashi/sisyphus-orchestrator
-  tag: ""                     # 留空 → 用 Chart.appVersion
+  # GHCR：CI 推到 ghcr.io/<github-owner>/sisyphus-orchestrator
+  # tag 推送规则见 .github/workflows/orchestrator-ci.yml
+  repository: ghcr.io/phona/sisyphus-orchestrator
+  tag: ""                     # 留空 → 用 Chart.appVersion；用 main 镜像填 "main"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []

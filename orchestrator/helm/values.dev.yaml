@@ -3,7 +3,7 @@
 
 image:
   pullPolicy: Always
-  tag: "latest"
+  tag: "main"   # CI 推到 main 分支会更新这个 tag
 
 ingress:
   hosts:
