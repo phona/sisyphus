@@ -170,6 +170,17 @@ async def test_create_ci_runner_unit_then_int(monkeypatch):
     assert "parent:reviewer" in last_call.kwargs["tags"]
 
 
+def test_infer_parent_stage_ci_unit_with_target():
+    """ci-int 由 ci-unit pass 触发时父 stage 应推成 ci-unit，不是 unknown。"""
+    from orchestrator.actions.create_ci_runner import _infer_parent_stage
+    assert _infer_parent_stage(["ci", "target:unit", "ci:pass"]) == "ci-unit"
+    assert _infer_parent_stage(["ci", "target:integration"]) == "ci-integration"
+    assert _infer_parent_stage(["ci"]) == "ci"
+    assert _infer_parent_stage(["dev"]) == "dev"
+    assert _infer_parent_stage(["reviewer"]) == "reviewer"
+    assert _infer_parent_stage(["something-weird"]) == "unknown"
+
+
 @pytest.mark.asyncio
 async def test_open_gh_and_bugfix_normal_round(monkeypatch):
     from orchestrator.actions import open_gh_and_bugfix as mod

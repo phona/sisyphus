@@ -69,8 +69,17 @@ async def create_ci_runner_integration(*, body, req_id, tags, ctx):
 
 
 def _infer_parent_stage(tags: list[str]) -> str:
-    """从触发事件 issue tags 推父 stage。"""
+    """从触发事件 issue tags 推父 stage。
+
+    ci-int 经常由 ci-unit pass 触发（tags=[ci, target:unit, ci:pass]），
+    所以 ci 也要识别 — 用 target: 细分 unit / integration。
+    """
     for s in ("dev", "reviewer", "test-fix", "bugfix", "accept"):
         if s in tags:
             return s
+    if "ci" in tags:
+        for t in tags:
+            if t.startswith("target:"):
+                return f"ci-{t.split(':', 1)[1]}"
+        return "ci"
     return "unknown"

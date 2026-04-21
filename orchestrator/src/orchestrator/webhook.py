@@ -100,6 +100,16 @@ async def webhook(request: Request) -> JSONResponse:
             issue = await bkd.get_issue(body.projectId, body.issueId)
             tags = issue.tags
     log.info("webhook.received", evt=body.event, issue_id=body.issueId, tags=tags)
+
+    # ─── 2.5 早期 noise filter ─────────────────────────────────────────────
+    # BKD 推整 project 所有 session.completed，包括跟当前 REQ 无关的旧 issue。
+    # 没 REQ-N tag 也不是 intent.analyze 入口的，直接 skip 不浪费 derive/CAS。
+    if (
+        body.event == "session.completed"
+        and not router_lib.extract_req_id(tags)
+    ):
+        log.debug("webhook.skip_no_req_tag", issue_id=body.issueId, tags=tags)
+        return {"action": "skip", "reason": "session event without REQ tag"}
     await obs.record_event(
         "webhook.received",
         issue_id=body.issueId, tags=tags,
