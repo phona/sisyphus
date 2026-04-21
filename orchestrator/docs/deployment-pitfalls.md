@@ -94,7 +94,11 @@ kubectl -n sisyphus exec sisyphus-postgresql-0 -- env PGPASSWORD="$PG_PASS" \
 # （新格式不需要这一步，已无内联 rollback）
 ```
 
-commit `<本次 fix>`。
+commit `da02198`。
+
+**关联坑**：yoyo SQL 把文件按 `;` 切 step。末尾留纯注释（无后续语句）会触发
+`psycopg2.ProgrammingError: can't execute an empty query`。SQL 文件最后一句必须以 `;` 结尾，
+后面不留注释。
 
 ---
 

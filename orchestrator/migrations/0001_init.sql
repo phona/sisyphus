@@ -22,6 +22,3 @@ CREATE TABLE IF NOT EXISTS event_seen (
 );
 
 CREATE INDEX IF NOT EXISTS event_seen_at_idx ON event_seen(seen_at DESC);
-
--- GC 老 dedup 记录（>7d）的 helper（手动 cron 调）
--- DELETE FROM event_seen WHERE seen_at < now() - interval '7 days';
