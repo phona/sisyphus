@@ -137,7 +137,10 @@ async def webhook(request: Request) -> JSONResponse:
             return {"action": "skip", "reason": "REQ not initialized"}
         await req_state.insert_init(
             pool, req_id, body.projectId,
-            context={"intent_issue_id": body.issueId},
+            context={
+                "intent_issue_id": body.issueId,
+                "intent_title": (body.title or "").strip(),  # 下游 issue 标题带上
+            },
         )
         row = await req_state.get(pool, req_id)
         if row is None:

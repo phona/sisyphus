@@ -13,7 +13,7 @@ from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
 from ..store import db, req_state
-from . import register
+from . import register, short_title
 
 log = structlog.get_logger(__name__)
 
@@ -42,7 +42,7 @@ async def open_gh_and_bugfix(*, body, req_id, tags, ctx):
         # 1. open GH incident issue
         gh = await bkd.create_issue(
             project_id=proj,
-            title=f"[{req_id}] [GH-ISSUE] {kind}",
+            title=f"[{req_id}] [GH-ISSUE] {kind}{short_title(ctx)}",
             tags=["github-incident", req_id, f"kind:{kind}", f"incident:{incident_key}"],
             status_id="todo",
         )
@@ -60,7 +60,7 @@ async def open_gh_and_bugfix(*, body, req_id, tags, ctx):
             # 2. open BKD bugfix issue（dev 侧）
             bug = await bkd.create_issue(
                 project_id=proj,
-                title=f"[{req_id}] [BUGFIX round-{round_n}] {kind}",
+                title=f"[{req_id}] [BUGFIX round-{round_n}] {kind}{short_title(ctx)}",
                 tags=["bugfix", req_id, f"round-{round_n}", f"parent-id:{source_issue_id}"],
                 status_id="todo",
             )

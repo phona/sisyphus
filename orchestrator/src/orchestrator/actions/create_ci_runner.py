@@ -14,7 +14,7 @@ from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
 from ..store import db, req_state
-from . import register
+from . import register, short_title
 
 log = structlog.get_logger(__name__)
 
@@ -32,7 +32,7 @@ async def _create(*, body, req_id, tags, ctx, target: str):
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
             project_id=proj,
-            title=f"[{req_id}] [CI {target}] self-check {parent_stage}",
+            title=f"[{req_id}] [CI {target}] self-check {parent_stage}{short_title(ctx)}",
             tags=[
                 "ci", req_id,
                 f"target:{target}",

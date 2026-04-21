@@ -170,6 +170,19 @@ async def test_create_ci_runner_unit_then_int(monkeypatch):
     assert "parent:reviewer" in last_call.kwargs["tags"]
 
 
+def test_short_title_helper():
+    from orchestrator.actions import short_title
+    assert short_title(None) == ""
+    assert short_title({}) == ""
+    assert short_title({"intent_title": ""}) == ""
+    assert short_title({"intent_title": "  hi  "}) == " — hi"
+    long = "x" * 60
+    out = short_title({"intent_title": long}, max_len=20)
+    assert out.startswith(" — ")
+    assert "…" in out
+    assert len(out) < 30
+
+
 def test_infer_parent_stage_ci_unit_with_target():
     """ci-int 由 ci-unit pass 触发时父 stage 应推成 ci-unit，不是 unknown。"""
     from orchestrator.actions.create_ci_runner import _infer_parent_stage

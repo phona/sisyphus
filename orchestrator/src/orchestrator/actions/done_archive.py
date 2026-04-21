@@ -7,7 +7,7 @@ from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
 from ..store import db, req_state
-from . import register
+from . import register, short_title
 
 log = structlog.get_logger(__name__)
 
@@ -22,7 +22,7 @@ async def done_archive(*, body, req_id, tags, ctx):
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
             project_id=proj,
-            title=f"[{req_id}] [DONE] archive & PR",
+            title=f"[{req_id}] [DONE] archive & PR{short_title(ctx)}",
             tags=["done-archive", req_id, f"parent-id:{accept_issue_id}"],
             status_id="todo",
         )

@@ -16,6 +16,21 @@ ActionHandler = Callable[..., Awaitable[dict[str, Any]]]
 REGISTRY: dict[str, ActionHandler] = {}
 
 
+def short_title(ctx: dict | None, max_len: int = 50) -> str:
+    """从 ctx.intent_title 取需求标题做成短后缀（` — <title>`）方便 BKD 看板辨识。
+
+    没设 / 太长截断。返空字符串则上层不该 append。
+    """
+    if not ctx:
+        return ""
+    t = (ctx.get("intent_title") or "").strip()
+    if not t:
+        return ""
+    if len(t) > max_len:
+        t = t[:max_len].rstrip() + "…"
+    return f" — {t}"
+
+
 def register(name: str):
     def deco(fn: ActionHandler) -> ActionHandler:
         REGISTRY[name] = fn

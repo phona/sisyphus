@@ -10,7 +10,7 @@ from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
 from ..store import db, req_state
-from . import register
+from . import register, short_title
 
 log = structlog.get_logger(__name__)
 
@@ -31,7 +31,7 @@ async def fanout_specs(*, body, req_id, tags, ctx):
         for stage in SPEC_STAGES:
             issue = await bkd.create_issue(
                 project_id=proj,
-                title=f"[{req_id}] [{stage}]",
+                title=f"[{req_id}] [{stage}]{short_title(ctx)}",
                 tags=[stage, req_id],
                 status_id="todo",
             )
