@@ -20,15 +20,25 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/sisyphus-runner
 
 jobs:
   build:
-    # PR 只 build；push 到 main / tag 才推
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: full     # Flutter + Go + 全工具链 (~5GB)
+            dockerfile: runner/Dockerfile
+            image_suffix: ''             # ghcr.io/<owner>/sisyphus-runner
+            cache_scope: runner-full
+          - flavor: go       # Go-only 轻量 (~1GB)，给 Go 项目（如 ubox-crosser）
+            dockerfile: runner/go.Dockerfile
+            image_suffix: '-go'          # ghcr.io/<owner>/sisyphus-runner-go
+            cache_scope: runner-go
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +54,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/sisyphus-runner${{ matrix.image_suffix }}
           tags: |
             type=ref,event=branch
             type=sha,prefix=sha-
@@ -56,14 +66,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build & push
+      - name: Build & push (${{ matrix.flavor }})
         uses: docker/build-push-action@v6
         with:
-          # context = repo root（Dockerfile 里 COPY scripts/... 走 repo 相对路径）
           context: .
-          file: runner/Dockerfile
+          file: ${{ matrix.dockerfile }}
           push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=runner
-          cache-to: type=gha,scope=runner,mode=max
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
+          cache-to: type=gha,scope=${{ matrix.cache_scope }},mode=max

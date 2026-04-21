@@ -4,7 +4,11 @@
 每个 REQ 一个长寿命容器，跨 stage 共用 cache（Go modules / pub cache / docker images）。
 
 容器名：`sisyphus-runner-{{ req_id }}`
-镜像：`ghcr.io/phona/sisyphus-runner:main`（含 Flutter SDK + Android SDK + Go + Node + Docker DinD + openspec CLI + /opt/sisyphus/scripts/）
+镜像：`ghcr.io/phona/sisyphus-runner-go:main`（Go-only 轻量版，~1GB；
+含 Go 1.22 + Node + Docker DinD + openspec CLI + /opt/sisyphus/scripts/）
+
+Flutter 项目用 `ghcr.io/phona/sisyphus-runner:main`（~5GB，加 Flutter SDK + Android SDK），
+等需要时再替换。
 
 ### 第一步：idempotent 拉起容器
 
@@ -15,7 +19,7 @@ CONTAINER=sisyphus-runner-{{ req_id }}
 docker inspect $CONTAINER >/dev/null 2>&1 || docker run -d --name $CONTAINER \
   --privileged --restart=unless-stopped \
   -v sisyphus-workspace-{{ req_id }}:/workspace -w /workspace \
-  ghcr.io/phona/sisyphus-runner:main sleep infinity
+  ghcr.io/phona/sisyphus-runner-go:main sleep infinity
 ```
 
 ### 第二步：bootstrap /workspace（首次进入此 REQ 才需要）

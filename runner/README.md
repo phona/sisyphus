@@ -38,6 +38,17 @@ docker exec $CONTAINER bash -c "docker compose -f tests/contract/docker-compose.
 - accept stage：用 ttpos-arch-lab K3s 部署而非 docker container
 - BKD coder workspace：BKD 自己控制，sisyphus 不动它
 
+## 两个 flavor
+
+| flavor | Dockerfile | image | 大小 | 用途 |
+|---|---|---|---|---|
+| `full` | `runner/Dockerfile` | `ghcr.io/phona/sisyphus-runner` | ~5GB | Flutter / mobile 项目（带 Android SDK + Java） |
+| `go` | `runner/go.Dockerfile` | `ghcr.io/phona/sisyphus-runner-go` | ~1GB | Go 项目（如 ubox-crosser），不带 Flutter |
+
+prompt `runner_container.md.j2` 默认用 `:go`。Flutter 项目要切成 `:main`（full flavor）。
+
 ## 构建
 
-由 `.github/workflows/runner-image.yml` 自动 build push 到 `ghcr.io/phona/sisyphus-runner:main` / `:sha-<short>` / 打 tag `runner-v*` 推 `:vN`。
+`.github/workflows/runner-image.yml` matrix build 两个 flavor，push 到 GHCR：
+- `:main` / `:sha-<short>`
+- 打 tag `runner-v1.2.3` → `:1.2.3` / `:1.2` / `:1` / `:latest`
