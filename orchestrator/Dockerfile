@@ -35,7 +35,8 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     SISYPHUS_HOST=0.0.0.0 \
-    SISYPHUS_PORT=8000
+    SISYPHUS_PORT=8000 \
+    SISYPHUS_MIGRATIONS_DIR=/app/migrations
 
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv

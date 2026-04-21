@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import structlog
@@ -20,8 +21,24 @@ from yoyo import get_backend, read_migrations
 
 log = structlog.get_logger(__name__)
 
-# repo 根的 migrations/ 目录（src/orchestrator/migrate.py → ../../migrations）
-_DEFAULT_MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
+
+def _resolve_default_dir() -> Path:
+    """找 migrations 目录。优先级：env > cwd/migrations > 包相对（dev 模式）。
+
+    - 容器：Dockerfile 设 SISYPHUS_MIGRATIONS_DIR=/app/migrations
+    - dev 跑 pytest / uvicorn：cwd 在 orchestrator/，cwd/migrations 命中
+    - 兜底：从 src/orchestrator/migrate.py 往上 2 级（dev editable 装时的 repo 根）
+    """
+    env = os.environ.get("SISYPHUS_MIGRATIONS_DIR", "")
+    if env:
+        return Path(env)
+    cwd_mig = Path.cwd() / "migrations"
+    if cwd_mig.is_dir():
+        return cwd_mig
+    return Path(__file__).resolve().parents[2] / "migrations"
+
+
+_DEFAULT_MIGRATIONS_DIR = _resolve_default_dir()
 
 
 def apply_pending(dsn: str, migrations_dir: Path | None = None) -> int:
