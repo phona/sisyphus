@@ -68,15 +68,9 @@ async def webhook_probe() -> dict:
 
 @api.post("/bkd-events")
 async def webhook(request: Request) -> JSONResponse:
-    # DEBUG：临时把 BKD 传过来的 header + body 全 log，搞清它的鉴权机制后撤
-    log.info(
-        "webhook.debug.incoming",
-        headers=dict(request.headers),
-        method=request.method,
-        path=str(request.url.path),
-    )
     # 顺序很关键：先 auth → 再 body 校验。否则 BKD 注册时无 auth 的探测会拿到 422
-    # 误以为格式错而拒绝注册。
+    # 误以为格式错而拒绝注册。BKD 注册 webhook 时填的 secret 字段会被 BKD 自动
+    # 包成 `Authorization: Bearer <secret>` header 发过来。
     _verify_token(request.headers.get("authorization"))
     try:
         raw = await request.json()

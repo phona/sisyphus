@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 
 import structlog
 
@@ -19,6 +20,16 @@ from .bkd import BKDClient, Issue
 from .config import settings
 from .router import _get_target, extract_req_id, get_parent_id, get_parent_stage, get_round
 from .store import db
+
+
+def _parse_iso(s: str | None) -> datetime | None:
+    """BKD 返 ISO 字符串带 'Z' 后缀，asyncpg 期望 datetime 实例。"""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 log = structlog.get_logger(__name__)
 
@@ -46,8 +57,8 @@ def _flatten(issue: Issue) -> dict:
         "target": _get_target(set(tags)),
         "parent_issue_id": get_parent_id(tags),
         "parent_stage": get_parent_stage(tags),
-        "created_at": issue.created_at,
-        "bkd_updated_at": issue.updated_at,
+        "created_at": _parse_iso(issue.created_at),
+        "bkd_updated_at": _parse_iso(issue.updated_at),
     }
 
 

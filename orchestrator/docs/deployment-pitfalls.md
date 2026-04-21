@@ -156,6 +156,49 @@ Settings → Change visibility → Public。
 
 ---
 
+## 9. BKD webhook 注册的几个非显然规则
+
+接 BKD 真实 webhook 时一连串坑：
+
+**a. 注册 API**：MCP 没暴露 webhook tools，必须用裸 REST `POST /api/settings/webhooks`：
+```json
+{
+  "url": "http://orchestrator/bkd-events",
+  "events": ["issue.updated","session.completed","session.failed"],
+  "secret": "test123"
+}
+```
+返回 201 + `{id, secret: "••••••••"}`。
+
+**b. `events` 是 array 不是 single string**。BKD 报错 `Invalid option: expected one of ...` 让人误以为单值，其实要 `events: [...]`。一次 array 订所有事件，一个 webhook id 即可。
+
+**c. 自定义 `headers` 字段被忽略**：注册时塞 `headers.Authorization` 不会保存。
+
+**d. **`secret` 字段 = Bearer token**：BKD 把它包成 `Authorization: Bearer <secret>` 自动发。orchestrator 这边走 Bearer 校验天然吃。**别用 `X-Sisyphus-Token` 这种自定义 header**，BKD 不让加。
+
+**e. POST endpoint 必须容忍 GET / 无 auth POST 探活**：
+- GET → 200（不能 405）
+- POST 无 auth → 401 必须先于 422 body validation 出现，否则 BKD 误判格式错
+
+**f. BKD 触发头**：`x-webhook-event: <event>`、`user-agent: Bun/<ver>`，body 跟 BKD MCP 返的 issue 一模一样。
+
+---
+
+## 10. asyncpg placeholder 计数严格 / datetime 不接 ISO 字符串
+
+**a. SQL 里有 `$N` placeholder 就必须传足 N 个 arg**，否则
+`InterfaceError: the server expects N arguments for this query, M were passed`。
+动态拼 SQL 时 args 列表也要相应增减。`cas_transition` 之前漏修，
+fake pool 测试通过但真 PG 挂。**fake pool 要按真实 SQL 严格匹配 arity**。
+
+**b. asyncpg 不会自动把 ISO string parse 成 datetime**：
+```
+invalid input for query argument $11: '2026-04-21T07:43:54.000Z' (expected a datetime.date or datetime.datetime instance, got 'str')
+```
+BKD 返时间是 ISO 字符串带 `Z`，要 `datetime.fromisoformat(s.replace("Z", "+00:00"))` 转。
+
+---
+
 ## 部署前 checklist（下次复用）
 
 ```
