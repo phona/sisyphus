@@ -41,9 +41,10 @@ BRANCH={{ branch }}
    应是 `[x]`。某条做不完、放弃，改成 `- [~] <原因>` 标注。
 7. ONE 干净 commit + push 到 stage/$REQ-dev
 8. **transit-test 前提 PR**：CI 流水会 build image push 到
-   `ghcr.io/zoneasetech/<service>:REQ-{{ req_id }}-sha-<8>`。push 完
-   你必须 `update-issue` 给本 dev issue 加 tag `image-tag:REQ-{{ req_id }}-sha-<8>`，
+   `ghcr.io/zoneasetech/<service>:{{ req_id }}-sha-<8>`。push 完
+   你必须 `update-issue` 给本 dev issue 加 tag `image-tag:{{ req_id }}-sha-<8>`，
    sisyphus accept stage 要读这个 tag 拉 lab。
+   注意：`{{ req_id }}` 已经是 `REQ-N` 形式，**不要再加 REQ- 前缀**。
 9. move review
 
 ## 禁改（pre-commit ACL 会拦）
