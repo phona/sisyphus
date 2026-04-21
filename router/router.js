@@ -197,20 +197,16 @@ function routeSpecDone(ctx, issueId, opts) {
   if (!ctx.specStage) {
     return { action: 'skip', reason: 'spec without specStage tag', params: { issueId } };
   }
-  // spec-agent done → 起 ci-runner 跑 make ci-lint 校验产出（golangci-lint --new-from-rev
-  // 做增量 scope，spec 分支只改 markdown/yaml 不触发 go linter）。
-  // 反馈环靠三道幂等闸兜底：priorStatusId==='done' / dedup / SPG 已开 dev。
-  const branch = `stage/${ctx.reqId}-${ctx.specStage}`;
+  // Lint 不再起独立 ci-runner issue —— spec-agent 在自己 session 里跑 make ci-lint
+  // (通过 aissh 上 vm-node04)，lint 挂了自己修到 pass 再 move review。
+  // 省掉每 REQ ~10+ 个 ci-lint issue + 消灭 mark_spec_reviewed → issue.updated →
+  // routeSpecDone 再派 lint 的死循环。tests 才派独立 ci-runner（docker/env 重）。
   return {
-    action: 'create_ci_runner',
+    action: 'mark_spec_reviewed',
     params: {
       reqId: ctx.reqId,
-      target: 'lint',
-      branch,
-      workdir: workdirFor(branch),
-      repoUrl: ctx._repoMap[ctx._projectId] || null,
+      specStage: ctx.specStage,
       parentIssueId: issueId,
-      parentStage: ctx.specStage,
     },
   };
 }

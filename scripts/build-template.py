@@ -1143,10 +1143,25 @@ nodes.append(http_node(
         "- **不写** openspec/specs/**（那是 openspec apply 归档后的位置，归 analyze+done 阶段）\n"
         "- pre-commit ACL 会拦越权；违反即任务失败\n"
         "\n"
+        "## 自检 lint（move review 前必须做，不起独立 CI issue）\n"
+        "commit 完你要**自己跑一遍** lint 确保绿，不绿就自己修到绿。通过 aissh 在 vm-node04 上跑：\n"
+        "```\n"
+        "WORKDIR=/var/sisyphus-ci/feat-$REQ   # 若不存在: git clone --branch feat/$REQ <repo_url> $WORKDIR\n"
+        "                                     # 已存在: cd $WORKDIR && git fetch && git reset --hard origin/feat/$REQ\n"
+        "cd $WORKDIR && BASE_REV=origin/master make ci-lint\n"
+        "```\n"
+        "`make ci-lint` 会跑：\n"
+        "- golangci-lint 增量（spec 分支通常 0 finding）\n"
+        "- scripts/check-scenario-refs.sh（tasks.md 的 [XXX-S<N>] 引用必须能 resolve）\n"
+        "- openspec validate openspec/changes/$REQ（结构校验）\n"
+        "\n"
+        "任一挂了 → 修 spec/tasks 文件 → commit + push → 再跑一次，直到绿。\n"
+        "**不绿就不许 move review**（review 后 Router 会推进到 SPG Gate + dev，带坏下游）。\n"
+        "\n"
         "## 完成时\n"
-        "- commit + push 到 feat/$REQ（子分支可选，直接 push feat/$REQ 也行）\n"
+        "- lint 绿 + commit + push 到 feat/$REQ\n"
         "- update-issue tags 保留 {{ $json.specStage }} + $REQ\n"
-        "- move review —— **不加** result:* tag；由下游 CI-lint gate 通过后 n8n 自动推进。",
+        "- move review —— n8n 自动推进到 SPG Gate。",
         61),
     rpc_id=61, on_error="continueRegularOutput",
 ))

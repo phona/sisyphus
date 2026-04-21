@@ -141,13 +141,11 @@ test('routeEvent: ci(lint) pass on spec → mark_spec_reviewed', () => {
   assert.equal(r.params.specStage, 'contract-test');
 });
 
-test('routeEvent: spec done → create_ci_runner(target=lint) on spec branch', () => {
+test('routeEvent: spec done → mark_spec_reviewed (agent self-lints before review)', () => {
   const r = routeEvent({ tags: ['accept-test', 'REQ-20'], issueId: 'spec-1', projectId: '77k9z58j' });
-  assert.equal(r.action, 'create_ci_runner');
-  assert.equal(r.params.target, 'lint');
-  assert.equal(r.params.parentStage, 'accept-test');
+  assert.equal(r.action, 'mark_spec_reviewed');
+  assert.equal(r.params.specStage, 'accept-test');
   assert.equal(r.params.parentIssueId, 'spec-1');
-  assert.equal(r.params.branch, 'stage/REQ-20-accept-test');
 });
 
 test('routeEvent: analyze done → fanout 2 fixed specs (contract-test + accept-test)', () => {
