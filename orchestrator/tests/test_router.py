@@ -19,8 +19,8 @@ CASES: list[tuple[str, list[str], Event | None]] = [
 
     # session.completed dispatch
     ("session.completed", ["analyze", "REQ-1"],                              Event.ANALYZE_DONE),
-    ("session.completed", ["contract-test", "REQ-1"],                        Event.SPEC_DONE),
-    ("session.completed", ["accept-test", "REQ-1"],                          Event.SPEC_DONE),
+    ("session.completed", ["contract-spec", "REQ-1"],                        Event.SPEC_DONE),
+    ("session.completed", ["acceptance-spec", "REQ-1"],                          Event.SPEC_DONE),
     ("session.completed", ["dev", "REQ-1"],                                  Event.DEV_DONE),
     ("session.completed", ["ci", "REQ-1", "target:unit", "ci:pass"],         Event.CI_UNIT_PASS),
     ("session.completed", ["ci", "REQ-1", "target:unit", "ci:fail"],         Event.CI_UNIT_FAIL),

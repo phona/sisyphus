@@ -18,7 +18,7 @@ BRANCH={{ branch }}
 按"干活容器"段先 idempotent 拉起 sisyphus-runner-{{ req_id }}。spec/analyze 已经把
 /workspace bootstrap 好；你直接 docker exec 进去干。
 
-前置：contract-test-agent + accept-test-agent 已产出契约/验收 spec + 测试骨架。
+前置：contract-spec-agent + acceptance-spec-agent 已产出契约/验收 spec + 测试骨架。
 你负责实现业务代码 + unit test，让上游契约和验收测试全部跑绿。
 
 ## 步骤

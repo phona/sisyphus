@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from .state import Event
 
 REQ_ID_RE = re.compile(r"^REQ-[\w-]+$")
-SPEC_TAGS = {"contract-test", "accept-test"}
+SPEC_TAGS = {"contract-spec", "acceptance-spec"}
 
 
 def derive_event(event_type: str, tags: Iterable[str], result_tags_only: bool = False) -> Event | None:

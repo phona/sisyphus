@@ -14,7 +14,7 @@ from . import register
 
 log = structlog.get_logger(__name__)
 
-SPEC_TAGS = ("contract-test", "accept-test")
+SPEC_TAGS = ("contract-spec", "acceptance-spec")
 
 
 @register("mark_spec_reviewed_and_check")

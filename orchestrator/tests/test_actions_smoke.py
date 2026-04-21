@@ -88,8 +88,8 @@ async def test_fanout_specs_creates_two(monkeypatch):
     patch_db(monkeypatch, "fanout_specs")
     body = make_body(issue_id="anz-1")
     out = await mod.fanout_specs(body=body, req_id="REQ-9", tags=["analyze"], ctx={})
-    assert out["specs_created"] == ["contract-test", "accept-test"]
-    assert out["spec_issue_ids"] == {"contract-test": "ct-1", "accept-test": "at-1"}
+    assert out["specs_created"] == ["contract-spec", "acceptance-spec"]
+    assert out["spec_issue_ids"] == {"contract-spec": "ct-1", "acceptance-spec": "at-1"}
     assert fake.create_issue.await_count == 2
     # update-issue 调用：1 (analyze→done) + 2 (each spec→working) = 3
     assert fake.update_issue.await_count == 3
@@ -102,14 +102,14 @@ async def test_mark_spec_gate_open(monkeypatch):
     from orchestrator.actions import mark_spec_reviewed_and_check as mod
     fake = make_fake_bkd()
     fake.list_issues.return_value = [
-        FakeIssue(id="ct-1", tags=["contract-test", "REQ-9", "ci-passed"]),
-        FakeIssue(id="at-1", tags=["accept-test",   "REQ-9", "ci-passed"]),
+        FakeIssue(id="ct-1", tags=["contract-spec", "REQ-9", "ci-passed"]),
+        FakeIssue(id="at-1", tags=["acceptance-spec",   "REQ-9", "ci-passed"]),
     ]
     patch_bkd(monkeypatch, "mark_spec_reviewed_and_check", fake)
     patch_db(monkeypatch, "mark_spec_reviewed_and_check")
     body = make_body(issue_id="ct-1")
     out = await mod.mark_spec_reviewed_and_check(
-        body=body, req_id="REQ-9", tags=["contract-test", "REQ-9"],
+        body=body, req_id="REQ-9", tags=["contract-spec", "REQ-9"],
         ctx={"expected_spec_count": 2},
     )
     assert out["emit"] == "spec.all-passed"
@@ -122,14 +122,14 @@ async def test_mark_spec_gate_wait(monkeypatch):
     from orchestrator.actions import mark_spec_reviewed_and_check as mod
     fake = make_fake_bkd()
     fake.list_issues.return_value = [
-        FakeIssue(id="ct-1", tags=["contract-test", "REQ-9", "ci-passed"]),
-        FakeIssue(id="at-1", tags=["accept-test",   "REQ-9"]),  # not yet
+        FakeIssue(id="ct-1", tags=["contract-spec", "REQ-9", "ci-passed"]),
+        FakeIssue(id="at-1", tags=["acceptance-spec",   "REQ-9"]),  # not yet
     ]
     patch_bkd(monkeypatch, "mark_spec_reviewed_and_check", fake)
     patch_db(monkeypatch, "mark_spec_reviewed_and_check")
     body = make_body(issue_id="ct-1")
     out = await mod.mark_spec_reviewed_and_check(
-        body=body, req_id="REQ-9", tags=["contract-test"],
+        body=body, req_id="REQ-9", tags=["contract-spec"],
         ctx={"expected_spec_count": 2},
     )
     assert "emit" not in out

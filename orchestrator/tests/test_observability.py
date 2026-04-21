@@ -19,7 +19,7 @@ class FakeObsPool:
 
 def test_infer_stage_table():
     assert obs.infer_stage(["dev", "REQ-1"]) == "dev"
-    assert obs.infer_stage(["accept-test", "REQ-1"]) == "accept-test"
+    assert obs.infer_stage(["acceptance-spec", "REQ-1"]) == "acceptance-spec"
     assert obs.infer_stage(["random"]) is None
 
 

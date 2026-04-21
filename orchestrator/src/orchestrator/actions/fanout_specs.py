@@ -1,4 +1,4 @@
-"""fanout_specs: analyze done → 创建 contract-test + accept-test 两个 spec issue。
+"""fanout_specs: analyze done → 创建 contract-spec + acceptance-spec 两个 spec issue。
 
 把 analyze issue 推 done（防 BKD 重投递再触发 routeAnalyze）。
 """
@@ -14,7 +14,7 @@ from . import register
 
 log = structlog.get_logger(__name__)
 
-SPEC_STAGES = ("contract-test", "accept-test")
+SPEC_STAGES = ("contract-spec", "acceptance-spec")
 
 
 @register("fanout_specs")

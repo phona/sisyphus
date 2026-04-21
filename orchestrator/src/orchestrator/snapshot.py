@@ -35,7 +35,7 @@ log = structlog.get_logger(__name__)
 
 _STAGE_FROM_TAGS = (
     "analyze",
-    "contract-test", "accept-test",
+    "contract-spec", "acceptance-spec",
     "dev", "ci",
     "accept", "bugfix", "test-fix", "reviewer",
     "done-archive", "github-incident",

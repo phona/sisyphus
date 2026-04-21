@@ -21,7 +21,7 @@ log = structlog.get_logger(__name__)
 # 把 issue tags → 推断 stage（与 router._infer 类似但收敛到一个枚举）
 _STAGE_FROM_TAGS = (
     "analyze",
-    "contract-test", "accept-test",
+    "contract-spec", "acceptance-spec",
     "dev", "ci",
     "accept", "bugfix", "test-fix", "reviewer",
     "done-archive", "github-incident",
