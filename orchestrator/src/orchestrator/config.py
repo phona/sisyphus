@@ -29,9 +29,10 @@ class Settings(BaseSettings):
     # bkd_snapshot 同步间隔（秒）。0 = 不跑（替代 n8n 5min cron）
     snapshot_interval_sec: int = 300
 
-    # Project → repo URL（替代 router/router.js 里硬编码的 DEFAULT_PROJECT_REPO_MAP）
-    # JSON: {"77k9z58j": "https://github.com/phona/ubox-crosser.git"}
-    project_repo_map_json: str = '{"77k9z58j": "https://github.com/phona/ubox-crosser.git"}'
+    # 扁平：哪个 BKD project + 它对应哪个 repo
+    # snapshot 循环只扫这一个 project；prompt 渲染时直接用 repo_url
+    bkd_project_id: str = "77k9z58j"
+    repo_url: str = "https://github.com/phona/ubox-crosser.git"
 
     # Workdir 模板（vm-node04 上的路径）
     workdir_root: str = "/var/sisyphus-ci"

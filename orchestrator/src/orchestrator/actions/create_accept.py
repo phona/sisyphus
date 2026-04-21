@@ -1,8 +1,6 @@
 """create_accept: ci-int 通过后派 accept-agent 跑 AI-QA。"""
 from __future__ import annotations
 
-import json
-
 import structlog
 
 from ..bkd import BKDClient
@@ -19,7 +17,7 @@ async def create_accept(*, body, req_id, tags, ctx):
     proj = body.projectId
     branch = (ctx or {}).get("branch") or f"feat/{req_id}"
     workdir = f"{settings.workdir_root}/accept-{req_id}"
-    repo_url = (ctx or {}).get("repo_url") or _repo_url(proj)
+    repo_url = (ctx or {}).get("repo_url") or settings.repo_url
     source_issue_id = body.issueId  # 触发的 ci-int issue
 
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
@@ -42,10 +40,3 @@ async def create_accept(*, body, req_id, tags, ctx):
 
     log.info("create_accept.done", req_id=req_id, accept_issue=issue.id)
     return {"accept_issue_id": issue.id}
-
-
-def _repo_url(project_id: str) -> str:
-    try:
-        return json.loads(settings.project_repo_map_json).get(project_id, "")
-    except json.JSONDecodeError:
-        return ""

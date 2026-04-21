@@ -1,8 +1,6 @@
 """done_archive: accept pass → openspec apply + 创 PR 收尾。"""
 from __future__ import annotations
 
-import json
-
 import structlog
 
 from ..bkd import BKDClient
@@ -19,7 +17,7 @@ async def done_archive(*, body, req_id, tags, ctx):
     proj = body.projectId
     branch = (ctx or {}).get("branch") or f"feat/{req_id}"
     workdir = (ctx or {}).get("workdir") or f"{settings.workdir_root}/feat-{req_id}"
-    repo_url = (ctx or {}).get("repo_url") or _repo_url(proj)
+    repo_url = (ctx or {}).get("repo_url") or settings.repo_url
     accept_issue_id = (ctx or {}).get("accept_issue_id") or body.issueId
 
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
@@ -42,10 +40,3 @@ async def done_archive(*, body, req_id, tags, ctx):
 
     log.info("done_archive.done", req_id=req_id, archive_issue=issue.id)
     return {"archive_issue_id": issue.id}
-
-
-def _repo_url(project_id: str) -> str:
-    try:
-        return json.loads(settings.project_repo_map_json).get(project_id, "")
-    except json.JSONDecodeError:
-        return ""

@@ -6,7 +6,6 @@ ci-int 重跑 → parent=reviewer/test-fix 视情况，统一以 ctx 里"上一�
 """
 from __future__ import annotations
 
-import json
 import time
 
 import structlog
@@ -24,7 +23,7 @@ async def _create(*, body, req_id, tags, ctx, target: str):
     proj = body.projectId
     branch = (ctx or {}).get("branch") or f"feat/{req_id}"
     workdir = f"{settings.workdir_root}/ci-{req_id}-{target}-{int(time.time())}"
-    repo_url = (ctx or {}).get("repo_url") or _repo_url(proj)
+    repo_url = (ctx or {}).get("repo_url") or settings.repo_url
 
     # parent stage：以触发本 transition 的事件源 issue 为父。
     # （dev.done → parent=dev；reviewer.pass → parent=reviewer；CI fail 重跑也是 parent=ci 上次）
@@ -68,13 +67,6 @@ async def create_ci_runner_unit(*, body, req_id, tags, ctx):
 @register("create_ci_runner_integration")
 async def create_ci_runner_integration(*, body, req_id, tags, ctx):
     return await _create(body=body, req_id=req_id, tags=tags, ctx=ctx, target="integration")
-
-
-def _repo_url(project_id: str) -> str:
-    try:
-        return json.loads(settings.project_repo_map_json).get(project_id, "")
-    except json.JSONDecodeError:
-        return ""
 
 
 def _infer_parent_stage(tags: list[str]) -> str:

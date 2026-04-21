@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 
 import structlog
 
@@ -80,40 +79,34 @@ async def sync_once() -> int:
     if pool is None:
         return 0
 
-    try:
-        project_map = json.loads(settings.project_repo_map_json)
-    except json.JSONDecodeError:
-        log.warning("snapshot.bad_project_map_json")
-        return 0
-
+    project_id = settings.bkd_project_id
     total = 0
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
-        for project_id in project_map:
-            try:
-                issues = await bkd.list_issues(project_id, limit=500)
-            except Exception as e:
-                log.warning("snapshot.list_failed", project_id=project_id, error=str(e))
-                continue
+        try:
+            issues = await bkd.list_issues(project_id, limit=500)
+        except Exception as e:
+            log.warning("snapshot.list_failed", project_id=project_id, error=str(e))
+            return 0
 
-            rows = [_flatten(i) for i in issues]
-            if not rows:
-                continue
-            try:
-                async with pool.acquire() as conn:
-                    async with conn.transaction():
-                        for r in rows:
-                            await conn.execute(
-                                _UPSERT_SQL,
-                                r["issue_id"], r["req_id"], r["stage"], r["status"],
-                                r["title"], r["tags"], r["round"], r["target"],
-                                r["parent_issue_id"], r["parent_stage"],
-                                r["created_at"], r["bkd_updated_at"],
-                            )
-                total += len(rows)
-            except Exception as e:
-                log.warning("snapshot.upsert_failed", project_id=project_id, error=str(e))
+        rows = [_flatten(i) for i in issues]
+        if not rows:
+            return 0
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    for r in rows:
+                        await conn.execute(
+                            _UPSERT_SQL,
+                            r["issue_id"], r["req_id"], r["stage"], r["status"],
+                            r["title"], r["tags"], r["round"], r["target"],
+                            r["parent_issue_id"], r["parent_stage"],
+                            r["created_at"], r["bkd_updated_at"],
+                        )
+            total = len(rows)
+        except Exception as e:
+            log.warning("snapshot.upsert_failed", project_id=project_id, error=str(e))
 
-    log.info("snapshot.synced", total=total, projects=list(project_map))
+    log.info("snapshot.synced", total=total, project_id=project_id)
     return total
 
 

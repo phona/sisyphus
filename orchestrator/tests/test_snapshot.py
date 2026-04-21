@@ -88,7 +88,7 @@ async def test_sync_once_upserts(monkeypatch):
 
     monkeypatch.setattr(snapshot.db, "get_obs_pool", lambda: FakePool())
     monkeypatch.setattr(snapshot, "BKDClient", _client_ctx)
-    # project_repo_map_json 默认有一个 project，sync_once 会用它
+    # settings.bkd_project_id 默认 77k9z58j，sync_once 会用它
     n = await snapshot.sync_once()
     assert n == 2
     # 两次 UPSERT

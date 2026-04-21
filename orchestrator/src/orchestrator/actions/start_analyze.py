@@ -7,8 +7,6 @@
 """
 from __future__ import annotations
 
-import json
-
 import structlog
 
 from ..bkd import BKDClient
@@ -23,8 +21,6 @@ log = structlog.get_logger(__name__)
 async def start_analyze(*, body, req_id, tags, ctx):
     proj = body.projectId
     issue_id = body.issueId
-    repo_map = json.loads(settings.project_repo_map_json)
-    repo_url = repo_map.get(proj)
     # intent 触发时 title 是用户输入的原文（无 [REQ-xxx] [ANALYZE] 前缀）
     raw_title = body.title or ""
 
@@ -37,7 +33,7 @@ async def start_analyze(*, body, req_id, tags, ctx):
             tags=["analyze", req_id],
         )
         # 2. 发 prompt
-        prompt = render("analyze.md.j2", req_id=req_id, repo_url=repo_url or "")
+        prompt = render("analyze.md.j2", req_id=req_id, repo_url=settings.repo_url)
         await bkd.follow_up_issue(project_id=proj, issue_id=issue_id, prompt=prompt)
         # 3. 推 working
         await bkd.update_issue(project_id=proj, issue_id=issue_id, status_id="working")

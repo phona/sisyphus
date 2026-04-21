@@ -7,8 +7,6 @@ Policy（沿用 d444f91 的策略 A）：
 """
 from __future__ import annotations
 
-import json
-
 import structlog
 
 from ..bkd import BKDClient
@@ -27,7 +25,7 @@ async def open_gh_and_bugfix(*, body, req_id, tags, ctx):
     proj = body.projectId
     branch = (ctx or {}).get("branch") or f"feat/{req_id}"
     workdir = (ctx or {}).get("workdir") or f"{settings.workdir_root}/feat-{req_id}"
-    repo_url = (ctx or {}).get("repo_url") or _repo_url(proj)
+    repo_url = (ctx or {}).get("repo_url") or settings.repo_url
     source_issue_id = body.issueId
     kind = _infer_kind(tags)
     incident_key = f"{req_id}:{kind}"
@@ -106,10 +104,3 @@ def _infer_kind(tags: list[str]) -> str:
     if "ci" in tags:
         return "ci-integration-fail"
     return "unknown-fail"
-
-
-def _repo_url(project_id: str) -> str:
-    try:
-        return json.loads(settings.project_repo_map_json).get(project_id, "")
-    except json.JSONDecodeError:
-        return ""
