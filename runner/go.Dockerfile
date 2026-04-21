@@ -4,7 +4,7 @@
 # 这个，不必带 Flutter SDK / Android SDK。Flutter 项目仍用 sisyphus-runner:main。
 #
 # 用法跟 sisyphus-runner 完全相同（runner_container.md.j2 通过 image 字段切）。
-FROM golang:1.22-bookworm
+FROM golang:1.23-bookworm
 
 LABEL org.opencontainers.image.source=https://github.com/phona/sisyphus
 LABEL org.opencontainers.image.description="Sisyphus Go-only runner: Go + Docker DinD + openspec + sisyphus tools"

@@ -34,7 +34,7 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/*
 
 # ─── 2. Go 1.22 ─────────────────────────────────────────────────────────
-ARG GO_VERSION=1.22.7
+ARG GO_VERSION=1.23.4
 RUN curl -fsSL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz \
       | tar -xz -C /usr/local
 ENV PATH="/usr/local/go/bin:/root/go/bin:$PATH" \
