@@ -52,7 +52,7 @@ def apply_pending(dsn: str, migrations_dir: Path | None = None) -> int:
         log.warning("migrate.no_dir", path=str(path))
         return 0
 
-    backend = get_backend(_to_yoyo_dsn(dsn))
+    backend = get_backend(dsn)
     with backend.lock():
         migrations = backend.to_apply(read_migrations(str(path)))
         if not migrations:
@@ -65,12 +65,5 @@ def apply_pending(dsn: str, migrations_dir: Path | None = None) -> int:
         return len(migrations)
 
 
-def _to_yoyo_dsn(dsn: str) -> str:
-    """asyncpg 用 `postgresql://` / `postgres://`，yoyo 默认走 psycopg2 也吃。"""
-    # yoyo 把 `postgres://` 当成 psycopg2，`postgresql+psycopg://` 走 psycopg3。
-    # 我们装的 psycopg2-binary，强制成 psycopg2 scheme。
-    if dsn.startswith("postgresql://"):
-        return "postgresql+psycopg2://" + dsn.removeprefix("postgresql://")
-    if dsn.startswith("postgres://"):
-        return "postgresql+psycopg2://" + dsn.removeprefix("postgres://")
-    return dsn
+# yoyo 默认 `postgresql://` scheme 即用 psycopg2 driver（已通过 psycopg2-binary 提供）
+# 不做 DSN 改写 — asyncpg 和 yoyo 用同一份 dsn 即可

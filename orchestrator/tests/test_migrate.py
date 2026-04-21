@@ -11,19 +11,7 @@ from pathlib import Path
 
 from yoyo import read_migrations
 
-from orchestrator.migrate import _DEFAULT_MIGRATIONS_DIR, _to_yoyo_dsn
-
-
-def test_dsn_rewrite_postgresql():
-    assert _to_yoyo_dsn("postgresql://u:p@h/db") == "postgresql+psycopg2://u:p@h/db"
-
-
-def test_dsn_rewrite_postgres():
-    assert _to_yoyo_dsn("postgres://u:p@h/db") == "postgresql+psycopg2://u:p@h/db"
-
-
-def test_dsn_passthrough_other():
-    assert _to_yoyo_dsn("sqlite:///x.db") == "sqlite:///x.db"
+from orchestrator.migrate import _DEFAULT_MIGRATIONS_DIR
 
 
 def test_migrations_dir_exists():
