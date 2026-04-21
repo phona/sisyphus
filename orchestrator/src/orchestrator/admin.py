@@ -106,6 +106,66 @@ async def force_escalate(
     return {"action": "force_escalated", "from_state": row.state.value}
 
 
+@admin.get("/metrics")
+async def metrics(
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """关键运行指标（JSON）。curl / Prometheus textfile 都能用。
+
+    - 状态分布
+    - per-stage 聚合（平均 + P50 + P95 + 次数，从 stage_stats view 来）
+    - escalated REQ 的失败原因 Top N
+    """
+    _verify_token(authorization)
+    pool = db.get_pool()
+
+    rows = await pool.fetch(
+        "SELECT state, count(*) AS n FROM req_state GROUP BY state",
+    )
+    state_dist = {r["state"]: r["n"] for r in rows}
+
+    rows = await pool.fetch(
+        "SELECT stage, enter_count, req_count, avg_sec, p50_sec, p95_sec "
+        "FROM stage_stats ORDER BY p95_sec DESC NULLS LAST",
+    )
+    stages = [
+        {
+            "stage": r["stage"],
+            "enter_count": r["enter_count"],
+            "req_count": r["req_count"],
+            "avg_sec": float(r["avg_sec"]) if r["avg_sec"] is not None else None,
+            "p50_sec": float(r["p50_sec"]) if r["p50_sec"] is not None else None,
+            "p95_sec": float(r["p95_sec"]) if r["p95_sec"] is not None else None,
+        }
+        for r in rows
+    ]
+
+    rows = await pool.fetch(
+        "SELECT reason, count, recent_reqs FROM failure_mode LIMIT 10",
+    )
+    failures = [
+        {
+            "reason": r["reason"],
+            "count": r["count"],
+            "recent_reqs": list(r["recent_reqs"]),
+        }
+        for r in rows
+    ]
+
+    rows = await pool.fetch(
+        "SELECT req_id, final_state, total_sec, total_steps, bugfix_rounds, intent_title "
+        "FROM req_summary ORDER BY updated_at DESC LIMIT 20",
+    )
+    recent = [dict(r) for r in rows]
+
+    return {
+        "state_distribution": state_dist,
+        "stage_stats": stages,
+        "failure_modes": failures,
+        "recent_reqs": recent,
+    }
+
+
 @admin.get("/req/{req_id}")
 async def get_req(
     req_id: str,
