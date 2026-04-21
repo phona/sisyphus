@@ -159,11 +159,33 @@ async def metrics(
     )
     recent = [dict(r) for r in rows]
 
+    # agent 质量（来自 sisyphus_obs）—— 可选，obs DB 没配就跳过
+    agents: list[dict] = []
+    diagnosis: list[dict] = []
+    obs_pool = db.get_obs_pool()
+    if obs_pool is not None:
+        try:
+            arows = await obs_pool.fetch(
+                "SELECT agent_role, total_invocations, distinct_reqs, "
+                "avg_invocations_per_req, first_pass_pct, avg_duration_sec, "
+                "result_pass, result_fail "
+                "FROM agent_quality",
+            )
+            agents = [dict(r) for r in arows]
+            drows = await obs_pool.fetch(
+                "SELECT diagnosis, count FROM bugfix_diagnosis",
+            )
+            diagnosis = [dict(r) for r in drows]
+        except Exception as e:
+            log.warning("metrics.obs_query_failed", error=str(e))
+
     return {
         "state_distribution": state_dist,
         "stage_stats": stages,
         "failure_modes": failures,
         "recent_reqs": recent,
+        "agent_quality": agents,
+        "bugfix_diagnosis": diagnosis,
     }
 
 
