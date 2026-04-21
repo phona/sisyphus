@@ -1,0 +1,124 @@
+# sisyphus-orchestrator helm values
+# 命名空间假设：sisyphus（PG 也在这里）
+# install: helm -n sisyphus install orch ./helm -f my-values.yaml --create-namespace
+
+replicaCount: 1   # 状态机靠 PG CAS 串行，多副本无害但 dedup 无意义
+
+image:
+  repository: ghcr.io/weifashi/sisyphus-orchestrator
+  tag: ""                     # 留空 → 用 Chart.appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  readOnlyRootFilesystem: true   # /opt/venv 是 root 目录，业务不写 fs
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations: {}
+  hosts:
+    - host: sisyphus.coder.tbc.5ok.co
+      paths:
+        - path: /bkd-events
+          pathType: Prefix
+        - path: /bkd-issue-updated
+          pathType: Prefix
+        - path: /healthz
+          pathType: Prefix
+  tls: []
+  # 生产建议:
+  # tls:
+  #   - hosts: [sisyphus.coder.tbc.5ok.co]
+  #     secretName: sisyphus-tls
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# 跑 yoyo apply 用的初始化 init-container（同样的镜像）
+migrations:
+  enabled: true
+
+# ─── 业务配置（注入 SISYPHUS_* env）──────────────────────────────────────
+env:
+  log_level: INFO
+  log_json: true
+  bkd_base_url: https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api
+  workdir_root: /var/sisyphus-ci
+  # JSON: {"<projectId>": "<repo url>"}
+  project_repo_map_json: '{"77k9z58j": "https://github.com/phona/ubox-crosser.git"}'
+
+# ─── 敏感信息 ─────────────────────────────────────────────────────────────
+# 选 A：让 chart 自建 Secret（适合小规模 / dev）
+secret:
+  create: true
+  bkd_token: ""           # !! 必填：BKD Coder-Session-Token
+  webhook_token: ""       # !! 必填：BKD webhook 调用时带的 X-Sisyphus-Token
+
+# 选 B：用外部已存在的 Secret（推荐 prod，配 SealedSecret / ESO）
+existingSecret: ""        # 若设了，会覆盖 secret.create
+existingSecretKeys:       # 外部 Secret 里 key 名映射
+  bkd_token: bkd_token
+  webhook_token: webhook_token
+  pg_dsn: pg_dsn
+
+# Postgres：用户已在同 ns 部署。默认假设用 Bitnami chart 装的 release 名 = sisyphus-postgresql
+postgres:
+  # 二选一：直接给完整 DSN，或拼 host/db/user，password 走 Secret
+  dsn: ""   # 例：postgresql://sisyphus:pass@sisyphus-postgresql.sisyphus.svc:5432/sisyphus
+  # 拼装方式（dsn 留空时生效）：
+  host: sisyphus-postgresql.sisyphus.svc
+  port: 5432
+  database: sisyphus
+  user: sisyphus
+  passwordSecret:
+    name: sisyphus-postgresql
+    key: postgres-password
+
+# 可观测性 DB（observability/schema.sql 的 sisyphus_obs；同实例不同 db）
+# 留空 = 关掉 event_log 写入和 bkd_snapshot 同步
+observability:
+  enabled: true
+  database: sisyphus_obs    # 用 postgres.user/passwordSecret 同账号连
+  snapshotIntervalSec: 300  # 0 = 关掉 BKD snapshot 同步循环
+
+probes:
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 10
+    periodSeconds: 30
+  readiness:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

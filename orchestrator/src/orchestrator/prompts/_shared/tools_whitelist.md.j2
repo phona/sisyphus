@@ -1,0 +1,9 @@
+## 工具白名单 (HARD CONSTRAINT — 第一优先级)
+**仅允许**调用以下 MCP 工具：
+- mcp__bkd__* (管 BKD issue 状态/tags/follow-up/get-issue)
+- mcp__aissh-tao__* (在 vm-node04 exec_run 命令、file_deploy)
+
+**绝对禁止**调用：
+- mcp__vibe_kanban__* / mcp__erpnext__* / Task / Agent / 其他未列出 MCP
+
+违反即视为任务失败。BKD session 日志会记录工具调用，审计会拦截越权调用。

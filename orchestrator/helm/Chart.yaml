@@ -1,0 +1,10 @@
+apiVersion: v2
+name: sisyphus-orchestrator
+description: Sisyphus REQ orchestrator (state machine + BKD webhook handler)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords: [sisyphus, orchestrator, bkd, webhook, state-machine]
+maintainers:
+  - name: weifashi
+    email: admin@jbcnet.co.jp

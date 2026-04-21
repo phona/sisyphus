@@ -1,0 +1,49 @@
+FROM python:3.12-slim AS builder
+
+# uv 装包速度快
+COPY --from=ghcr.io/astral-sh/uv:0.5.4 /uv /usr/local/bin/uv
+
+WORKDIR /app
+ENV UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    PYTHONDONTWRITEBYTECODE=1
+
+# 单独 copy pyproject 利于 docker layer 缓存
+COPY pyproject.toml ./
+RUN uv venv /opt/venv && \
+    UV_PROJECT_ENVIRONMENT=/opt/venv uv pip install \
+        fastapi 'uvicorn[standard]' pydantic pydantic-settings httpx \
+        asyncpg jinja2 structlog yoyo-migrations psycopg2-binary
+
+COPY src/ ./src/
+COPY migrations/ ./migrations/
+RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv pip install --no-deps .
+
+# ─── runtime ────────────────────────────────────────────────────────────
+FROM python:3.12-slim AS runtime
+
+# psycopg2 运行时要 libpq
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    SISYPHUS_HOST=0.0.0.0 \
+    SISYPHUS_PORT=8000
+
+WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /app/migrations /app/migrations
+
+EXPOSE 8000
+
+# 非 root
+RUN useradd -m -u 1000 sisyphus
+USER sisyphus
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz').status==200 else 1)"
+
+CMD ["uvicorn", "orchestrator.main:app", "--host", "0.0.0.0", "--port", "8000"]

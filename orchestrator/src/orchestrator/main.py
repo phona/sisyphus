@@ -1,0 +1,71 @@
+"""FastAPI 入口。"""
+from __future__ import annotations
+
+import asyncio
+import logging
+
+import structlog
+from fastapi import FastAPI
+
+from . import snapshot
+from .config import settings
+from .migrate import apply_pending
+from .store import db
+from .webhook import api as webhook_api
+
+
+def _configure_logging() -> None:
+    logging.basicConfig(level=settings.log_level)
+    if settings.log_json:
+        structlog.configure(
+            processors=[
+                structlog.stdlib.add_log_level,
+                structlog.processors.TimeStamper(fmt="iso"),
+                structlog.processors.JSONRenderer(),
+            ],
+        )
+
+
+_configure_logging()
+log = structlog.get_logger(__name__)
+app = FastAPI(title="sisyphus-orchestrator", version="0.1.0")
+app.include_router(webhook_api)
+
+# 后台 task 句柄（shutdown 时取消）
+_bg_tasks: list[asyncio.Task] = []
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    # 1. 跑 schema 迁移（同步，启动时一次性）
+    apply_pending(settings.pg_dsn)
+    # 2. 起业务 pool + observability pool（obs DSN 空就跳过）
+    await db.init_pool(settings.pg_dsn)
+    await db.init_obs_pool(settings.obs_pg_dsn)
+    # 3. 起 bkd_snapshot 后台同步 task（interval 0 不起）
+    if settings.snapshot_interval_sec > 0 and settings.obs_pg_dsn:
+        _bg_tasks.append(asyncio.create_task(snapshot.run_loop(), name="snapshot"))
+    log.info(
+        "startup.ok",
+        port=settings.port,
+        obs_enabled=bool(settings.obs_pg_dsn),
+        snapshot_interval=settings.snapshot_interval_sec,
+    )
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    for t in _bg_tasks:
+        t.cancel()
+    for t in _bg_tasks:
+        try:
+            await t
+        except (asyncio.CancelledError, Exception):
+            pass
+    await db.close_pool()
+    log.info("shutdown.ok")
+
+
+@app.get("/healthz")
+async def healthz() -> dict:
+    return {"status": "ok"}

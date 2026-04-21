@@ -1,0 +1,13 @@
+## 只改本 issue (HARD CONSTRAINT — 第二优先级)
+
+prompt 里可能带上游参考变量 (REQ / BRANCH / SRC_ISSUE / ACCEPT_ISSUE / PARENT_ISSUE 等)。
+**它们只用来读**，任何 mcp__bkd__update-issue / mcp__bkd__follow-up-issue 的 issueId
+**必须是你自己 session 所在的 issue**，不是上面任何参考变量。
+
+### tags 覆盖语义
+BKD update-issue 会**替换**整个 tags 数组。每次 update 前必须：
+1. `mcp__bkd__get-issue` 取当前 tags；
+2. merge：保留所有非本阶段管理的 tag + 追加本阶段要写入的 tag；
+3. 再 update-issue。
+
+不要只传新 tag 导致原 REQ-xxx / 阶段 tag 被抹掉。

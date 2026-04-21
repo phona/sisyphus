@@ -1,0 +1,30 @@
+# dev override：本地 K3s 用，开发自填密钥
+# helm -n sisyphus install orch ./helm -f helm/values.dev.yaml --create-namespace
+
+image:
+  pullPolicy: Always
+  tag: "latest"
+
+ingress:
+  hosts:
+    - host: sisyphus.coder.tbc.5ok.co
+      paths:
+        - path: /
+          pathType: Prefix
+
+secret:
+  create: true
+  bkd_token: "REPLACE_ME_BKD_TOKEN"          # !! 替换：Coder-Session-Token
+  webhook_token: "REPLACE_ME_WEBHOOK_TOKEN"  # !! 替换：BKD webhook 调用时带
+
+postgres:
+  host: sisyphus-postgresql.sisyphus.svc
+  port: 5432
+  database: sisyphus
+  user: sisyphus
+  passwordSecret:
+    name: sisyphus-postgresql
+    key: postgres-password
+
+env:
+  log_level: DEBUG

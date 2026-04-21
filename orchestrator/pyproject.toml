@@ -1,0 +1,47 @@
+[project]
+name = "sisyphus-orchestrator"
+version = "0.1.0"
+description = "Sisyphus REQ orchestrator (state machine + BKD webhook handler)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "httpx>=0.27",
+    "asyncpg>=0.30",
+    "jinja2>=3.1",
+    "structlog>=24.4",
+    # 数据库迁移：yoyo 跑 migrations/*.sql，自维护 _yoyo_migration 版本表
+    "yoyo-migrations>=9.0",
+    "psycopg2-binary>=2.9",  # yoyo 的 postgres 驱动
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-httpx>=0.32",
+    "ruff>=0.7",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/orchestrator"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+# 中文 docstring/注释里全角标点不算问题；E501 长行让 prompt 模板和长 SQL 喘口气
+ignore = ["RUF001", "RUF002", "RUF003", "E501"]
