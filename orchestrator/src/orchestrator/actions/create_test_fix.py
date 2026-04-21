@@ -17,7 +17,6 @@ async def create_test_fix(*, body, req_id, tags, ctx):
     proj = body.projectId
     round_n = (ctx or {}).get("bugfix_round") or 1
     branch = (ctx or {}).get("branch") or f"feat/{req_id}"
-    repo_url = (ctx or {}).get("repo_url") or ""
     source_issue_id = body.issueId  # 触发的 bugfix issue
     workdir = f"{settings.workdir_root}/bugfix-test-{req_id}-round-{round_n}"
 
@@ -32,7 +31,7 @@ async def create_test_fix(*, body, req_id, tags, ctx):
             "test_fix.md.j2",
             req_id=req_id, round_n=round_n,
             source_issue_id=source_issue_id, branch=branch,
-            workdir=workdir, repo_url=repo_url,
+            workdir=workdir,
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")

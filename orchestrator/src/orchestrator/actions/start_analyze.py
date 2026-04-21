@@ -33,7 +33,7 @@ async def start_analyze(*, body, req_id, tags, ctx):
             tags=["analyze", req_id],
         )
         # 2. 发 prompt
-        prompt = render("analyze.md.j2", req_id=req_id, repo_url=settings.repo_url)
+        prompt = render("analyze.md.j2", req_id=req_id)
         await bkd.follow_up_issue(project_id=proj, issue_id=issue_id, prompt=prompt)
         # 3. 推 working
         await bkd.update_issue(project_id=proj, issue_id=issue_id, status_id="working")

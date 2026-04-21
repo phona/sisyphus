@@ -9,5 +9,3 @@ data:
   SISYPHUS_LOG_JSON: {{ .Values.env.log_json | quote }}
   SISYPHUS_BKD_BASE_URL: {{ .Values.env.bkd_base_url | quote }}
   SISYPHUS_WORKDIR_ROOT: {{ .Values.env.workdir_root | quote }}
-  SISYPHUS_BKD_PROJECT_ID: {{ .Values.env.bkd_project_id | quote }}
-  SISYPHUS_REPO_URL: {{ .Values.env.repo_url | quote }}

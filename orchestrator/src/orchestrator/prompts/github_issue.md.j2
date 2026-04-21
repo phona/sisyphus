@@ -13,8 +13,9 @@ KIND={{ kind }}                  # ci-integration-fail | accept-fail
 SRC_ISSUE={{ source_issue_id }}
 BRANCH={{ branch }}
 WORKDIR={{ workdir }}
-REPO_URL={{ repo_url }}
 INCIDENT_KEY={{ incident_key }}  # 例：REQ-686:ci-integration-fail
+
+> repo URL：在 session cwd 里 `git remote get-url origin`（Step 2 直接调）。
 
 ## 职责
 契约/验收测试是 LOCKED 边界，fail 一律需要人工判定。你的活：

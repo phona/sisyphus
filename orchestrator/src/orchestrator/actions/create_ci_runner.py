@@ -23,7 +23,6 @@ async def _create(*, body, req_id, tags, ctx, target: str):
     proj = body.projectId
     branch = (ctx or {}).get("branch") or f"feat/{req_id}"
     workdir = f"{settings.workdir_root}/ci-{req_id}-{target}-{int(time.time())}"
-    repo_url = (ctx or {}).get("repo_url") or settings.repo_url
 
     # parent stage：以触发本 transition 的事件源 issue 为父。
     # （dev.done → parent=dev；reviewer.pass → parent=reviewer；CI fail 重跑也是 parent=ci 上次）
@@ -45,7 +44,7 @@ async def _create(*, body, req_id, tags, ctx, target: str):
         prompt = render(
             "ci_runner.md.j2",
             req_id=req_id, target=target, branch=branch, workdir=workdir,
-            repo_url=repo_url, parent_issue_id=parent_issue_id, parent_stage=parent_stage,
+            parent_issue_id=parent_issue_id, parent_stage=parent_stage,
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")

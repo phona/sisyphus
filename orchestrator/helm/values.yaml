@@ -72,9 +72,8 @@ env:
   log_json: true
   bkd_base_url: https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api
   workdir_root: /var/sisyphus-ci
-  # 当前一个 BKD project 对一个 repo（多 project 多 repo 等以后再扩）
-  bkd_project_id: 77k9z58j
-  repo_url: https://github.com/phona/ubox-crosser.git
+  # 不存任何 project_id / repo_url —— project_id 来自 webhook，
+  # repo_url 来自 agent 自己 `git remote get-url origin`
 
 # ─── 敏感信息 ─────────────────────────────────────────────────────────────
 # 选 A：让 chart 自建 Secret（适合小规模 / dev）

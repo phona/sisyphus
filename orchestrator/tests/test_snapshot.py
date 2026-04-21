@@ -55,8 +55,29 @@ async def test_sync_once_noop_without_obs(monkeypatch):
     assert n == 0
 
 
+class FakeMainPool:
+    """模拟 main pool 的 fetch SELECT DISTINCT project_id。"""
+    def __init__(self, project_ids: list[str]):
+        self._rows = [{"project_id": p} for p in project_ids]
+
+    async def fetch(self, sql, *args):
+        return self._rows
+
+
 @pytest.mark.asyncio
-async def test_sync_once_upserts(monkeypatch):
+async def test_sync_once_no_projects_yet(monkeypatch):
+    """req_state 没记录时返 0，不报错。"""
+    class _ObsPool:
+        pass
+    monkeypatch.setattr(snapshot.db, "get_obs_pool", lambda: _ObsPool())
+    monkeypatch.setattr(snapshot.db, "get_pool", lambda: FakeMainPool([]))
+    n = await snapshot.sync_once()
+    assert n == 0
+
+
+@pytest.mark.asyncio
+async def test_sync_once_upserts_per_project(monkeypatch):
+    """两个 project 各 1 issue，应当 UPSERT 2 行。"""
     captured: list[tuple] = []
 
     class FakeConn:
@@ -69,7 +90,7 @@ async def test_sync_once_upserts(monkeypatch):
                 yield
             return _t()
 
-    class FakePool:
+    class FakeObsPool:
         def acquire(self):
             @asynccontextmanager
             async def _a():
@@ -77,20 +98,22 @@ async def test_sync_once_upserts(monkeypatch):
             return _a()
 
     fake_bkd = AsyncMock()
-    fake_bkd.list_issues = AsyncMock(return_value=[
-        make_issue(id="a", tags=["dev", "REQ-1"]),
-        make_issue(id="b", tags=["accept", "REQ-1", "result:pass"]),
+    # 每次 list_issues 返一条
+    fake_bkd.list_issues = AsyncMock(side_effect=[
+        [make_issue(id="a", tags=["dev", "REQ-1"])],
+        [make_issue(id="b", tags=["accept", "REQ-2", "result:pass"])],
     ])
 
     @asynccontextmanager
     async def _client_ctx(*a, **kw):
         yield fake_bkd
 
-    monkeypatch.setattr(snapshot.db, "get_obs_pool", lambda: FakePool())
+    monkeypatch.setattr(snapshot.db, "get_obs_pool", lambda: FakeObsPool())
+    monkeypatch.setattr(snapshot.db, "get_pool", lambda: FakeMainPool(["proj-A", "proj-B"]))
     monkeypatch.setattr(snapshot, "BKDClient", _client_ctx)
-    # settings.bkd_project_id 默认 77k9z58j，sync_once 会用它
+
     n = await snapshot.sync_once()
     assert n == 2
-    # 两次 UPSERT
+    assert fake_bkd.list_issues.await_count == 2  # 每个 project 一次
     assert len(captured) == 2
     assert all(sql.startswith("INSERT INTO bkd_snapshot") for sql, _ in captured)

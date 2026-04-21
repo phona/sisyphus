@@ -12,9 +12,11 @@ REQ={{ req_id }}
 TARGET={{ target }}
 BRANCH={{ branch }}
 WORKDIR={{ workdir }}
-REPO_URL={{ repo_url }}
 PARENT_ISSUE={{ parent_issue_id }}    # 只用于参考，禁止对它 update
 PARENT_STAGE={{ parent_stage }}
+
+> repo URL：在 session cwd 里 `REPO_URL=$(git remote get-url origin)`。
+> 多 repo 工作区下，先 cd 进 proposal.md 指定的 repo 子目录再取。
 
 ## 硬约束
 1. 所有命令只能通过 mcp__aissh-tao__exec_run 在 vm-node04 上执行。禁本地 Bash。
@@ -29,6 +31,7 @@ PARENT_STAGE={{ parent_stage }}
 
 ## 步骤
 Step 1 bootstrap（一条 exec_run，bash -c 包起来）:
+  REPO_URL=$(git remote get-url origin)   # 在 session cwd 里
   首次:    git clone --branch $BRANCH $REPO_URL $WORKDIR
   已存在:  cd $WORKDIR && git fetch origin && git reset --hard origin/$BRANCH
 

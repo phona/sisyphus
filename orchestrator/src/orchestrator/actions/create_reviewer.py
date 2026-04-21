@@ -17,7 +17,6 @@ async def create_reviewer(*, body, req_id, tags, ctx):
     proj = body.projectId
     round_n = (ctx or {}).get("bugfix_round") or 1
     branch = (ctx or {}).get("branch") or f"feat/{req_id}"
-    repo_url = (ctx or {}).get("repo_url") or ""
     workdir = f"{settings.workdir_root}/reviewer-{req_id}-round-{round_n}"
 
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
@@ -30,7 +29,7 @@ async def create_reviewer(*, body, req_id, tags, ctx):
         prompt = render(
             "reviewer.md.j2",
             req_id=req_id, round_n=round_n,
-            branch=branch, workdir=workdir, repo_url=repo_url,
+            branch=branch, workdir=workdir,
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")

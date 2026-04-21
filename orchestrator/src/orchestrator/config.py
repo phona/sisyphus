@@ -29,10 +29,9 @@ class Settings(BaseSettings):
     # bkd_snapshot 同步间隔（秒）。0 = 不跑（替代 n8n 5min cron）
     snapshot_interval_sec: int = 300
 
-    # 扁平：哪个 BKD project + 它对应哪个 repo
-    # snapshot 循环只扫这一个 project；prompt 渲染时直接用 repo_url
-    bkd_project_id: str = "77k9z58j"
-    repo_url: str = "https://github.com/phona/ubox-crosser.git"
+    # 不存任何 repo / project_id：
+    # - repo URL 由 agent 自己 `git remote get-url origin` 取（在 BKD session cwd 里）
+    # - project_id 来自 webhook payload；snapshot 扫描 req_state.project_id distinct（多项目自然支持）
 
     # Workdir 模板（vm-node04 上的路径）
     workdir_root: str = "/var/sisyphus-ci"

@@ -25,7 +25,6 @@ async def open_gh_and_bugfix(*, body, req_id, tags, ctx):
     proj = body.projectId
     branch = (ctx or {}).get("branch") or f"feat/{req_id}"
     workdir = (ctx or {}).get("workdir") or f"{settings.workdir_root}/feat-{req_id}"
-    repo_url = (ctx or {}).get("repo_url") or settings.repo_url
     source_issue_id = body.issueId
     kind = _infer_kind(tags)
     incident_key = f"{req_id}:{kind}"
@@ -50,7 +49,7 @@ async def open_gh_and_bugfix(*, body, req_id, tags, ctx):
         gh_prompt = render(
             "github_issue.md.j2",
             req_id=req_id, kind=kind, source_issue_id=source_issue_id,
-            branch=branch, workdir=workdir, repo_url=repo_url,
+            branch=branch, workdir=workdir,
             incident_key=incident_key,
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=gh.id, prompt=gh_prompt)
@@ -70,7 +69,6 @@ async def open_gh_and_bugfix(*, body, req_id, tags, ctx):
                 req_id=req_id, round_n=round_n, kind=kind,
                 source_issue_id=source_issue_id, branch=branch,
                 workdir=f"{settings.workdir_root}/bugfix-dev-{req_id}-round-{round_n}",
-                repo_url=repo_url,
             )
             await bkd.follow_up_issue(project_id=proj, issue_id=bug.id, prompt=bug_prompt)
             await bkd.update_issue(project_id=proj, issue_id=bug.id, status_id="working")

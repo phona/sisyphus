@@ -15,7 +15,9 @@ SOURCE_ISSUE={{ source_issue_id }}
 BRANCH_BASE={{ branch }}
 BRANCH_WORK=stage/bugfix-dev-{{ req_id }}-round-{{ round_n }}
 WORKDIR={{ workdir }}
-REPO_URL={{ repo_url }}
+
+> repo URL：在 session cwd 里 `REPO_URL=$(git remote get-url origin)`。
+> 多 repo 工作区下，先 cd 进 proposal.md 指定的 repo 子目录再取。
 
 ## 职责
 - 诊断 BUG 类型（CODE / TEST / SPEC）
@@ -26,6 +28,7 @@ REPO_URL={{ repo_url }}
 
 ## 步骤
 Step 1 bootstrap:
+  REPO_URL=$(git remote get-url origin)   # 在 session cwd 里
   cd $WORKDIR 不存在: git clone --branch $BRANCH_BASE $REPO_URL $WORKDIR
   存在: cd $WORKDIR && git fetch origin && git reset --hard origin/$BRANCH_BASE
   cd $WORKDIR && git checkout -B $BRANCH_WORK origin/$BRANCH_BASE

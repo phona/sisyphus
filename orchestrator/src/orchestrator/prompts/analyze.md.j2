@@ -9,7 +9,9 @@
 ## 需求分析 (ANALYZE)
 AGENT_ROLE=analyze-agent
 REQ={{ req_id }}
-REPO_URL={{ repo_url }}
+
+你的工作目录已 checkout 好对应仓库（多 repo 工作区下，按需 cd 进 repo 子目录）。
+需要 repo URL 时自己 `git remote get-url origin`。
 
 ## 职责：需求拆解 + 立框架
 - 看清需求要改什么 / 怎么改 / 联动哪些仓库
@@ -18,7 +20,6 @@ REPO_URL={{ repo_url }}
 
 ## 产出（严格对齐 openspec 规范，不自创文件）
 1. `openspec/changes/$REQ/proposal.md` — 一句话需求 + 影响范围 + 支持性判定
-   frontmatter 写 `repos: [{{ repos|default(["ubox-crosser"]) | join(", ") }}]`
 2. `openspec/changes/$REQ/design.md`（可选）— 高层方案、选型、风险
 3. `openspec/changes/$REQ/tasks.md` —— 三个 Stage section 骨架：
 ```markdown
@@ -37,5 +38,5 @@ REPO_URL={{ repo_url }}
 
 ## 完成时
 - 3 个文件 commit + push 到 feat/$REQ
-- update-issue tags（保留 analyze + $REQ）追加 `repo:<name>` 等
+- update-issue tags 保留 analyze + $REQ
 - move review
