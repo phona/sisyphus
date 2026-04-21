@@ -10,8 +10,9 @@ import hmac
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Header, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import engine
 from . import observability as obs
@@ -28,7 +29,7 @@ api = APIRouter()
 _BEARER = "bearer "
 
 
-def _verify_token(authorization: str | None = Header(default=None)) -> None:
+def _verify_token(authorization: str | None) -> None:
     """共享 token 校验：Authorization: Bearer <token>。常量时间比较防 timing。"""
     expected = settings.webhook_token
     provided = ""
@@ -59,12 +60,26 @@ class WebhookBody(BaseModel):
     changes: dict[str, Any] | None = None  # issue.updated 携带
 
 
+@api.get("/bkd-events")
+async def webhook_probe() -> dict:
+    """GET 探活，给 BKD / 健康巡检用。无需 auth。"""
+    return {"status": "ok", "endpoint": "bkd-events", "method": "POST", "auth": "Bearer"}
+
+
 @api.post("/bkd-events")
-async def webhook(
-    body: WebhookBody,
-    authorization: str | None = Header(default=None),
-) -> dict:
-    _verify_token(authorization)
+async def webhook(request: Request) -> JSONResponse:
+    # 顺序很关键：先 auth → 再 body 校验。否则 BKD 注册时无 auth 的探测会拿到 422
+    # 误以为格式错而拒绝注册。
+    _verify_token(request.headers.get("authorization"))
+    try:
+        raw = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body") from None
+    try:
+        body = WebhookBody.model_validate(raw)
+    except ValidationError as e:
+        return JSONResponse(status_code=422, content={"detail": e.errors()})
+
     pool = db.get_pool()
 
     # ─── 1. Dedup ───────────────────────────────────────────────────────────
