@@ -41,12 +41,15 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # REQ-997 analyze 报 "openspec: command not found"）
 RUN npm install -g @fission-ai/openspec@latest && openspec --version
 
-# ─── 3. sisyphus 合约脚本 ───────────────────────────────────────────────
+# ─── 3. sisyphus 合约脚本 + v0.2 manifest validator ──────────────────
+# validator 要 PyYAML
+RUN pip3 install --break-system-packages pyyaml
 COPY scripts/check-scenario-refs.sh \
      scripts/check-tasks-section-ownership.sh \
      scripts/pre-commit-acl.sh \
+     scripts/validate-manifest.py \
      /opt/sisyphus/scripts/
-RUN chmod +x /opt/sisyphus/scripts/*.sh
+RUN chmod +x /opt/sisyphus/scripts/*.sh /opt/sisyphus/scripts/*.py
 ENV PATH="/opt/sisyphus/scripts:$PATH"
 
 # ─── 4. DinD 入口（跟 runner/entrypoint.sh 共用） ──────────────────────
