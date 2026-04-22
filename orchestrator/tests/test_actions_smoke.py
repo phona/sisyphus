@@ -391,7 +391,7 @@ async def test_create_accept_skipped(monkeypatch):
 async def test_create_staging_test_checker_pass(monkeypatch):
     """checker_staging_test_enabled=True + checker pass → emit staging-test.pass。"""
     from orchestrator.actions import create_staging_test as mod
-    from orchestrator.checkers.staging_test import CheckResult
+    from orchestrator.checkers._types import CheckResult
 
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.checker_staging_test_enabled", True)
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.skip_staging_test", False)
@@ -425,7 +425,7 @@ async def test_create_staging_test_checker_pass(monkeypatch):
 async def test_create_staging_test_checker_fail(monkeypatch):
     """checker_staging_test_enabled=True + checker fail → emit staging-test.fail。"""
     from orchestrator.actions import create_staging_test as mod
-    from orchestrator.checkers.staging_test import CheckResult
+    from orchestrator.checkers._types import CheckResult
 
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.checker_staging_test_enabled", True)
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.skip_staging_test", False)

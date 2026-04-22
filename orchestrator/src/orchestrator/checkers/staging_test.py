@@ -5,25 +5,15 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 
 import structlog
 
 from .. import k8s_runner
+from ._types import CheckResult
 
 log = structlog.get_logger(__name__)
 
 _TAIL = 2048  # stdout/stderr 各截尾 2KB，防 OOM
-
-
-@dataclass(frozen=True)
-class CheckResult:
-    passed: bool
-    exit_code: int
-    stdout_tail: str
-    stderr_tail: str
-    duration_sec: float
-    cmd: str
 
 
 async def run_staging_test(
