@@ -107,10 +107,15 @@ runner:
   imagePullSecrets: []        # 如果 runner image 私有需要填
 
   # 单一 runner secret：所有 runner Pod 要的凭证都在里面（keys 见下）
-  #   gh_token    → env GH_TOKEN              给 agent gh CLI / git clone
+  #   gh_token    → env GH_TOKEN              给 agent gh CLI / git clone（**只读 PAT**）
   #   ghcr_user   → env SISYPHUS_GHCR_USER    docker login ghcr.io
-  #   ghcr_token  → env SISYPHUS_GHCR_TOKEN
+  #   ghcr_token  → env SISYPHUS_GHCR_TOKEN   （通常跟 gh_token 同一个只读 PAT）
   #   kubeconfig  → 挂载到 /root/.kube/config  accept 阶段 agent 起 helm 用
+  #
+  # ⚠️ Runner PAT 原则：最小权限只读。Fine-grained 首选（Contents Read +
+  # Statuses Read + Packages Read，限定到 sisyphus 涉及的 repo）；fallback 到
+  # classic `repo` + `read:packages` 必须配 branch protection / 90d rotation。
+  # 长远推荐 Deploy Key + read:packages PAT 或 GitHub App。详见 docs/V0.2-PLAN.md。
   #
   # createSecrets=true 时 helm 帮建 secret（用下方 secret 段的值）；
   # 生产建议 createSecrets=false + existingSecretName 指向 SealedSecret / ESO 管的 secret
