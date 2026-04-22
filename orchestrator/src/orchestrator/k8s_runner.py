@@ -325,8 +325,12 @@ class RunnerController:
         """重建 Pod（PVC 复用）。"""
         return await self.ensure_runner(req_id, wait_ready=True)
 
-    async def destroy(self, req_id: str) -> None:
-        """终态清理：删 Pod + PVC。幂等。"""
+    async def cleanup_runner(self, req_id: str, *, retain_pvc: bool = False) -> None:
+        """终态清理：删 Pod，PVC 按 retain_pvc 决定。幂等。
+
+        retain_pvc=True：escalated 时保留 PVC，给人翻 workspace；过期由 runner_gc 兜底
+        retain_pvc=False：done 时立即销 PVC（无 debug 价值），释放磁盘
+        """
         pod_deleted = pvc_deleted = False
         try:
             await asyncio.to_thread(
@@ -337,17 +341,22 @@ class RunnerController:
         except ApiException as e:
             if e.status != 404:
                 raise
-        try:
-            await asyncio.to_thread(
-                self.core_v1.delete_namespaced_persistent_volume_claim,
-                self.pvc_name(req_id), self.namespace,
-            )
-            pvc_deleted = True
-        except ApiException as e:
-            if e.status != 404:
-                raise
-        log.info("runner.destroyed", req_id=req_id,
+        if not retain_pvc:
+            try:
+                await asyncio.to_thread(
+                    self.core_v1.delete_namespaced_persistent_volume_claim,
+                    self.pvc_name(req_id), self.namespace,
+                )
+                pvc_deleted = True
+            except ApiException as e:
+                if e.status != 404:
+                    raise
+        log.info("runner.cleanup", req_id=req_id, retain_pvc=retain_pvc,
                  pod_deleted=pod_deleted, pvc_deleted=pvc_deleted)
+
+    async def destroy(self, req_id: str) -> None:
+        """向后兼容：等价 cleanup_runner(retain_pvc=False)。"""
+        await self.cleanup_runner(req_id, retain_pvc=False)
 
     async def get_runner_status(self, req_id: str) -> RunnerStatus | None:
         pod_name = self.pod_name(req_id)
@@ -423,7 +432,8 @@ class RunnerController:
             if not req_label or req_label in keep_lower:
                 continue
             req_id = req_label.upper() if req_label.lower().startswith("req-") else req_label
-            await self.destroy(req_id)
+            # 兜底 sweep：done 已立即清，escalated 过期才到这；都该硬删 PVC
+            await self.cleanup_runner(req_id, retain_pvc=False)
             cleaned.append(req_id)
 
         if cleaned:

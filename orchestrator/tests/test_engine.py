@@ -4,12 +4,14 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from orchestrator import engine
+from orchestrator import engine, k8s_runner
 from orchestrator.actions import REGISTRY
 from orchestrator.state import Event, ReqState
 
@@ -143,6 +145,128 @@ async def test_cas_failure_skips(stub_actions):
     )
     assert result["action"] == "skip"
     assert "concurrent" in result["reason"]
+
+
+# ─── M10: terminal state 即时 cleanup ─────────────────────────────────
+
+
+@pytest.fixture
+def mock_runner_controller():
+    """注入 fake controller，断言 cleanup_runner 调用参数。"""
+    fake = MagicMock()
+    fake.cleanup_runner = AsyncMock(return_value=None)
+    k8s_runner.set_controller(fake)
+    yield fake
+    k8s_runner.set_controller(None)
+
+
+async def _drain_tasks() -> None:
+    """让 fire-and-forget 的 asyncio.create_task 跑完。"""
+    # 收集除当前外所有 task；engine.step 用 create_task 起 cleanup
+    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_terminal_done_triggers_cleanup_no_retain(stub_actions, mock_runner_controller):
+    """ARCHIVING + ARCHIVE_DONE → DONE 应触发 cleanup_runner(retain_pvc=False)。"""
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ARCHIVING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.ARCHIVING, ctx={}, event=Event.ARCHIVE_DONE,
+    )
+    await _drain_tasks()
+
+    assert pool.rows["REQ-1"].state == ReqState.DONE.value
+    mock_runner_controller.cleanup_runner.assert_awaited_once_with(
+        "REQ-1", retain_pvc=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_terminal_escalated_triggers_cleanup_retain_pvc(
+    stub_actions, mock_runner_controller,
+):
+    """SESSION_FAILED → ESCALATED 应触发 cleanup_runner(retain_pvc=True)。"""
+    calls, reg = stub_actions
+
+    async def escalate(*, body, req_id, tags, ctx):
+        calls.append(("escalate", {"req_id": req_id}))
+        return {"escalated": True}
+
+    reg["escalate"] = escalate
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.DEV_RUNNING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.failed"})()
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.DEV_RUNNING, ctx={}, event=Event.SESSION_FAILED,
+    )
+    await _drain_tasks()
+
+    assert pool.rows["REQ-1"].state == ReqState.ESCALATED.value
+    mock_runner_controller.cleanup_runner.assert_awaited_once_with(
+        "REQ-1", retain_pvc=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_non_terminal_does_not_trigger_cleanup(
+    stub_actions, mock_runner_controller,
+):
+    """非 terminal 转移不该 cleanup（如 DEV_RUNNING + DEV_DONE → STAGING_TEST_RUNNING）。"""
+    calls, reg = stub_actions
+
+    async def create_staging_test(*, body, req_id, tags, ctx):
+        calls.append(("create_staging_test", {"req_id": req_id}))
+        return {"ok": True}
+
+    reg["create_staging_test"] = create_staging_test
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.DEV_RUNNING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.DEV_RUNNING, ctx={}, event=Event.DEV_DONE,
+    )
+    await _drain_tasks()
+
+    mock_runner_controller.cleanup_runner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_no_controller_safe(stub_actions, monkeypatch):
+    """没 K8s controller（dev / 测试）→ 静默跳过，不报错。"""
+    k8s_runner.set_controller(None)
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ARCHIVING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    # 不抛 = ok
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.ARCHIVING, ctx={}, event=Event.ARCHIVE_DONE,
+    )
+    await _drain_tasks()
+    assert pool.rows["REQ-1"].state == ReqState.DONE.value
+
+
+@pytest.mark.asyncio
+async def test_cleanup_failure_does_not_block_engine(stub_actions, mock_runner_controller):
+    """cleanup_runner 抛错 → engine 不受影响（fire-and-forget）。"""
+    mock_runner_controller.cleanup_runner = AsyncMock(side_effect=RuntimeError("kapow"))
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ARCHIVING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    result = await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.ARCHIVING, ctx={}, event=Event.ARCHIVE_DONE,
+    )
+    await _drain_tasks()
+
+    assert pool.rows["REQ-1"].state == ReqState.DONE.value
+    assert result["next_state"] == ReqState.DONE.value
 
 
 @pytest.mark.asyncio

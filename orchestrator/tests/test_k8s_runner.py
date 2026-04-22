@@ -212,6 +212,62 @@ async def test_destroy_deletes_both_idempotent():
     core.delete_namespaced_persistent_volume_claim.assert_called_once()
 
 
+# ─── M10: cleanup_runner ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cleanup_runner_default_deletes_both():
+    """retain_pvc 默认 False → 删 pod + PVC（done 路径）。"""
+    core = MagicMock()
+    core.delete_namespaced_pod = MagicMock(return_value=None)
+    core.delete_namespaced_persistent_volume_claim = MagicMock(return_value=None)
+    rc = _make_controller(core)
+    await rc.cleanup_runner("REQ-9")
+    core.delete_namespaced_pod.assert_called_once_with("runner-req-9", "sisyphus-runners")
+    core.delete_namespaced_persistent_volume_claim.assert_called_once_with(
+        "workspace-req-9", "sisyphus-runners",
+    )
+
+
+@pytest.mark.asyncio
+async def test_cleanup_runner_retain_pvc_only_deletes_pod():
+    """retain_pvc=True → 只删 pod，PVC 留给人翻（escalated 路径）。"""
+    core = MagicMock()
+    core.delete_namespaced_pod = MagicMock(return_value=None)
+    core.delete_namespaced_persistent_volume_claim = MagicMock(return_value=None)
+    rc = _make_controller(core)
+    await rc.cleanup_runner("REQ-9", retain_pvc=True)
+    core.delete_namespaced_pod.assert_called_once_with("runner-req-9", "sisyphus-runners")
+    core.delete_namespaced_persistent_volume_claim.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_runner_idempotent_on_404():
+    """pod / PVC 已不在 → 吃 404，不抛。"""
+    core = MagicMock()
+    core.delete_namespaced_pod = MagicMock(
+        side_effect=ApiException(status=404, reason="Not Found")
+    )
+    core.delete_namespaced_persistent_volume_claim = MagicMock(
+        side_effect=ApiException(status=404, reason="Not Found")
+    )
+    rc = _make_controller(core)
+    await rc.cleanup_runner("REQ-1")  # 不抛 = ok
+    core.delete_namespaced_pod.assert_called_once()
+    core.delete_namespaced_persistent_volume_claim.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_runner_raises_on_other_api_error():
+    core = MagicMock()
+    core.delete_namespaced_pod = MagicMock(
+        side_effect=ApiException(status=500, reason="server error")
+    )
+    rc = _make_controller(core)
+    with pytest.raises(ApiException):
+        await rc.cleanup_runner("REQ-1")
+
+
 # ─── gc_orphans ────────────────────────────────────────────────────────
 
 
