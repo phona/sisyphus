@@ -110,5 +110,12 @@ class Settings(BaseSettings):
     # 测试失败从第 N 轮起改走 diagnose agent（分流 spec-bug/env-bug/code-bug）
     retry_diagnose_threshold: int = 3
 
+    # ─── M6：analyze 歧义 admission（跟 M3 manifest schema 协同） ─────────
+    # True = fanout_specs 开 spec issue 前先跑 manifest_validate，
+    #        open_questions 非空 → emit ANALYZE_PENDING_HUMAN → 挂 analyzing-pending-human
+    # False（默认）= 老路，analyze-agent tag → 直接 fanout_specs，不验歧义
+    # 回滚：unset env / set false → rollout restart
+    admission_analyze_pending_questions: bool = False
+
 
 settings = Settings()  # type: ignore[call-arg]

@@ -81,9 +81,44 @@ sources:
 integration:
   repo: <owner>/<integration-repo>
   path: integration/<integration-repo>
+
+# ↓ ambiguity admission（M6 强制三段，三段都必须存在，内容为空数组 [] 亦合法）
+open_questions: []            # 需求里还没敲定的歧义点；**非空直接 hold REQ 等人答**
+assumptions: []               # 你为了能继续推进所做的假设（给人事后审）
+out_of_scope: []              # 主动划出的边界，避免 scope creep
 ```
 
 如果没 integration（纯 source repo REQ），省略整个 `integration:` 段。
+
+#### Step A4.1: ambiguity admission（硬要求，不写三段 validator 会拒）
+
+**你必须认真扫三类歧义**，每一类都要自证"查过了"：
+
+1. **open_questions**（阻塞项）：任何你看了 intent description 后**说不清楚**的点
+   都必须列这里。举例：
+   - "登录支持手机号还是邮箱？两个都支持还是二选一？"
+   - "失败后要不要重试？重试几次？"
+   - "accept 拿线上 prod 库还是 staging 库？"
+
+   **不要靠猜推进。** 哪怕只有一个 open_question，sisyphus 都会把 REQ 挂在
+   `analyzing-pending-human` 状态等人答完再推进。
+
+   如果你认真查了 intent description / 相关 repo 代码 / 相关 openspec，
+   **确信没歧义**，也要留**至少一条**自证：比如
+   `"已检查 intent description / 代码注释 / openspec 变更历史，无歧义"`。
+   **不允许 `open_questions: []` 配空白说明** —— 要么有歧义，要么有自证。
+
+2. **assumptions**（推进前提）：你为了能写出 tasks 骨架而**隐含做的假设**，
+   哪怕 open_questions 都清零，也得列给人审。举例：
+   - "假设 REQ 只改 ttpos-server-go，不动 ttpos-flutter"
+   - "假设现有 user table 已经有 phone 字段"
+
+3. **out_of_scope**（边界）：相关但本 REQ 不做的东西。举例：
+   - "不改 admin 后台的用户列表显示"
+   - "不动 OAuth 第三方登录"
+
+**三个字段都必须存在**（空数组 `[]` 也算合法），schema validator 会强制。
+内容质量靠 review 人把关。
 
 ### Step A5: 跑 validator 确认 manifest 合法
 
