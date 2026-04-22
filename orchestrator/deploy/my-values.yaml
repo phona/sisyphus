@@ -1,0 +1,109 @@
+# Sisyphus v0.2 deployment values（vm-node04 K3s / ns: sisyphus）
+# ─────────────────────────────────────────────────────────────────
+# 使用前提：先在 vm-node04 上跑 `deploy-secrets.sh` 把两个 secret 建好：
+#   - sisyphus/orch-sisyphus-orchestrator  （bkd_token + webhook_token + pg_dsn）
+#   - sisyphus-runners/sisyphus-runner-secrets  （gh_token + ghcr_* + kubeconfig）
+# 这份 values.yaml 本身**不含任何 secret**，可放 repo、提 PR 审计。
+# ─────────────────────────────────────────────────────────────────
+
+# ── orchestrator image ────────────────────────────────────────────
+image:
+  repository: ghcr.io/phona/sisyphus-orchestrator
+  tag: main                       # 实际跑的 tag；CI 自动覆盖到最新 sha
+  pullPolicy: IfNotPresent
+
+replicaCount: 1                    # 多副本对状态机 dedup 无帮助
+
+# ── Ingress ───────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: traefik
+  hosts:
+    - host: sisyphus.43.239.84.24.nip.io    # 按实际域名改
+      paths:
+        - path: /bkd-events
+          pathType: Prefix
+        - path: /healthz
+          pathType: Prefix
+        - path: /admin
+          pathType: Prefix
+  tls: []
+
+# ── 业务 env（skip flag 等；生产全 false）────────────────────────
+env:
+  log_level: INFO
+  log_json: true
+  bkd_base_url: https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api
+  workdir_root: /var/sisyphus-ci
+  skip_analyze: false
+  skip_spec: false
+  skip_dev: false
+  skip_staging_test: false
+  skip_pr_ci: false
+  skip_accept: true              # ttpos-arch-lab Makefile ci-accept-env-up 接好前保持 true
+  skip_reviewer: false
+  skip_archive: false
+  test_mode: false
+
+# ── orchestrator 自己的 secret（BKD+webhook token）走 existingSecret ──
+secret:
+  create: false                  # deploy-secrets.sh 建
+existingSecret: orch-sisyphus-orchestrator
+existingSecretKeys:
+  bkd_token: bkd_token
+  webhook_token: webhook_token
+  pg_dsn: pg_dsn                 # 如果用独立 pg_dsn 字段，否则走下面拼接
+
+# ── PG（Bitnami chart 装的，走 passwordSecret 拼 DSN）────────────
+postgres:
+  host: sisyphus-postgresql.sisyphus.svc
+  port: 5432
+  database: sisyphus
+  user: sisyphus
+  passwordSecret:
+    name: sisyphus-postgresql
+    key: postgres-password
+
+observability:
+  enabled: true
+  database: sisyphus_obs
+  snapshotIntervalSec: 300
+
+# ── v0.2 runner（K8s Pod + PVC）─────────────────────────────────
+runner:
+  namespace: sisyphus-runners
+  createNamespace: true          # helm 建 ns（uninstall 不删）
+  createRbac: true               # 建 SA/Role/RoleBinding
+  serviceAccountName: sisyphus-runner-sa
+
+  image: ghcr.io/phona/sisyphus-runner-go:main
+  storageClass: local-path       # K3s 默认
+  workspaceSize: 10Gi
+  readyTimeoutSec: 120
+  retainOnEscalateDays: 7
+  gcIntervalSec: 3600
+  imagePullSecrets: []
+
+  # runner secret 由 deploy-secrets.sh 建，不让 helm 管
+  createSecrets: false
+  existingSecretName: sisyphus-runner-secrets
+  secretName: sisyphus-runner-secrets
+
+# ── probes / 资源 ──────────────────────────────────────────────────
+probes:
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 10
+    periodSeconds: 30
+  readiness:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
