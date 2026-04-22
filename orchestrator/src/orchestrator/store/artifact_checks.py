@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncpg
 
-from ..checkers.staging_test import CheckResult
+from ..checkers._types import CheckResult
 
 
 async def insert_check(pool: asyncpg.Pool, req_id: str, stage: str, result: CheckResult) -> None:

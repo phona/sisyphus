@@ -5,7 +5,8 @@ import asyncio
 
 import pytest
 
-from orchestrator.checkers.staging_test import CheckResult, run_staging_test
+from orchestrator.checkers._types import CheckResult
+from orchestrator.checkers.staging_test import run_staging_test
 from orchestrator.k8s_runner import ExecResult
 
 

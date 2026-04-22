@@ -93,5 +93,13 @@ class Settings(BaseSettings):
     # False（默认）= 走老路，创建 BKD agent issue（回滚：unset env / set false → rollout restart）
     checker_staging_test_enabled: bool = False
 
+    # ─── M2：pr-ci-watch 自检 ────────────────────────────────────────────
+    # True = sisyphus 用 GitHub REST API 轮询 PR check-runs，不再起 BKD agent
+    # False（默认）= 走老路 BKD agent。回滚同上。
+    checker_pr_ci_watch_enabled: bool = False
+    # 轮询参数（仅 checker 模式下用）
+    pr_ci_watch_poll_interval_sec: int = 30
+    pr_ci_watch_timeout_sec: int = 1800   # 30 min
+
 
 settings = Settings()  # type: ignore[call-arg]
