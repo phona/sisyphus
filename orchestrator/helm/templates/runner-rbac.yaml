@@ -26,7 +26,8 @@ rules:
     verbs: ["get", "list", "watch", "create", "delete", "patch"]
   - apiGroups: [""]
     resources: ["pods/exec"]
-    verbs: ["create"]
+    # websocket exec handshake 是 GET，纯 create 不够（M1/M2 sisyphus checker 直 exec runner pod）
+    verbs: ["create", "get"]
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "delete", "patch"]
