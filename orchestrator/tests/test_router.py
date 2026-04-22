@@ -33,16 +33,18 @@ CASES: list[tuple[str, list[str], Event | None]] = [
     ("session.completed", ["bugfix", "REQ-1", "round-1"],                    Event.BUGFIX_DONE),
     ("session.completed", ["bugfix", "REQ-1", "diagnosis:spec-bug"],         Event.BUGFIX_SPEC_BUG),
     ("session.completed", ["bugfix", "REQ-1", "diagnosis:env-bug"],          Event.BUGFIX_ENV_BUG),
-    ("session.completed", ["test-fix", "REQ-1", "round-1"],                  Event.TEST_FIX_DONE),
-    ("session.completed", ["reviewer", "REQ-1", "result:pass"],              Event.REVIEWER_PASS),
-    ("session.completed", ["reviewer", "REQ-1", "result:fail"],              Event.REVIEWER_FAIL),
+    # M5 diagnose 分流
+    ("session.completed", ["diagnose", "REQ-1", "diagnosis:code-bug"],       Event.BUGFIX_RETRY),
+    ("session.completed", ["diagnose", "REQ-1", "diagnosis:spec-bug"],       Event.SPEC_REWORK),
+    ("session.completed", ["diagnose", "REQ-1", "diagnosis:env-bug"],        Event.BUGFIX_ENV_BUG),
+    ("session.completed", ["diagnose", "REQ-1", "diagnosis:unknown"],        Event.BUGFIX_ENV_BUG),
+    ("session.completed", ["diagnose", "REQ-1"],                             Event.BUGFIX_ENV_BUG),
     ("session.completed", ["done-archive", "REQ-1"],                         Event.ARCHIVE_DONE),
 
     # 没结果 tag → None（agent 没正常完成）
     ("session.completed", ["staging-test", "REQ-1"],                         None),
     ("session.completed", ["pr-ci", "REQ-1"],                                None),
     ("session.completed", ["accept", "REQ-1"],                               None),
-    ("session.completed", ["reviewer", "REQ-1"],                             None),
 
     # 未知 event_type
     ("session.unknown",   ["dev", "REQ-1"],                                  None),

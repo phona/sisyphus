@@ -37,7 +37,7 @@ _STAGE_FROM_TAGS = (
     "analyze",
     "contract-spec", "acceptance-spec",
     "dev", "ci",
-    "accept", "bugfix", "test-fix", "reviewer",
+    "accept", "bugfix", "diagnose",
     "done-archive", "github-incident",
 )
 

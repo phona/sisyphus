@@ -82,7 +82,6 @@ class Settings(BaseSettings):
     skip_staging_test: bool = False   # staging-test.pass（调试环境跑 unit+int）
     skip_pr_ci: bool = False          # pr-ci.pass（PR CI 全套等绿）
     skip_accept: bool = False         # accept.pass (ttpos-arch-lab 接好前默认 true)
-    skip_reviewer: bool = False       # reviewer.pass (bugfix 子链)
     skip_archive: bool = False        # archive.done (跳过真 PR 创建)
 
     # 全部 skip = 状态机几秒走完，验 transition + cleanup，不动 BKD agent
