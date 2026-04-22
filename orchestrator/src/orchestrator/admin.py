@@ -1,16 +1,18 @@
-"""Admin endpoints：手动驱状态机 + 强制处理卡住的 REQ。
+"""Admin endpoints：手动驱状态机 + 强制处理卡住的 REQ + v0.2 runner 运维。
 
 需要同样的 Authorization: Bearer <webhook_token> 头。
 
-POST /admin/req/{req_id}/emit
-   body: {"event": "ci-int.pass"}    # Event 枚举值
-   → 给 REQ 注入一个事件，让 engine 试 transition
+基础（已有）：
+  POST /admin/req/{req_id}/emit       body: {"event": "..."}
+  POST /admin/req/{req_id}/escalate
+  GET  /admin/metrics
+  GET  /admin/req/{req_id}
 
-POST /admin/req/{req_id}/escalate
-   → 强制 state=escalated，标记 escalated_reason=admin
-
-POST /admin/req/{req_id}/cancel
-   → 同 escalate + 提示外部清理 container/volume
+v0.2 runner 运维（新）：
+  POST /admin/req/{req_id}/pause      → 删 Pod，PVC 保留
+  POST /admin/req/{req_id}/resume     → 重建 Pod
+  POST /admin/req/{req_id}/rebuild-workspace  → 强拉代码重建 workspace（需 PVC 存在）
+  GET  /admin/runners                  → 列所有 runner pod / pvc 状态
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ import structlog
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from . import engine
+from . import engine, k8s_runner
 from .state import Event, ReqState
 from .store import db, req_state
 from .webhook import _verify_token
@@ -210,4 +212,137 @@ async def get_req(
         "context": row.context,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v0.2 runner 运维 endpoints
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _require_controller() -> k8s_runner.RunnerController:
+    """没初始化就 503，不让 caller 以为成功了。"""
+    try:
+        return k8s_runner.get_controller()
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"k8s runner controller not initialized: {e}",
+        ) from None
+
+
+@admin.post("/req/{req_id}/pause")
+async def pause_runner(
+    req_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """删 Pod（PVC 保留），释放 docker daemon / 节点内存资源；workspace 保留。
+
+    适合"让出资源给高优 REQ"的场景。resume 即恢复。
+    """
+    _verify_token(authorization)
+    rc = _require_controller()
+
+    pool = db.get_pool()
+    row = await req_state.get(pool, req_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"req {req_id} not found")
+
+    deleted = await rc.pause(req_id)
+    log.warning("admin.pause", req_id=req_id, pod_deleted=deleted)
+    return {"action": "paused", "pod_deleted": deleted, "pvc_kept": True}
+
+
+@admin.post("/req/{req_id}/resume")
+async def resume_runner(
+    req_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """重建 Pod，PVC 自动重新挂载。"""
+    _verify_token(authorization)
+    rc = _require_controller()
+
+    pool = db.get_pool()
+    row = await req_state.get(pool, req_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"req {req_id} not found")
+
+    pod_name = await rc.resume(req_id)
+    log.warning("admin.resume", req_id=req_id, pod=pod_name)
+    return {"action": "resumed", "pod": pod_name}
+
+
+class RebuildBody(BaseModel):
+    """rebuild workspace 的参数。"""
+    keep_pvc: bool = True     # True = 保留 PVC 只重拉 git；False = 删 PVC 从零重建
+
+
+@admin.post("/req/{req_id}/rebuild-workspace")
+async def rebuild_workspace(
+    req_id: str,
+    body: RebuildBody | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """强制重建 workspace。
+
+    场景：
+    - PVC 数据被误删 / 损坏
+    - 手动调试需要从 branch 头重新开始
+    - manifest.yaml 丢了
+
+    行为：
+    1. 删除当前 Pod
+    2. 若 keep_pvc=False，也删 PVC（workspace 清零，但还需人工补 manifest）
+    3. 重建 Pod（PVC 保留则挂原 PVC；删了就挂新的空 PVC）
+    4. 由下一个 stage 的 agent 自行检测 workspace 丢 → 重新 clone + 写 manifest
+       （agent prompt 里的"起手自检"逻辑会处理）
+
+    **不**触发状态机重走——REQ state 不变，只管 K8s 资源。
+    """
+    _verify_token(authorization)
+    rc = _require_controller()
+    params = body or RebuildBody()
+
+    pool = db.get_pool()
+    row = await req_state.get(pool, req_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"req {req_id} not found")
+
+    if params.keep_pvc:
+        # 只删 pod，重建（PVC 原样挂回）
+        await rc.pause(req_id)
+        pod_name = await rc.ensure_runner(req_id, wait_ready=True)
+        action = "rebuilt_pod_pvc_kept"
+    else:
+        # 全销重建（PVC 也删）
+        await rc.destroy(req_id)
+        pod_name = await rc.ensure_runner(req_id, wait_ready=True)
+        action = "rebuilt_pod_pvc_recreated"
+
+    log.warning("admin.rebuild_workspace", req_id=req_id,
+                action=action, state=row.state.value)
+    return {"action": action, "pod": pod_name, "current_state": row.state.value}
+
+
+@admin.get("/runners")
+async def list_runners(
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """列 sisyphus-runners namespace 下所有 runner Pod + PVC 状态。"""
+    _verify_token(authorization)
+    rc = _require_controller()
+    runners = await rc.list_runners()
+    return {
+        "count": len(runners),
+        "runners": [
+            {
+                "req_id": r.req_id,
+                "pod_name": r.pod_name,
+                "pvc_name": r.pvc_name,
+                "pod_phase": r.pod_phase,
+                "pvc_phase": r.pvc_phase,
+                "created_at": r.created_at,
+            }
+            for r in runners
+        ],
     }

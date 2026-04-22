@@ -7,7 +7,7 @@ import logging
 import structlog
 from fastapi import FastAPI
 
-from . import k8s_runner, snapshot
+from . import k8s_runner, runner_gc, snapshot
 from .admin import admin as admin_api
 from .config import settings
 from .migrate import apply_pending
@@ -63,6 +63,9 @@ async def startup() -> None:
         )
         k8s_runner.set_controller(controller)
         log.info("k8s_runner.initialized", namespace=settings.runner_namespace)
+        # 5. 起 runner GC 后台任务（周期清 done/escalated 过保留期的 PVC）
+        if settings.runner_gc_interval_sec > 0:
+            _bg_tasks.append(asyncio.create_task(runner_gc.run_loop(), name="runner_gc"))
     except Exception as e:
         # dev / 单机 / 没 kubeconfig 的场景允许失败（调 action 会抛，但 http 主进程能起）
         log.warning("k8s_runner.init_failed", error=str(e))
