@@ -30,7 +30,7 @@ accept 通过 + teardown 已清 lab。你现在要：
 POD=runner-{{ req_id | lower }}
 NS=sisyphus-runners
 kubectl -n $NS exec $POD -- validate-manifest.py
-kubectl -n $NS exec $POD -- cat /workspace/.sisyphus/manifest.yaml
+kubectl -n $NS exec $POD -- cat /workspace/.sisyphus/manifest.yaml > /tmp/manifest.yaml
 ```
 
 ## 步骤
@@ -41,32 +41,43 @@ kubectl -n $NS exec $POD -- cat /workspace/.sisyphus/manifest.yaml
 - 如果 `merge_order` 已填（analyze-agent 可能写过），按它来
 - 如果没填，按 `sources[].depends_on` 拓扑排序（被依赖的 repo 先）
 
+回写到 runner pod 的 manifest：
+
 ```bash
-# 简单情况（手算）：depends_on 空的 repo 先 merge，然后依赖它的
-# 复杂情况：agent 自己拓扑排序，然后回写 merge_order 给审计
+# 自己算好顺序后
 kubectl -n $NS exec $POD -- yq -i '.merge_order = ["<repo1>", "<repo2>", ...]' /workspace/.sisyphus/manifest.yaml
 ```
 
-### Step 2: 按顺序 merge 每个 PR
+### Step 2: 按顺序 merge 每个 PR（在你自己 cwd，用自己的 GH_TOKEN 有写权限）
 
 ```bash
-for repo in $(kubectl -n $NS exec $POD -- yq '.merge_order[]' /workspace/.sisyphus/manifest.yaml); do
-  pr_url=$(kubectl -n $NS exec $POD -- yq ".pr_by_repo.\"$repo\"" /workspace/.sisyphus/manifest.yaml)
-  kubectl -n $NS exec $POD -- bash -c "gh pr merge $pr_url --squash --delete-branch --auto"
+for repo in $(yq '.merge_order[]' /tmp/manifest.yaml); do
+  pr_url=$(yq ".pr_by_repo.\"$repo\"" /tmp/manifest.yaml)
+  gh pr merge "$pr_url" --squash --delete-branch --auto
 done
 ```
 
-`--auto` 会等分支保护要求的 check 全绿才 merge（如果 repo 配了保护）。没配则立即 merge。
+`--auto` 会等分支保护要求的 check 全绿才 merge（如果 repo 配了保护）。
+**不能**在 `kubectl exec runner pod` 里跑 `gh pr merge` —— runner PAT 只读。
 
-### Step 3: 各 source repo openspec apply
+### Step 3: leader repo openspec apply
 
-归档 `openspec/changes/{{ req_id }}/` → `openspec/specs/`。由 leader repo 负责（多 repo 场景共享一份 spec）：
+归档 `openspec/changes/{{ req_id }}/` → `openspec/specs/`（由 leader repo 管）。
+**在你自己 cwd 里跑**：
 
 ```bash
-LEADER=$(kubectl -n $NS exec $POD -- yq '.sources[] | select(.role == "leader") | .path' /workspace/.sisyphus/manifest.yaml)
-kubectl -n $NS exec $POD -- bash -c "cd /workspace/$LEADER && openspec apply {{ req_id }}"
-# 这会更新 openspec/specs/ 然后 commit 一个 "archive $REQ" patch
-# push 到 main（通过 follow-up PR 或 admin 直推）
+leader=$(yq '.sources[] | select(.role == "leader") | .repo' /tmp/manifest.yaml)
+leader_name=$(basename "$leader")
+
+gh repo clone "$leader" "./$leader_name-archive"
+cd "./$leader_name-archive"
+git fetch origin
+git checkout main
+git pull
+openspec apply {{ req_id }}
+# 会 commit "archive {{ req_id }}" 本地
+git push origin main    # 或发 follow-up PR，视 repo 分支保护
+cd -
 ```
 
 ### Step 4: 写结果到**本 issue**

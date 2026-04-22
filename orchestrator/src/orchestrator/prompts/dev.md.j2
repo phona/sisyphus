@@ -14,9 +14,12 @@
 AGENT_ROLE=dev-agent
 REQ={{ req_id }}
 
-sisyphus 已把 Pod + PVC 拉起，spec 阶段已把 tests / specs 写入 workspace。
+sisyphus 已把 runner Pod + PVC 拉起（你只读用它存 manifest + 跑自检）。
+你的**代码编辑 + 推送** 全部在**自己的 Coder workspace cwd** 里做，用你自己的
+`$GH_TOKEN`（Coder 里默认有写权限）。**不要**在 runner pod 里 git push 或 gh pr create
+—— runner 的 PAT 只读，不能 push。
+
 你**只写代码**：不跑 lint，不跑测试，不 build。本地测试交给 staging-test-agent。
-推完代码 + 开 PR 即完成。
 
 ---
 
@@ -26,96 +29,102 @@ sisyphus 已把 Pod + PVC 拉起，spec 阶段已把 tests / specs 写入 worksp
 POD=runner-{{ req_id | lower }}
 NS=sisyphus-runners
 kubectl -n $NS exec $POD -- validate-manifest.py   # manifest 合法才继续
+kubectl -n $NS exec $POD -- cat /workspace/.sisyphus/manifest.yaml > /tmp/manifest.yaml
 ```
 
 ## 步骤
 
-### Step 1: 读 manifest + 读 openspec
+### Step 1: clone 本 REQ 涉及的 repo 到你自己 cwd
 
 ```bash
-kubectl -n $NS exec $POD -- cat /workspace/.sisyphus/manifest.yaml
+# 你自己的 $CWD（Coder workspace），clone 各 source repo 到子目录
+for p in $(yq '.sources[].path' /tmp/manifest.yaml); do
+  repo=$(yq ".sources[] | select(.path == \"$p\") | .repo" /tmp/manifest.yaml)
+  branch=$(yq ".sources[] | select(.path == \"$p\") | .branch" /tmp/manifest.yaml)
+  name=$(basename $p)   # source/xxx → xxx
+  gh repo clone "$repo" "./$name" -- --branch main
+  cd "./$name"
+  git checkout -B "$branch" origin/main
+  cd -
+done
 ```
 
-拿到 sources 列表。每个 source repo 的 `openspec/changes/{{ req_id }}/` 下：
+### Step 2: 读 openspec/changes/{{ req_id }}/
+
+在 leader repo 下（role=leader 的 source）：
 - proposal.md + design.md（需求、方案）
 - contract.spec.yaml（LOCKED）
 - specs/<capability>/spec.md（Scenario，LOCKED）
 - tasks.md 的 `## Stage: implementation` section（你填）
 
-### Step 2: 各 source repo 同步分支
+### Step 3: 写业务代码（各 source repo 按需改）
 
-manifest.sources 里每个 repo 都有 branch 字段（通常 `stage/{{ req_id }}-dev`）：
-
-```bash
-for p in $(kubectl -n $NS exec $POD -- yq '.sources[].path' /workspace/.sisyphus/manifest.yaml); do
-  branch=$(kubectl -n $NS exec $POD -- yq ".sources[] | select(.path == \"$p\") | .branch" /workspace/.sisyphus/manifest.yaml)
-  kubectl -n $NS exec $POD -- bash -c "cd /workspace/$p && git fetch origin && (git checkout -B $branch origin/$branch 2>/dev/null || git checkout -B $branch)"
-done
-```
-
-### Step 3: 写业务代码（每 source repo 按需）
-
-实现在 `internal/` / `cmd/`。**新增 unit test 必须按 repo 内**
-`.claude/skills/unit-test/SKILL.md` 的约定写（pure / service-dependent 分类、env 取地址不硬编码、
-testify/assert 等）：
-
-```bash
-kubectl -n $NS exec $POD -- cat /workspace/<repo-path>/.claude/skills/unit-test/SKILL.md
-```
+实现在 `internal/` / `cmd/`。**新增 unit test 按 repo 内**
+`.claude/skills/unit-test/SKILL.md` 的约定写（pure / service-dependent 分类、env
+取地址不硬编码、testify/assert 等）。
 
 ### Step 4: 填 tasks.md 的 Stage: implementation
 
-- 把 analyze 留的 `- [ ] TODO:...` 换成具体任务
-- 每完成一条 `- [ ]` → `- [x]`，放弃 → `- [~] <原因>`
-- 最终 commit 里本 Stage section 应当全 `[x]` 或 `[~]`
+- analyze 留的 `- [ ] TODO:...` 换成具体任务
+- 每完成一条 `- [ ]` → `- [x]`；放弃 → `- [~] <原因>`
 
-### Step 5: 推分支（每 source repo 各推各的）
+### Step 5: 每个改动的 repo 各推各的（在你自己 cwd，**不是** runner pod）
 
 ```bash
-for p in $(kubectl -n $NS exec $POD -- yq '.sources[].path' /workspace/.sisyphus/manifest.yaml); do
-  branch=$(kubectl -n $NS exec $POD -- yq ".sources[] | select(.path == \"$p\") | .branch" /workspace/.sisyphus/manifest.yaml)
-  # 确认有 diff
-  if kubectl -n $NS exec $POD -- bash -c "cd /workspace/$p && git diff --quiet origin/$branch 2>/dev/null"; then
-    # 无 diff，跳过
-    continue
-  fi
-  kubectl -n $NS exec $POD -- bash -c "cd /workspace/$p && git add -A && git commit -m '[{{ req_id }}] dev' && git push origin $branch"
+for name in <每个改过的 repo>; do
+  cd "./$name"
+  git add -A
+  git commit -m "[{{ req_id }}] dev"
+  git push origin "<branch>"
+  cd -
 done
 ```
 
-### Step 6: 每 source repo 开 PR（有新 commit 才开）
+### Step 6: 开 PR（还是在你自己 cwd）
 
 ```bash
-for p in $(kubectl -n $NS exec $POD -- yq '.sources[].path' /workspace/.sisyphus/manifest.yaml); do
-  repo=$(kubectl -n $NS exec $POD -- yq ".sources[] | select(.path == \"$p\") | .repo" /workspace/.sisyphus/manifest.yaml)
-  branch=$(kubectl -n $NS exec $POD -- yq ".sources[] | select(.path == \"$p\") | .branch" /workspace/.sisyphus/manifest.yaml)
-  # 已开 PR 就拿 URL，没开就建
-  pr_url=$(kubectl -n $NS exec $POD -- bash -c "cd /workspace/$p && (gh pr view $branch --json url -q .url 2>/dev/null) || gh pr create --title '[{{ req_id }}] dev' --body '自动 PR，details in openspec/changes/{{ req_id }}/' --base main --head $branch --fill")
-  sha=$(kubectl -n $NS exec $POD -- bash -c "cd /workspace/$p && git rev-parse --short HEAD")
-  # 回填 manifest（原子写，防 race）
-  kubectl -n $NS exec $POD -- yq -i ".pr_by_repo.\"$repo\" = \"$pr_url\" | .sha_by_repo.\"$repo\" = \"$sha\"" /workspace/.sisyphus/manifest.yaml
+for name in <每个有新 commit 的 repo>; do
+  cd "./$name"
+  branch=<对应 branch>
+  # 已开就拿 URL；没开就建
+  pr_url=$(gh pr view "$branch" --json url -q .url 2>/dev/null) \
+    || pr_url=$(gh pr create --title "[{{ req_id }}] dev" \
+                             --body "auto PR; details in openspec/changes/{{ req_id }}/" \
+                             --base main --head "$branch" --fill)
+  sha=$(git rev-parse --short HEAD)
+
+  # 回填 manifest（在 runner pod 里改）
+  repo=<对应 repo 名>
+  kubectl -n $NS exec $POD -- \
+    yq -i ".pr_by_repo.\"$repo\" = \"$pr_url\" | .sha_by_repo.\"$repo\" = \"$sha\"" \
+    /workspace/.sisyphus/manifest.yaml
+  cd -
 done
 ```
 
 ### Step 7: move review
 
-update-issue：
+update-issue（对本 dev BKD issue）：
 - tags 保留 `[dev, {{ req_id }}]`
 - statusId=review
 
 ---
 
-## 硬约束（pre-commit ACL 会拦）
+## 硬约束
 
-### 禁改
-- `tests/contract/**` / `tests/acceptance/**` / `tests/ui/**`（spec 写的 LOCKED）
-- `openspec/changes/{{ req_id }}/specs/**`（contract/accept Scenario LOCKED）
-- `openspec/changes/{{ req_id }}/contract.spec.yaml`（LOCKED）
+### 禁改（pre-commit ACL 会拦）
+- `tests/contract/**` / `tests/acceptance/**` / `tests/ui/**`
+- `openspec/changes/{{ req_id }}/specs/**`
+- `openspec/changes/{{ req_id }}/contract.spec.yaml`
 - `openspec/changes/{{ req_id }}/tasks.md` 里本 Stage 之外的 section
-- `openspec/specs/**`（归 done-archive 阶段写）
+- `openspec/specs/**`
 
-### 不该做的事（v0.2 小步快跑，dev 不测）
-- **不跑** `go test` / `make ci-*`：交给 staging-test agent 跑（它有完整 fail 反馈闭环）
+### v0.2 小步快跑原则
+- **不跑** `go test` / `make ci-*`：交给 staging-test agent 跑（它有完整 fail 反馈）
 - **不 build image**：pr-ci-watch stage GHA 会 build
-- **不改 manifest.yaml 的结构字段**（schema_version / sources / integration），
-  只能追加 `sha_by_repo` / `pr_by_repo` 运行时字段
+- **不改 manifest.yaml 的 schema 字段**（schema_version / sources / integration）
+
+### 权限边界
+- push / gh pr create：**只能在你自己的 Coder workspace cwd**（用你自己的 GH_TOKEN）
+- runner pod 是只读 PAT，**不能** 在 `kubectl exec` 里做这些写操作
+- 只读操作可以在 runner pod（比如 `gh api repos/.../statuses`），但 staging-test / pr-ci 阶段该 agent 自己做，不是 dev 的事

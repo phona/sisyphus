@@ -41,18 +41,25 @@ kubectl exec runner-{{ req_id | lower }} -- bash -c "mkdir -p /workspace/.sisyph
 - **integration repo**（可选）：如果需要集成环境（比如 ttpos 要 helm 起 lab），声明它；
   纯单仓库 / 纯 library REQ 不声明
 
-### Step A3: clone repo 到约定结构
+### Step A3: clone repo 到约定结构（runner pod 里，只读 clone）
 
-source repo 放 `/workspace/source/<repo-name>/`，integration 放 `/workspace/integration/<repo-name>/`：
+source / integration repo 拷进 runner PVC 的约定路径。runner pod 的 `GH_TOKEN` 是
+只读 PAT —— clone + fetch 够用，不创建 stage 分支（后续 dev-agent 在自己 cwd 里创分支
+再 push）：
 
 ```bash
-kubectl exec runner-{{ req_id | lower }} -- bash -c '\
-  cd /workspace/source && \
-  git clone https://x-access-token:$GH_TOKEN@github.com/<owner>/<repo>.git && \
-  cd <repo> && git checkout -B stage/{{ req_id }}-dev'
+POD=runner-{{ req_id | lower }}
+NS=sisyphus-runners
+for owner_repo in <source repo 列表>; do
+  name=$(basename $owner_repo)
+  kubectl -n $NS exec $POD -- bash -c "cd /workspace/source && \
+    git clone https://x-access-token:\$GH_TOKEN@github.com/$owner_repo.git $name"
+done
+# integration repo（如有）clone 到 /workspace/integration/
 ```
 
-对每个 repo 都跑一遍。integration repo 同样 clone，但不创建 stage 分支（它不改代码）。
+每个 repo 都 clone 一遍。**不在 runner pod 创分支也不 push** —— 那是 dev-agent 的活，
+它在自己 cwd 里干。
 
 ### Step A4: 写 /workspace/.sisyphus/manifest.yaml
 
@@ -121,7 +128,8 @@ exit 0 才往下走。非 0 根据 stderr 修 manifest 再跑。
 
 ## 完成时
 
-- analyze 产物（proposal/design/tasks）commit + push 到 leader repo 的 `stage/{{ req_id }}-dev`
 - manifest.yaml validator 通过（**硬约束，不过就是 fail**）
+- analyze 产物（proposal/design/tasks）**在你自己 cwd** 里 commit + push 到
+  leader repo 的 `stage/{{ req_id }}-dev`（用你自己的 GH_TOKEN，runner 不负责 push）
 - update-issue tags 保留 `analyze` + `{{ req_id }}`
 - move review

@@ -60,26 +60,43 @@ Scenario 命名 `FEATURE-A<N>`（Given/When/Then，**用户视角**）。
 
 ## 起手自检
 
-所有命令包成 `kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- ...`：
-
 ```bash
 POD=runner-{{ req_id | lower }}
 NS=sisyphus-runners
 kubectl -n $NS exec $POD -- validate-manifest.py   # 不合法不继续
 ```
 
-## spec 写完的 lint（move review 前必须做）
+## 写 spec：在你自己的 Coder cwd
 
-**sisyphus 合约校验**（不依赖 repo Makefile）：
+不要在 runner pod 里改 leader repo 代码（runner PAT 只读，也不能 push）。流程：
+
 ```bash
-kubectl -n $NS exec $POD -- bash -c "cd /workspace/<leader-repo-path> && openspec validate openspec/changes/{{ req_id }}"
-kubectl -n $NS exec $POD -- bash -c "cd /workspace/<leader-repo-path> && check-scenario-refs.sh"
-```
-leader 路径从 manifest 里 `.sources[] | select(.role == \"leader\") | .path` 取。
+# 你自己 cwd
+leader_repo=$(kubectl -n $NS exec $POD -- yq '.sources[] | select(.role == "leader") | .repo' /workspace/.sisyphus/manifest.yaml)
+leader_branch=$(kubectl -n $NS exec $POD -- yq '.sources[] | select(.role == "leader") | .branch' /workspace/.sisyphus/manifest.yaml)
+name=$(basename ${leader_repo})
 
-不要在 spec 阶段跑 `make ci-*`（没实现前测 integration 会卡），只校验 spec 文件结构。
+gh repo clone "$leader_repo" "./$name"
+cd "./$name"
+git checkout -B "$leader_branch" origin/main
+# ... 写 openspec/changes/{{ req_id }}/specs/... 和 tests/contract/ 或 tests/acceptance/ 下文件
+```
+
+## 完成前 lint（在本地 cwd 或 runner pod 都行，读 OK）
+
+```bash
+openspec validate openspec/changes/{{ req_id }}     # 本地跑
+{{ "/opt/sisyphus/scripts/check-scenario-refs.sh" }}  # 先 file_deploy 到本地 或拷到 cwd
+```
+
+或在 runner pod 跑（只读，不改东西）：
+```bash
+kubectl -n $NS exec $POD -- bash -c "cd /workspace/source/$name && openspec validate openspec/changes/{{ req_id }}"
+```
+
+spec 阶段**不跑** `make ci-*`（dev 还没实现，integration test 必红，空耗时间）。
 
 ## 完成时
-- commit + push 到 leader repo 的 stage/{{ req_id }}-dev（spec 文件归 leader 管）
+- **在你自己 cwd**：git add + commit + push 到 `$leader_branch`（用你 Coder 的 GH_TOKEN，有写权限）
 - update-issue tags 保留 {{ spec_stage }} + {{ req_id }}
 - move review

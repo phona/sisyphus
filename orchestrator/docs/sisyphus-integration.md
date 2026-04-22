@@ -146,7 +146,7 @@ sisyphus 的 agent 写测试时调这两个 skill，**repo 必须提供**：
 |---|---|
 | 持久 workspace | PVC 生命周期绑 REQ，直到 done/escalate+7d 才清 |
 | 隔离 runner | 每 REQ 独立 Pod + PVC + K8s namespace |
-| 自动 secrets 注入 | GH_TOKEN / GHCR 凭证 / kubeconfig 自动挂进来 |
+| 自动 secrets 注入 | 只读 GH_TOKEN / GHCR 凭证 / kubeconfig 自动挂进来 |
 | 失败恢复 | K8s restartPolicy=Always；Pod 重启 workspace 不丢 |
 | pause/resume | 资源紧张时可临时 suspend REQ（PVC 留），晚些 resume |
 
@@ -155,6 +155,15 @@ Sisyphus **不做**的事（repo 自己管）：
 - 写 docker-compose / helm chart
 - 管 repo 内代码结构
 - 决定 test 该怎么写（由 `.claude/skills/` 规范）
+
+### 推送 / PR / Merge 不发生在 runner Pod
+
+runner 是**调试环境**，只验证，不改东西。所有写操作（git push / gh pr create /
+gh pr merge / gh issue create / openspec apply+push）都在 **BKD agent 自己的
+Coder workspace cwd** 里跑，用 Coder 自带的可写 GH token。
+
+runner Pod 拿的 `GH_TOKEN` secret 是**只读 PAT**，够 clone + pull + gh api 看
+commit statuses，不能 push。这是安全分层，runner 失陷不会污染 upstream。
 
 ---
 
