@@ -63,7 +63,7 @@ postgres:
   user: sisyphus
   passwordSecret:
     name: sisyphus-postgresql
-    key: postgres-password
+    key: password            # Bitnami：sisyphus 用户密码在 'password' key；'postgres-password' 是超级用户
 
 observability:
   enabled: true
