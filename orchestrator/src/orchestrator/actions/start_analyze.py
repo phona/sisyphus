@@ -5,7 +5,7 @@ kubectl exec 进去能立刻用。Pod 生命周期绑本 REQ 直到 done/escalat
 
 行为：
 1. ensure_runner（K8s：建 PVC + Pod，等 Ready）
-2. update-issue 把 intent issue 改名 [REQ-xxx] [ANALYZE] xxx + tags=[analyze, REQ-xxx]
+2. update-issue 把 intent issue 改名 [REQ-xxx] [ANALYZE] — <title> + tags=[analyze, REQ-xxx]
 3. follow-up-issue 发 analyze prompt
 4. update-issue statusId=working 触发 agent
 """
@@ -18,7 +18,7 @@ from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
 from ..state import Event
-from . import register
+from . import register, short_title
 from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
@@ -30,7 +30,6 @@ async def start_analyze(*, body, req_id, tags, ctx):
         return rv
     proj = body.projectId
     issue_id = body.issueId
-    raw_title = body.title or ""   # 用户创建 intent 时输入的原文
 
     # 1. 拉 K8s Pod + PVC（幂等；已存在就跳）
     try:
@@ -47,7 +46,7 @@ async def start_analyze(*, body, req_id, tags, ctx):
         await bkd.update_issue(
             project_id=proj,
             issue_id=issue_id,
-            title=f"[{req_id}] [ANALYZE] {raw_title}",
+            title=f"[{req_id}] [ANALYZE]{short_title(ctx)}",
             tags=["analyze", req_id],
         )
         prompt = render("analyze.md.j2", req_id=req_id)
