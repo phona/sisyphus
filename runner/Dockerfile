@@ -42,10 +42,9 @@ ENV PATH="/usr/local/go/bin:/root/go/bin:$PATH" \
     GOPATH=/root/go
 
 # ─── 3. openspec CLI ─────────────────────────────────────────────────────
-# openspec 上游目前是 npm package；如果包名/装法变了改这条
-RUN npm install -g @fission-codes/openspec 2>/dev/null || \
-    npm install -g openspec 2>/dev/null || \
-    echo "openspec install probe — adjust pkg name in Dockerfile"
+# 真包名是 @fission-ai/openspec（旧 Dockerfile 装的 @fission-codes/openspec 不存在，
+# 退回 openspec 是 npm 上的占位空包，REQ-997 analyze 暴露的）
+RUN npm install -g @fission-ai/openspec@latest && openspec --version
 
 # ─── 4. sisyphus 合约脚本 ───────────────────────────────────────────────
 # build context 必须是 sisyphus repo 根（CI workflow 已配 context: .）

@@ -37,9 +37,9 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && rm -rf /var/lib/apt/lists/*
 
 # ─── 2. openspec CLI ─────────────────────────────────────────────────────
-RUN npm install -g @fission-codes/openspec 2>/dev/null || \
-    npm install -g openspec 2>/dev/null || \
-    echo "openspec install probe — adjust pkg name if needed"
+# 真包名是 @fission-ai/openspec（旧版本误装 npm 上的占位 openspec@0.0.0 是空的，导致
+# REQ-997 analyze 报 "openspec: command not found"）
+RUN npm install -g @fission-ai/openspec@latest && openspec --version
 
 # ─── 3. sisyphus 合约脚本 ───────────────────────────────────────────────
 COPY scripts/check-scenario-refs.sh \
