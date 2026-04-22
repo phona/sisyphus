@@ -254,7 +254,7 @@ async def test_escalate(monkeypatch):
     assert "intent-1" in args  # 标在 intent issue 上
 
 
-# ─── done_archive / test_fix / reviewer ────────────────────────────────────
+# ─── done_archive / spawn_diagnose (M5) ───────────────────────────────────
 @pytest.mark.asyncio
 async def test_done_archive(monkeypatch):
     from orchestrator.actions import done_archive as mod
@@ -270,33 +270,55 @@ async def test_done_archive(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_test_fix_uses_round(monkeypatch):
-    from orchestrator.actions import create_test_fix as mod
+async def test_spawn_diagnose_uses_round(monkeypatch):
+    """M5：多轮 bugfix 失败触发诊断，tag=diagnose + parent-id。"""
+    from orchestrator.actions import spawn_diagnose as mod
     fake = make_fake_bkd()
-    fake.create_issue.return_value = FakeIssue(id="tfix-1")
-    patch_bkd(monkeypatch, "create_test_fix", fake)
-    patch_db(monkeypatch, "create_test_fix")
-    out = await mod.create_test_fix(
-        body=make_body(issue_id="bug-1"), req_id="REQ-9", tags=["bugfix"],
-        ctx={"bugfix_round": 2},
+    fake.create_issue.return_value = FakeIssue(id="diag-1")
+    patch_bkd(monkeypatch, "spawn_diagnose", fake)
+    patch_db(monkeypatch, "spawn_diagnose")
+    out = await mod.spawn_diagnose(
+        body=make_body(issue_id="bug-3"), req_id="REQ-9", tags=["bugfix"],
+        ctx={"bugfix_round": 3},
     )
-    assert out == {"test_fix_issue_id": "tfix-1", "round": 2}
-    last = fake.create_issue.await_args
-    assert "round-2" in last.kwargs["tags"]
+    assert out == {"diagnose_issue_id": "diag-1", "round": 3}
+    _, kwargs = fake.create_issue.await_args
+    assert "diagnose" in kwargs["tags"]
+    assert "REQ-9" in kwargs["tags"]
+    assert "parent-id:bug-3" in kwargs["tags"]
+    assert "DIAGNOSE after round-3" in kwargs["title"]
+    fake.follow_up_issue.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_create_reviewer_uses_round(monkeypatch):
-    from orchestrator.actions import create_reviewer as mod
+async def test_spawn_diagnose_without_round(monkeypatch):
+    """M4 尚未填 ctx.bugfix_round 时，round 显 0（action 不抛）。"""
+    from orchestrator.actions import spawn_diagnose as mod
     fake = make_fake_bkd()
-    fake.create_issue.return_value = FakeIssue(id="rvw-1")
-    patch_bkd(monkeypatch, "create_reviewer", fake)
-    patch_db(monkeypatch, "create_reviewer")
-    out = await mod.create_reviewer(
-        body=make_body(issue_id="tfix-1"), req_id="REQ-9", tags=["test-fix"],
-        ctx={"bugfix_round": 3},
+    fake.create_issue.return_value = FakeIssue(id="diag-2")
+    patch_bkd(monkeypatch, "spawn_diagnose", fake)
+    patch_db(monkeypatch, "spawn_diagnose")
+    out = await mod.spawn_diagnose(
+        body=make_body(issue_id="bug-x"), req_id="REQ-9", tags=["bugfix"], ctx={},
     )
-    assert out == {"reviewer_issue_id": "rvw-1", "round": 3}
+    assert out == {"diagnose_issue_id": "diag-2", "round": 0}
+
+
+@pytest.mark.asyncio
+async def test_open_gh_and_bugfix_prefers_ctx_round(monkeypatch):
+    """ctx['bugfix_round']=N 时直接 N+1，不再扫 BKD list-issues（M4 后接入点）。"""
+    from orchestrator.actions import open_gh_and_bugfix as mod
+    fake = make_fake_bkd()
+    fake.create_issue.side_effect = [FakeIssue(id="gh-1"), FakeIssue(id="bug-3")]
+    patch_bkd(monkeypatch, "open_gh_and_bugfix", fake)
+    patch_db(monkeypatch, "open_gh_and_bugfix")
+    out = await mod.open_gh_and_bugfix(
+        body=make_body(issue_id="pr-ci-1"), req_id="REQ-9", tags=["ci"],
+        ctx={"bugfix_round": 2},
+    )
+    assert out["round"] == 3
+    # list_issues 不应被调用（ctx 提供了 round）
+    fake.list_issues.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-"""状态机表驱动测试：每个 (state, event) 期望 transition（v0.2）。"""
+"""状态机表驱动测试：每个 (state, event) 期望 transition（M5）。"""
 from __future__ import annotations
 
 import pytest
@@ -12,7 +12,6 @@ EXPECTED = [
     (ReqState.ANALYZING,            Event.ANALYZE_DONE,        ReqState.SPECS_RUNNING,       "fanout_specs"),
     (ReqState.SPECS_RUNNING,        Event.SPEC_DONE,           ReqState.SPECS_RUNNING,       "mark_spec_reviewed_and_check"),
     (ReqState.SPECS_RUNNING,        Event.SPEC_ALL_PASSED,     ReqState.DEV_RUNNING,         "create_dev"),
-    # v0.2：dev → staging-test（砍 ci-unit/ci-int 作为独立 stage）
     (ReqState.DEV_RUNNING,          Event.DEV_DONE,            ReqState.STAGING_TEST_RUNNING, "create_staging_test"),
     (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_PASS,   ReqState.PR_CI_RUNNING,       "create_pr_ci_watch"),
     (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_FAIL,   ReqState.BUGFIX_RUNNING,      "open_gh_and_bugfix"),
@@ -20,18 +19,19 @@ EXPECTED = [
     (ReqState.PR_CI_RUNNING,        Event.PR_CI_FAIL,          ReqState.BUGFIX_RUNNING,      "open_gh_and_bugfix"),
     (ReqState.PR_CI_RUNNING,        Event.PR_CI_TIMEOUT,       ReqState.ESCALATED,           "escalate"),
     (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_ENV_UP_FAIL,  ReqState.ESCALATED,           "escalate"),
-    # v0.2：accept 完必跑 teardown 清 lab（不管 pass/fail）
     (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_PASS,         ReqState.ACCEPT_TEARING_DOWN, "teardown_accept_env"),
     (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_FAIL,         ReqState.ACCEPT_TEARING_DOWN, "teardown_accept_env"),
     (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_PASS,  ReqState.ARCHIVING,           "done_archive"),
     (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_FAIL,  ReqState.BUGFIX_RUNNING,      "open_gh_and_bugfix"),
-    (ReqState.BUGFIX_RUNNING,       Event.BUGFIX_DONE,         ReqState.TEST_FIX_RUNNING,    "create_test_fix"),
+    # M5 关键：bugfix → staging-test（不再走 test-fix / reviewer）
+    (ReqState.BUGFIX_RUNNING,       Event.BUGFIX_DONE,         ReqState.STAGING_TEST_RUNNING, "create_staging_test"),
     (ReqState.BUGFIX_RUNNING,       Event.BUGFIX_SPEC_BUG,     ReqState.ESCALATED,           "escalate"),
     (ReqState.BUGFIX_RUNNING,       Event.BUGFIX_ENV_BUG,      ReqState.ESCALATED,           "escalate"),
-    (ReqState.TEST_FIX_RUNNING,     Event.TEST_FIX_DONE,       ReqState.REVIEWER_RUNNING,    "create_reviewer"),
-    # v0.2 关键：reviewer.pass 回 STAGING_TEST（小步快跑重验）
-    (ReqState.REVIEWER_RUNNING,     Event.REVIEWER_PASS,       ReqState.STAGING_TEST_RUNNING, "create_staging_test"),
-    (ReqState.REVIEWER_RUNNING,     Event.REVIEWER_FAIL,       ReqState.ESCALATED,           "escalate"),
+    # M5 新：多轮失败触发 diagnose 分流
+    (ReqState.BUGFIX_RUNNING,       Event.DIAGNOSE_NEEDED,     ReqState.DIAGNOSE_RUNNING,    "spawn_diagnose"),
+    (ReqState.DIAGNOSE_RUNNING,     Event.BUGFIX_RETRY,        ReqState.BUGFIX_RUNNING,      "open_gh_and_bugfix"),
+    (ReqState.DIAGNOSE_RUNNING,     Event.SPEC_REWORK,         ReqState.ESCALATED,           "escalate"),
+    (ReqState.DIAGNOSE_RUNNING,     Event.BUGFIX_ENV_BUG,      ReqState.ESCALATED,           "escalate"),
     (ReqState.ARCHIVING,            Event.ARCHIVE_DONE,        ReqState.DONE,                None),
 ]
 
@@ -49,7 +49,7 @@ def test_session_failed_escalates_all_running_states():
         ReqState.ANALYZING, ReqState.SPECS_RUNNING, ReqState.DEV_RUNNING,
         ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
         ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
-        ReqState.BUGFIX_RUNNING, ReqState.TEST_FIX_RUNNING, ReqState.REVIEWER_RUNNING,
+        ReqState.BUGFIX_RUNNING, ReqState.DIAGNOSE_RUNNING,
         ReqState.ARCHIVING,
     ]
     for st in running:
@@ -62,6 +62,20 @@ def test_terminal_states_have_no_outgoing():
     for st in (ReqState.DONE, ReqState.ESCALATED):
         for ev in Event:
             assert decide(st, ev) is None, f"terminal {st.value} should not move on {ev.value}"
+
+
+def test_m5_dropped_test_fix_reviewer_states():
+    """M5：确认 test-fix-running / reviewer-running 这两个老 state 彻底删。"""
+    values = {s.value for s in ReqState}
+    assert "test-fix-running" not in values
+    assert "reviewer-running" not in values
+
+
+def test_m5_dropped_test_fix_reviewer_events():
+    """M5：test-fix.done / reviewer.pass / reviewer.fail 也彻底删。"""
+    legacy = {"test-fix.done", "reviewer.pass", "reviewer.fail"}
+    for e in Event:
+        assert e.value not in legacy, f"M5 应彻底删 {e.value}"
 
 
 def test_v02_removed_ci_states():
@@ -93,7 +107,8 @@ def test_dump_transitions_renders():
     md = dump_transitions()
     assert "| state |" in md
     assert "init" in md and "done" in md
-    # v0.2 新 state 出现
+    # v0.2 / M5 新 state 出现
     assert "staging-test-running" in md
     assert "pr-ci-running" in md
     assert "accept-tearing-down" in md
+    assert "diagnose-running" in md
