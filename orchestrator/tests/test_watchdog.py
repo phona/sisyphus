@@ -221,7 +221,7 @@ async def test_no_stuck_rows_does_nothing(monkeypatch):
     assert art_calls == []
 
 
-# ─── Case 7：SQL 参数正确下发（_SKIP_STATES 含终态 + pending-human + init）────
+# ─── Case 7：SQL 参数正确下发（_SKIP_STATES 含终态 + init）────
 @pytest.mark.asyncio
 async def test_tick_passes_skip_states_and_threshold_to_sql(monkeypatch):
     captured: dict = {}
@@ -243,8 +243,9 @@ async def test_tick_passes_skip_states_and_threshold_to_sql(monkeypatch):
     assert threshold == 1800
     assert "done" in skip_arr
     assert "escalated" in skip_arr
-    assert "analyzing-pending-human" in skip_arr
     assert "init" in skip_arr
+    # M12：pending-human state 已删，不应出现在 skip 列表
+    assert "analyzing-pending-human" not in skip_arr
 
 
 # ─── Case 8：watchdog_enabled=False → run_loop 立即 return 不跑循环 ─────────

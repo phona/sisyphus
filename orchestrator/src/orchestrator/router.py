@@ -30,10 +30,6 @@ def derive_event(event_type: str, tags: Iterable[str], result_tags_only: bool = 
     if event_type == "issue.updated":
         if "intent:analyze" in tagset and "analyze" not in tagset:
             return Event.INTENT_ANALYZE
-        # M6：analyzing-pending-human 下人答完 open_questions → 打 resume:analyze
-        # 触发 re-kick analyze。走 INTENT_ANALYZE 事件让状态机统一入口。
-        if "resume:analyze" in tagset:
-            return Event.INTENT_ANALYZE
         # 其他 issue.updated 一律忽略（避免自指 loop）
         return None
 

@@ -7,9 +7,6 @@
     "schema_version",
     "req_id",
     "sources",
-    "open_questions",
-    "assumptions",
-    "out_of_scope",
     "test",
     "pr"
   ],

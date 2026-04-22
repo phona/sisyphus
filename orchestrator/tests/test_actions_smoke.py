@@ -126,6 +126,21 @@ async def test_fanout_specs_creates_two(monkeypatch):
     assert fake.update_issue.await_count == 3
 
 
+def test_fanout_specs_no_manifest_validate_import():
+    """M12：fanout_specs 不再跑 manifest_validate admission。
+
+    确认模块不 import checkers.manifest_validate，也不构造 ANALYZE_PENDING_HUMAN。
+    （open_questions 非空 / 空都不影响 spec 创建 — agent 自己跟 user 谈歧义。）
+    """
+    import inspect
+
+    from orchestrator.actions import fanout_specs as mod
+    src = inspect.getsource(mod)
+    assert "manifest_validate" not in src
+    assert "ANALYZE_PENDING_HUMAN" not in src
+    assert "pending_human" not in src
+
+
 # ─── mark_spec_reviewed_and_check ────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_mark_spec_gate_open(monkeypatch):
