@@ -25,8 +25,10 @@ def test_unwrap_failure_raises():
 
 
 def test_unwrap_non_json_raises():
-    r = httpx.Response(500, text="<html>oops</html>")
-    with pytest.raises(Exception):
+    # 500 + 非 JSON：_unwrap 先 try .json() 失败，再 raise_for_status() → HTTPStatusError
+    req = httpx.Request("GET", "https://example/api/x")
+    r = httpx.Response(500, text="<html>oops</html>", request=req)
+    with pytest.raises(httpx.HTTPStatusError):
         _unwrap(r)
 
 

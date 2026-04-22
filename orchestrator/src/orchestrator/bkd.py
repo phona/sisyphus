@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .bkd_mcp import BKDMcpClient
@@ -46,7 +46,7 @@ def _to_issue(d: dict) -> Issue:
     )
 
 
-def BKDClient(base_url: str, token: str, transport: str | None = None) -> Union["BKDRestClient", "BKDMcpClient"]:
+def BKDClient(base_url: str, token: str, transport: str | None = None) -> BKDRestClient | BKDMcpClient:
     """Factory：按 settings.bkd_transport 选 REST（默认）或 MCP。
 
     显式 transport 参数优先（测试可覆盖）；否则查 config。
