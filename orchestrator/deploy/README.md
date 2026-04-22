@@ -8,14 +8,14 @@
 | `deploy-secrets.sh` | 在 vm-node04 交互式建 secret（命令行输入不落 log）| **运行时用，不进 repo** |
 | `README.md` | 本文件 | 否 |
 
-## 操作顺序（给用户 = 你）
+## 操作顺序（用户 SSH 不到 vm-node04 的场景 — 上传文件走 aissh 部署）
 
 ### 步骤 1：准备两个 PAT（在 GitHub 上）
 
 **PAT #1 — Fine-grained**（给 `gh_token`；给 runner 做 clone + commit status read）
-- Resource owner: 你的机器账号（个人）或 ZonEaseTech（如果 org 开了 fine-grained 批复）
+- Resource owner: 机器账号或 ZonEaseTech（org 开 fine-grained 批复才可选）
 - Repository access: 选 sisyphus 要接入的 repo 列表
-- Permissions：
+- Permissions:
   - Contents → **Read-only**
   - Commit statuses → **Read-only**
   - Metadata → Read（自动）
@@ -25,40 +25,45 @@
 - scope **只勾** `read:packages`
 - 生成 → 保存
 
-### 步骤 2：建 secret（在 vm-node04 上）
+### 步骤 2：填 `secrets.env`
 
 ```bash
-ssh vm-node04
-cd <sisyphus repo>/orchestrator/deploy
-bash deploy-secrets.sh
+cp orchestrator/deploy/secrets.env.template secrets.env
+# 编辑 secrets.env，填 5 个值
 ```
 
-脚本会按顺序问：
-1. BKD token（Coder-Session-Token，从 BKD 那边拿）
-2. webhook_token（自家发的；回车自动 `openssl rand -hex 32` 生成；**记下来给 BKD webhook 配置用**）
-3. GH Fine-grained PAT（PAT #1）
-4. GHCR 用户名（机器账号 username）
-5. GHCR Classic PAT（PAT #2）
-6. kubeconfig 路径（默认 `/etc/rancher/k3s/k3s.yaml`）
+**不要** git add / commit（`orchestrator/deploy/.gitignore` 已拦）。
 
-跑完会 verify 两个 secret 都建好。
+### 步骤 3：把 `secrets.env` 上传给 sisyphus 部署方（= 我）
 
-### 步骤 3：把 `my-values.yaml` 提交到 repo + 通知部署
+用聊天附件直接拖进来。部署方流程：
+- `file_deploy` secrets.env → vm-node04 `/tmp/secrets.env`
+- `exec_run` `bash deploy-secrets.sh --env-file /tmp/secrets.env`
+- 脚本跑完自动 `shred -u` 清掉 `/tmp/secrets.env`（敏感文件不残留）
+- content 全程不进聊天 transcript
 
-```bash
-git add orchestrator/deploy/my-values.yaml
-git commit -m "deploy: sisyphus v0.2 values (non-secret)"
-git push
-```
+### 步骤 4：`my-values.yaml` 确认（通常默认值就够）
 
-然后告诉 sisyphus 部署方（我）"可以部署了"，我会通过 aissh 跑：
+如果要改 ingress host / 资源 limit 等非敏感配置：直接改 `my-values.yaml` 后
+git commit + push。部署方拉最新版再跑 helm。
+
+### 步骤 5：部署方 helm upgrade + verify
 
 ```bash
-helm -n sisyphus upgrade --install orch ./orchestrator/helm -f deploy/my-values.yaml
+# 部署方通过 aissh 跑
+helm -n sisyphus upgrade --install orch ./orchestrator/helm \
+  -f orchestrator/deploy/my-values.yaml
 kubectl -n sisyphus rollout status deploy/orch-sisyphus-orchestrator
+curl -sSH 'Authorization: Bearer <webhook_token>' \
+  http://sisyphus.43.239.84.24.nip.io/admin/metrics | jq .state_distribution
 ```
 
-然后验 `/admin/metrics` 回 200。
+### 步骤 6：BKD webhook 注册（一次性）
+
+BKD 那边加 webhook：
+- URL: `http://sisyphus.43.239.84.24.nip.io/bkd-events`（按 my-values.yaml 的 host 改）
+- Events: `issue.updated`, `session.completed`, `session.failed`
+- Secret: `secrets.env` 里的 `SISYPHUS_WEBHOOK_TOKEN`（若空自动生成的那个，部署输出里会打印）
 
 ### 步骤 4：BKD webhook 注册（一次性）
 

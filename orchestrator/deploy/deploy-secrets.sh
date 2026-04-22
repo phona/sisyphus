@@ -1,81 +1,111 @@
 #!/usr/bin/env bash
-# Sisyphus v0.2 secret 注入脚本（在 vm-node04 上跑一次即可）
+# Sisyphus v0.2 secret 部署脚本（vm-node04 上跑）
 # ─────────────────────────────────────────────────────────────────
-# 作用：
-#   1. 确保 sisyphus / sisyphus-runners namespace 存在
-#   2. 创建 orchestrator secret（bkd_token + webhook_token + pg_dsn）
-#   3. 创建 runner secret（gh_token + ghcr_user + ghcr_token + kubeconfig）
+# 两种模式：
 #
-# 所有 secret 值**交互式输入**（`read -s`），不落 shell history，不打 log。
+#   1) 交互式（在 vm-node04 本地直接跑；read -s 输入密码不落 history）
+#        bash deploy-secrets.sh
 #
-# 用法：
-#   ssh vm-node04
-#   cd <sisyphus repo>/orchestrator/deploy
-#   bash deploy-secrets.sh
+#   2) 从 env 文件读（通过 sisyphus 部署方的 file_deploy 送到 /tmp 后跑）
+#        bash deploy-secrets.sh --env-file /tmp/secrets.env
 #
-# 重跑幂等：已存在的 secret 会被 `kubectl create --dry-run | kubectl apply -f -` 更新。
+# 不管哪种模式，都做：
+#   - 建 ns: sisyphus, sisyphus-runners
+#   - 建 secret orch-sisyphus-orchestrator (bkd_token + webhook_token)
+#   - 建 secret sisyphus-runner-secrets (gh_token + ghcr_user + ghcr_token + kubeconfig)
+#
+# 跑完删 --env-file 指向的文件（防敏感信息残留）。
 # ─────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-echo "=== Sisyphus v0.2 secret 部署 ==="
-echo
+ENV_FILE=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --env-file) ENV_FILE="$2"; shift 2 ;;
+        *) echo "unknown arg: $1"; exit 2 ;;
+    esac
+done
 
-# ── 0. 预检 ─────────────────────────────────────────────────────
+echo "=== Sisyphus v0.2 secret 部署 ==="
 command -v kubectl >/dev/null || { echo "FATAL: 没找到 kubectl"; exit 1; }
 
-# ── 1. namespace ────────────────────────────────────────────────
+# ── 1. namespaces ───────────────────────────────────────────────
 for ns in sisyphus sisyphus-runners; do
-    if ! kubectl get ns "$ns" >/dev/null 2>&1; then
-        echo "[info] create ns/$ns"
-        kubectl create namespace "$ns"
+    kubectl get ns "$ns" >/dev/null 2>&1 || kubectl create namespace "$ns"
+done
+
+# ── 2. 从 env 文件或交互式收集值 ─────────────────────────────────
+if [[ -n "$ENV_FILE" ]]; then
+    if [[ ! -r "$ENV_FILE" ]]; then
+        echo "FATAL: --env-file $ENV_FILE 不可读"
+        exit 1
+    fi
+    # shellcheck disable=SC1090
+    set -a
+    source "$ENV_FILE"
+    set +a
+else
+    # 交互式
+    read -srp "BKD token: " SISYPHUS_BKD_TOKEN; echo
+    read -srp "webhook token（空=自动生成）: " SISYPHUS_WEBHOOK_TOKEN; echo
+    read -srp "GH Fine-grained PAT: " SISYPHUS_GH_TOKEN; echo
+    read -rp  "GHCR 用户名: " SISYPHUS_GHCR_USER
+    read -srp "GHCR Classic PAT (read:packages): " SISYPHUS_GHCR_TOKEN; echo
+    read -rp  "kubeconfig 路径 [/etc/rancher/k3s/k3s.yaml]: " SISYPHUS_KUBECONFIG_PATH
+    SISYPHUS_KUBECONFIG_PATH="${SISYPHUS_KUBECONFIG_PATH:-/etc/rancher/k3s/k3s.yaml}"
+fi
+
+# 兜底生成 webhook_token
+if [[ -z "${SISYPHUS_WEBHOOK_TOKEN:-}" ]]; then
+    SISYPHUS_WEBHOOK_TOKEN=$(openssl rand -hex 32)
+    echo
+    echo "[info] 自动生成 webhook_token（BKD webhook 配置要填这个；记下来）："
+    echo "    $SISYPHUS_WEBHOOK_TOKEN"
+    echo
+fi
+
+# 必填校验
+for v in SISYPHUS_BKD_TOKEN SISYPHUS_GH_TOKEN SISYPHUS_GHCR_USER SISYPHUS_GHCR_TOKEN; do
+    if [[ -z "${!v:-}" ]]; then
+        echo "FATAL: $v 未填"
+        exit 1
     fi
 done
 
-# ── 2. orchestrator secret (ns: sisyphus) ────────────────────────
-echo
-echo "── 2. Orchestrator secret (ns: sisyphus / name: orch-sisyphus-orchestrator) ──"
-read -srp "BKD token (Coder-Session-Token): " BKD_TOKEN; echo
-read -srp "webhook token (自家发；建议 openssl rand -hex 32；回车自动生成): " WEBHOOK_TOKEN; echo
-if [[ -z "$WEBHOOK_TOKEN" ]]; then
-    WEBHOOK_TOKEN=$(openssl rand -hex 32)
-    echo "[info] 已生成 webhook_token（记下来给 BKD webhook 配置用）："
-    echo "    $WEBHOOK_TOKEN"
+# ── 3. kubeconfig 路径（可能需要 sudo）────────────────────────────
+KUBECONFIG_SRC="${SISYPHUS_KUBECONFIG_PATH:-/etc/rancher/k3s/k3s.yaml}"
+CLEANUP_KUBECONFIG=0
+if [[ ! -r "$KUBECONFIG_SRC" ]]; then
+    echo "[info] $KUBECONFIG_SRC 不可读，sudo 复制到 /tmp"
+    sudo cat "$KUBECONFIG_SRC" > /tmp/sisyphus-kubeconfig.tmp
+    chmod 600 /tmp/sisyphus-kubeconfig.tmp
+    KUBECONFIG_SRC=/tmp/sisyphus-kubeconfig.tmp
+    CLEANUP_KUBECONFIG=1
 fi
 
+# ── 4. 建 secret ────────────────────────────────────────────────
 kubectl -n sisyphus create secret generic orch-sisyphus-orchestrator \
-    --from-literal=bkd_token="$BKD_TOKEN" \
-    --from-literal=webhook_token="$WEBHOOK_TOKEN" \
+    --from-literal=bkd_token="$SISYPHUS_BKD_TOKEN" \
+    --from-literal=webhook_token="$SISYPHUS_WEBHOOK_TOKEN" \
     --dry-run=client -o yaml | kubectl apply -f -
-
-# ── 3. runner secret (ns: sisyphus-runners) ─────────────────────
-echo
-echo "── 3. Runner secret (ns: sisyphus-runners / name: sisyphus-runner-secrets) ──"
-read -srp "GH Fine-grained PAT (gh_token, Contents Read + Commit statuses Read): " GH_TOKEN; echo
-read -rp  "GHCR 登录用户名 (ghcr_user, 比如 sisyphus-bot): " GHCR_USER
-read -srp "GHCR Classic PAT (ghcr_token, 只 read:packages): " GHCR_TOKEN; echo
-
-KUBECONFIG_PATH=""
-read -rp "kubeconfig 文件路径 (给 runner Pod 内 agent 起 helm 用；默认 /etc/rancher/k3s/k3s.yaml): " KUBECONFIG_PATH
-KUBECONFIG_PATH="${KUBECONFIG_PATH:-/etc/rancher/k3s/k3s.yaml}"
-if [[ ! -r "$KUBECONFIG_PATH" ]]; then
-    echo "[warn] $KUBECONFIG_PATH 不可读 — 用 sudo cat 绕一下"
-    sudo cat "$KUBECONFIG_PATH" > /tmp/sisyphus-kubeconfig.tmp
-    KUBECONFIG_PATH=/tmp/sisyphus-kubeconfig.tmp
-    cleanup_kubeconfig=1
-fi
 
 kubectl -n sisyphus-runners create secret generic sisyphus-runner-secrets \
-    --from-literal=gh_token="$GH_TOKEN" \
-    --from-literal=ghcr_user="$GHCR_USER" \
-    --from-literal=ghcr_token="$GHCR_TOKEN" \
-    --from-file=kubeconfig="$KUBECONFIG_PATH" \
+    --from-literal=gh_token="$SISYPHUS_GH_TOKEN" \
+    --from-literal=ghcr_user="$SISYPHUS_GHCR_USER" \
+    --from-literal=ghcr_token="$SISYPHUS_GHCR_TOKEN" \
+    --from-file=kubeconfig="$KUBECONFIG_SRC" \
     --dry-run=client -o yaml | kubectl apply -f -
 
-[[ "${cleanup_kubeconfig:-0}" == 1 ]] && rm -f /tmp/sisyphus-kubeconfig.tmp
+# ── 5. 清理临时敏感文件 ──────────────────────────────────────────
+[[ "$CLEANUP_KUBECONFIG" == 1 ]] && rm -f /tmp/sisyphus-kubeconfig.tmp
+if [[ -n "$ENV_FILE" ]]; then
+    shred -u "$ENV_FILE" 2>/dev/null || rm -f "$ENV_FILE"
+    echo "[info] 已清理 $ENV_FILE"
+fi
 
-# ── 4. 验证 ─────────────────────────────────────────────────────
+# ── 6. 验证 ────────────────────────────────────────────────────
 echo
-echo "── 4. 核对结果 ──"
+echo "── 核对结果 ──"
 for row in "sisyphus orch-sisyphus-orchestrator" "sisyphus-runners sisyphus-runner-secrets"; do
     set -- $row
     ns="$1"; name="$2"
@@ -84,14 +114,13 @@ for row in "sisyphus orch-sisyphus-orchestrator" "sisyphus-runners sisyphus-runn
                python3 -c 'import sys,json; print(",".join(json.loads(sys.stdin.read()).keys()))')
         echo "  ✓ $ns / $name  keys: $keys"
     else
-        echo "  ✗ $ns / $name  MISSING"
+        echo "  ✗ $ns / $name  MISSING" >&2
+        exit 1
     fi
 done
 
 echo
 echo "=== 完成 ==="
-echo
-echo "下一步："
-echo "  1. webhook_token 记下来（给 BKD webhook 配置用）"
-echo "  2. 通知 sisyphus 部署方，跑:"
-echo "     helm -n sisyphus upgrade --install orch ./orchestrator/helm -f deploy/my-values.yaml"
+if [[ -n "$ENV_FILE" ]] && [[ -n "${SISYPHUS_WEBHOOK_TOKEN_GENERATED:-}" ]]; then
+    echo "记得把 webhook_token 配到 BKD webhook"
+fi

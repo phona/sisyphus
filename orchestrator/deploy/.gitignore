@@ -1,0 +1,7 @@
+# 永远不要把真值 commit 进 repo
+secrets.env
+secrets.env.local
+*.pem
+*.key
+kubeconfig
+k3s.yaml
