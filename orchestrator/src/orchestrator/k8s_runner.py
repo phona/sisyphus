@@ -27,6 +27,23 @@ from kubernetes.stream import stream
 log = structlog.get_logger(__name__)
 
 
+# ── module-level singleton（让 actions 拿一个公共 controller）──────────
+# main.py startup 时 set_controller 注入；action 调 get_controller 拿。
+# 测试场景可直接 set_controller(mock) 替换。
+_controller: RunnerController | None = None
+
+
+def set_controller(controller: RunnerController | None) -> None:
+    global _controller
+    _controller = controller
+
+
+def get_controller() -> RunnerController:
+    if _controller is None:
+        raise RuntimeError("RunnerController 未初始化；main.py startup 应调 set_controller()")
+    return _controller
+
+
 @dataclass(frozen=True)
 class ExecResult:
     """kubectl exec 的聚合结果。"""

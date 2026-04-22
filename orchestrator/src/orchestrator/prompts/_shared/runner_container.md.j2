@@ -1,57 +1,62 @@
-## 干活容器（必读）
+## 干活 Pod（v0.2，必读）
 
-所有 vm-node04 上的命令**必须包在 sisyphus-runner 容器里执行**，不能裸跑宿主。
-每个 REQ 一个长寿命容器，跨 stage 共用 cache（Go modules / pub cache / docker images）。
+所有 vm-node04 上的命令**必须包在 sisyphus-runner Pod 里执行**，不能裸跑宿主。
+每个 REQ 一个 per-REQ Pod（`runner-<req-id>`，小写）+ PVC（`workspace-<req-id>`，挂
+`/workspace`），住在 K8s namespace `sisyphus-runners`。sisyphus orchestrator 已在
+dev 启动前把 Pod 拉起好，你**不用**建 Pod，直接 `kubectl exec` 进去干活。
 
-容器名：`sisyphus-runner-{{ req_id }}`
-镜像：`ghcr.io/phona/sisyphus-runner-go:main`（Go-only 轻量版，~1GB；
-含 Go 1.22 + Node + Docker DinD + openspec CLI + /opt/sisyphus/scripts/）
+- Pod 生命周期：绑本 REQ，done/escalate 才清
+- PVC 生命周期：同 Pod；中途 Pod 重启（OOM / node 迁移）PVC 不动
+- 工具链：Go 1.23 + docker DinD + helm + kubectl + gh + openspec + /opt/sisyphus/scripts/
 
-Flutter 项目用 `ghcr.io/phona/sisyphus-runner:main`（~5GB，加 Flutter SDK + Android SDK），
-等需要时再替换。
-
-### 第一步：idempotent 拉起容器
-
-通过 `mcp__aissh-tao__exec_run` 在 vm-node04 上跑（**这一段每个 stage 都跑，已存在就跳过**）：
+### 所有命令都包成 kubectl exec
 
 ```bash
-CONTAINER=sisyphus-runner-{{ req_id }}
-docker inspect $CONTAINER >/dev/null 2>&1 || docker run -d --name $CONTAINER \
-  --privileged --restart=unless-stopped \
-  --device /dev/fuse \
-  -v sisyphus-workspace-{{ req_id }}:/workspace -w /workspace \
-  ghcr.io/phona/sisyphus-runner-go:main sleep infinity
-```
+POD=runner-{{ req_id | lower }}
+NS=sisyphus-runners
 
-### 第二步：bootstrap /workspace（首次进入此 REQ 才需要）
-
-容器首次创建时 `/workspace` 是空 named volume。analyze stage 第一次跑要 clone repo 进去：
-
-```bash
-# REPO_URL 来源：BKD intent issue 的 description "Repo: <url>" 行，
-# 或 BKD session 自身 cwd 的 `git remote get-url origin`，agent 自己拿
-docker exec $CONTAINER bash -c "[ -d /workspace/.git ] || git clone $REPO_URL /workspace"
-# 切到 / 创建 feat/$REQ 分支
-docker exec $CONTAINER bash -c "cd /workspace && git fetch origin && (git checkout feat/{{ req_id }} 2>/dev/null || git checkout -b feat/{{ req_id }})"
-```
-
-后续 stage 直接 `docker exec $CONTAINER` 即可，cwd 自动是 `/workspace`。
-
-### 之后所有命令包成 docker exec
-
-```bash
 # 替代 "cd $WORKDIR && cmd"
-docker exec $CONTAINER bash -c "cmd"
+kubectl -n $NS exec $POD -- bash -c "cmd"
 
-# 取 repo URL（容器内 /workspace 已是 git checkout）
-docker exec $CONTAINER bash -c "git remote get-url origin"
+# 传环境变量
+kubectl -n $NS exec $POD -- env FOO=bar bash -c "cmd"
 ```
 
-### 容器内已就绪
-- `/opt/sisyphus/scripts/` 在 PATH 里：`check-scenario-refs.sh` / `check-tasks-section-ownership.sh` / `pre-commit-acl.sh` 直接调
-- `openspec` / `go` / `flutter` / `node` / `docker` 都全局可用
-- `/workspace` 是 named volume `sisyphus-workspace-{{ req_id }}`，跨 stage 持久
+{% if aissh_server_id %}
+sisyphus 通过 aissh-tao MCP 给你运行 kubectl（vm-node04 上）：
+```
+mcp__aissh-tao__exec_run(server_id="{{ aissh_server_id }}", command="kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c '...'")
+```
+{% endif %}
+
+### workspace 约定结构（analyze-agent 已初始化，所有后续 stage 沿用）
+
+```
+/workspace/
+├── .sisyphus/manifest.yaml     ← agent 间拓扑共享文件
+├── source/<repo>/               ← 每个 source repo 一个
+└── integration/<repo>/          ← lab repo（accept 阶段才用）
+```
+
+每个 stage **起手先验证**：
+
+```bash
+kubectl -n $NS exec $POD -- validate-manifest.py
+```
+
+不绿不继续。
+
+### Pod 内已就绪的环境变量（sisyphus 自动注入）
+
+- `SISYPHUS_REQ_ID` = REQ-N
+- `GH_TOKEN` / `SISYPHUS_GHCR_USER` / `SISYPHUS_GHCR_TOKEN`：GitHub / GHCR 凭证
+- `KUBECONFIG=/root/.kube/config`：能访问 vm-node04 K3s（给 accept 阶段 helm install 用）
+- `/opt/sisyphus/scripts/` 在 PATH：validate-manifest.py / check-scenario-refs.sh / 等
 
 ### 不要做的事
-- 在容器外（vm-node04 宿主 shell）跑业务命令 —— 缺工具或污染宿主
-- 销毁容器 —— sisyphus 自己管生命周期，accept pass 后才删
+
+- 在 Pod 外（aissh 直接跑宿主命令）跑业务 —— 缺工具或污染宿主
+- `kubectl delete pod runner-*` —— sisyphus 管生命周期
+- `kubectl delete pvc workspace-*` —— 同上
+- 修改 `/workspace/.sisyphus/manifest.yaml` 的结构字段（schema_version / sources / integration）；
+  只允许追加运行时字段（sha_by_repo / pr_by_repo / image_tags / merge_order 等，按各 stage 约定）
