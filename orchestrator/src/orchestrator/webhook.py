@@ -60,6 +60,21 @@ class WebhookBody(BaseModel):
     changes: dict[str, Any] | None = None  # issue.updated 携带
 
 
+async def _push_upstream_done(project_id: str, issue_id: str) -> None:
+    """把刚收到 session.completed 的 BKD issue 状态推到 done。
+
+    幂等（重推 done 是 no-op）。失败只记 warning，不阻塞状态机。
+    """
+    try:
+        async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+            await bkd.update_issue(
+                project_id=project_id, issue_id=issue_id, status_id="done",
+            )
+    except Exception as e:
+        log.warning("webhook.upstream_done_failed",
+                    issue_id=issue_id, error=str(e))
+
+
 @api.get("/bkd-events")
 async def webhook_probe() -> dict:
     """GET 探活，给 BKD / 健康巡检用。无需 auth。"""
@@ -121,6 +136,14 @@ async def webhook(request: Request) -> JSONResponse:
     if event is None:
         log.debug("webhook.no_event_mapping", tags=tags, event_type=body.event)
         return {"action": "skip", "reason": "no event mapping"}
+
+    # ─── 3.5 把上游 BKD issue 推 done（webhook 已识别为有效完工信号）──────
+    # 不修的话 dev/ci-unit/ci-int/accept/done-archive 等 issue 永远卡 review，
+    # BKD UI 一片乱，agent_quality.review_count 也失真。
+    # fanout_specs / mark_spec_reviewed_and_check 也会推自己负责的 issue done，
+    # 重推幂等不冲突。session.failed 不推（保留人工排查）。
+    if body.event == "session.completed":
+        await _push_upstream_done(body.projectId, body.issueId)
 
     # ─── 4. resolve req_id ─────────────────────────────────────────────────
     req_id = router_lib.extract_req_id(tags, body.issueNumber)
