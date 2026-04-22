@@ -357,7 +357,8 @@ async def test_create_accept_skipped(monkeypatch):
 # ─── 重要：BKD merge_tags_and_update 的 tag merge 逻辑 ─────────────────────
 @pytest.mark.asyncio
 async def test_bkd_merge_tags_preserves(monkeypatch):
-    from orchestrator.bkd import BKDClient
+    # 直接拿具体实现 class — merge_tags_and_update 在 REST/MCP 两侧逻辑一致，任挑一个测
+    from orchestrator.bkd_rest import BKDRestClient
 
     captured = {}
 
@@ -368,9 +369,9 @@ async def test_bkd_merge_tags_preserves(monkeypatch):
         captured.update(kw)
         return FakeIssue(id=issue_id, tags=kw.get("tags", []))
 
-    monkeypatch.setattr(BKDClient, "get_issue", fake_get_issue)
-    monkeypatch.setattr(BKDClient, "update_issue", fake_update_issue)
-    bkd = BKDClient.__new__(BKDClient)
+    monkeypatch.setattr(BKDRestClient, "get_issue", fake_get_issue)
+    monkeypatch.setattr(BKDRestClient, "update_issue", fake_update_issue)
+    bkd = BKDRestClient.__new__(BKDRestClient)
     await bkd.merge_tags_and_update(
         "p", "i1", add=["ci-passed"], remove=["existing"], status_id="done",
     )

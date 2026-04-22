@@ -5,7 +5,8 @@ import json
 
 import pytest
 
-from orchestrator.bkd import _parse_mcp_response, _to_issue
+from orchestrator.bkd import _to_issue
+from orchestrator.bkd_mcp import _parse_mcp_response
 
 
 def _sse(envelope: dict) -> str:
