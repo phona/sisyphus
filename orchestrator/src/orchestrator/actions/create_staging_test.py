@@ -1,22 +1,25 @@
-"""create_staging_test（v0.2）：dev.done 后下发 staging-test BKD agent。
+"""create_staging_test（v0.2 + M1 checker）：dev.done 后验 staging 测试。
 
-staging-test 在调试环境（sisyphus-runners Pod）跑 unit + integration test。
-按 manifest.sources 遍历，每个 source repo 跑 make ci-lint / ci-unit-test /
-ci-integration-test。全绿 → result:pass；任一红 → result:fail + bug:pre-release。
+feature flag checker_staging_test_enabled:
+  False（默认）: 创建 BKD agent issue（老路，保证老行为不破）
+  True: sisyphus 自己在 runner pod 执行测试，根据退出码 emit STAGING_TEST_PASS/FAIL
 """
 from __future__ import annotations
 
 import structlog
 
 from ..bkd import BKDClient
+from ..checkers import staging_test as checker
 from ..config import settings
 from ..prompts import render
 from ..state import Event
-from ..store import db, req_state
+from ..store import artifact_checks, db, req_state
 from . import register, short_title
 from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
+
+_TEST_CMD = "make test"   # M1 硬编码；M3 改成读 PVC manifest.yaml
 
 
 @register("create_staging_test")
@@ -24,8 +27,58 @@ async def create_staging_test(*, body, req_id, tags, ctx):
     if rv := skip_if_enabled("staging-test", Event.STAGING_TEST_PASS, req_id=req_id):
         return rv
 
+    if settings.checker_staging_test_enabled:
+        return await _run_checker(req_id=req_id)
+
+    return await _dispatch_bkd_agent(body=body, req_id=req_id, ctx=ctx)
+
+
+# ── 新路：sisyphus 自检 ────────────────────────────────────────────────────
+
+async def _run_checker(*, req_id: str) -> dict:
+    log.info("create_staging_test.checker_path", req_id=req_id, cmd=_TEST_CMD)
+
+    try:
+        result = await checker.run_staging_test(req_id, _TEST_CMD)
+    except TimeoutError:
+        log.error("create_staging_test.checker_timeout", req_id=req_id)
+        return {
+            "emit": Event.STAGING_TEST_FAIL.value,
+            "reason": "timeout",
+            "exit_code": -1,
+            "cmd": _TEST_CMD,
+        }
+    except Exception as e:
+        log.exception("create_staging_test.checker_error", req_id=req_id, error=str(e))
+        return {
+            "emit": Event.STAGING_TEST_FAIL.value,
+            "reason": str(e)[:200],
+            "exit_code": -1,
+            "cmd": _TEST_CMD,
+        }
+
+    pool = db.get_pool()
+    await artifact_checks.insert_check(pool, req_id, "staging-test", result)
+
+    emit = Event.STAGING_TEST_PASS if result.passed else Event.STAGING_TEST_FAIL
+    log.info("create_staging_test.checker_done", req_id=req_id,
+             passed=result.passed, exit_code=result.exit_code,
+             duration_sec=round(result.duration_sec, 1))
+
+    return {
+        "emit": emit.value,
+        "passed": result.passed,
+        "exit_code": result.exit_code,
+        "cmd": result.cmd,
+        "duration_sec": result.duration_sec,
+    }
+
+
+# ── 老路：BKD agent（flag off 时走这里）────────────────────────────────────
+
+async def _dispatch_bkd_agent(*, body, req_id: str, ctx: dict) -> dict:
     proj = body.projectId
-    source_issue_id = body.issueId   # 上游 dev issue（只读参考）
+    source_issue_id = body.issueId
 
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
@@ -45,5 +98,5 @@ async def create_staging_test(*, body, req_id, tags, ctx):
     pool = db.get_pool()
     await req_state.update_context(pool, req_id, {"staging_test_issue_id": issue.id})
 
-    log.info("create_staging_test.done", req_id=req_id, staging_issue=issue.id)
+    log.info("create_staging_test.bkd_agent_dispatched", req_id=req_id, staging_issue=issue.id)
     return {"staging_test_issue_id": issue.id}
