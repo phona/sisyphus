@@ -86,9 +86,31 @@ integration:
 open_questions: []            # 需求里还没敲定的歧义点；**非空直接 hold REQ 等人答**
 assumptions: []               # 你为了能继续推进所做的假设（给人事后审）
 out_of_scope: []              # 主动划出的边界，避免 scope creep
+
+# ↓ M11 staging-test checker 配置（必填，schema validator 会强制）
+test:
+  cmd: "make ci-unit-test ci-integration-test"   # sisyphus 在 runner pod 里执行的测试命令
+  cwd: "source/ubox-crosser"                     # 相对 /workspace 的工作目录（通常 = leader source 的 path）
+  timeout_sec: 1800                              # 可选，默认 600，范围 30..3600
+
+# ↓ M11 pr-ci-watch checker 配置（repo 必填，number 由 dev agent 开 PR 后回写）
+pr:
+  repo: "phona/ubox-crosser"                     # leader source 的 GitHub 仓库
+  # number: 123                                   # 开 PR 后由 dev/staging-test agent 填回
 ```
 
 如果没 integration（纯 source repo REQ），省略整个 `integration:` 段。
+
+#### Step A4.0: `test` / `pr` 字段怎么填
+
+- **`test.cmd`**：看 leader source repo 的 Makefile / package.json / justfile 挑 CI 级别测试 target
+  （别写 `make test` 之类的通用别名，要写真实 target 比如 `make ci-unit-test`、
+  `npm run test:ci`、`pytest tests/`）。
+- **`test.cwd`**：一般是 `source/<leader-repo>`；若 leader 仓里测试脚本挂在子目录
+  （monorepo），写该子目录路径。
+- **`pr.repo`**：leader source 的 `<owner>/<name>`，跟 `sources[0].repo` 对齐。
+- **`pr.number`**：analyze 阶段还没 PR，**留空**即可；dev agent 开 PR 后
+  会回写 manifest 填上。
 
 #### Step A4.1: ambiguity admission（硬要求，不写三段 validator 会拒）
 

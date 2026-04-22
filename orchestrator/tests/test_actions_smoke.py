@@ -419,9 +419,9 @@ async def test_create_staging_test_checker_pass(monkeypatch):
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.skip_staging_test", False)
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.test_mode", False)
 
-    fake_result = CheckResult(passed=True, exit_code=0, stdout_tail="ok\n", stderr_tail="", duration_sec=4.2, cmd="make test")
+    fake_result = CheckResult(passed=True, exit_code=0, stdout_tail="ok\n", stderr_tail="", duration_sec=4.2, cmd="cd /workspace/source/foo && make ci-unit-test")
 
-    async def fake_run(req_id, test_cmd, timeout_sec=600):
+    async def fake_run(req_id):
         return fake_result
 
     monkeypatch.setattr("orchestrator.actions.create_staging_test.checker.run_staging_test", fake_run)
@@ -453,9 +453,9 @@ async def test_create_staging_test_checker_fail(monkeypatch):
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.skip_staging_test", False)
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.test_mode", False)
 
-    fake_result = CheckResult(passed=False, exit_code=1, stdout_tail="FAIL\n", stderr_tail="panic\n", duration_sec=2.0, cmd="make test")
+    fake_result = CheckResult(passed=False, exit_code=1, stdout_tail="FAIL\n", stderr_tail="panic\n", duration_sec=2.0, cmd="cd /workspace/source/foo && make ci-unit-test")
 
-    async def fake_run(req_id, test_cmd, timeout_sec=600):
+    async def fake_run(req_id):
         return fake_result
 
     monkeypatch.setattr("orchestrator.actions.create_staging_test.checker.run_staging_test", fake_run)
@@ -484,9 +484,9 @@ async def test_create_staging_test_checker_fail_retry_enabled(monkeypatch):
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.skip_staging_test", False)
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.test_mode", False)
 
-    fake_result = CheckResult(passed=False, exit_code=1, stdout_tail="FAIL\n", stderr_tail="panic\n", duration_sec=2.0, cmd="make test")
+    fake_result = CheckResult(passed=False, exit_code=1, stdout_tail="FAIL\n", stderr_tail="panic\n", duration_sec=2.0, cmd="cd /workspace/source/foo && make ci-unit-test")
 
-    async def fake_run_check(req_id, test_cmd, timeout_sec=600):
+    async def fake_run_check(req_id):
         return fake_result
 
     monkeypatch.setattr("orchestrator.actions.create_staging_test.checker.run_staging_test", fake_run_check)
@@ -532,9 +532,9 @@ async def test_create_staging_test_checker_pass_retry_enabled_resets_round(monke
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.skip_staging_test", False)
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.test_mode", False)
 
-    fake_result = CheckResult(passed=True, exit_code=0, stdout_tail="ok\n", stderr_tail="", duration_sec=3.0, cmd="make test")
+    fake_result = CheckResult(passed=True, exit_code=0, stdout_tail="ok\n", stderr_tail="", duration_sec=3.0, cmd="cd /workspace/source/foo && make ci-unit-test")
 
-    async def fake_run_check(req_id, test_cmd, timeout_sec=600):
+    async def fake_run_check(req_id):
         return fake_result
 
     monkeypatch.setattr("orchestrator.actions.create_staging_test.checker.run_staging_test", fake_run_check)
@@ -569,7 +569,7 @@ async def test_create_staging_test_checker_timeout_retry_enabled_flaky(monkeypat
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.skip_staging_test", False)
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.test_mode", False)
 
-    async def fake_run_check(req_id, test_cmd, timeout_sec=600):
+    async def fake_run_check(req_id):
         raise TimeoutError()
 
     monkeypatch.setattr("orchestrator.actions.create_staging_test.checker.run_staging_test", fake_run_check)

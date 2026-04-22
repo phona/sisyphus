@@ -1,4 +1,5 @@
-"""create_staging_test（v0.2 + M1 checker + M4 retry）：dev.done 后验 staging 测试。
+"""create_staging_test（v0.2 + M1 checker + M4 retry + M11 manifest-driven）：
+dev.done 后验 staging 测试。
 
 feature flag checker_staging_test_enabled:
   False（默认）: 创建 BKD agent issue（老路，保证老行为不破）
@@ -8,12 +9,15 @@ feature flag retry_enabled（仅 checker 路径生效）:
   False（默认）: checker fail 直 emit STAGING_TEST_FAIL（老行为，进 bugfix 链）
   True: checker fail 走 retry.executor 分级决策；follow_up/diagnose 不 emit fail，
         状态留在 STAGING_TEST_RUNNING 等 dev agent 修完再触发重跑
+
+M11：test_cmd / cwd / timeout 不再硬编码，checker 自己从 PVC manifest.yaml 读。
 """
 from __future__ import annotations
 
 import structlog
 
 from ..bkd import BKDClient
+from ..checkers import manifest_io
 from ..checkers import staging_test as checker
 from ..config import settings
 from ..prompts import render
@@ -26,7 +30,6 @@ from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
 
-_TEST_CMD = "make test"   # M1 硬编码；M3 改成读 PVC manifest.yaml
 _STAGE = "staging-test"
 
 
@@ -44,23 +47,31 @@ async def create_staging_test(*, body, req_id, tags, ctx):
 # ── 新路：sisyphus 自检 ────────────────────────────────────────────────────
 
 async def _run_checker(*, body, req_id: str, ctx: dict) -> dict:
-    log.info("create_staging_test.checker_path", req_id=req_id, cmd=_TEST_CMD)
+    log.info("create_staging_test.checker_path", req_id=req_id)
 
     try:
-        result = await checker.run_staging_test(req_id, _TEST_CMD)
+        result = await checker.run_staging_test(req_id)
     except TimeoutError:
         log.error("create_staging_test.checker_timeout", req_id=req_id)
         return await _handle_fail(
             body=body, req_id=req_id, ctx=ctx,
             fail_kind="flaky",   # timeout 归 flaky；不烦 agent，sisyphus 自己重跑
-            details={"reason": "timeout", "exit_code": -1, "cmd": _TEST_CMD},
+            details={"reason": "timeout", "exit_code": -1},
+        )
+    except manifest_io.ManifestReadError as e:
+        # 读 manifest 失败（PVC 挂了 / yaml 坏 / 缺字段）→ infra/flaky，给 retry 重跑一次
+        log.error("create_staging_test.manifest_read_failed", req_id=req_id, error=str(e))
+        return await _handle_fail(
+            body=body, req_id=req_id, ctx=ctx,
+            fail_kind="flaky",
+            details={"reason": f"manifest read failed: {e}"[:200], "exit_code": -1},
         )
     except Exception as e:
         log.exception("create_staging_test.checker_error", req_id=req_id, error=str(e))
         return await _handle_fail(
             body=body, req_id=req_id, ctx=ctx,
             fail_kind="test",
-            details={"reason": str(e)[:200], "exit_code": -1, "cmd": _TEST_CMD},
+            details={"reason": str(e)[:200], "exit_code": -1},
         )
 
     pool = db.get_pool()
@@ -108,8 +119,9 @@ async def _handle_fail(*, body, req_id: str, ctx: dict, fail_kind: str, details:
             "emit": Event.STAGING_TEST_FAIL.value,
             "passed": False,
             "exit_code": details.get("exit_code", -1),
-            "cmd": details.get("cmd", _TEST_CMD),
         }
+        if "cmd" in details:
+            out["cmd"] = details["cmd"]
         if "reason" in details:
             out["reason"] = details["reason"]
         return out
