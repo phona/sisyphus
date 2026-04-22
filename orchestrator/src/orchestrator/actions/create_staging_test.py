@@ -30,7 +30,7 @@ _TEST_CMD = "make test"   # M1 硬编码；M3 改成读 PVC manifest.yaml
 _STAGE = "staging-test"
 
 
-@register("create_staging_test")
+@register("create_staging_test", idempotent=False)  # 老路创 BKD issue；checker 模式安全但保守 False
 async def create_staging_test(*, body, req_id, tags, ctx):
     if rv := skip_if_enabled("staging-test", Event.STAGING_TEST_PASS, req_id=req_id):
         return rv

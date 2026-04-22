@@ -14,7 +14,7 @@ from ._skip import skip_if_enabled
 log = structlog.get_logger(__name__)
 
 
-@register("create_dev")
+@register("create_dev", idempotent=False)  # 创建新 BKD dev issue
 async def create_dev(*, body, req_id, tags, ctx):
     if rv := skip_if_enabled("dev", Event.DEV_DONE, req_id=req_id):
         return rv

@@ -19,7 +19,7 @@ from ._skip import skip_if_enabled
 log = structlog.get_logger(__name__)
 
 
-@register("teardown_accept_env")
+@register("teardown_accept_env", idempotent=True)
 async def teardown_accept_env(*, body, req_id, tags, ctx):
     """跑 ci-accept-env-down 清 lab，然后按 accept_result emit 下一步事件。"""
     # accept 被 skip 时（skip_accept=true，ttpos-arch-lab 没接前的常态），

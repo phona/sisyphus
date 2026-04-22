@@ -19,7 +19,7 @@ from . import register, short_title
 log = structlog.get_logger(__name__)
 
 
-@register("spawn_diagnose")
+@register("spawn_diagnose", idempotent=False)  # 创建新 diagnose BKD issue
 async def spawn_diagnose(*, body, req_id, tags, ctx):
     proj = body.projectId
     branch = (ctx or {}).get("branch") or f"feat/{req_id}"

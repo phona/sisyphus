@@ -1,8 +1,8 @@
-"""M4 故障分级路由：按失败类型 + 轮次返回 RetryDecision。
+"""M4/M9 故障分级路由：按失败类型 + 轮次返回 RetryDecision。
 
 纯函数，不碰 IO。方便单测每种组合。
 
-决策表（见 #11 设计）：
+M4（decide）— checker/admission fail 分级决策：
 | fail_kind                | 处理                          |
 |--------------------------|-------------------------------|
 | schema / lint / typecheck| follow_up 同 agent（外科手术）|
@@ -12,11 +12,23 @@
 | flaky                    | skip_check_retry（sisyphus 自重）|
 | 任意（round ≥ max_rounds）| escalate                     |
 | 未知 fail_kind            | escalate（保守兜底）          |
+
+M9（decide_action_fail）— engine action handler 抛异常分级：
+| 条件                              | 处理                             |
+|-----------------------------------|----------------------------------|
+| 非幂等 action                     | escalate（重试会重复副作用）     |
+| transient exception + 未超 max    | retry with backoff               |
+| transient + 超 max_rounds         | escalate                         |
+| 非 transient exception            | escalate（bug, 不自动重试）      |
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Literal
+
+import httpx
+from kubernetes.client.exceptions import ApiException as K8sApiException
 
 RetryAction = Literal[
     "follow_up",
@@ -25,6 +37,18 @@ RetryAction = Literal[
     "skip_check_retry",
     "escalate",
 ]
+
+ActionFailAction = Literal["retry", "escalate"]
+
+# 网络 / K8s API / 异步超时类异常：重试可能救活。
+# 注：RuntimeError (比如 k8s pod 拒启动后 phase=Failed) 不在此列，直接 escalate。
+TRANSIENT_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    TimeoutError,            # 含 asyncio.TimeoutError（3.11+ 起是同一个）
+    asyncio.TimeoutError,    # 显式列出兼容更老 traceback
+    K8sApiException,         # k8s API 抖动（5xx/超时 + 4xx 某些情况）
+    httpx.HTTPError,         # httpx 根异常类（含 TimeoutException / ConnectError 等）
+    ConnectionError,         # 网络层兜底
+)
 
 SURGICAL_KINDS: frozenset[str] = frozenset({"schema", "lint", "typecheck"})
 FAIL_KIND_TEST = "test"
@@ -98,4 +122,69 @@ def decide(
     return RetryDecision(
         "escalate", None,
         f"unknown fail_kind {fail_kind!r} → escalate",
+    )
+
+
+# ── M9: engine action-fail 决策 ─────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ActionFailDecision:
+    """engine.step 捕到 action handler 异常后的处理决策。"""
+    action: ActionFailAction
+    backoff_sec: float
+    reason: str
+
+
+def decide_action_fail(
+    action: str,
+    *,
+    exc: BaseException,
+    round: int,
+    idempotent: bool,
+    max_rounds: int = 3,
+) -> ActionFailDecision:
+    """action handler 抛异常 → 决定 retry / escalate。
+
+    Args:
+        action: 触发异常的 action 名（仅用于 reason/log）
+        exc: handler 抛出的异常
+        round: 已重试轮次（0-based；第一次失败 round=0）
+        idempotent: 重试该 action 是否安全（由 ACTION_META[action]["idempotent"] 传入）
+        max_rounds: 最多重试轮次（不含首次；round == max_rounds 就 escalate）
+
+    Returns:
+        ActionFailDecision（action="retry"|"escalate" + backoff + reason）
+
+    决策规则（顺序即优先级）：
+        1. 非幂等 action → escalate（重试 create_dev 会重复建 BKD issue）
+        2. transient 异常 + round < max_rounds → retry（退避 30/60/90/120s）
+        3. 其他（非 transient / 超轮） → escalate
+    """
+    if not idempotent:
+        return ActionFailDecision(
+            action="escalate", backoff_sec=0.0,
+            reason=f"non-idempotent action {action}; retry would duplicate side effects",
+        )
+
+    is_transient = isinstance(exc, TRANSIENT_EXCEPTIONS)
+    exc_name = type(exc).__name__
+
+    if is_transient and round < max_rounds:
+        # 30, 60, 90, 120（上限），递增退避
+        backoff = min(30.0 * (round + 1), 120.0)
+        return ActionFailDecision(
+            action="retry", backoff_sec=backoff,
+            reason=f"transient {exc_name} round {round + 1}/{max_rounds}",
+        )
+
+    if is_transient:
+        return ActionFailDecision(
+            action="escalate", backoff_sec=0.0,
+            reason=f"transient {exc_name} exceeded max_rounds {max_rounds}",
+        )
+
+    return ActionFailDecision(
+        action="escalate", backoff_sec=0.0,
+        reason=f"non-transient {exc_name}: {str(exc)[:200]}",
     )

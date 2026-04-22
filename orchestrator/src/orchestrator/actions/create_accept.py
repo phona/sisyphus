@@ -26,7 +26,7 @@ from ._skip import skip_if_enabled
 log = structlog.get_logger(__name__)
 
 
-@register("create_accept")
+@register("create_accept", idempotent=False)  # 创建新 accept issue + env-up 副作用
 async def create_accept(*, body, req_id, tags, ctx):
     if rv := skip_if_enabled("accept", Event.ACCEPT_PASS, req_id=req_id):
         pool = db.get_pool()

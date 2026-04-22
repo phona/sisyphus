@@ -174,6 +174,112 @@ async def test_ensure_runner_raises_on_other_api_error():
         await rc.ensure_runner("REQ-1", wait_ready=False)
 
 
+# ─── M9: ensure_runner 多次 attempt ────────────────────────────────────
+
+
+def _make_controller_with_attempts(core_v1: MagicMock, attempts: int) -> RunnerController:
+    return RunnerController(
+        namespace="sisyphus-runners",
+        runner_image="img",
+        runner_sa="sa",
+        storage_class="local-path",
+        workspace_size="5Gi",
+        runner_secret_name="s",
+        image_pull_secrets=[],
+        ready_timeout_sec=1,      # 每轮 1s 超时，测试快
+        ready_attempts=attempts,
+        core_v1=core_v1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ensure_runner_multi_attempt_succeeds_on_second(monkeypatch):
+    """第 1 次 _wait_pod_ready 抛 TimeoutError → 第 2 次 Ready → ensure_runner 返回 pod_name。"""
+    core = MagicMock()
+    core.create_namespaced_persistent_volume_claim = MagicMock(return_value=None)
+    core.create_namespaced_pod = MagicMock(return_value=None)
+    rc = _make_controller_with_attempts(core, attempts=3)
+
+    calls = {"n": 0}
+
+    async def fake_wait(pod_name, timeout_sec):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise TimeoutError(f"Pod {pod_name} not ready in {timeout_sec}s")
+        return None
+
+    monkeypatch.setattr(rc, "_wait_pod_ready", fake_wait)
+
+    pod_name = await rc.ensure_runner("REQ-1", wait_ready=True)
+    assert pod_name == "runner-req-1"
+    assert calls["n"] == 2, "should retry once then succeed"
+
+
+@pytest.mark.asyncio
+async def test_ensure_runner_multi_attempt_all_fail_raises_last_timeout(monkeypatch):
+    """所有 attempts 都超时 → 抛最后一次 TimeoutError（engine retry policy 接手）。"""
+    core = MagicMock()
+    core.create_namespaced_persistent_volume_claim = MagicMock(return_value=None)
+    core.create_namespaced_pod = MagicMock(return_value=None)
+    rc = _make_controller_with_attempts(core, attempts=3)
+
+    calls = {"n": 0}
+
+    async def fake_wait(pod_name, timeout_sec):
+        calls["n"] += 1
+        raise TimeoutError(f"Pod {pod_name} not ready (attempt {calls['n']})")
+
+    monkeypatch.setattr(rc, "_wait_pod_ready", fake_wait)
+
+    with pytest.raises(TimeoutError) as exc_info:
+        await rc.ensure_runner("REQ-1", wait_ready=True)
+    assert calls["n"] == 3
+    # 最后一次的错误 message（attempt 3）
+    assert "attempt 3" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_ensure_runner_attempts_override_via_kwarg(monkeypatch):
+    """attempts 参数可以覆盖 controller 默认值（给单次 ensure 临时延长耐心）。"""
+    core = MagicMock()
+    core.create_namespaced_persistent_volume_claim = MagicMock(return_value=None)
+    core.create_namespaced_pod = MagicMock(return_value=None)
+    rc = _make_controller_with_attempts(core, attempts=1)
+
+    calls = {"n": 0}
+
+    async def fake_wait(pod_name, timeout_sec):
+        calls["n"] += 1
+        if calls["n"] < 4:
+            raise TimeoutError("slow node")
+        return None
+
+    monkeypatch.setattr(rc, "_wait_pod_ready", fake_wait)
+
+    await rc.ensure_runner("REQ-1", wait_ready=True, attempts=5)
+    assert calls["n"] == 4
+
+
+@pytest.mark.asyncio
+async def test_ensure_runner_single_attempt_still_works_when_ready(monkeypatch):
+    """attempts=1 + 立即 Ready：不多做无谓循环。"""
+    core = MagicMock()
+    core.create_namespaced_persistent_volume_claim = MagicMock(return_value=None)
+    core.create_namespaced_pod = MagicMock(return_value=None)
+    rc = _make_controller_with_attempts(core, attempts=1)
+
+    calls = {"n": 0}
+
+    async def fake_wait(pod_name, timeout_sec):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(rc, "_wait_pod_ready", fake_wait)
+
+    await rc.ensure_runner("REQ-1", wait_ready=True)
+    assert calls["n"] == 1
+
+
 # ─── pause / resume / destroy ──────────────────────────────────────────
 
 

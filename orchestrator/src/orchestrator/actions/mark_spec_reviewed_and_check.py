@@ -17,7 +17,7 @@ log = structlog.get_logger(__name__)
 SPEC_TAGS = ("contract-spec", "acceptance-spec")
 
 
-@register("mark_spec_reviewed_and_check")
+@register("mark_spec_reviewed_and_check", idempotent=True)
 async def mark_spec_reviewed_and_check(*, body, req_id, tags, ctx):
     proj = body.projectId
     triggering_issue = body.issueId
