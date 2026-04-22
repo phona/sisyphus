@@ -1,12 +1,12 @@
-# Sisyphus 当前状态（v0.1.0 基线）
+# Sisyphus 当前状态（v0.1.1）
 
-**截至**：2026-04-21
+**截至**：2026-04-22
 
 ---
 
 ## 一句话
 
-研发主链（intent → analyze → spec → dev → ci-unit → ci-int → accept → archive → done）**状态机全部实现** + **运行时基础设施稳定**。v0.1.0 基线冻结为 **ci-int + accept 两阶段 skip**（磁盘 + lab 未接限制），其他真跑。可观测性全量数据 + 指标 view 就位，进入"跑一版看效果"阶段。
+研发主链（intent → analyze → spec → dev → ci-unit → ci-int → accept → archive → done）**状态机全部实现** + **运行时基础设施稳定**。v0.1.1 解锁 **ci-int 真跑**（DinD vfs → fuse-overlayfs，单 REQ 磁盘 15GB → 5GB），accept 仍 skip（ttpos-arch-lab 未接）。REQ-997 验证 28m6s 全链路跑通，详见 [REQ-997-postmortem.md](runs/REQ-997-postmortem.md)。
 
 ---
 
@@ -19,7 +19,7 @@
 2. **运行时**：per-REQ 一个 docker container（sisyphus-runner-go），named volume，cross-stage cache 复用，done_archive prompt 末尾清理
 
 3. **镜像**：GHCR 双 flavor
-   - `ghcr.io/phona/sisyphus-runner-go:main` — Go 1.23 + docker-ce + compose-plugin v2 + DinD（vfs） + openspec + sisyphus scripts（~1.5GB）
+   - `ghcr.io/phona/sisyphus-runner-go:main` — Go 1.23 + docker-ce + compose-plugin v2 + DinD（**fuse-overlayfs**） + openspec 1.3.1 + sisyphus scripts（~1.5GB）
    - `ghcr.io/phona/sisyphus-runner:main` — +Flutter SDK（Flutter 项目备用）
 
 4. **部署**：Bitnami PG 20Gi persistent + orchestrator helm + ingress + GHA 自动 build push + yoyo 迁移（startup apply）
@@ -42,10 +42,15 @@
    - `POST /admin/req/{id}/escalate` — 强制止损
    - per-stage SKIP flags + TEST_MODE 全跳 20s 验状态机
 
-### ⚠️ v0.1.0 基线 skip 的两段
+### ⚠️ v0.1.1 仍 skip 的一段
 
-- **ci-int 跳过**：K3s pod 嵌套里 dockerd 只能 vfs，10x 放大磁盘，vm-node04 49GB 撑不住
-- **accept 跳过**：ttpos-arch-lab helm 集成未接
+- **accept 跳过**：ttpos-arch-lab helm 集成未接（lab chart + RBAC + 数据快照 PVC 生命周期都没写）
+
+### ✅ v0.1.1 解锁的能力
+
+- **ci-int 真跑**：DinD storage driver 从 vfs 换 fuse-overlayfs（用户态 overlay，3-5x 省空间，单 REQ 峰值 15GB → 5GB）；vm-node04 49GB 能撑 3-4 并发
+- **openspec CLI 修包名**：`@fission-codes/openspec`（不存在）→ `@fission-ai/openspec` 1.3.1（真包），spec / done_archive 阶段不再 `command not found`
+- **BKD 上游 issue 自动 done**：webhook 收到 `session.completed` 且识别成有效事件就推 done，BKD UI 不再卡 review 残骸，`agent_quality.review_count` 数据准确
 
 ### ❌ 已知缺陷（下一版改进）
 
@@ -54,7 +59,8 @@
 3. **dev → GHA build image → image-tag 链路** 部分通（dev-agent 会写 tag，但 image 内容没验）
 4. **无成本监控**：`event_log.token_in/out` schema 有但没人写
 5. **无告警**：escalated / failure 发生不自动通知
-6. **vm-node04 磁盘 49GB** 偏紧，已两次 disk-pressure 驱逐
+6. **vm-node04 磁盘 49GB** 偏紧（fuse-overlayfs 后并发 3-4 OK，再多还是会挤）
+7. **specs-running stage_stats self-loop 失真**：每次 `spec.done` 都 self-loop 进 specs-running，`avg_sec` 算成单次 spec 而非整 specs 阶段（view 设计要么按 from_state 算，要么排除 self-loop）
 
 ---
 
@@ -105,20 +111,24 @@ bugfix 归因分布：test-bug 2, code-bug 1, no-diagnosis 1（env-bug 用例还
 | `58c51ae` | engine recursion depth 12 |
 | `fe64513` | SQL views（req_latency / stage_stats / failure_mode 等）+ /admin/metrics |
 | `04c94bb` | agent_quality / bugfix_diagnosis / suspicious_sessions views |
+| `d044537` | v0.1.0 baseline 文档定稿 |
+| `4e01d15` | DinD storage vfs → fuse-overlayfs（解锁 ci-int）|
+| `2f78eae` | openspec npm 包名 fix（@fission-codes → @fission-ai）|
+| `0ed0b36` / `1e0d3b0` | webhook 自动推上游 BKD issue done |
 
 ---
 
 ## 下一步推荐顺序
 
-跑几天基线看 metrics 稳不稳，再决定优先级。候选：
-
-1. **[P0]** vm-node04 磁盘扩容（200GB+）或换 fuse-overlayfs → 放开 ci-int
+1. **[P0]** 跑 3-5 个真实需求拿 v0.1.1 真基线（REQ-997 单样本不可信）
 2. **[P0]** spec prompt 硬约束（禁 tests/ 内含 handler 实现；RED 测试自检）— 治 spec-agent 自欺
-3. **[P1]** ttpos-arch-lab accept 链路（helm + RBAC + chart bootstrap）— 放开 accept
+3. **[P1]** ttpos-arch-lab accept 链路（helm + RBAC + chart bootstrap + 数据快照 PVC 生命周期）— 放开 accept
 4. **[P1]** escalated / failure → Lark / email webhook 通知
-5. **[P2]** event_log 埋 token_in/out（cost 监控）
-6. **[P2]** Metabase UI（看板 / 报表）
-7. **[P2]** done_archive PR 系统验证（真打开 PR 看代码 + 镜像跑起来）
+5. **[P2]** admin emit 补 4 个未触发 transition（accept.fail / spec-bug / env-bug / reviewer.fail）
+6. **[P2]** event_log 埋 token_in/out（cost 监控）
+7. **[P2]** Metabase UI（看板 / 报表）
+8. **[P2]** done_archive PR 系统验证（真打开 PR 看代码 + 镜像跑起来）
+9. **[P2]** specs-running stage_stats self-loop 修正（按 from_state 算或排除 self-loop）
 
 ---
 
@@ -129,7 +139,8 @@ bugfix 归因分布：test-bug 2, code-bug 1, no-diagnosis 1（env-bug 用例还
 | `docs/RUNBOOK.md` | 日常运维 / 诊断 / 救场 |
 | `docs/STATUS.md` | 本文件（当前状态快照）|
 | `docs/deployment-pitfalls.md` | 踩过的 10+ 个坑 |
-| `docs/runs/REQ-953-postmortem.md` | 首次全链路复盘 |
+| `docs/runs/REQ-953-postmortem.md` | v0.1.0 首次全链路复盘 |
+| `docs/runs/REQ-997-postmortem.md` | v0.1.1 ci-int 真跑首次验证 |
 | `observability/README.md` | 观测栈设计（Metabase 计划等）|
 | `observability/agent_quality.sql` | agent_quality views SQL |
 | `helm/` | Helm chart |

@@ -1,4 +1,4 @@
-# Sisyphus 运维手册 (v0.1.0 基线)
+# Sisyphus 运维手册 (v0.1.1)
 
 面向：日常运行、排查、救场。
 
@@ -47,8 +47,8 @@ kubectl -n sisyphus logs -f deploy/orch-sisyphus-orchestrator
 | `SISYPHUS_SKIP_SPEC` | false | false | |
 | `SISYPHUS_SKIP_DEV` | false | false | |
 | `SISYPHUS_SKIP_CI_UNIT` | false | false | |
-| `SISYPHUS_SKIP_CI_INT` | false | **true**（磁盘紧 / DinD vfs 放大）| 跳 ci-integration |
-| `SISYPHUS_SKIP_ACCEPT` | false | **true**（ttpos-arch-lab 没接） | 跳 accept |
+| `SISYPHUS_SKIP_CI_INT` | **false**（v0.1.1 fuse-overlayfs 解锁）| true（手动调试）| 跳 ci-integration |
+| `SISYPHUS_SKIP_ACCEPT` | true（ttpos-arch-lab 没接）| true | 跳 accept |
 | `SISYPHUS_SKIP_REVIEWER` | false | false | |
 | `SISYPHUS_SKIP_ARCHIVE` | false | false | |
 | `SISYPHUS_TEST_MODE` | false | **true**（验状态机 20s 走完）| 全 skip |
@@ -60,8 +60,8 @@ kubectl -n sisyphus patch configmap orch-sisyphus-orchestrator --type=merge \
 kubectl -n sisyphus rollout restart deploy/orch-sisyphus-orchestrator
 ```
 
-**当前 baseline 默认**（v0.1.0）：
-- SKIP_CI_INT=true（磁盘紧）
+**当前 baseline 默认**（v0.1.1）：
+- SKIP_CI_INT=**false**（fuse-overlayfs 解锁，REQ-997 验过）
 - SKIP_ACCEPT=true（lab 没接）
 - 其他全 false
 
@@ -164,7 +164,7 @@ MCP 方式：
 `helm/values.yaml` 关键项：
 ```yaml
 env:
-  skip_ci_int: true
+  skip_ci_int: false   # v0.1.1 解锁，fuse-overlayfs 撑得住
   skip_accept: true
   # 其余全 false
   test_mode: false
@@ -180,23 +180,24 @@ helm upgrade orch ./helm -n sisyphus -f my-values.yaml
 
 ---
 
-## 已知限制（v0.1.0）
+## 已知限制（v0.1.1）
 
-1. **ci-int 跳过** — vm-node04 49GB 扛不住 vfs DinD，先 skip 免得拖挂
-2. **accept 跳过** — ttpos-arch-lab 集成未实现
-3. **done_archive PR 创建未系统验证** — agent 自述成功，没手动翻过 PR 内容
-4. **spec-agent 可能自欺**（mock 测 mock）—— REQ-969 暴露，prompt 硬约束未加
-5. **vm-node04 磁盘 49GB 紧** — 连跑 2-3 个并发 ci-int 就爆
+1. **accept 跳过** — ttpos-arch-lab 集成未实现
+2. **done_archive PR 创建未系统验证** — agent 自述成功，没手动翻过 PR 内容
+3. **spec-agent 可能自欺**（mock 测 mock）—— REQ-969 暴露，prompt 硬约束未加
+4. **vm-node04 磁盘 49GB** — fuse-overlayfs 后能撑 3-4 并发，再多还是会挤
+5. **specs-running stage_stats 失真** — self-loop 算单次 spec 而非整阶段
 
 修复优先级见 `docs/STATUS.md` 的"下一步推荐顺序"。
 
 ---
 
-## 下一版改进方向
+## 下一版（v0.1.2+）改进方向
 
-等跑完基线数据再决策：
-- 扩盘 or fuse-overlayfs → 放开 ci-int
-- 接 ttpos-arch-lab → 放开 accept
+- 跑 3-5 真实需求拿 v0.1.1 真基线（REQ-997 单样本，太小）
+- 接 ttpos-arch-lab → 放开 accept（最后一个 SKIP）
 - spec prompt 硬约束 + 静态检查 → 防 mock 自欺
+- escalated → Lark/email 自动告警
 - event_log `token_in/out` 埋点 → 成本监控
+- admin emit 补 4 个未触发 transition（accept.fail / spec-bug / env-bug / reviewer.fail）
 - Metabase UI → 看板可视化
