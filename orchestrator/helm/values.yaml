@@ -106,19 +106,23 @@ runner:
 
   imagePullSecrets: []        # 如果 runner image 私有需要填
 
-  # k8s 拉制品 + agent 工作用的凭证
-  createSecrets: true         # 自建 runner secret；false 则用 existingSecretName
+  # 单一 runner secret：所有 runner Pod 要的凭证都在里面（keys 见下）
+  #   gh_token    → env GH_TOKEN              给 agent gh CLI / git clone
+  #   ghcr_user   → env SISYPHUS_GHCR_USER    docker login ghcr.io
+  #   ghcr_token  → env SISYPHUS_GHCR_TOKEN
+  #   kubeconfig  → 挂载到 /root/.kube/config  accept 阶段 agent 起 helm 用
+  #
+  # createSecrets=true 时 helm 帮建 secret（用下方 secret 段的值）；
+  # 生产建议 createSecrets=false + existingSecretName 指向 SealedSecret / ESO 管的 secret
+  createSecrets: true
   existingSecretName: ""
   secretName: sisyphus-runner-secrets
   secret:
     gh_token: ""              # !! 建议填：GitHub PAT，scope=repo+read:packages
     ghcr_user: ""             # GHCR 用户名（通常是 GitHub 用户或 org 名）
-    ghcr_token: ""            # GHCR PAT（可以跟 gh_token 同一个）
-
-  # accept/staging 阶段 runner Pod 内 agent 要 `helm install` 到 accept-REQ-N
-  # namespace，通过挂一个 kubeconfig secret 获得权限。这个 secret 不由 helm 建，
-  # 部署方自己 kubectl create secret generic sisyphus-runner-kubeconfig ...
-  kubeconfigSecretName: sisyphus-runner-kubeconfig
+    ghcr_token: ""            # GHCR PAT（可跟 gh_token 同一个）
+    kubeconfig: ""            # kubeconfig 文件内容（accept 阶段 helm install 用）
+                              # 生产建议单独放 --set-file runner.secret.kubeconfig=$HOME/.kube/config
 
 # ─── 敏感信息 ─────────────────────────────────────────────────────────────
 # 选 A：让 chart 自建 Secret（适合小规模 / dev）

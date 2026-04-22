@@ -56,7 +56,6 @@ async def startup() -> None:
             storage_class=settings.runner_storage_class,
             workspace_size=settings.runner_workspace_size,
             runner_secret_name=settings.runner_secret_name,
-            kubeconfig_secret_name=settings.runner_kubeconfig_secret,
             image_pull_secrets=settings.runner_image_pull_secrets,
             ready_timeout_sec=settings.runner_ready_timeout_sec,
             in_cluster=settings.k8s_in_cluster,

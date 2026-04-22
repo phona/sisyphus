@@ -86,7 +86,6 @@ class RunnerController:
         storage_class: str,
         workspace_size: str,
         runner_secret_name: str,
-        kubeconfig_secret_name: str,
         image_pull_secrets: list[str] | None = None,
         ready_timeout_sec: int = 120,
         in_cluster: bool = True,
@@ -97,8 +96,8 @@ class RunnerController:
         self.runner_sa = runner_sa
         self.storage_class = storage_class
         self.workspace_size = workspace_size
+        # 单一 secret：env 注入 gh_token/ghcr_user/ghcr_token；文件挂载 kubeconfig
         self.runner_secret_name = runner_secret_name
-        self.kubeconfig_secret_name = kubeconfig_secret_name
         self.image_pull_secrets = list(image_pull_secrets or [])
         self.ready_timeout_sec = ready_timeout_sec
 
@@ -196,7 +195,9 @@ class RunnerController:
             client.V1Volume(
                 name="kubeconfig",
                 secret=client.V1SecretVolumeSource(
-                    secret_name=self.kubeconfig_secret_name, optional=True,
+                    secret_name=self.runner_secret_name,
+                    optional=True,
+                    items=[client.V1KeyToPath(key="kubeconfig", path="config")],
                 ),
             ),
         ]

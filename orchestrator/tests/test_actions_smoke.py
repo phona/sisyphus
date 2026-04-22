@@ -136,7 +136,7 @@ async def test_mark_spec_gate_wait(monkeypatch):
     assert out["gate"] == "wait"
 
 
-# ─── create_dev / create_ci_runner / create_accept ────────────────────────
+# ─── create_dev / create_accept ────────────────────────
 @pytest.mark.asyncio
 async def test_create_dev(monkeypatch):
     from orchestrator.actions import create_dev as mod
@@ -151,25 +151,6 @@ async def test_create_dev(monkeypatch):
     assert "[REQ-9] [DEV]" in kwargs["title"]
 
 
-@pytest.mark.asyncio
-async def test_create_ci_runner_unit_then_int(monkeypatch):
-    from orchestrator.actions import create_ci_runner as mod
-    fake = make_fake_bkd()
-    fake.create_issue.return_value = FakeIssue(id="ci-1")
-    patch_bkd(monkeypatch, "create_ci_runner", fake)
-    patch_db(monkeypatch, "create_ci_runner")
-    body = make_body(issue_id="dev-1")
-    out_u = await mod.create_ci_runner_unit(body=body, req_id="REQ-9", tags=["dev"], ctx={})
-    assert out_u["target"] == "unit"
-    out_i = await mod.create_ci_runner_integration(
-        body=body, req_id="REQ-9", tags=["reviewer"], ctx={},
-    )
-    assert out_i["target"] == "integration"
-    # 第二次 create 的 tags 含 parent:reviewer
-    last_call = fake.create_issue.await_args_list[-1]
-    assert "parent:reviewer" in last_call.kwargs["tags"]
-
-
 def test_short_title_helper():
     from orchestrator.actions import short_title
     assert short_title(None) == ""
@@ -181,17 +162,6 @@ def test_short_title_helper():
     assert out.startswith(" — ")
     assert "…" in out
     assert len(out) < 30
-
-
-def test_infer_parent_stage_ci_unit_with_target():
-    """ci-int 由 ci-unit pass 触发时父 stage 应推成 ci-unit，不是 unknown。"""
-    from orchestrator.actions.create_ci_runner import _infer_parent_stage
-    assert _infer_parent_stage(["ci", "target:unit", "ci:pass"]) == "ci-unit"
-    assert _infer_parent_stage(["ci", "target:integration"]) == "ci-integration"
-    assert _infer_parent_stage(["ci"]) == "ci"
-    assert _infer_parent_stage(["dev"]) == "dev"
-    assert _infer_parent_stage(["reviewer"]) == "reviewer"
-    assert _infer_parent_stage(["something-weird"]) == "unknown"
 
 
 @pytest.mark.asyncio
@@ -236,34 +206,6 @@ async def test_open_gh_and_bugfix_circuit_break(monkeypatch):
     assert out["circuit_broken"] is True
     assert out["bugfix_issue_id"] is None
     assert fake.create_issue.await_count == 1  # 只开 gh
-
-
-@pytest.mark.asyncio
-async def test_comment_back_dev(monkeypatch):
-    from orchestrator.actions import comment_back_dev as mod
-    fake = make_fake_bkd()
-    patch_bkd(monkeypatch, "comment_back_dev", fake)
-    body = make_body(issue_id="ci-unit-1")
-    out = await mod.comment_back_dev(
-        body=body, req_id="REQ-9", tags=["ci", "target:unit", "ci:fail"],
-        ctx={"dev_issue_id": "dev-9"},
-    )
-    assert out["dev_issue_id"] == "dev-9"
-    fake.follow_up_issue.assert_awaited_once()
-    fake.update_issue.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_comment_back_dev_missing_ctx(monkeypatch):
-    from orchestrator.actions import comment_back_dev as mod
-    fake = make_fake_bkd()
-    patch_bkd(monkeypatch, "comment_back_dev", fake)
-    body = make_body(issue_id="ci-unit-1")
-    out = await mod.comment_back_dev(
-        body=body, req_id="REQ-9", tags=[], ctx={},
-    )
-    assert "error" in out
-    fake.follow_up_issue.assert_not_called()
 
 
 # ─── escalate ────────────────────────────────────────────────────────────

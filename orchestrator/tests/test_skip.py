@@ -21,13 +21,13 @@ def test_skip_specific_stage(monkeypatch):
 def test_test_mode_skips_all(monkeypatch):
     monkeypatch.setattr("orchestrator.actions._skip.settings.test_mode", True)
     # 无需 skip_<stage>=True
-    out = skip_if_enabled("ci_int", Event.CI_INT_PASS)
-    assert out["emit"] == "ci-int.pass"
+    out = skip_if_enabled("staging-test", Event.STAGING_TEST_PASS)
+    assert out["emit"] == "staging-test.pass"
 
 
 def test_dash_underscore_normalization(monkeypatch):
     """stage 名带破折号要能映射到 settings 字段（带下划线）。"""
     monkeypatch.setattr("orchestrator.actions._skip.settings.test_mode", False)
-    monkeypatch.setattr("orchestrator.actions._skip.settings.skip_ci_int", True)
-    # 调用方传 "ci_int"（settings 字段名形式）
-    assert skip_if_enabled("ci_int", Event.CI_INT_PASS) is not None
+    monkeypatch.setattr("orchestrator.actions._skip.settings.skip_staging_test", True)
+    # 调用方传 "staging-test"（带横杠，settings 字段带下划线）
+    assert skip_if_enabled("staging-test", Event.STAGING_TEST_PASS) is not None

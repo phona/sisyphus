@@ -29,7 +29,6 @@ def _make_controller(core_v1: MagicMock | None = None) -> RunnerController:
         storage_class="local-path",
         workspace_size="10Gi",
         runner_secret_name="sisyphus-runner-secrets",
-        kubeconfig_secret_name="sisyphus-runner-kubeconfig",
         image_pull_secrets=[],
         ready_timeout_sec=5,
         core_v1=core_v1 or MagicMock(),
@@ -106,12 +105,22 @@ def test_build_pod_with_image_pull_secrets():
         storage_class="local-path",
         workspace_size="5Gi",
         runner_secret_name="s",
-        kubeconfig_secret_name="k",
         image_pull_secrets=["ghcr-creds"],
         core_v1=core,
     )
     pod = rc.build_pod("REQ-1")
     assert pod.spec.image_pull_secrets[0].name == "ghcr-creds"
+
+
+def test_kubeconfig_mounts_from_same_secret():
+    """verify kubeconfig is mounted from the same runner_secret_name (not a separate secret)。"""
+    rc = _make_controller()
+    pod = rc.build_pod("REQ-1")
+    kubeconfig_vol = next(v for v in pod.spec.volumes if v.name == "kubeconfig")
+    assert kubeconfig_vol.secret.secret_name == "sisyphus-runner-secrets"
+    # items 映射 key=kubeconfig → path=config（让 ~/.kube/config 正确）
+    items = kubeconfig_vol.secret.items or []
+    assert any(i.key == "kubeconfig" and i.path == "config" for i in items)
 
 
 # ─── lifecycle: ensure_runner 幂等 ─────────────────────────────────────

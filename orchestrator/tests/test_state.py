@@ -71,12 +71,11 @@ def test_v02_removed_ci_states():
     assert "ci-int-running" not in values
 
 
-def test_v02_legacy_ci_events_unused_by_state_machine():
-    """ci-unit.* / ci-int.* event 为 v0.1 遗留（event 枚举保留给老 action 引用，
-    但 TRANSITIONS 里不再出现，state machine 不再响应。"""
-    legacy = {Event.CI_UNIT_PASS, Event.CI_UNIT_FAIL, Event.CI_INT_PASS, Event.CI_INT_FAIL}
-    for (_, ev), _ in TRANSITIONS.items():
-        assert ev not in legacy, f"v0.2 state machine 不该再用 {ev.value}"
+def test_v02_no_legacy_ci_events():
+    """v0.2 完全删了 CI_UNIT_PASS/FAIL/CI_INT_PASS/FAIL。"""
+    legacy_values = {"ci-unit.pass", "ci-unit.fail", "ci-int.pass", "ci-int.fail"}
+    for e in Event:
+        assert e.value not in legacy_values, f"v0.2 应彻底删 {e.value}"
 
 
 def test_no_orphan_actions():

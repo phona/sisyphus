@@ -66,12 +66,6 @@ class Event(StrEnum):
     ARCHIVE_DONE = "archive.done"
     SESSION_FAILED = "session.failed"
 
-    # ── v0.1 遗留事件（state machine 不再用；S4 正式 cleanup 时删）──────
-    CI_UNIT_PASS = "ci-unit.pass"
-    CI_UNIT_FAIL = "ci-unit.fail"
-    CI_INT_PASS = "ci-int.pass"
-    CI_INT_FAIL = "ci-int.fail"
-
 
 @dataclass(frozen=True)
 class Transition:

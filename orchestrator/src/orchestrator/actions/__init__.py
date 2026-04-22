@@ -39,15 +39,12 @@ def register(name: str):
 
 
 # 触发各 handler 注册（导入即注册）
-# v0.2：真实 stage handler 替代 _v02_stubs（_v02_stubs.py 变空 placeholder）
 from . import (  # noqa: E402,F401
-    comment_back_dev,  # deprecated since v0.2（ci-unit fail retry 不再用）
     create_accept,
-    create_ci_runner,  # deprecated since v0.2（ci-unit/ci-int stage 合并进 staging）
     create_dev,
-    create_pr_ci_watch,  # v0.2 新
+    create_pr_ci_watch,
     create_reviewer,
-    create_staging_test,  # v0.2 新
+    create_staging_test,
     create_test_fix,
     done_archive,
     escalate,
@@ -55,5 +52,5 @@ from . import (  # noqa: E402,F401
     mark_spec_reviewed_and_check,
     open_gh_and_bugfix,
     start_analyze,
-    teardown_accept_env,  # v0.2 新
+    teardown_accept_env,
 )

@@ -28,8 +28,9 @@ class Settings(BaseSettings):
     runner_service_account: str = "sisyphus-runner-sa"
     runner_storage_class: str = "local-path"   # K3s 默认
     runner_workspace_size: str = "10Gi"        # PVC 大小（runner 峰值 ~5GB）
-    runner_secret_name: str = "sisyphus-runner-secrets"       # GH token 等
-    runner_kubeconfig_secret: str = "sisyphus-runner-kubeconfig"  # accept 阶段起 lab 用
+    # 单一 runner secret：keys = gh_token / ghcr_user / ghcr_token / kubeconfig
+    # 前三个以 env 形式注入 Pod；kubeconfig 文件挂载到 /root/.kube/config
+    runner_secret_name: str = "sisyphus-runner-secrets"
     runner_image_pull_secrets: list[str] = Field(default_factory=list)
     runner_ready_timeout_sec: int = 120
 
@@ -78,9 +79,6 @@ class Settings(BaseSettings):
     # v0.2：新 stage 替换 ci-unit/ci-int
     skip_staging_test: bool = False   # staging-test.pass（调试环境跑 unit+int）
     skip_pr_ci: bool = False          # pr-ci.pass（PR CI 全套等绿）
-    # v0.1 兼容字段（S4 清理前保留，让老 action 不破）
-    skip_ci_unit: bool = False        # v0.1 兼容
-    skip_ci_int: bool = False         # v0.1 兼容
     skip_accept: bool = False         # accept.pass (ttpos-arch-lab 接好前默认 true)
     skip_reviewer: bool = False       # reviewer.pass (bugfix 子链)
     skip_archive: bool = False        # archive.done (跳过真 PR 创建)

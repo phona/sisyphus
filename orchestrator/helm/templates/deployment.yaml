@@ -67,8 +67,6 @@ spec:
               value: {{ .Values.runner.workspaceSize | quote }}
             - name: SISYPHUS_RUNNER_SECRET_NAME
               value: {{ .Values.runner.secretName | quote }}
-            - name: SISYPHUS_RUNNER_KUBECONFIG_SECRET
-              value: {{ .Values.runner.kubeconfigSecretName | quote }}
             - name: SISYPHUS_RUNNER_READY_TIMEOUT_SEC
               value: {{ .Values.runner.readyTimeoutSec | quote }}
             - name: SISYPHUS_PVC_RETAIN_ON_ESCALATE_DAYS
