@@ -117,5 +117,13 @@ class Settings(BaseSettings):
     # 回滚：unset env / set false → rollout restart
     admission_analyze_pending_questions: bool = False
 
+    # ─── M8：watchdog 兜底卡死 stage ────────────────────────────────────
+    # 周期扫 req_state，发现某 stage 超过阈值没 transition 且关联 BKD session
+    # 不在 running → emit SESSION_FAILED 走 escalate。兜底 BKD spawn-time
+    # 失败不发 webhook 的场景（M4 retry policy 假设"失败事件总会到"被打破）。
+    watchdog_enabled: bool = True             # 默认开（兜底必须开）
+    watchdog_interval_sec: int = 60           # 每 60s 扫一次
+    watchdog_stuck_threshold_sec: int = 1800  # 30 min 无 transition 视为卡死
+
 
 settings = Settings()  # type: ignore[call-arg]
