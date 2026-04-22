@@ -1,9 +1,10 @@
-"""open_gh_and_bugfix: ci-int 或 accept 失败时双路开 issue。
+"""open_gh_and_bugfix：staging / pr-ci / accept 失败 → 开 GH incident + 单 dev-fix bugfix。
 
-Policy（沿用 d444f91 的策略 A）：
-- 一定开 GitHub incident issue（让人评审）
-- 同时开 BKD bugfix issue（让 dev-fix-agent 自修）
-- bugfix round 超过 CB_THRESHOLD（=3）就熔断，只开 GH 不开 bugfix
+M5：砍 DFIX+TFIX 双链（不再 fanout 出 test-fix，也不再跑 reviewer 裁判）。本 action
+只起一个 dev-fix agent。bugfix round 计数以 ctx["bugfix_round"] 为准（M4 retry policy
+写入）；缺省回退 BKD list-issues 兜底，让 M4 未到位也能单独跑。
+
+Circuit breaker：同一 REQ 累计 round 超 CB_THRESHOLD 只开 GH issue 不开 bugfix。
 """
 from __future__ import annotations
 
@@ -23,23 +24,17 @@ CB_THRESHOLD = 3
 @register("open_gh_and_bugfix")
 async def open_gh_and_bugfix(*, body, req_id, tags, ctx):
     proj = body.projectId
-    branch = (ctx or {}).get("branch") or f"feat/{req_id}"
-    workdir = (ctx or {}).get("workdir") or f"{settings.workdir_root}/feat-{req_id}"
+    ctx = ctx or {}
+    branch = ctx.get("branch") or f"feat/{req_id}"
     source_issue_id = body.issueId
     kind = _infer_kind(tags)
     incident_key = f"{req_id}:{kind}"
 
-    # bugfix round = 已存在 bugfix issue 数 + 1
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
-        all_issues = await bkd.list_issues(proj, limit=200)
-        existing_bug = [
-            i for i in all_issues
-            if "bugfix" in i.tags and req_id in i.tags
-        ]
-        round_n = len(existing_bug) + 1
+        round_n = await _next_round(bkd, proj, req_id, ctx)
         should_bugfix = round_n <= CB_THRESHOLD
 
-        # 1. open GH incident issue
+        # 1. 开 GH incident issue（审计 + 人工兜底）
         gh = await bkd.create_issue(
             project_id=proj,
             title=f"[{req_id}] [GH-ISSUE] {kind}{short_title(ctx)}",
@@ -49,15 +44,15 @@ async def open_gh_and_bugfix(*, body, req_id, tags, ctx):
         gh_prompt = render(
             "github_issue.md.j2",
             req_id=req_id, kind=kind, source_issue_id=source_issue_id,
-            branch=branch, workdir=workdir,
+            branch=branch, workdir=f"{settings.workdir_root}/feat-{req_id}",
             incident_key=incident_key,
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=gh.id, prompt=gh_prompt)
         await bkd.update_issue(project_id=proj, issue_id=gh.id, status_id="working")
 
+        # 2. 开单 dev-fix bugfix（熔断后只开 GH）
         bug_issue_id: str | None = None
         if should_bugfix:
-            # 2. open BKD bugfix issue（dev 侧）
             bug = await bkd.create_issue(
                 project_id=proj,
                 title=f"[{req_id}] [BUGFIX round-{round_n}] {kind}{short_title(ctx)}",
@@ -94,6 +89,16 @@ async def open_gh_and_bugfix(*, body, req_id, tags, ctx):
         "round": round_n,
         "circuit_broken": not should_bugfix,
     }
+
+
+async def _next_round(bkd, proj: str, req_id: str, ctx: dict) -> int:
+    """Round counter 来源：优先 ctx（M4 retry policy 写） → 回退 BKD list-issues 数数。"""
+    cur = ctx.get("bugfix_round")
+    if isinstance(cur, int) and cur > 0:
+        return cur + 1
+    all_issues = await bkd.list_issues(proj, limit=200)
+    existing = [i for i in all_issues if "bugfix" in i.tags and req_id in i.tags]
+    return len(existing) + 1
 
 
 def _infer_kind(tags: list[str]) -> str:
