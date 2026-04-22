@@ -22,10 +22,12 @@ CASES: list[tuple[str, list[str], Event | None]] = [
     ("session.completed", ["contract-spec", "REQ-1"],                        Event.SPEC_DONE),
     ("session.completed", ["acceptance-spec", "REQ-1"],                          Event.SPEC_DONE),
     ("session.completed", ["dev", "REQ-1"],                                  Event.DEV_DONE),
-    ("session.completed", ["ci", "REQ-1", "target:unit", "ci:pass"],         Event.CI_UNIT_PASS),
-    ("session.completed", ["ci", "REQ-1", "target:unit", "ci:fail"],         Event.CI_UNIT_FAIL),
-    ("session.completed", ["ci", "REQ-1", "target:integration", "ci:pass"],  Event.CI_INT_PASS),
-    ("session.completed", ["ci", "REQ-1", "target:integration", "ci:fail"],  Event.CI_INT_FAIL),
+    # v0.2：staging-test + pr-ci 新 agent role
+    ("session.completed", ["staging-test", "REQ-1", "result:pass"],          Event.STAGING_TEST_PASS),
+    ("session.completed", ["staging-test", "REQ-1", "result:fail"],          Event.STAGING_TEST_FAIL),
+    ("session.completed", ["pr-ci", "REQ-1", "pr-ci:pass"],                  Event.PR_CI_PASS),
+    ("session.completed", ["pr-ci", "REQ-1", "pr-ci:fail"],                  Event.PR_CI_FAIL),
+    ("session.completed", ["pr-ci", "REQ-1", "pr-ci:timeout"],               Event.PR_CI_TIMEOUT),
     ("session.completed", ["accept", "REQ-1", "result:pass"],                Event.ACCEPT_PASS),
     ("session.completed", ["accept", "REQ-1", "result:fail"],                Event.ACCEPT_FAIL),
     ("session.completed", ["bugfix", "REQ-1", "round-1"],                    Event.BUGFIX_DONE),
@@ -37,7 +39,8 @@ CASES: list[tuple[str, list[str], Event | None]] = [
     ("session.completed", ["done-archive", "REQ-1"],                         Event.ARCHIVE_DONE),
 
     # 没结果 tag → None（agent 没正常完成）
-    ("session.completed", ["ci", "REQ-1", "target:unit"],                    None),
+    ("session.completed", ["staging-test", "REQ-1"],                         None),
+    ("session.completed", ["pr-ci", "REQ-1"],                                None),
     ("session.completed", ["accept", "REQ-1"],                               None),
     ("session.completed", ["reviewer", "REQ-1"],                             None),
 

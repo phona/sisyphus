@@ -75,8 +75,12 @@ class Settings(BaseSettings):
     skip_analyze: bool = False        # analyze.done
     skip_spec: bool = False           # spec.all-passed (跳整 spec stage)
     skip_dev: bool = False            # dev.done
-    skip_ci_unit: bool = False        # ci-unit.pass
-    skip_ci_int: bool = False         # ci-int.pass
+    # v0.2：新 stage 替换 ci-unit/ci-int
+    skip_staging_test: bool = False   # staging-test.pass（调试环境跑 unit+int）
+    skip_pr_ci: bool = False          # pr-ci.pass（PR CI 全套等绿）
+    # v0.1 兼容字段（S4 清理前保留，让老 action 不破）
+    skip_ci_unit: bool = False        # v0.1 兼容
+    skip_ci_int: bool = False         # v0.1 兼容
     skip_accept: bool = False         # accept.pass (ttpos-arch-lab 接好前默认 true)
     skip_reviewer: bool = False       # reviewer.pass (bugfix 子链)
     skip_archive: bool = False        # archive.done (跳过真 PR 创建)

@@ -14,6 +14,8 @@ from .state import Event
 
 REQ_ID_RE = re.compile(r"^REQ-[\w-]+$")
 SPEC_TAGS = {"contract-spec", "acceptance-spec"}
+# v0.2 新增：stage tag 用于区分 agent role
+# staging-test / pr-ci / accept 都走 result:* tag 判 pass/fail
 
 
 def derive_event(event_type: str, tags: Iterable[str], result_tags_only: bool = False) -> Event | None:
@@ -57,19 +59,23 @@ def derive_event(event_type: str, tags: Iterable[str], result_tags_only: bool = 
             return Event.REVIEWER_FAIL
         return None  # 没结果 tag，忽略（agent 没正常完成）
 
-    if "ci" in tagset:
-        target = _get_target(tagset)
-        if target == "unit":
-            if "ci:pass" in tagset:
-                return Event.CI_UNIT_PASS
-            if "ci:fail" in tagset:
-                return Event.CI_UNIT_FAIL
-        elif target == "integration":
-            if "ci:pass" in tagset:
-                return Event.CI_INT_PASS
-            if "ci:fail" in tagset:
-                return Event.CI_INT_FAIL
-        return None  # ci 没结果 tag
+    # v0.2：staging-test agent 在调试环境跑 unit+int，结果带 result:pass/fail
+    if "staging-test" in tagset:
+        if "result:pass" in tagset:
+            return Event.STAGING_TEST_PASS
+        if "result:fail" in tagset:
+            return Event.STAGING_TEST_FAIL
+        return None
+
+    # v0.2：pr-ci-watch agent 监听 N 个 PR 的 GHA commit statuses
+    if "pr-ci" in tagset:
+        if "pr-ci:pass" in tagset:
+            return Event.PR_CI_PASS
+        if "pr-ci:fail" in tagset:
+            return Event.PR_CI_FAIL
+        if "pr-ci:timeout" in tagset:
+            return Event.PR_CI_TIMEOUT
+        return None
 
     if "accept" in tagset:
         if "result:pass" in tagset:

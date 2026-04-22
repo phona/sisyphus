@@ -40,6 +40,7 @@ def register(name: str):
 
 # 触发各 handler 注册（导入即注册）
 from . import (  # noqa: E402,F401
+    _v02_stubs,  # v0.2 stage stubs（S4 会实现真逻辑）
     comment_back_dev,
     create_accept,
     create_ci_runner,
