@@ -34,7 +34,14 @@ BRANCH={{ branch }}
    ```
 3. **填 tasks.md 的 Stage: implementation section**：先把 analyze 留的
    `- [ ] TODO: ...` 换成具体任务清单（依然 `- [ ]` 开头）
-4. 实现业务代码（internal/ cmd/）+ 同目录 unit test
+4. 实现业务代码（internal/ cmd/）。**新增 unit test 必须按容器内
+   `/workspace/.claude/skills/unit-test/SKILL.md` 的 skill 写**（pure / service-dependent
+   分类、env 取地址不硬编码、testify/assert、`//go:build integration` 标注等约束都在
+   skill 里，sisyphus 不重复说）：
+   ```
+   docker exec $CONTAINER cat /workspace/.claude/skills/unit-test/SKILL.md
+   docker exec $CONTAINER cat /workspace/.claude/skills/unit-test/rules.md
+   ```
 5. 容器内验证：`docker exec $CONTAINER bash -c "go vet ./... && go build ./... && make ci-unit-test"`
 6. **每完成一条就把对应 checkbox 改成 `- [x]`**（PR 审查的人要看 tick 率
    判断完成度）。最终 commit 里所有 Stage: implementation 下的 checkbox 都

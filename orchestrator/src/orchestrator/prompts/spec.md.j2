@@ -19,10 +19,23 @@ REQ={{ req_id }}
 
 **读**: openspec/changes/$REQ/proposal.md + design.md + tasks.md 的 `Stage: contract-tests` section。
 
-**根据 proposal 涉及的形态，挑一种或多种写**：
-- REST API → `contract.spec.yaml` (OpenAPI) + `tests/contract/*.go`
-- UI 组件契约 → `tests/ui/*` (props 快照)
-- DB schema → `migrations/*.sql` + 验证 SQL
+**怎么写测试 —— 优先调用 repo 里的 skill，sisyphus 不重复定义实践**：
+
+容器内 `/workspace/.claude/skills/integration-test/SKILL.md` 是契约测试的标准做法
+（docker-compose 起真实 stack、env BASE_URL 注入、build tag `//go:build integration`、
+test-runner 单独容器等）。**所有 `tests/contract/*.go` 必须遵守这个 skill 的约定，
+禁止 inline `httptest.NewServer` / 在测试文件里写 mock handler 自测自己**——
+那样既绕过 docker-compose 真实 stack，也让 ci-int "PASS" 失去意义（REQ-969 实证）。
+
+**步骤**：
+1. `docker exec $CONTAINER cat /workspace/.claude/skills/integration-test/SKILL.md` 读 skill
+2. `docker exec $CONTAINER cat /workspace/.claude/skills/integration-test/rules.md` 读细则
+3. 如有 `templates/` 用之
+4. **根据 proposal 的形态**挑一种或多种写：
+   - REST API → `contract.spec.yaml` (OpenAPI) + `tests/contract/*.go`（按 skill 写）
+   - UI 组件契约 → `tests/ui/*`
+   - DB schema → `migrations/*.sql` + 验证 SQL
+5. 测试要 RED：dev 实现前 `docker compose -f tests/docker-compose.yml up --build --exit-code-from test-runner` 必须 exit 非 0
 
 写 specs：`openspec/changes/$REQ/specs/<capability>/spec.md` 的 ADDED 块，
 Scenario 命名 `<REQ>-S<N>`（check-scenario-refs.sh 校验）。
@@ -35,6 +48,10 @@ Scenario 命名 `<REQ>-S<N>`（check-scenario-refs.sh 校验）。
 
 **产**：`openspec/changes/$REQ/specs/<capability>/spec.md` 的 ADDED 块，
 Scenario 命名 `FEATURE-A<N>`（Given/When/Then，**用户视角**）。
+
+如果验收场景需要可执行 e2e 脚本（非纯人工 QA），同样优先调用容器内
+`/workspace/.claude/skills/integration-test/SKILL.md` 的 docker-compose blackbox
+做法，不要在测试文件里 inline mock。
 
 填 tasks.md 的 `## Stage: acceptance-tests` section。
 
