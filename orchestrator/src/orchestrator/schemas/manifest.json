@@ -3,7 +3,14 @@
   "$id": "https://sisyphus.dev/schemas/manifest.json",
   "title": "Sisyphus workspace manifest (post-analyze)",
   "type": "object",
-  "required": ["schema_version", "req_id", "sources"],
+  "required": [
+    "schema_version",
+    "req_id",
+    "sources",
+    "open_questions",
+    "assumptions",
+    "out_of_scope"
+  ],
   "additionalProperties": true,
   "properties": {
     "schema_version": {
@@ -30,6 +37,18 @@
           "pattern": "^integration/.+"
         }
       }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "out_of_scope": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
     },
     "sha_by_repo": {"type": "object"},
     "pr_by_repo": {"type": "object"},

@@ -11,6 +11,9 @@ CASES: list[tuple[str, list[str], Event | None]] = [
     ("issue.updated",     ["intent:analyze"],                                Event.INTENT_ANALYZE),
     # intent 已被 analyze 接管 → 不再发
     ("issue.updated",     ["intent:analyze", "analyze", "REQ-1"],            None),
+    # M6：人答完 open_questions 后打 resume:analyze → 重新走 INTENT_ANALYZE
+    # （状态机在 ANALYZING_PENDING_HUMAN 接收，其他状态自然 skip）
+    ("issue.updated",     ["resume:analyze", "analyze", "REQ-1"],            Event.INTENT_ANALYZE),
     # 普通 issue.updated 一律忽略（避免自指）
     ("issue.updated",     ["dev", "REQ-1"],                                  None),
 

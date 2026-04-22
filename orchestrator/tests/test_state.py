@@ -10,6 +10,9 @@ EXPECTED = [
     # state, event, next_state, action
     (ReqState.INIT,                 Event.INTENT_ANALYZE,      ReqState.ANALYZING,           "start_analyze"),
     (ReqState.ANALYZING,            Event.ANALYZE_DONE,        ReqState.SPECS_RUNNING,       "fanout_specs"),
+    # M6：fanout_specs 查出 open_questions → chained emit → 回挂起
+    (ReqState.SPECS_RUNNING,        Event.ANALYZE_PENDING_HUMAN, ReqState.ANALYZING_PENDING_HUMAN, None),
+    (ReqState.ANALYZING_PENDING_HUMAN, Event.INTENT_ANALYZE,   ReqState.ANALYZING,           "start_analyze"),
     (ReqState.SPECS_RUNNING,        Event.SPEC_DONE,           ReqState.SPECS_RUNNING,       "mark_spec_reviewed_and_check"),
     (ReqState.SPECS_RUNNING,        Event.SPEC_ALL_PASSED,     ReqState.DEV_RUNNING,         "create_dev"),
     (ReqState.DEV_RUNNING,          Event.DEV_DONE,            ReqState.STAGING_TEST_RUNNING, "create_staging_test"),
@@ -90,6 +93,23 @@ def test_v02_no_legacy_ci_events():
     legacy_values = {"ci-unit.pass", "ci-unit.fail", "ci-int.pass", "ci-int.fail"}
     for e in Event:
         assert e.value not in legacy_values, f"v0.2 应彻底删 {e.value}"
+
+
+def test_m6_pending_human_not_in_session_failed_running_list():
+    """M6：pending-human 没有 agent 在跑，不应被 session.failed 连带 escalate。"""
+    t = decide(ReqState.ANALYZING_PENDING_HUMAN, Event.SESSION_FAILED)
+    assert t is None
+
+
+def test_m6_pending_human_stable_without_resume():
+    """M6：挂起态只接受 INTENT_ANALYZE（人打 resume:analyze / intent:analyze），
+    其他 event 一律 skip（不会被 analyze-agent 的 session.completed 抢跑）。"""
+    stable_events = [
+        Event.ANALYZE_DONE, Event.SPEC_DONE, Event.DEV_DONE,
+        Event.ANALYZE_PENDING_HUMAN,
+    ]
+    for ev in stable_events:
+        assert decide(ReqState.ANALYZING_PENDING_HUMAN, ev) is None, ev
 
 
 def test_no_orphan_actions():

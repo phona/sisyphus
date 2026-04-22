@@ -16,6 +16,8 @@ dependencies = [
     "yoyo-migrations>=9.0",
     "psycopg2-binary>=2.9",  # yoyo 的 postgres 驱动
     "kubernetes>=31.0",      # v0.2 K8s runner（pod/pvc/exec）
+    "jsonschema>=4.0",       # M3 manifest/openspec admission（schema validate）
+    "pyyaml>=6.0",           # M3 读 PVC 上 manifest.yaml
 ]
 
 [project.optional-dependencies]
