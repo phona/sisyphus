@@ -101,5 +101,15 @@ class Settings(BaseSettings):
     pr_ci_watch_poll_interval_sec: int = 30
     pr_ci_watch_timeout_sec: int = 1800   # 30 min
 
+    # ─── M4：故障分级重试 ────────────────────────────────────────────────
+    # False（默认）= checker fail 直接 emit FAIL event（老行为）
+    # True = checker fail 调 retry.executor，按 policy 决定 follow_up / diagnose / escalate
+    # 回滚：set false → rollout restart
+    retry_enabled: bool = False
+    # 到/超过即 escalate 人工（含本次在内的总轮次）
+    retry_max_rounds: int = 5
+    # 测试失败从第 N 轮起改走 diagnose agent（分流 spec-bug/env-bug/code-bug）
+    retry_diagnose_threshold: int = 3
+
 
 settings = Settings()  # type: ignore[call-arg]
