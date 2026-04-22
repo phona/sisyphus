@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 
 from orchestrator import webhook
@@ -12,8 +14,8 @@ from orchestrator import webhook
 class _FakeBKD:
     """只 capture update_issue 调用，其他方法默认空实现。"""
 
-    captured: list[tuple[str, str, str]] = []
-    raise_on_update: bool = False
+    captured: ClassVar[list[tuple[str, str, str]]] = []
+    raise_on_update: ClassVar[bool] = False
 
     def __init__(self, *_a, **_kw):
         pass
