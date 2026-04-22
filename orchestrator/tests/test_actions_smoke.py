@@ -473,6 +473,47 @@ async def test_create_staging_test_bkd_path(monkeypatch):
     fake_bkd.update_issue.assert_awaited_once()
 
 
+# ─── teardown_accept_env skip 路径 ────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_teardown_skipped_when_accept_skipped(monkeypatch):
+    """skip_accept=True 时 teardown 必 skip，emit teardown-done.pass（不能误推 fail）。"""
+    from orchestrator.actions import teardown_accept_env as mod
+    from orchestrator.config import settings
+
+    monkeypatch.setattr(settings, "skip_accept", True)
+    monkeypatch.setattr(settings, "test_mode", False)
+
+    out = await mod.teardown_accept_env(body=make_body(), req_id="REQ-9", tags=[], ctx={})
+
+    assert out.get("skipped") is True
+    assert out["emit"] == "teardown-done.pass"
+
+
+@pytest.mark.asyncio
+async def test_teardown_runs_normally_when_accept_not_skipped(monkeypatch):
+    """skip_accept=False + tags 含 result:pass → 正常跑 env-down + emit teardown-done.pass。"""
+    from orchestrator.actions import teardown_accept_env as mod
+    from orchestrator.config import settings
+
+    monkeypatch.setattr(settings, "skip_accept", False)
+    monkeypatch.setattr(settings, "test_mode", False)
+
+    # k8s_runner.get_controller 抛 → teardown 走 best-effort 路径（test 跳真 exec）
+    def fake_controller():
+        raise RuntimeError("no k8s in test")
+    monkeypatch.setattr(mod.k8s_runner, "get_controller", fake_controller)
+    patch_db(monkeypatch, "teardown_accept_env")
+
+    out = await mod.teardown_accept_env(
+        body=make_body(), req_id="REQ-9", tags=["accept", "REQ-9", "result:pass"], ctx={},
+    )
+
+    assert out.get("skipped") is None  # 没走 skip 路径
+    assert out["emit"] == "teardown-done.pass"
+    assert out["accept_result"] == "pass"
+    assert out["env_down_ok"] is False  # controller 抛了，best-effort 失败但不阻塞
+
+
 # ─── 重要：BKD merge_tags_and_update 的 tag merge 逻辑 ─────────────────────
 @pytest.mark.asyncio
 async def test_bkd_merge_tags_preserves(monkeypatch):
