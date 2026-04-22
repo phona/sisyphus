@@ -46,13 +46,12 @@ env:
   test_mode: false
 
 # ── orchestrator 自己的 secret（Helm 管）──
-# 留空。实际值通过独立的 values override 文件（不 commit）传：
-#   helm upgrade ... -f my-values.yaml -f my-values.local.yaml
-# 或用 --set / --set-file。
+# 这里只声明 helm 托管；实际值通过独立 override 文件（不 commit）传：
+#   helm upgrade ... -f my-values.yaml -f /tmp/secrets-values.yaml
+# 注意：这里**不写 bkd_token/webhook_token=空串**，否则 --reuse-values 时会被
+# 空串覆盖掉上一次 release 保存的真实值。
 secret:
   create: true
-  bkd_token: ""
-  webhook_token: ""
 existingSecret: ""   # 用 helm 管，不走 existingSecret
 
 # ── PG（Bitnami chart 装的，走 passwordSecret 拼 DSN）────────────
@@ -89,11 +88,7 @@ runner:
   createSecrets: true
   existingSecretName: ""
   secretName: sisyphus-runner-secrets
-  secret:
-    gh_token: ""
-    ghcr_user: ""
-    ghcr_token: ""
-    kubeconfig: ""
+  # 同样：不在这里写空串，让 --reuse-values 保留上次的 override 值
 
 # ── probes / 资源 ──────────────────────────────────────────────────
 probes:
