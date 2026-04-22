@@ -45,14 +45,15 @@ env:
   skip_archive: false
   test_mode: false
 
-# ── orchestrator 自己的 secret（BKD+webhook token）走 existingSecret ──
+# ── orchestrator 自己的 secret（Helm 管）──
+# 留空。实际值通过独立的 values override 文件（不 commit）传：
+#   helm upgrade ... -f my-values.yaml -f my-values.local.yaml
+# 或用 --set / --set-file。
 secret:
-  create: false                  # deploy-secrets.sh 建
-existingSecret: orch-sisyphus-orchestrator
-existingSecretKeys:
-  bkd_token: bkd_token
-  webhook_token: webhook_token
-  pg_dsn: pg_dsn                 # 如果用独立 pg_dsn 字段，否则走下面拼接
+  create: true
+  bkd_token: ""
+  webhook_token: ""
+existingSecret: ""   # 用 helm 管，不走 existingSecret
 
 # ── PG（Bitnami chart 装的，走 passwordSecret 拼 DSN）────────────
 postgres:
@@ -84,10 +85,15 @@ runner:
   gcIntervalSec: 3600
   imagePullSecrets: []
 
-  # runner secret 由 deploy-secrets.sh 建，不让 helm 管
-  createSecrets: false
-  existingSecretName: sisyphus-runner-secrets
+  # runner secret 也由 Helm 管；实际值走 override values 文件
+  createSecrets: true
+  existingSecretName: ""
   secretName: sisyphus-runner-secrets
+  secret:
+    gh_token: ""
+    ghcr_user: ""
+    ghcr_token: ""
+    kubeconfig: ""
 
 # ── probes / 资源 ──────────────────────────────────────────────────
 probes:

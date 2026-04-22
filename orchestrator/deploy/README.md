@@ -34,13 +34,32 @@ cp orchestrator/deploy/secrets.env.template secrets.env
 
 **不要** git add / commit（`orchestrator/deploy/.gitignore` 已拦）。
 
-### 步骤 3：把 `secrets.env` 上传给 sisyphus 部署方（= 我）
+### 步骤 3：把 `secrets.env` 送到 vm-node04
 
-用聊天附件直接拖进来。部署方流程：
-- `file_deploy` secrets.env → vm-node04 `/tmp/secrets.env`
-- `exec_run` `bash deploy-secrets.sh --env-file /tmp/secrets.env`
-- 脚本跑完自动 `shred -u` 清掉 `/tmp/secrets.env`（敏感文件不残留）
-- content 全程不进聊天 transcript
+用 croc（或其他 P2P 工具）把 `secrets.env` 发到 vm-node04 上的 `/tmp/`。
+部署方（= 我）不处理 secret 内容；只从 env 文件拼出 **helm values override**，
+让 Helm 自己建并管理 secret（K8s 标准所有权模式）：
+
+```bash
+source /tmp/secrets.env
+export WH=${SISYPHUS_WEBHOOK_TOKEN:-$(openssl rand -hex 32)}
+
+cat > /tmp/secrets-values.yaml <<EOF
+secret:
+  bkd_token: "$SISYPHUS_BKD_TOKEN"
+  webhook_token: "$WH"
+runner:
+  secret:
+    gh_token: "$SISYPHUS_GH_TOKEN"
+    ghcr_user: "$SISYPHUS_GHCR_USER"
+    ghcr_token: "$SISYPHUS_GHCR_TOKEN"
+    kubeconfig: |
+$(sed 's/^/      /' "${SISYPHUS_KUBECONFIG_PATH:-/etc/rancher/k3s/k3s.yaml}")
+EOF
+chmod 600 /tmp/secrets-values.yaml
+```
+
+（不落聊天 transcript：values 文件写进 vm-node04 /tmp，用完 `rm` 清。）
 
 ### 步骤 4：`my-values.yaml` 确认（通常默认值就够）
 
@@ -50,9 +69,12 @@ git commit + push。部署方拉最新版再跑 helm。
 ### 步骤 5：部署方 helm upgrade + verify
 
 ```bash
-# 部署方通过 aissh 跑
+# 部署方通过 aissh 跑（两个 values file：非敏感 my-values + 敏感 secrets-values）
 helm -n sisyphus upgrade --install orch ./orchestrator/helm \
-  -f orchestrator/deploy/my-values.yaml
+  -f orchestrator/deploy/my-values.yaml \
+  -f /tmp/secrets-values.yaml
+rm -f /tmp/secrets-values.yaml            # 敏感文件用完立即清
+
 kubectl -n sisyphus rollout status deploy/orch-sisyphus-orchestrator
 curl -sSH 'Authorization: Bearer <webhook_token>' \
   http://sisyphus.43.239.84.24.nip.io/admin/metrics | jq .state_distribution
