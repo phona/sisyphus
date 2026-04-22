@@ -1,12 +1,20 @@
-"""create_accept: ci-int 通过后派 accept-agent 跑 AI-QA。
+"""create_accept (v0.2): PR CI 通过后拉 lab + 派 accept-agent。
 
-settings.skip_accept=True 时直接 emit accept.pass，不调 BKD agent。
-用于 ttpos-arch-lab 集成完成前先测整链路（dev → done）。
+v0.2 三段：
+1. env-up：sisyphus 直调 k8s_runner.exec_in_runner 跑 `make ci-accept-env-up`
+   （在 /workspace/integration/* 下），拿 stdout 尾行 JSON 的 endpoint
+2. 发 accept-agent BKD issue，注入 endpoint + image_tags + FEATURES
+3. agent 跑 FEATURE-A* scenarios → session.completed 进 teardown_accept_env
+
+env-up 失败 → emit accept-env-up.fail → state ESCALATED（lab 起不来，人介入）
 """
 from __future__ import annotations
 
+import json
+
 import structlog
 
+from .. import k8s_runner
 from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
@@ -21,16 +29,78 @@ log = structlog.get_logger(__name__)
 @register("create_accept")
 async def create_accept(*, body, req_id, tags, ctx):
     if rv := skip_if_enabled("accept", Event.ACCEPT_PASS, req_id=req_id):
-        # 标记 ctx 给 done_archive 知晓
         pool = db.get_pool()
         await req_state.update_context(pool, req_id, {"accept_skipped": True})
         return rv
 
     proj = body.projectId
-    branch = (ctx or {}).get("branch") or f"feat/{req_id}"
-    workdir = f"{settings.workdir_root}/accept-{req_id}"
-    source_issue_id = body.issueId  # 触发的 ci-int issue
+    source_issue_id = body.issueId   # 触发的 pr-ci-watch issue
+    namespace = f"accept-{req_id.lower()}"
 
+    # Phase 1: env-up via sisyphus (aissh 代理)
+    accept_env: dict | None = None
+    try:
+        rc = k8s_runner.get_controller()
+    except RuntimeError as e:
+        log.warning("create_accept.no_runner_controller", req_id=req_id, error=str(e))
+        # 没 runner controller → 直接走 skip（等同 dev 环境）
+        return {"emit": Event.ACCEPT_PASS.value, "note": "no runner controller, skipped env-up"}
+
+    # image_tags 来自 manifest.yaml（pr-ci-watch agent 已填）；由 agent 在 Makefile 里自己读
+    exec_env = {
+        "SISYPHUS_REQ_ID": req_id,
+        "SISYPHUS_STAGE": "accept-env-up",
+        "SISYPHUS_NAMESPACE": namespace,
+    }
+    try:
+        result = await rc.exec_in_runner(
+            req_id,
+            command=(
+                "cd /workspace/integration/* && "
+                "make ci-accept-env-up"
+            ),
+            env=exec_env,
+            timeout_sec=600,   # 10 min 应该够 helm install + wait ready
+        )
+    except Exception as e:
+        log.exception("create_accept.env_up_crashed", req_id=req_id, error=str(e))
+        return {"emit": Event.ACCEPT_ENV_UP_FAIL.value, "error": str(e)[:200]}
+
+    if result.exit_code != 0:
+        log.warning("create_accept.env_up_failed", req_id=req_id,
+                    exit_code=result.exit_code, stderr_tail=result.stderr[-500:])
+        return {
+            "emit": Event.ACCEPT_ENV_UP_FAIL.value,
+            "exit_code": result.exit_code,
+            "stderr_tail": result.stderr[-500:],
+        }
+
+    # 从 stdout 最后一行解 JSON
+    last_line = ""
+    for line in reversed(result.stdout.splitlines()):
+        line = line.strip()
+        if line:
+            last_line = line
+            break
+    try:
+        accept_env = json.loads(last_line)
+    except json.JSONDecodeError:
+        log.warning("create_accept.env_up_bad_json", req_id=req_id,
+                    last_line_preview=last_line[:200])
+        return {
+            "emit": Event.ACCEPT_ENV_UP_FAIL.value,
+            "reason": "env-up stdout tail is not JSON",
+        }
+
+    endpoint = accept_env.get("endpoint") if isinstance(accept_env, dict) else None
+    if not endpoint:
+        log.warning("create_accept.env_up_no_endpoint", req_id=req_id, accept_env=accept_env)
+        return {
+            "emit": Event.ACCEPT_ENV_UP_FAIL.value,
+            "reason": "env-up JSON missing endpoint",
+        }
+
+    # Phase 2: dispatch accept-agent
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
             project_id=proj,
@@ -40,14 +110,26 @@ async def create_accept(*, body, req_id, tags, ctx):
         )
         prompt = render(
             "accept.md.j2",
-            req_id=req_id, branch=branch, workdir=workdir,
+            req_id=req_id,
+            endpoint=endpoint,
+            namespace=namespace,
             source_issue_id=source_issue_id,
+            accept_env=accept_env,
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")
 
     pool = db.get_pool()
-    await req_state.update_context(pool, req_id, {"accept_issue_id": issue.id})
+    await req_state.update_context(pool, req_id, {
+        "accept_issue_id": issue.id,
+        "accept_endpoint": endpoint,
+        "accept_namespace": namespace,
+    })
 
-    log.info("create_accept.done", req_id=req_id, accept_issue=issue.id)
-    return {"accept_issue_id": issue.id}
+    log.info("create_accept.done", req_id=req_id, accept_issue=issue.id,
+             endpoint=endpoint, namespace=namespace)
+    return {
+        "accept_issue_id": issue.id,
+        "endpoint": endpoint,
+        "namespace": namespace,
+    }

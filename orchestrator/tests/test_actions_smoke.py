@@ -328,17 +328,72 @@ async def test_create_reviewer_uses_round(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_accept(monkeypatch):
+    """v0.2：create_accept 先跑 env-up（k8s_runner.exec_in_runner）拿 endpoint，
+    再 dispatch BKD accept-agent。
+    """
     from orchestrator.actions import create_accept as mod
-    fake = make_fake_bkd()
-    fake.create_issue.return_value = FakeIssue(id="acc-1")
-    patch_bkd(monkeypatch, "create_accept", fake)
+    from orchestrator.k8s_runner import ExecResult
+
+    fake_bkd = make_fake_bkd()
+    fake_bkd.create_issue.return_value = FakeIssue(id="acc-1")
+    patch_bkd(monkeypatch, "create_accept", fake_bkd)
     patch_db(monkeypatch, "create_accept")
     monkeypatch.setattr("orchestrator.actions.create_accept.settings.skip_accept", False)
-    out = await mod.create_accept(
-        body=make_body(issue_id="ci-int-1"), req_id="REQ-9", tags=["ci"],
-        ctx={"branch": "feat/REQ-9"},
+
+    # mock k8s runner controller：env-up 返 exit_code=0 + stdout 末行 JSON
+    class FakeRC:
+        async def exec_in_runner(self, req_id, command, env=None, timeout_sec=600):
+            return ExecResult(
+                exit_code=0,
+                stdout='some helm output\n{"endpoint":"http://svc.accept-req-9.svc:8080"}\n',
+                stderr="",
+                duration_sec=5.0,
+            )
+
+    monkeypatch.setattr(
+        "orchestrator.actions.create_accept.k8s_runner.get_controller",
+        lambda: FakeRC(),
     )
-    assert out == {"accept_issue_id": "acc-1"}
+
+    out = await mod.create_accept(
+        body=make_body(issue_id="pr-ci-1"), req_id="REQ-9",
+        tags=["pr-ci"], ctx={},
+    )
+    assert out["accept_issue_id"] == "acc-1"
+    assert out["endpoint"] == "http://svc.accept-req-9.svc:8080"
+    assert out["namespace"] == "accept-req-9"
+
+
+@pytest.mark.asyncio
+async def test_create_accept_env_up_fail(monkeypatch):
+    """env-up exit_code != 0 → emit accept-env-up.fail，不 dispatch agent。"""
+    from orchestrator.actions import create_accept as mod
+    from orchestrator.k8s_runner import ExecResult
+
+    fake_bkd = make_fake_bkd()
+    patch_bkd(monkeypatch, "create_accept", fake_bkd)
+    patch_db(monkeypatch, "create_accept")
+    monkeypatch.setattr("orchestrator.actions.create_accept.settings.skip_accept", False)
+
+    class FakeRC:
+        async def exec_in_runner(self, req_id, command, env=None, timeout_sec=600):
+            return ExecResult(
+                exit_code=1, stdout="", stderr="helm install failed",
+                duration_sec=3.0,
+            )
+
+    monkeypatch.setattr(
+        "orchestrator.actions.create_accept.k8s_runner.get_controller",
+        lambda: FakeRC(),
+    )
+
+    out = await mod.create_accept(
+        body=make_body(issue_id="x"), req_id="REQ-9", tags=["pr-ci"], ctx={},
+    )
+    assert out["emit"] == "accept-env-up.fail"
+    assert out["exit_code"] == 1
+    # 不应 dispatch agent
+    fake_bkd.create_issue.assert_not_awaited()
 
 
 @pytest.mark.asyncio

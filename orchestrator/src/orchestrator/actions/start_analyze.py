@@ -1,14 +1,19 @@
-"""start_analyze: intent:analyze 入口。
+"""start_analyze (v0.2)：intent:analyze 入口。
 
-行为（沿用旧 [ANZ] block 三步）：
-1. update-issue 把 intent issue 改名 [REQ-xxx] [ANALYZE] xxx + tags=[analyze, REQ-xxx]
-2. follow-up-issue 发 analyze prompt
-3. update-issue statusId=working 触发 agent
+v0.2 变化：agent 跑前先 ensure_runner 拉起 K8s Pod + PVC，保证 analyze-agent
+kubectl exec 进去能立刻用。Pod 生命周期绑本 REQ 直到 done/escalate。
+
+行为：
+1. ensure_runner（K8s：建 PVC + Pod，等 Ready）
+2. update-issue 把 intent issue 改名 [REQ-xxx] [ANALYZE] xxx + tags=[analyze, REQ-xxx]
+3. follow-up-issue 发 analyze prompt
+4. update-issue statusId=working 触发 agent
 """
 from __future__ import annotations
 
 import structlog
 
+from .. import k8s_runner
 from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
@@ -25,21 +30,28 @@ async def start_analyze(*, body, req_id, tags, ctx):
         return rv
     proj = body.projectId
     issue_id = body.issueId
-    # intent 触发时 title 是用户输入的原文（无 [REQ-xxx] [ANALYZE] 前缀）
-    raw_title = body.title or ""
+    raw_title = body.title or ""   # 用户创建 intent 时输入的原文
 
+    # 1. 拉 K8s Pod + PVC（幂等；已存在就跳）
+    try:
+        rc = k8s_runner.get_controller()
+    except RuntimeError as e:
+        # dev 环境可能没 K8s；降级警告，后续 agent kubectl exec 会自己报错
+        log.warning("start_analyze.no_runner_controller", req_id=req_id, error=str(e))
+    else:
+        pod_name = await rc.ensure_runner(req_id, wait_ready=True)
+        log.info("start_analyze.runner_ready", req_id=req_id, pod=pod_name)
+
+    # 2-4. BKD 调度 analyze-agent
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
-        # 1. 改 title + tags
         await bkd.update_issue(
             project_id=proj,
             issue_id=issue_id,
             title=f"[{req_id}] [ANALYZE] {raw_title}",
             tags=["analyze", req_id],
         )
-        # 2. 发 prompt
         prompt = render("analyze.md.j2", req_id=req_id)
         await bkd.follow_up_issue(project_id=proj, issue_id=issue_id, prompt=prompt)
-        # 3. 推 working
         await bkd.update_issue(project_id=proj, issue_id=issue_id, status_id="working")
 
     log.info("start_analyze.done", req_id=req_id, issue_id=issue_id)
