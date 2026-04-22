@@ -41,23 +41,22 @@ def derive_event(event_type: str, tags: Iterable[str], result_tags_only: bool = 
     if event_type != "session.completed":
         return None  # 未知 event type
 
-    # bugfix 优先（diagnosis tag 决定细分）
+    # diagnose agent（M5）：比 bugfix 先查，因为 diagnose issue 可能也带 bugfix 历史 tag
+    if "diagnose" in tagset:
+        if "diagnosis:code-bug" in tagset:
+            return Event.BUGFIX_RETRY
+        if "diagnosis:spec-bug" in tagset:
+            return Event.SPEC_REWORK
+        # env-bug / unknown / 无 tag 都按 env-bug 走 escalate（统一终态）
+        return Event.BUGFIX_ENV_BUG
+
+    # bugfix agent：老 prompt 自判 diagnosis:spec-bug / env-bug 直接 escalate
     if "bugfix" in tagset:
         if "diagnosis:spec-bug" in tagset:
             return Event.BUGFIX_SPEC_BUG
         if "diagnosis:env-bug" in tagset:
             return Event.BUGFIX_ENV_BUG
         return Event.BUGFIX_DONE
-
-    if "test-fix" in tagset:
-        return Event.TEST_FIX_DONE
-
-    if "reviewer" in tagset:
-        if "result:pass" in tagset:
-            return Event.REVIEWER_PASS
-        if "result:fail" in tagset:
-            return Event.REVIEWER_FAIL
-        return None  # 没结果 tag，忽略（agent 没正常完成）
 
     # v0.2：staging-test agent 在调试环境跑 unit+int，结果带 result:pass/fail
     if "staging-test" in tagset:
