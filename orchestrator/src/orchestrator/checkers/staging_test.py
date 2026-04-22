@@ -11,6 +11,8 @@ import structlog
 from .. import k8s_runner
 from ._types import CheckResult
 
+__all__ = ["CheckResult", "run_staging_test"]
+
 log = structlog.get_logger(__name__)
 
 _TAIL = 2048  # stdout/stderr 各截尾 2KB，防 OOM
