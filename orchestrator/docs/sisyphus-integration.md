@@ -34,20 +34,20 @@ req_id: REQ-997
 
 # 本 REQ 要改动的 source repo（按 role 排序）
 sources:
-  - repo: phona/ttpos-server-go      # owner/name
-    path: source/ttpos-server-go     # 相对 /workspace 的 subdir
-    role: leader                      # leader | source；leader 是业务主 repo
-    branch: stage/REQ-997-dev         # dev agent push 的分支
-    depends_on: [phona/ubox-proto]    # merge 依赖（可选，仅 leader/中间层声明）
+  - repo: ZonEaseTech/ttpos-server-go     # owner/name
+    path: source/ttpos-server-go          # 相对 /workspace 的 subdir
+    role: leader                           # leader | source；leader 是业务主 repo
+    branch: stage/REQ-997-dev              # dev agent push 的分支
+    depends_on: [ZonEaseTech/ubox-proto]   # merge 依赖（可选，仅 leader/中间层声明）
 
-  - repo: phona/ubox-proto
+  - repo: ZonEaseTech/ubox-proto
     path: source/ubox-proto
     role: source
     branch: stage/REQ-997-dev
 
 # 可选：接集成环境（lab）的 repo
 integration:
-  repo: phona/ttpos-arch-lab
+  repo: ZonEaseTech/ttpos-arch-lab
   path: integration/ttpos-arch-lab
 
 # ── 下面字段由后续 stage 填（analyze 生成时可留空或忽略）──
