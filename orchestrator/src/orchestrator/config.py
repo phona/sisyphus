@@ -88,5 +88,10 @@ class Settings(BaseSettings):
     # 全部 skip = 状态机几秒走完，验 transition + cleanup，不动 BKD agent
     test_mode: bool = False           # 等价于全部 skip_* = true
 
+    # ─── artifact-driven checker 开关（M1 灰度） ──────────────────────────
+    # True = staging-test 由 sisyphus 自己 kubectl exec 跑，不再起 BKD agent
+    # False（默认）= 走老路，创建 BKD agent issue（回滚：unset env / set false → rollout restart）
+    checker_staging_test_enabled: bool = False
+
 
 settings = Settings()  # type: ignore[call-arg]

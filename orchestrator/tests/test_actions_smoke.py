@@ -385,6 +385,94 @@ async def test_create_accept_skipped(monkeypatch):
     fake.create_issue.assert_not_called()
 
 
+# ─── create_staging_test ─────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_staging_test_checker_pass(monkeypatch):
+    """checker_staging_test_enabled=True + checker pass → emit staging-test.pass。"""
+    from orchestrator.actions import create_staging_test as mod
+    from orchestrator.checkers.staging_test import CheckResult
+
+    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.checker_staging_test_enabled", True)
+    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.skip_staging_test", False)
+    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.test_mode", False)
+
+    fake_result = CheckResult(passed=True, exit_code=0, stdout_tail="ok\n", stderr_tail="", duration_sec=4.2, cmd="make test")
+
+    async def fake_run(req_id, test_cmd, timeout_sec=600):
+        return fake_result
+
+    monkeypatch.setattr("orchestrator.actions.create_staging_test.checker.run_staging_test", fake_run)
+
+    insert_calls: list = []
+
+    async def fake_insert(pool, req_id, stage, result):
+        insert_calls.append((req_id, stage, result))
+
+    monkeypatch.setattr("orchestrator.actions.create_staging_test.artifact_checks.insert_check", fake_insert)
+    patch_db(monkeypatch, "create_staging_test")
+
+    out = await mod.create_staging_test(body=make_body(), req_id="REQ-9", tags=[], ctx={})
+
+    assert out["emit"] == "staging-test.pass"
+    assert out["passed"] is True
+    assert out["exit_code"] == 0
+    assert len(insert_calls) == 1
+    assert insert_calls[0] == ("REQ-9", "staging-test", fake_result)
+
+
+@pytest.mark.asyncio
+async def test_create_staging_test_checker_fail(monkeypatch):
+    """checker_staging_test_enabled=True + checker fail → emit staging-test.fail。"""
+    from orchestrator.actions import create_staging_test as mod
+    from orchestrator.checkers.staging_test import CheckResult
+
+    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.checker_staging_test_enabled", True)
+    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.skip_staging_test", False)
+    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.test_mode", False)
+
+    fake_result = CheckResult(passed=False, exit_code=1, stdout_tail="FAIL\n", stderr_tail="panic\n", duration_sec=2.0, cmd="make test")
+
+    async def fake_run(req_id, test_cmd, timeout_sec=600):
+        return fake_result
+
+    monkeypatch.setattr("orchestrator.actions.create_staging_test.checker.run_staging_test", fake_run)
+
+    async def fake_insert(pool, req_id, stage, result):
+        pass
+
+    monkeypatch.setattr("orchestrator.actions.create_staging_test.artifact_checks.insert_check", fake_insert)
+    patch_db(monkeypatch, "create_staging_test")
+
+    out = await mod.create_staging_test(body=make_body(), req_id="REQ-9", tags=[], ctx={})
+
+    assert out["emit"] == "staging-test.fail"
+    assert out["passed"] is False
+    assert out["exit_code"] == 1
+
+
+@pytest.mark.asyncio
+async def test_create_staging_test_bkd_path(monkeypatch):
+    """checker_staging_test_enabled=False → 走老路创建 BKD agent issue。"""
+    from orchestrator.actions import create_staging_test as mod
+
+    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.checker_staging_test_enabled", False)
+    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.skip_staging_test", False)
+    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.test_mode", False)
+
+    fake_bkd = make_fake_bkd()
+    fake_bkd.create_issue.return_value = FakeIssue(id="st-1")
+    patch_bkd(monkeypatch, "create_staging_test", fake_bkd)
+    patch_db(monkeypatch, "create_staging_test")
+
+    out = await mod.create_staging_test(body=make_body(issue_id="dev-1"), req_id="REQ-9", tags=[], ctx={})
+
+    assert out == {"staging_test_issue_id": "st-1"}
+    fake_bkd.create_issue.assert_awaited_once()
+    fake_bkd.follow_up_issue.assert_awaited_once()
+    fake_bkd.update_issue.assert_awaited_once()
+
+
 # ─── 重要：BKD merge_tags_and_update 的 tag merge 逻辑 ─────────────────────
 @pytest.mark.asyncio
 async def test_bkd_merge_tags_preserves(monkeypatch):
