@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     # BKD
     bkd_base_url: str = "https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api"
     bkd_token: str = Field(..., description="Coder-Session-Token")
+    # transport: 'rest'（BKD ≥0.0.65 默认）/ 'mcp'（老版本，带 /api/mcp 端点）
+    bkd_transport: str = "rest"
 
     # 入站 webhook 共享 token（BKD webhook 配置里加 `Authorization: Bearer <token>` header）
     webhook_token: str = Field(..., description="Bearer token expected in Authorization header on /bkd-events")
