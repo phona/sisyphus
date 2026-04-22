@@ -78,6 +78,37 @@ async def test_start_analyze(monkeypatch):
     assert fake.follow_up_issue.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_start_analyze_title_format(monkeypatch):
+    """验证 start_analyze 标题使用 short_title 格式（ — 分隔 + 截断）。"""
+    from orchestrator.actions import start_analyze as mod
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, "start_analyze", fake)
+
+    # 场景1：有 intent_title，长度正常
+    body = make_body(issue_id="intent-1", title="加个登录端点")
+    ctx = {"intent_title": "加个登录端点"}
+    await mod.start_analyze(body=body, req_id="REQ-9", tags=["intent:analyze"], ctx=ctx)
+    _, kwargs = fake.update_issue.call_args_list[0]
+    assert kwargs["title"] == "[REQ-9] [ANALYZE] — 加个登录端点"
+
+    # 场景2：intent_title 超过 50 字符，需要截断 + 省略号
+    long_title = "a" * 60
+    ctx = {"intent_title": long_title}
+    await mod.start_analyze(body=body, req_id="REQ-10", tags=["intent:analyze"], ctx=ctx)
+    _, kwargs = fake.update_issue.call_args_list[2]
+    title = kwargs["title"]
+    assert title.startswith("[REQ-10] [ANALYZE] — ")
+    assert "…" in title
+    assert len(title) < 100  # 合理长度
+
+    # 场景3：ctx 为空，标题应该只有 [REQ-xx] [ANALYZE] 部分
+    ctx = {}
+    await mod.start_analyze(body=body, req_id="REQ-11", tags=["intent:analyze"], ctx=ctx)
+    _, kwargs = fake.update_issue.call_args_list[4]
+    assert kwargs["title"] == "[REQ-11] [ANALYZE]"
+
+
 # ─── fanout_specs ────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_fanout_specs_creates_two(monkeypatch):
