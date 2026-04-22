@@ -17,7 +17,8 @@ COPY pyproject.toml ./
 RUN uv venv $VIRTUAL_ENV && \
     uv pip install \
         fastapi 'uvicorn[standard]' pydantic pydantic-settings httpx \
-        asyncpg jinja2 structlog yoyo-migrations psycopg2-binary
+        asyncpg jinja2 structlog yoyo-migrations psycopg2-binary \
+        'kubernetes>=31.0'
 
 # 装本包（不重装 deps）
 COPY src/ ./src/
