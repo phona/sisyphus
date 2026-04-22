@@ -87,6 +87,39 @@ env:
   skip_archive: false
   test_mode: false
 
+# ─── v0.2 runner（调试环境 Pod + PVC）─────────────────────────────────────
+# 每个 REQ 一个 Pod（runner-<req>）+ 一个 PVC（workspace-<req>），住在独立
+# namespace。Pod 是 privileged + DinD + fuse-overlayfs；PVC 挂 /workspace 做
+# 持久化。生命周期绑 REQ，done/escalate 时销毁。
+runner:
+  namespace: sisyphus-runners
+  createNamespace: true       # install 时自动创 ns（uninstall 不删 —— keep 注解）
+  createRbac: true            # 自动建 Role/RoleBinding 给 orchestrator SA 管 ns
+  serviceAccountName: sisyphus-runner-sa   # runner Pod 跑的 SA
+
+  image: ghcr.io/phona/sisyphus-runner-go:main
+  storageClass: local-path    # K3s 默认；多节点场景换 longhorn / NFS
+  workspaceSize: 10Gi         # PVC 大小（runner 峰值 ~5GB + 余量）
+  readyTimeoutSec: 120        # ensure_runner 等 Pod Ready 的超时
+  retainOnEscalateDays: 7     # escalated REQ 的 PVC 保留天数，过期 GC 清
+  gcIntervalSec: 3600         # orphan PVC/Pod 回收扫描周期
+
+  imagePullSecrets: []        # 如果 runner image 私有需要填
+
+  # k8s 拉制品 + agent 工作用的凭证
+  createSecrets: true         # 自建 runner secret；false 则用 existingSecretName
+  existingSecretName: ""
+  secretName: sisyphus-runner-secrets
+  secret:
+    gh_token: ""              # !! 建议填：GitHub PAT，scope=repo+read:packages
+    ghcr_user: ""             # GHCR 用户名（通常是 GitHub 用户或 org 名）
+    ghcr_token: ""            # GHCR PAT（可以跟 gh_token 同一个）
+
+  # accept/staging 阶段 runner Pod 内 agent 要 `helm install` 到 accept-REQ-N
+  # namespace，通过挂一个 kubeconfig secret 获得权限。这个 secret 不由 helm 建，
+  # 部署方自己 kubectl create secret generic sisyphus-runner-kubeconfig ...
+  kubeconfigSecretName: sisyphus-runner-kubeconfig
+
 # ─── 敏感信息 ─────────────────────────────────────────────────────────────
 # 选 A：让 chart 自建 Secret（适合小规模 / dev）
 secret:

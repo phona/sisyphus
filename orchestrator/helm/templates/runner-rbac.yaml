@@ -1,0 +1,53 @@
+{{- if .Values.runner.createRbac -}}
+# ServiceAccount: runner Pod 以它身份跑。accept stage 要 helm / kubectl 操作别的
+# namespace（比如 accept-REQ-N），通过挂 kubeconfig secret 获得权限，这个 SA 本身
+# 不给集群权限（最小权限）。
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.runner.serviceAccountName }}
+  namespace: {{ .Values.runner.namespace }}
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: sisyphus
+---
+# Role: orchestrator SA 对 sisyphus-runners 下 pods/pvcs 的 CRUD + exec 权限。
+# 作用域严格限定在 runner namespace，不给 cluster-wide 权限。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "orchestrator.fullname" . }}-runner-mgr
+  namespace: {{ .Values.runner.namespace }}
+  labels:
+    {{- include "orchestrator.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/status"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+# 把 Role 绑定到 orchestrator 的 ServiceAccount（sisyphus namespace 里那个）
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "orchestrator.fullname" . }}-runner-mgr
+  namespace: {{ .Values.runner.namespace }}
+  labels:
+    {{- include "orchestrator.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "orchestrator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "orchestrator.fullname" . }}-runner-mgr
+{{- end -}}

@@ -19,6 +19,34 @@ class Settings(BaseSettings):
     # 入站 webhook 共享 token（BKD webhook 配置里加 `Authorization: Bearer <token>` header）
     webhook_token: str = Field(..., description="Bearer token expected in Authorization header on /bkd-events")
 
+    # ─── v0.2 K8s runner 配置 ─────────────────────────────────────────────
+    # sisyphus 在 sisyphus-runners namespace 拉起 per-REQ Pod（runner-<REQ>），
+    # PVC（workspace-<REQ>）挂 /workspace。生命周期绑 REQ：done/escalate 时清理，
+    # orchestrator 重启不销毁。
+    runner_namespace: str = "sisyphus-runners"
+    runner_image: str = "ghcr.io/phona/sisyphus-runner-go:main"
+    runner_service_account: str = "sisyphus-runner-sa"
+    runner_storage_class: str = "local-path"   # K3s 默认
+    runner_workspace_size: str = "10Gi"        # PVC 大小（runner 峰值 ~5GB）
+    runner_secret_name: str = "sisyphus-runner-secrets"       # GH token 等
+    runner_kubeconfig_secret: str = "sisyphus-runner-kubeconfig"  # accept 阶段起 lab 用
+    runner_image_pull_secrets: list[str] = Field(default_factory=list)
+    runner_ready_timeout_sec: int = 120
+
+    # in-cluster = orchestrator 跑在 K8s pod 里，load_incluster_config()
+    # False = 本地调试，load_kube_config() 读 ~/.kube/config
+    k8s_in_cluster: bool = True
+
+    # PVC 保留策略：escalated REQ 保留天数（过期 GC 自动清）
+    pvc_retain_on_escalate_days: int = 7
+    # GC 扫描周期
+    runner_gc_interval_sec: int = 3600   # 1h
+
+    # GitHub token（烘进 runner Pod env，给 agent 用 gh CLI / docker login ghcr.io）
+    # scope: repo + read:packages
+    github_token: str = ""
+    github_pull_user: str = "x-access-token"
+
     # Postgres
     pg_dsn: str = Field(..., description="postgresql://user:pass@host:5432/sisyphus")
 

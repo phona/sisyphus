@@ -15,6 +15,7 @@ dependencies = [
     # 数据库迁移：yoyo 跑 migrations/*.sql，自维护 _yoyo_migration 版本表
     "yoyo-migrations>=9.0",
     "psycopg2-binary>=2.9",  # yoyo 的 postgres 驱动
+    "kubernetes>=31.0",      # v0.2 K8s runner（pod/pvc/exec）
 ]
 
 [project.optional-dependencies]

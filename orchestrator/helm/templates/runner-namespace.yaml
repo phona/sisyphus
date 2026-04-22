@@ -1,0 +1,15 @@
+{{- if .Values.runner.createNamespace -}}
+# sisyphus-runners: v0.2 架构里每个 REQ 一个 Pod + PVC 住这里。
+# 跟 sisyphus 主 namespace 隔开，RBAC 精细控制。
+# `helm.sh/resource-policy: keep` 保证 uninstall orchestrator 时 namespace 不删
+# （里面可能有在跑的 REQ 资源，不能误删）。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.runner.namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: sisyphus
+{{- end -}}

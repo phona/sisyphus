@@ -54,6 +54,29 @@ spec:
                   key: {{ if .Values.existingSecret }}{{ .Values.existingSecretKeys.webhook_token }}{{ else }}webhook_token{{ end }}
             {{- include "orchestrator.pgDsnEnv" . | nindent 12 }}
             {{- include "orchestrator.obsPgDsnEnv" . | nindent 12 }}
+            # ── v0.2 K8s runner 配置（orchestrator 用 K8s client 管 per-REQ Pod） ──
+            - name: SISYPHUS_RUNNER_NAMESPACE
+              value: {{ .Values.runner.namespace | quote }}
+            - name: SISYPHUS_RUNNER_IMAGE
+              value: {{ .Values.runner.image | quote }}
+            - name: SISYPHUS_RUNNER_SERVICE_ACCOUNT
+              value: {{ .Values.runner.serviceAccountName | quote }}
+            - name: SISYPHUS_RUNNER_STORAGE_CLASS
+              value: {{ .Values.runner.storageClass | quote }}
+            - name: SISYPHUS_RUNNER_WORKSPACE_SIZE
+              value: {{ .Values.runner.workspaceSize | quote }}
+            - name: SISYPHUS_RUNNER_SECRET_NAME
+              value: {{ .Values.runner.secretName | quote }}
+            - name: SISYPHUS_RUNNER_KUBECONFIG_SECRET
+              value: {{ .Values.runner.kubeconfigSecretName | quote }}
+            - name: SISYPHUS_RUNNER_READY_TIMEOUT_SEC
+              value: {{ .Values.runner.readyTimeoutSec | quote }}
+            - name: SISYPHUS_PVC_RETAIN_ON_ESCALATE_DAYS
+              value: {{ .Values.runner.retainOnEscalateDays | quote }}
+            - name: SISYPHUS_RUNNER_GC_INTERVAL_SEC
+              value: {{ .Values.runner.gcIntervalSec | quote }}
+            - name: SISYPHUS_K8S_IN_CLUSTER
+              value: "true"
           livenessProbe:
             httpGet:
               path: {{ .Values.probes.liveness.path }}
