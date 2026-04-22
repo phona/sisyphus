@@ -23,7 +23,6 @@ import yaml
 from jsonschema import Draft7Validator
 
 from .. import k8s_runner
-from ..config import settings
 from ._types import CheckResult
 
 log = structlog.get_logger(__name__)
@@ -31,9 +30,6 @@ log = structlog.get_logger(__name__)
 _TAIL = 2048
 _MANIFEST_PATH = "/workspace/.sisyphus/manifest.yaml"
 _READ_CMD = f"cat {_MANIFEST_PATH}"
-
-# 语义 reason：CheckResult.reason 可选值
-REASON_OPEN_QUESTIONS_PENDING = "open_questions_pending"
 
 _validator: Draft7Validator | None = None
 
@@ -151,27 +147,6 @@ async def run_manifest_validate(req_id: str, *, timeout_sec: int = 30) -> CheckR
             stderr_tail=f"manifest 验证失败 ({len(errs)} 项):\n{joined}"[-_TAIL:],
             duration_sec=duration, cmd=_READ_CMD,
         )
-
-    # M6 ambiguity admission：schema 过了才看 open_questions。
-    # 非空 → 歧义未清 → 路由 pending-human（区别于 schema-fail 的 bugfix 重做）。
-    # 由 settings.admission_analyze_pending_questions 灰度控制。
-    if settings.admission_analyze_pending_questions:
-        questions = manifest.get("open_questions") or []
-        if isinstance(questions, list) and questions:
-            joined = "\n".join(f"  - {q}" for q in questions if isinstance(q, str))
-            log.info(
-                "checker.manifest_validate.pending_human",
-                req_id=req_id, count=len(questions),
-            )
-            return CheckResult(
-                passed=False, exit_code=3,
-                stdout_tail=exec_result.stdout[-_TAIL:],
-                stderr_tail=(
-                    f"{REASON_OPEN_QUESTIONS_PENDING}: {len(questions)} 项\n{joined}"
-                )[-_TAIL:],
-                duration_sec=duration, cmd=_READ_CMD,
-                reason=REASON_OPEN_QUESTIONS_PENDING,
-            )
 
     log.info("checker.manifest_validate.ok", req_id=req_id, duration_sec=round(duration, 2))
     return CheckResult(

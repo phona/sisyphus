@@ -119,13 +119,6 @@ class Settings(BaseSettings):
     # 默认 3 × 120s = 6min，覆盖 K3s 节点偶发慢启动；生产可调更高。
     runner_ready_attempts: int = 3
 
-    # ─── M6：analyze 歧义 admission（跟 M3 manifest schema 协同） ─────────
-    # True = fanout_specs 开 spec issue 前先跑 manifest_validate，
-    #        open_questions 非空 → emit ANALYZE_PENDING_HUMAN → 挂 analyzing-pending-human
-    # False（默认）= 老路，analyze-agent tag → 直接 fanout_specs，不验歧义
-    # 回滚：unset env / set false → rollout restart
-    admission_analyze_pending_questions: bool = False
-
     # ─── M8：watchdog 兜底卡死 stage ────────────────────────────────────
     # 周期扫 req_state，发现某 stage 超过阈值没 transition 且关联 BKD session
     # 不在 running → emit SESSION_FAILED 走 escalate。兜底 BKD spawn-time

@@ -30,8 +30,6 @@ from enum import StrEnum
 class ReqState(StrEnum):
     INIT = "init"                               # 还没 analyze
     ANALYZING = "analyzing"                     # analyze-agent 在跑
-    # M6：manifest admission 发现 open_questions 非空 → 卡这里等人答
-    ANALYZING_PENDING_HUMAN = "analyzing-pending-human"
     SPECS_RUNNING = "specs-running"             # contract + acceptance spec-agent
     DEV_RUNNING = "dev-running"                 # SPG gate 通过，dev-agent 只写代码
     STAGING_TEST_RUNNING = "staging-test-running"  # 调试环境 build + unit + int test
@@ -49,8 +47,6 @@ class ReqState(StrEnum):
 class Event(StrEnum):
     INTENT_ANALYZE = "intent.analyze"               # 人在 BKD 打 intent:analyze tag
     ANALYZE_DONE = "analyze.done"                   # analyze-agent 完成
-    # M6：analyze manifest admission 发现 open_questions 非空 → fanout_specs 不进，回挂起
-    ANALYZE_PENDING_HUMAN = "analyze.pending-human"
     SPEC_DONE = "spec.done"                         # 单个 spec-agent 完成
     SPEC_ALL_PASSED = "spec.all-passed"             # 聚合事件：N/N ci-passed
     DEV_DONE = "dev.done"                           # dev-agent push 完毕
@@ -91,18 +87,6 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
 
     (ReqState.ANALYZING, Event.ANALYZE_DONE):
         Transition(ReqState.SPECS_RUNNING, "fanout_specs", "create 2 spec issues"),
-
-    # M6：fanout_specs 跑 admission 发现 open_questions 非空 → chained emit 挂起等人
-    # (两步走：先按 ANALYZE_DONE 转到 SPECS_RUNNING 启动 fanout_specs，fanout_specs
-    # 检出歧义回 emit ANALYZE_PENDING_HUMAN，SPECS_RUNNING 在此再跳挂起态)
-    (ReqState.SPECS_RUNNING, Event.ANALYZE_PENDING_HUMAN):
-        Transition(ReqState.ANALYZING_PENDING_HUMAN, None,
-                   "open_questions pending human answer"),
-
-    # M6：人打 resume:analyze / 重加 intent:analyze → 重跑 analyze（带新答案）
-    (ReqState.ANALYZING_PENDING_HUMAN, Event.INTENT_ANALYZE):
-        Transition(ReqState.ANALYZING, "start_analyze",
-                   "human answered open_questions, re-kick analyze"),
 
     (ReqState.SPECS_RUNNING, Event.SPEC_DONE):
         Transition(ReqState.SPECS_RUNNING, "mark_spec_reviewed_and_check", "tag + maybe gate"),

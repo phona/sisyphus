@@ -82,8 +82,10 @@ integration:
   repo: <owner>/<integration-repo>
   path: integration/<integration-repo>
 
-# ↓ ambiguity admission（M6 强制三段，三段都必须存在，内容为空数组 [] 亦合法）
-open_questions: []            # 需求里还没敲定的歧义点；**非空直接 hold REQ 等人答**
+# ↓ ambiguity tracking（可选字段，给人 review 参考）
+# sisyphus 不再卡 open_questions 非空 —— 歧义直接在 BKD chat 跟 user 谈，不要摆烂进 manifest
+# 写这里的 open_questions 仅当"你独立思考后仍悬而未决的疑点清单"，**move review 之前自己消化完**
+open_questions: []            # 推进前必须清零：要么谈完写进 assumptions，要么明确写进 out_of_scope
 assumptions: []               # 你为了能继续推进所做的假设（给人事后审）
 out_of_scope: []              # 主动划出的边界，避免 scope creep
 
@@ -112,26 +114,28 @@ pr:
 - **`pr.number`**：analyze 阶段还没 PR，**留空**即可；dev agent 开 PR 后
   会回写 manifest 填上。
 
-#### Step A4.1: ambiguity admission（硬要求，不写三段 validator 会拒）
+#### Step A4.1: 歧义处理 — 跟 user 直接谈，不要卡 sisyphus
 
-**你必须认真扫三类歧义**，每一类都要自证"查过了"：
+**sisyphus 是 CI 编排层，不负责 human-AI 歧义对话。** 看到需求歧义？
+**直接在 BKD issue chat 里发清楚问题问 user**，别写进 manifest 摆烂等 sisyphus 兜。
 
-1. **open_questions**（阻塞项）：任何你看了 intent description 后**说不清楚**的点
-   都必须列这里。举例：
-   - "登录支持手机号还是邮箱？两个都支持还是二选一？"
-   - "失败后要不要重试？重试几次？"
-   - "accept 拿线上 prod 库还是 staging 库？"
+举例——在 chat 发消息：
 
-   **不要靠猜推进。** 哪怕只有一个 open_question，sisyphus 都会把 REQ 挂在
-   `analyzing-pending-human` 状态等人答完再推进。
+> 我需要确认两点才能继续：
+> 1. /version 端点返回 JSON 还是 plain text？
+> 2. commit SHA 用完整 40 字符还是缩短到 7？
 
-   如果你认真查了 intent description / 相关 repo 代码 / 相关 openspec，
-   **确信没歧义**，也要留**至少一条**自证：比如
-   `"已检查 intent description / 代码注释 / openspec 变更历史，无歧义"`。
-   **不允许 `open_questions: []` 配空白说明** —— 要么有歧义，要么有自证。
+BKD 会把 user 答复以 follow-up 形式回给你。处理完答复，把答案融进 `assumptions`
+（或依情况放 `out_of_scope`），然后继续推进，最后 move review。
 
-2. **assumptions**（推进前提）：你为了能写出 tasks 骨架而**隐含做的假设**，
-   哪怕 open_questions 都清零，也得列给人审。举例：
+manifest 的三个字段按下面的语义来用，**move review 之前必须自己消化完**：
+
+1. **open_questions**（move review 前必须清零）：你**独立思考过但仍悬而未决**的
+   疑点清单。要么跟 user 谈完转进 assumptions / out_of_scope，要么 scope 上明确
+   划出。不允许留着非空 open_questions 就 move review。
+
+2. **assumptions**（推进前提）：你为了能写出 tasks 骨架而**做的假设**，留给人
+   事后审。举例：
    - "假设 REQ 只改 ttpos-server-go，不动 ttpos-flutter"
    - "假设现有 user table 已经有 phone 字段"
 
@@ -139,8 +143,7 @@ pr:
    - "不改 admin 后台的用户列表显示"
    - "不动 OAuth 第三方登录"
 
-**三个字段都必须存在**（空数组 `[]` 也算合法），schema validator 会强制。
-内容质量靠 review 人把关。
+三个字段都是**可选**（schema validator 只校验类型）；非空时每条字符串 1..500 字。
 
 ### Step A5: 跑 validator 确认 manifest 合法
 

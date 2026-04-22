@@ -1,16 +1,12 @@
 """fanout_specs: analyze done → 创建 contract-spec + acceptance-spec 两个 spec issue。
 
 把 analyze issue 推 done（防 BKD 重投递再触发 routeAnalyze）。
-
-M6：开 spec issue 前先跑 manifest_validate 检查 open_questions；非空 → emit
-ANALYZE_PENDING_HUMAN 回 analyzing-pending-human 态等人答，不创建 spec issue。
 """
 from __future__ import annotations
 
 import structlog
 
 from ..bkd import BKDClient
-from ..checkers import manifest_validate
 from ..config import settings
 from ..prompts import render
 from ..state import Event
@@ -27,29 +23,6 @@ SPEC_STAGES = ("contract-spec", "acceptance-spec")
 async def fanout_specs(*, body, req_id, tags, ctx):
     if rv := skip_if_enabled("spec", Event.SPEC_ALL_PASSED, req_id=req_id):
         return rv
-
-    # M6 admission：检 manifest 里的 open_questions 是否清零。flag off 时完全跳过。
-    if settings.admission_analyze_pending_questions:
-        try:
-            check = await manifest_validate.run_manifest_validate(req_id)
-        except Exception as e:
-            # 读 PVC/kubectl 挂了不是 ambiguity 问题，不走 pending_human；记录后继续让
-            # 下游 admission（M3 schema fail）或 skip 逻辑兜底。
-            log.warning("fanout_specs.admission_error", req_id=req_id, error=str(e))
-        else:
-            if (
-                not check.passed
-                and check.reason == manifest_validate.REASON_OPEN_QUESTIONS_PENDING
-            ):
-                log.info(
-                    "fanout_specs.pending_human",
-                    req_id=req_id, stderr_tail=check.stderr_tail[:500],
-                )
-                return {
-                    "emit": Event.ANALYZE_PENDING_HUMAN.value,
-                    "reason": check.reason,
-                    "stderr_tail": check.stderr_tail,
-                }
 
     proj = body.projectId
     workdir = f"{settings.workdir_root}/feat-{req_id}"
