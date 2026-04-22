@@ -9,7 +9,9 @@
     "sources",
     "open_questions",
     "assumptions",
-    "out_of_scope"
+    "out_of_scope",
+    "test",
+    "pr"
   ],
   "additionalProperties": true,
   "properties": {
@@ -53,7 +55,44 @@
     "sha_by_repo": {"type": "object"},
     "pr_by_repo": {"type": "object"},
     "image_tags": {"type": "object"},
-    "merge_order": {"type": "array"}
+    "merge_order": {"type": "array"},
+    "test": {
+      "type": "object",
+      "description": "staging-test checker 用：runner pod 里跑什么命令验 staging 测试通过",
+      "required": ["cmd", "cwd"],
+      "additionalProperties": true,
+      "properties": {
+        "cmd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "测试命令，如 'make ci-unit-test ci-integration-test'"
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "相对 /workspace 的工作目录，如 'source/ubox-crosser'"
+        },
+        "timeout_sec": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 3600,
+          "default": 600
+        }
+      }
+    },
+    "pr": {
+      "type": "object",
+      "description": "pr-ci-watch checker 用：轮询哪个 repo 的哪个 PR 的 check-runs",
+      "required": ["repo"],
+      "additionalProperties": true,
+      "properties": {
+        "repo": {"$ref": "#/definitions/repo_id"},
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
   },
   "definitions": {
     "repo_id": {

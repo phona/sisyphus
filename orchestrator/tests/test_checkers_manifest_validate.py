@@ -34,6 +34,11 @@ def _yaml_min(open_questions_line: str = "open_questions: []") -> str:
         """\
         assumptions: []
         out_of_scope: []
+        test:
+          cmd: "make ci-unit-test"
+          cwd: "source/foo"
+        pr:
+          repo: "phona/foo"
         """
     )
     return base + open_questions_line.rstrip() + "\n" + tail
@@ -240,3 +245,137 @@ async def test_yaml_parse_failure_keeps_reason_none(monkeypatch):
     assert result.passed is False
     assert result.reason is None
     assert result.exit_code == 2
+
+
+# ── M11：test / pr 必填字段 ───────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_missing_test_section_is_schema_fail(monkeypatch):
+    """M11：manifest 缺 test 段 → admission 拒（exit 1）。"""
+    yaml_body = textwrap.dedent(
+        """\
+        schema_version: 1
+        req_id: REQ-9
+        sources:
+          - repo: phona/foo
+            path: source/foo
+            role: leader
+            branch: stage/REQ-9-dev
+        open_questions: []
+        assumptions: []
+        out_of_scope: []
+        pr:
+          repo: "phona/foo"
+        """
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.manifest_validate.k8s_runner.get_controller",
+        lambda: _fake_controller(0, yaml_body),
+    )
+    result = await manifest_validate.run_manifest_validate("REQ-9")
+    assert result.passed is False
+    assert result.reason is None
+    assert result.exit_code == 1
+    assert "test" in result.stderr_tail
+
+
+@pytest.mark.asyncio
+async def test_missing_pr_section_is_schema_fail(monkeypatch):
+    yaml_body = textwrap.dedent(
+        """\
+        schema_version: 1
+        req_id: REQ-9
+        sources:
+          - repo: phona/foo
+            path: source/foo
+            role: leader
+            branch: stage/REQ-9-dev
+        open_questions: []
+        assumptions: []
+        out_of_scope: []
+        test:
+          cmd: "make ci-unit-test"
+          cwd: "source/foo"
+        """
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.manifest_validate.k8s_runner.get_controller",
+        lambda: _fake_controller(0, yaml_body),
+    )
+    result = await manifest_validate.run_manifest_validate("REQ-9")
+    assert result.passed is False
+    assert result.reason is None
+    assert "pr" in result.stderr_tail
+
+
+@pytest.mark.asyncio
+async def test_test_section_missing_cmd_is_schema_fail(monkeypatch):
+    """test 段在但 cmd 缺失也拒。"""
+    yaml_body = textwrap.dedent(
+        """\
+        schema_version: 1
+        req_id: REQ-9
+        sources:
+          - repo: phona/foo
+            path: source/foo
+            role: leader
+            branch: stage/REQ-9-dev
+        open_questions: []
+        assumptions: []
+        out_of_scope: []
+        test:
+          cwd: "source/foo"
+        pr:
+          repo: "phona/foo"
+        """
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.manifest_validate.k8s_runner.get_controller",
+        lambda: _fake_controller(0, yaml_body),
+    )
+    result = await manifest_validate.run_manifest_validate("REQ-9")
+    assert result.passed is False
+    assert "cmd" in result.stderr_tail
+
+
+@pytest.mark.asyncio
+async def test_pr_section_missing_repo_is_schema_fail(monkeypatch):
+    yaml_body = textwrap.dedent(
+        """\
+        schema_version: 1
+        req_id: REQ-9
+        sources:
+          - repo: phona/foo
+            path: source/foo
+            role: leader
+            branch: stage/REQ-9-dev
+        open_questions: []
+        assumptions: []
+        out_of_scope: []
+        test:
+          cmd: "make ci-unit-test"
+          cwd: "source/foo"
+        pr:
+          number: 42
+        """
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.manifest_validate.k8s_runner.get_controller",
+        lambda: _fake_controller(0, yaml_body),
+    )
+    result = await manifest_validate.run_manifest_validate("REQ-9")
+    assert result.passed is False
+    assert "repo" in result.stderr_tail
+
+
+@pytest.mark.asyncio
+async def test_pr_number_optional_at_analyze_time(monkeypatch):
+    """pr.number 在 analyze 阶段可空（dev agent 开 PR 后回写）。"""
+    # 使用 _yaml_min 的 pr: 只带 repo，正是 analyze 阶段的常态
+    monkeypatch.setattr(
+        "orchestrator.checkers.manifest_validate.k8s_runner.get_controller",
+        lambda: _fake_controller(0, _yaml_min()),
+    )
+    result = await manifest_validate.run_manifest_validate("REQ-9")
+    assert result.passed is True
+    assert result.reason is None

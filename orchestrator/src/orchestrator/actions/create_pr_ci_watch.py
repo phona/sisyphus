@@ -1,19 +1,19 @@
-"""create_pr_ci_watch（v0.2 + M2 checker）：staging-test pass → 等 PR CI 全套绿。
+"""create_pr_ci_watch（v0.2 + M2 checker + M11 manifest-driven）：
+staging-test pass → 等 PR CI 全套绿。
 
 feature flag checker_pr_ci_watch_enabled:
   False（默认）: 创建 BKD agent issue（老路，agent 用 gh CLI 轮询，报 tag）
   True: sisyphus 自己调 GitHub REST API 轮询 check-runs，emit PR_CI_PASS/FAIL/TIMEOUT
 
-ctx 输入（checker 模式）：
-  pr_repo: "owner/name" 例 "phona/ubox-crosser"
-  pr_number: int
-M3 会改成统一从 manifest.yaml 读，M2 先硬编码 ctx 字段（dev/staging-test agent 写入）。
+M11：pr_repo / pr_number 不再从 ctx 读，checker 自己从 PVC manifest.yaml 的
+`pr` 段读。上游（dev / staging-test agent）开 PR 后要回写 manifest 填 pr.number。
 """
 from __future__ import annotations
 
 import structlog
 
 from ..bkd import BKDClient
+from ..checkers import manifest_io
 from ..checkers import pr_ci_watch as checker
 from ..config import settings
 from ..prompts import render
@@ -39,28 +39,21 @@ async def create_pr_ci_watch(*, body, req_id, tags, ctx):
 # ── 新路：sisyphus 自检 ────────────────────────────────────────────────────
 
 async def _run_checker(*, req_id: str, ctx: dict) -> dict:
-    pr_repo = ctx.get("pr_repo")
-    pr_number = ctx.get("pr_number")
-    if not pr_repo or not pr_number:
-        # ctx 缺字段：emit fail 进 bugfix（按 PR_CI_FAIL 路径走，跟老路报 pr-ci:fail tag 等价）
-        log.error("create_pr_ci_watch.checker_missing_ctx",
-                  req_id=req_id, pr_repo=pr_repo, pr_number=pr_number)
-        return {
-            "emit": Event.PR_CI_FAIL.value,
-            "reason": "missing pr_repo / pr_number in ctx",
-            "exit_code": -1,
-        }
-
-    log.info("create_pr_ci_watch.checker_path",
-             req_id=req_id, repo=pr_repo, pr=pr_number)
+    log.info("create_pr_ci_watch.checker_path", req_id=req_id)
 
     try:
         result = await checker.watch_pr_ci(
-            repo=pr_repo,
-            pr_number=int(pr_number),
+            req_id,
             poll_interval_sec=settings.pr_ci_watch_poll_interval_sec,
             timeout_sec=settings.pr_ci_watch_timeout_sec,
         )
+    except manifest_io.ManifestReadError as e:
+        log.error("create_pr_ci_watch.manifest_read_failed", req_id=req_id, error=str(e))
+        return {
+            "emit": Event.PR_CI_FAIL.value,
+            "reason": f"manifest read failed: {e}"[:200],
+            "exit_code": -1,
+        }
     except Exception as e:
         log.exception("create_pr_ci_watch.checker_error", req_id=req_id, error=str(e))
         return {

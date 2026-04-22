@@ -1,5 +1,9 @@
-"""pr-ci-watch 自检（M2）：sisyphus 直接调 GitHub REST API 轮询 PR check-runs，
+"""pr-ci-watch 自检（M2 + M11）：sisyphus 直接调 GitHub REST API 轮询 PR check-runs，
 不再起 BKD agent 让它跑 `gh pr checks` 然后报 tag。
+
+M11：repo / pr_number 从 /workspace/.sisyphus/manifest.yaml 的 `pr` 段读。
+admission 强制 `pr.repo` 必填；`pr.number` 由 dev / staging-test agent
+开 PR 后回写 manifest — pr-ci-watch 跑到这里时必须已有 number，否则直接抛。
 
 GH API:
 - GET /repos/{owner}/{repo}/pulls/{pr_number}        → head.sha
@@ -19,6 +23,7 @@ import httpx
 import structlog
 
 from ..config import settings
+from . import manifest_io
 from ._types import CheckResult
 
 log = structlog.get_logger(__name__)
@@ -33,21 +38,47 @@ _FAIL_CONCLUSIONS = {"failure", "cancelled", "timed_out", "action_required", "st
 
 
 async def watch_pr_ci(
-    repo: str,
-    pr_number: int,
+    req_id: str,
     poll_interval_sec: int = 30,
     timeout_sec: int = 1800,
 ) -> CheckResult:
-    """轮询 PR 的 check-runs，全绿 / 任一失败 / 超时返 CheckResult。
+    """读 manifest.pr → 轮询 check-runs → 全绿 / 任一失败 / 超时返 CheckResult。
 
-    Args:
-        repo: "owner/name" 形如 "phona/ubox-crosser"
-        pr_number: PR 编号
-        poll_interval_sec: 每轮轮询间隔
-        timeout_sec: 总超时；过期返 exit_code=124，passed=False
-
-    通过 settings.github_token 认证。
+    Raises:
+        manifest_io.ManifestReadError: 读 manifest 失败或 pr 段缺字段
+          （包括 pr.number 缺失 —— admission 不强制，但 pr-ci 阶段必须已由
+          上游 agent 写入，缺了按 infra fail 走 retry）。
     """
+    manifest = await manifest_io.read_manifest(req_id)
+
+    pr = manifest.get("pr")
+    if not isinstance(pr, dict):
+        raise manifest_io.ManifestReadError("manifest 缺 pr 段（admission 应已挡）")
+
+    repo = pr.get("repo")
+    pr_number = pr.get("number")
+    if not repo:
+        raise manifest_io.ManifestReadError(f"manifest.pr.repo 缺失：{pr!r}")
+    if not pr_number:
+        raise manifest_io.ManifestReadError(
+            "manifest.pr.number 缺失 —— 上游应在开 PR 后回写 manifest"
+        )
+
+    return await _watch_pr_ci_inner(
+        repo=repo,
+        pr_number=int(pr_number),
+        poll_interval_sec=poll_interval_sec,
+        timeout_sec=timeout_sec,
+    )
+
+
+async def _watch_pr_ci_inner(
+    *,
+    repo: str,
+    pr_number: int,
+    poll_interval_sec: int,
+    timeout_sec: int,
+) -> CheckResult:
     cmd_label = f"watch-pr-ci {repo}#{pr_number}"
     start = time.monotonic()
 
