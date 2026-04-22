@@ -18,7 +18,7 @@ from . import register
 log = structlog.get_logger(__name__)
 
 
-@register("escalate")
+@register("escalate", idempotent=True)
 async def escalate(*, body, req_id, tags, ctx):
     proj = body.projectId
     intent_issue_id = (ctx or {}).get("intent_issue_id") or body.issueId

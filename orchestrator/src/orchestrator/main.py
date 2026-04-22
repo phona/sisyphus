@@ -58,6 +58,7 @@ async def startup() -> None:
             runner_secret_name=settings.runner_secret_name,
             image_pull_secrets=settings.runner_image_pull_secrets,
             ready_timeout_sec=settings.runner_ready_timeout_sec,
+            ready_attempts=settings.runner_ready_attempts,
             in_cluster=settings.k8s_in_cluster,
         )
         k8s_runner.set_controller(controller)

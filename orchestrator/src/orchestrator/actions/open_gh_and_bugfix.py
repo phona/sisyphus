@@ -21,7 +21,7 @@ log = structlog.get_logger(__name__)
 CB_THRESHOLD = 3
 
 
-@register("open_gh_and_bugfix")
+@register("open_gh_and_bugfix", idempotent=False)  # 创建 GH issue + bugfix BKD issue
 async def open_gh_and_bugfix(*, body, req_id, tags, ctx):
     proj = body.projectId
     ctx = ctx or {}

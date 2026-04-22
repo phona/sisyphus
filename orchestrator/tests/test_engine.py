@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from orchestrator import engine, k8s_runner
-from orchestrator.actions import REGISTRY
+from orchestrator.actions import ACTION_META, REGISTRY
 from orchestrator.state import Event, ReqState
 
 
@@ -25,14 +25,23 @@ class FakeReq:
 
 
 class FakePool:
-    """模拟 asyncpg.Pool 的 fetchrow / execute，仅支持 req_state 的 CAS UPDATE 和 SELECT。"""
+    """模拟 asyncpg.Pool 的 fetchrow / execute，支持 req_state CAS + ctx patch + M9 action_retries。"""
 
     def __init__(self, initial: dict[str, FakeReq]):
         self.rows = initial
 
     async def fetchrow(self, sql: str, *args):
-        sql = sql.strip()
-        if sql.startswith("SELECT"):
+        sql_stripped = sql.strip()
+        # M9：action_retries bump — `UPDATE req_state SET context = jsonb_set(...) RETURNING new_round`
+        if "action_retries" in sql and "RETURNING" in sql:
+            req_id, action_name = args
+            r = self.rows.get(req_id)
+            if r is None:
+                return None
+            retries = r.context.setdefault("action_retries", {})
+            retries[action_name] = int(retries.get(action_name, 0)) + 1
+            return {"new_round": retries[action_name]}
+        if sql_stripped.startswith("SELECT"):
             req_id = args[0]
             r = self.rows.get(req_id)
             if r is None:
@@ -42,7 +51,7 @@ class FakePool:
                 "history": json.dumps(r.history), "context": json.dumps(r.context),
                 "created_at": None, "updated_at": None,
             }
-        if sql.startswith("UPDATE req_state"):
+        if sql_stripped.startswith("UPDATE req_state"):
             # 4 个参数（无 ctx_patch）或 5 个参数（带 ctx_patch）— 跟真实 cas_transition 对齐
             req_id, expected, next_state, history_json, *rest = args
             r = self.rows.get(req_id)
@@ -61,8 +70,18 @@ class FakePool:
         raise NotImplementedError(sql[:60])
 
     async def execute(self, sql: str, *args):
-        sql = sql.strip()
-        if sql.startswith("UPDATE req_state SET context"):
+        sql_stripped = sql.strip()
+        # M9：reset_action_retry — `UPDATE req_state SET context = jsonb_set(context, '{action_retries}', ... - $2)`
+        if "action_retries" in sql and "jsonb_set" in sql:
+            req_id, action_name = args
+            r = self.rows.get(req_id)
+            if r:
+                retries = r.context.get("action_retries", {})
+                if isinstance(retries, dict):
+                    retries.pop(action_name, None)
+            return
+        # update_context：`UPDATE req_state SET context = context || $2::jsonb`
+        if sql_stripped.startswith("UPDATE req_state SET context"):
             req_id, patch_json = args
             patch = json.loads(patch_json)
             r = self.rows.get(req_id)
@@ -83,11 +102,15 @@ def stub_actions(monkeypatch):
             return {"emit": emit} if emit else {"ok": True}
         return _stub
 
-    saved = dict(REGISTRY)
+    saved_reg = dict(REGISTRY)
+    saved_meta = dict(ACTION_META)
     REGISTRY.clear()
+    ACTION_META.clear()
     yield calls, REGISTRY
     REGISTRY.clear()
-    REGISTRY.update(saved)
+    ACTION_META.clear()
+    REGISTRY.update(saved_reg)
+    ACTION_META.update(saved_meta)
 
 
 @pytest.mark.asyncio
@@ -267,6 +290,199 @@ async def test_cleanup_failure_does_not_block_engine(stub_actions, mock_runner_c
 
     assert pool.rows["REQ-1"].state == ReqState.DONE.value
     assert result["next_state"] == ReqState.DONE.value
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# M9: engine action-fail retry / escalate
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def enable_retry(monkeypatch):
+    """临时打开 retry_enabled，缩短测试 backoff。"""
+    from orchestrator import engine as eng
+    from orchestrator.config import settings as cfg
+    monkeypatch.setattr(cfg, "retry_enabled", True)
+    monkeypatch.setattr(cfg, "retry_action_max_rounds", 3)
+    # 用 0 backoff 加速测试（policy 会根据 round 计出 backoff，我们 patch asyncio.sleep）
+    orig_sleep = eng.asyncio.sleep
+
+    async def _fast_sleep(_sec):
+        await orig_sleep(0)
+
+    monkeypatch.setattr(eng.asyncio, "sleep", _fast_sleep)
+
+
+@pytest.mark.asyncio
+async def test_action_fail_retries_transient_then_succeeds(stub_actions, enable_retry):
+    """idempotent action 抛 TimeoutError → policy retry → 第 2 次成功 → 状态推进。"""
+    _calls, reg = stub_actions
+    from orchestrator.actions import ACTION_META
+
+    attempts = {"n": 0}
+
+    async def flaky(*, body, req_id, tags, ctx):
+        attempts["n"] += 1
+        if attempts["n"] < 2:
+            raise TimeoutError("pod not ready in 120s")
+        return {"issue_id": "i-1"}
+
+    # 注册 start_analyze stub + 标 idempotent=True
+    reg["start_analyze"] = flaky
+    ACTION_META["start_analyze"] = {"idempotent": True}
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.INIT.value)})
+    body = type("B", (), {"issueId": "i-intent", "projectId": "p", "event": "intent.analyze"})()
+
+    result = await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=["intent:analyze", "REQ-1"],
+        cur_state=ReqState.INIT, ctx={}, event=Event.INTENT_ANALYZE,
+    )
+
+    assert attempts["n"] == 2, "handler should be retried once after first TimeoutError"
+    # 成功路径：action 字段 = 注册的 transition.action
+    assert result["action"] == "start_analyze"
+    # 状态已推进到 ANALYZING（cas 在重试前就做过，不会回滚）
+    assert pool.rows["REQ-1"].state == ReqState.ANALYZING.value
+    # counter 已清零（成功后 reset）
+    assert pool.rows["REQ-1"].context.get("action_retries", {}).get("start_analyze", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_action_fail_non_idempotent_escalates_immediately(stub_actions, enable_retry):
+    """非幂等 action（create_dev）抛任何异常 → 不重试，直接 emit SESSION_FAILED。"""
+    calls, reg = stub_actions
+    from orchestrator.actions import ACTION_META
+
+    attempts = {"n": 0}
+
+    async def broken_create_dev(*, body, req_id, tags, ctx):
+        attempts["n"] += 1
+        raise TimeoutError("BKD API timeout")
+
+    async def escalate_stub(*, body, req_id, tags, ctx):
+        calls.append(("escalate", {"req_id": req_id}))
+        return {"escalated": True, "reason": "action_fail"}
+
+    reg["create_dev"] = broken_create_dev
+    reg["escalate"] = escalate_stub
+    ACTION_META["create_dev"] = {"idempotent": False}
+    ACTION_META["escalate"] = {"idempotent": True}
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.SPECS_RUNNING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "spec.all-passed"})()
+
+    result = await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.SPECS_RUNNING, ctx={}, event=Event.SPEC_ALL_PASSED,
+    )
+
+    assert attempts["n"] == 1, "non-idempotent should not retry"
+    assert result["action"] == "error"
+    assert result["escalated"] is True
+    # 链式 SESSION_FAILED → ESCALATED + escalate action 被调用
+    assert any(n == "escalate" for n, _ in calls)
+    assert pool.rows["REQ-1"].state == ReqState.ESCALATED.value
+
+
+@pytest.mark.asyncio
+async def test_action_fail_exceeds_max_rounds_escalates(stub_actions, enable_retry, monkeypatch):
+    """idempotent action + 一直 fail → 超 max_rounds → escalate。"""
+    calls, reg = stub_actions
+    from orchestrator.actions import ACTION_META
+    from orchestrator.config import settings as cfg
+
+    # 把 max_rounds 缩到 2，加速测试
+    monkeypatch.setattr(cfg, "retry_action_max_rounds", 2)
+
+    attempts = {"n": 0}
+
+    async def always_fails(*, body, req_id, tags, ctx):
+        attempts["n"] += 1
+        raise TimeoutError(f"still not ready attempt={attempts['n']}")
+
+    async def escalate_stub(*, body, req_id, tags, ctx):
+        calls.append(("escalate", {"req_id": req_id}))
+        return {"escalated": True}
+
+    reg["start_analyze"] = always_fails
+    reg["escalate"] = escalate_stub
+    ACTION_META["start_analyze"] = {"idempotent": True}
+    ACTION_META["escalate"] = {"idempotent": True}
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.INIT.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "intent.analyze"})()
+
+    result = await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.INIT, ctx={}, event=Event.INTENT_ANALYZE,
+    )
+
+    # max_rounds=2 → round 0 retry, round 1 retry, round 2 escalate = 3 次调用
+    assert attempts["n"] == 3, f"expected 3 attempts (2 retries + 1 final), got {attempts['n']}"
+    assert result["action"] == "error"
+    assert result["escalated"] is True
+    assert pool.rows["REQ-1"].state == ReqState.ESCALATED.value
+
+
+@pytest.mark.asyncio
+async def test_action_fail_non_transient_escalates_no_retry(stub_actions, enable_retry):
+    """idempotent action 抛非 transient 异常（ValueError）→ 不重试，直接 escalate。"""
+    calls, reg = stub_actions
+    from orchestrator.actions import ACTION_META
+
+    attempts = {"n": 0}
+
+    async def bad_handler(*, body, req_id, tags, ctx):
+        attempts["n"] += 1
+        raise ValueError("bad ctx field")
+
+    async def escalate_stub(*, body, req_id, tags, ctx):
+        calls.append(("escalate", {"req_id": req_id}))
+        return {"escalated": True}
+
+    reg["start_analyze"] = bad_handler
+    reg["escalate"] = escalate_stub
+    ACTION_META["start_analyze"] = {"idempotent": True}
+    ACTION_META["escalate"] = {"idempotent": True}
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.INIT.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "intent.analyze"})()
+
+    result = await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.INIT, ctx={}, event=Event.INTENT_ANALYZE,
+    )
+
+    assert attempts["n"] == 1, "non-transient should not retry"
+    assert result["escalated"] is True
+
+
+@pytest.mark.asyncio
+async def test_action_fail_retry_disabled_keeps_old_behavior(stub_actions):
+    """retry_enabled=False（默认）→ 旧行为：一次 fail 就 error，不重试，不 escalate。"""
+    _calls, reg = stub_actions
+    from orchestrator.actions import ACTION_META
+
+    async def flaky(*, body, req_id, tags, ctx):
+        raise TimeoutError("pod not ready")
+
+    reg["start_analyze"] = flaky
+    ACTION_META["start_analyze"] = {"idempotent": True}
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.INIT.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "intent.analyze"})()
+
+    result = await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.INIT, ctx={}, event=Event.INTENT_ANALYZE,
+    )
+
+    # 旧行为：action=error 但 escalated 未设（没链式 emit）
+    assert result["action"] == "error"
+    assert "escalated" not in result
+    # 状态保持 ANALYZING（cas 已推进但 escalate 未触发）
+    assert pool.rows["REQ-1"].state == ReqState.ANALYZING.value
 
 
 @pytest.mark.asyncio

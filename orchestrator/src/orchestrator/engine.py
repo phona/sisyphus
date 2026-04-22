@@ -2,6 +2,11 @@
 
 action handler 可以返回 {"emit": "<event-name>"} 触发链式推进
 （例如 mark_spec_reviewed_and_check 检测到 N/N 后 emit spec.all-passed → create_dev）。
+
+M9：action handler 抛异常时，若 retry_enabled + action 标了 idempotent，
+按 retry.policy.decide_action_fail 决策 retry（带 backoff 原地重试 handler）或
+escalate（链式 emit SESSION_FAILED 进状态机 → ESCALATED）。非幂等 action 异常
+或超 max_rounds 一律 escalate。
 """
 from __future__ import annotations
 
@@ -14,7 +19,9 @@ import structlog
 
 from . import k8s_runner
 from . import observability as obs
-from .actions import REGISTRY
+from .actions import ACTION_META, REGISTRY
+from .config import settings
+from .retry import policy as retry_policy
 from .state import Event, ReqState, decide
 from .store import req_state
 
@@ -117,27 +124,22 @@ async def step(
         log.error("engine.action_not_registered", action=transition.action)
         return {"action": "error", "reason": f"action {transition.action} not registered"}
 
-    started = time.monotonic()
-    try:
-        result = await handler(body=body, req_id=req_id, tags=tags, ctx=ctx)
-    except Exception as e:
-        log.exception("engine.action_failed", action=transition.action, error=str(e))
-        await obs.record_event(
-            "action.failed",
-            req_id=req_id, issue_id=getattr(body, "issueId", None), tags=tags,
-            router_action=transition.action,
-            duration_ms=int((time.monotonic() - started) * 1000),
-            error_msg=str(e)[:500],
-        )
-        return {"action": "error", "reason": str(e)}
-
-    await obs.record_event(
-        "action.executed",
-        req_id=req_id, issue_id=getattr(body, "issueId", None), tags=tags,
-        router_action=transition.action,
-        duration_ms=int((time.monotonic() - started) * 1000),
-        extras=result if isinstance(result, dict) else None,
+    ok, result = await _dispatch_with_retry(
+        pool,
+        body=body,
+        req_id=req_id,
+        project_id=project_id,
+        tags=tags,
+        action_name=transition.action,
+        handler=handler,
+        ctx=ctx,
+        next_state=transition.next_state,
+        depth=depth,
     )
+    # action terminal fail → _dispatch_with_retry 内部已 emit SESSION_FAILED 走 escalate；
+    # 上层直接把 escalate 的 chained 结果原样返回，不再做后续 handler result 的 emit chain
+    if not ok:
+        return result
 
     base_result = {
         "action": transition.action,
@@ -171,3 +173,153 @@ async def step(
         base_result["chained"] = chain
 
     return base_result
+
+
+async def _dispatch_with_retry(
+    pool: asyncpg.Pool,
+    *,
+    body,
+    req_id: str,
+    project_id: str,
+    tags: list[str],
+    action_name: str,
+    handler,
+    ctx: dict,
+    next_state: ReqState,
+    depth: int,
+) -> tuple[bool, dict[str, Any]]:
+    """跑 handler；按 retry.policy 决策 retry 原地 / escalate（emit SESSION_FAILED）。
+
+    retry_enabled=False 时保留老行为：抛到第一次 fail 就 record + 返回 error。
+
+    返回 (ok, payload)：
+        ok=True, payload = handler 的 result dict（上层继续做 emit chain）
+        ok=False, payload = escalate 汇总字典（error / escalated / chained 等），
+                            上层应直接返回不再处理
+    """
+    meta = ACTION_META.get(action_name, {"idempotent": False})
+    idempotent = bool(meta.get("idempotent"))
+    # round = 已重试轮次（0-based；首次 handler 调用 round=0）
+    round_ = 0
+    issue_id = getattr(body, "issueId", None)
+
+    while True:
+        started = time.monotonic()
+        try:
+            result = await handler(body=body, req_id=req_id, tags=tags, ctx=ctx)
+        except Exception as e:
+            duration_ms = int((time.monotonic() - started) * 1000)
+
+            if not settings.retry_enabled:
+                # 老行为：不自动重试，直接记 + 返回 error
+                log.exception("engine.action_failed", action=action_name, error=str(e))
+                await obs.record_event(
+                    "action.failed",
+                    req_id=req_id, issue_id=issue_id, tags=tags,
+                    router_action=action_name,
+                    duration_ms=duration_ms, error_msg=str(e)[:500],
+                )
+                return False, {"action": "error", "reason": str(e)}
+
+            decision = retry_policy.decide_action_fail(
+                action_name, exc=e, round=round_,
+                idempotent=idempotent,
+                max_rounds=settings.retry_action_max_rounds,
+            )
+            log.warning(
+                "engine.action_fail_decide",
+                req_id=req_id, action=action_name,
+                error=str(e)[:200], round=round_,
+                decision=decision.action, reason=decision.reason,
+                idempotent=idempotent,
+            )
+            await obs.record_event(
+                "action.failed",
+                req_id=req_id, issue_id=issue_id, tags=tags,
+                router_action=action_name,
+                duration_ms=duration_ms, error_msg=str(e)[:500],
+                extras={
+                    "retry_round": round_,
+                    "retry_decision": decision.action,
+                    "retry_reason": decision.reason,
+                    "idempotent": idempotent,
+                },
+            )
+
+            if decision.action == "retry":
+                await req_state.bump_action_retry(pool, req_id, action_name)
+                await asyncio.sleep(decision.backoff_sec)
+                round_ += 1
+                continue
+
+            # escalate：链式 emit SESSION_FAILED，让状态机走 ESCALATED + escalate action
+            log.error(
+                "engine.action_escalate",
+                req_id=req_id, action=action_name,
+                error=str(e)[:200], reason=decision.reason,
+            )
+            chained = await _emit_escalate(
+                pool, body=body, req_id=req_id, project_id=project_id,
+                tags=tags, fallback_state=next_state, depth=depth,
+                error_reason=decision.reason,
+            )
+            return False, {
+                "action": "error",
+                "reason": str(e),
+                "escalated": True,
+                "retry_round": round_,
+                "chained": chained,
+            }
+
+        # 成功：清 round 计数，观测 executed
+        if round_ > 0:
+            await req_state.reset_action_retry(pool, req_id, action_name)
+            log.info(
+                "engine.action_retry_succeeded",
+                req_id=req_id, action=action_name, rounds=round_,
+            )
+        await obs.record_event(
+            "action.executed",
+            req_id=req_id, issue_id=issue_id, tags=tags,
+            router_action=action_name,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            extras=result if isinstance(result, dict) else None,
+        )
+        return True, (result if isinstance(result, dict) else {})
+
+
+async def _emit_escalate(
+    pool: asyncpg.Pool,
+    *,
+    body,
+    req_id: str,
+    project_id: str,
+    tags: list[str],
+    fallback_state: ReqState,
+    depth: int,
+    error_reason: str,
+) -> dict[str, Any]:
+    """action handler 彻底失败 → 从当前状态 emit SESSION_FAILED 进 escalate 链。
+
+    读最新 state（cas 已推进到 next_state；handler 部分执行可能有 ctx 改动）。
+    SESSION_FAILED 对所有 *_RUNNING 态都有 transition → ESCALATED + escalate action。
+    """
+    new_row = await req_state.get(pool, req_id)
+    cur_state = new_row.state if new_row else fallback_state
+    cur_ctx = new_row.context if new_row else {}
+    # 把失败原因暴露给 escalate action（ctx + body.event）— escalate 读 body.event 打 tag
+    # 这里不改 body.event（signature 限制）；仅保留 ctx 里的诊断信息
+    await req_state.update_context(pool, req_id, {
+        "action_escalate_reason": error_reason[:200],
+    })
+    return await step(
+        pool,
+        body=body,
+        req_id=req_id,
+        project_id=project_id,
+        tags=tags,
+        cur_state=cur_state,
+        ctx=cur_ctx,
+        event=Event.SESSION_FAILED,
+        depth=depth + 1,
+    )

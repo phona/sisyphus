@@ -25,7 +25,7 @@ from ._skip import skip_if_enabled
 log = structlog.get_logger(__name__)
 
 
-@register("create_pr_ci_watch")
+@register("create_pr_ci_watch", idempotent=False)  # 老路创 BKD issue；checker 模式安全但保守 False
 async def create_pr_ci_watch(*, body, req_id, tags, ctx):
     if rv := skip_if_enabled("pr-ci", Event.PR_CI_PASS, req_id=req_id):
         return rv

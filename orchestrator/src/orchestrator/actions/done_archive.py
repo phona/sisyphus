@@ -14,7 +14,7 @@ from ._skip import skip_if_enabled
 log = structlog.get_logger(__name__)
 
 
-@register("done_archive")
+@register("done_archive", idempotent=False)  # 创建新 archive issue + 开 PR
 async def done_archive(*, body, req_id, tags, ctx):
     if rv := skip_if_enabled("archive", Event.ARCHIVE_DONE, req_id=req_id):
         return rv

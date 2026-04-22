@@ -88,6 +88,7 @@ class RunnerController:
         runner_secret_name: str,
         image_pull_secrets: list[str] | None = None,
         ready_timeout_sec: int = 120,
+        ready_attempts: int = 3,
         in_cluster: bool = True,
         core_v1: client.CoreV1Api | None = None,
     ):
@@ -100,6 +101,9 @@ class RunnerController:
         self.runner_secret_name = runner_secret_name
         self.image_pull_secrets = list(image_pull_secrets or [])
         self.ready_timeout_sec = ready_timeout_sec
+        # M9：Pod Ready 外层 attempts（每次等 ready_timeout_sec）。超全部 attempts 抛
+        # TimeoutError，让 engine.step 的 retry policy 接手决策 retry/escalate。
+        self.ready_attempts = max(1, ready_attempts)
 
         if core_v1 is not None:
             # 测试注入 mock client
@@ -244,8 +248,14 @@ class RunnerController:
     async def ensure_runner(
         self, req_id: str, *, wait_ready: bool = True,
         timeout_sec: int | None = None,
+        attempts: int | None = None,
     ) -> str:
-        """幂等创建 PVC + Pod。返回 pod name。"""
+        """幂等创建 PVC + Pod。返回 pod name。
+
+        M9：wait_ready=True 时外层跑 `attempts` 轮 _wait_pod_ready，每轮
+        timeout_sec 秒。总等待 ≈ attempts × timeout_sec。全超时后抛最后一次的
+        TimeoutError，由 engine.step retry policy 决定 retry / escalate。
+        """
         pod_name = self.pod_name(req_id)
 
         # PVC 先建（Pod 挂它；PVC 落不下来 Pod 会 Pending）
@@ -273,7 +283,24 @@ class RunnerController:
             log.debug("runner.pod.exists", req_id=req_id)
 
         if wait_ready:
-            await self._wait_pod_ready(pod_name, timeout_sec or self.ready_timeout_sec)
+            per_attempt = timeout_sec or self.ready_timeout_sec
+            total_attempts = attempts or self.ready_attempts
+            last_err: TimeoutError | None = None
+            for attempt in range(total_attempts):
+                try:
+                    await self._wait_pod_ready(pod_name, per_attempt)
+                    return pod_name
+                except TimeoutError as e:
+                    last_err = e
+                    log.warning(
+                        "runner.ready_attempt_failed",
+                        req_id=req_id, pod=pod_name,
+                        attempt=attempt + 1, total=total_attempts,
+                        timeout_sec=per_attempt,
+                    )
+            # 所有 attempts 都超时：抛最后一次的 TimeoutError（engine retry 会 catch）
+            assert last_err is not None
+            raise last_err
 
         return pod_name
 

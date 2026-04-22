@@ -23,7 +23,7 @@ log = structlog.get_logger(__name__)
 SPEC_STAGES = ("contract-spec", "acceptance-spec")
 
 
-@register("fanout_specs")
+@register("fanout_specs", idempotent=False)  # 创建两个新 spec issue
 async def fanout_specs(*, body, req_id, tags, ctx):
     if rv := skip_if_enabled("spec", Event.SPEC_ALL_PASSED, req_id=req_id):
         return rv

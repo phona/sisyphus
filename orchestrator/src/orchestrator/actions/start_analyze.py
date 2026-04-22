@@ -24,7 +24,7 @@ from ._skip import skip_if_enabled
 log = structlog.get_logger(__name__)
 
 
-@register("start_analyze")
+@register("start_analyze", idempotent=True)
 async def start_analyze(*, body, req_id, tags, ctx):
     if rv := skip_if_enabled("analyze", Event.ANALYZE_DONE, req_id=req_id):
         return rv

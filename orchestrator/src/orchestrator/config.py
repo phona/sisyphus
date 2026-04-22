@@ -103,12 +103,21 @@ class Settings(BaseSettings):
     # ─── M4：故障分级重试 ────────────────────────────────────────────────
     # False（默认）= checker fail 直接 emit FAIL event（老行为）
     # True = checker fail 调 retry.executor，按 policy 决定 follow_up / diagnose / escalate
+    # M9：同一 flag 启用 engine.step action-handler 异常重试（decide_action_fail）
     # 回滚：set false → rollout restart
     retry_enabled: bool = False
     # 到/超过即 escalate 人工（含本次在内的总轮次）
     retry_max_rounds: int = 5
     # 测试失败从第 N 轮起改走 diagnose agent（分流 spec-bug/env-bug/code-bug）
     retry_diagnose_threshold: int = 3
+    # M9：幂等 action 抛 transient 异常时最多重试 N 轮（0/1/2 → retry，round=3 → escalate）
+    retry_action_max_rounds: int = 3
+
+    # ─── M9：runner ready 重试 ──────────────────────────────────────────
+    # ensure_runner 等 Pod Ready 的外层 attempts：N × runner_ready_timeout_sec
+    # 总等待；最后一次抛 TimeoutError 让 engine 的 retry policy 接手。
+    # 默认 3 × 120s = 6min，覆盖 K3s 节点偶发慢启动；生产可调更高。
+    runner_ready_attempts: int = 3
 
     # ─── M6：analyze 歧义 admission（跟 M3 manifest schema 协同） ─────────
     # True = fanout_specs 开 spec issue 前先跑 manifest_validate，
