@@ -5,18 +5,46 @@ action handler 可以返回 {"emit": "<event-name>"} 触发链式推进
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
 import asyncpg
 import structlog
 
+from . import k8s_runner
 from . import observability as obs
 from .actions import REGISTRY
 from .state import Event, ReqState, decide
 from .store import req_state
 
 log = structlog.get_logger(__name__)
+
+
+# 进 terminal state 时立即清 runner（fire-and-forget；runner_gc 仍周期兜底）
+# escalated 保 PVC 给人工 debug，过期由 runner_gc 按 pvc_retain_on_escalate_days 清
+_TERMINAL_STATES = {ReqState.DONE, ReqState.ESCALATED}
+
+# 持引用防 fire-and-forget task 被 GC（done_callback 自清）
+_cleanup_tasks: set[asyncio.Task] = set()
+
+
+async def _cleanup_runner_on_terminal(req_id: str, terminal_state: ReqState) -> None:
+    try:
+        rc = k8s_runner.get_controller()
+    except RuntimeError as e:
+        log.debug("runner.cleanup_no_controller", req_id=req_id, error=str(e))
+        return
+    try:
+        await rc.cleanup_runner(
+            req_id,
+            retain_pvc=(terminal_state == ReqState.ESCALATED),
+        )
+        log.info("runner.cleanup_on_terminal",
+                 req_id=req_id, terminal_state=terminal_state.value)
+    except Exception as e:
+        # cleanup 失败别回压状态机；runner_gc 兜底
+        log.warning("runner.cleanup_failed", req_id=req_id, error=str(e))
 
 
 async def step(
@@ -61,6 +89,15 @@ async def step(
         evt=event.value,
         action=transition.action,
     )
+
+    # M10：转 terminal state 时立即清 runner（fire-and-forget）
+    if transition.next_state in _TERMINAL_STATES:
+        task = asyncio.create_task(
+            _cleanup_runner_on_terminal(req_id, transition.next_state)
+        )
+        _cleanup_tasks.add(task)
+        task.add_done_callback(_cleanup_tasks.discard)
+
     await obs.record_event(
         "router.decision",
         req_id=req_id, issue_id=getattr(body, "issueId", None), tags=tags,
