@@ -10,43 +10,87 @@
 
 ─────────
 
-## 归档 (DONE ARCHIVE)
+## 归档 (DONE ARCHIVE)  v0.2
 AGENT_ROLE=done-archive-agent
 REQ={{ req_id }}
-BRANCH={{ branch }}
 ACCEPT_ISSUE={{ accept_issue_id }}
 
-按"干活容器"段先 idempotent 拉起 sisyphus-runner-{{ req_id }}（容器还活着，复用即可）。
+accept 通过 + teardown 已清 lab。你现在要：
+1. 每个 source repo merge PR（按 manifest.merge_order 顺序）
+2. 各 repo 归档 openspec changes → specs
+3. 写结果到本 issue
 
-## 职责
-验收通过后：openspec apply + 创建 PR + **回收 sisyphus-runner 容器 + named volume**。
+**别动 runner Pod / PVC**，sisyphus 会自己清（ctrl-loop GC 或 admin 手动）。
 
-## 硬约束
-- update-issue / follow-up-issue 的 issueId 只能是本 issue（不是 ACCEPT_ISSUE）
-- 所有 shell 命令通过 mcp__aissh-tao__exec_run 在 vm-node04 上执行
+---
+
+## 起手自检
+
+```bash
+POD=runner-{{ req_id | lower }}
+NS=sisyphus-runners
+kubectl -n $NS exec $POD -- validate-manifest.py
+kubectl -n $NS exec $POD -- cat /workspace/.sisyphus/manifest.yaml
+```
 
 ## 步骤
-Step 1 sync 分支:
-  docker exec $CONTAINER bash -c "git fetch origin && git checkout $BRANCH && git reset --hard origin/$BRANCH"
 
-Step 2 openspec apply:
-  docker exec $CONTAINER bash -c "openspec apply $REQ"
-  失败就贴 error 到本 issue description，加 tag `archive-fail` 并 move review。
+### Step 1: 决定 merge 顺序
 
-Step 3 push:
-  docker exec $CONTAINER bash -c "git push origin $BRANCH"
+看 manifest：
+- 如果 `merge_order` 已填（analyze-agent 可能写过），按它来
+- 如果没填，按 `sources[].depends_on` 拓扑排序（被依赖的 repo 先）
 
-Step 4 创 PR:
-  docker exec $CONTAINER bash -c "gh pr create --base master --head $BRANCH \
-    --title '$REQ: <一句话概括>' \
-    --body \"\$(cat openspec/changes/$REQ/proposal.md 2>/dev/null || echo done via sisyphus)\""
+```bash
+# 简单情况（手算）：depends_on 空的 repo 先 merge，然后依赖它的
+# 复杂情况：agent 自己拓扑排序，然后回写 merge_order 给审计
+kubectl -n $NS exec $POD -- yq -i '.merge_order = ["<repo1>", "<repo2>", ...]' /workspace/.sisyphus/manifest.yaml
+```
 
-Step 5 写结果到**本 issue**:
-  A. follow-up-issue 追加 `## Archive Result`: pr_url / commit_sha
-  B. update-issue tags: [done-archive, $REQ, result:pass, pr:<url>]
-  C. update-issue statusId=done    # 归档完成直接 done，不 review
+### Step 2: 按顺序 merge 每个 PR
 
-Step 6 回收容器 + volume（在 vm-node04 宿主上跑，不在容器内）:
-  docker rm -f sisyphus-runner-{{ req_id }} || true
-  docker volume rm sisyphus-workspace-{{ req_id }} || true
-  echo "runner cleanup done"
+```bash
+for repo in $(kubectl -n $NS exec $POD -- yq '.merge_order[]' /workspace/.sisyphus/manifest.yaml); do
+  pr_url=$(kubectl -n $NS exec $POD -- yq ".pr_by_repo.\"$repo\"" /workspace/.sisyphus/manifest.yaml)
+  kubectl -n $NS exec $POD -- bash -c "gh pr merge $pr_url --squash --delete-branch --auto"
+done
+```
+
+`--auto` 会等分支保护要求的 check 全绿才 merge（如果 repo 配了保护）。没配则立即 merge。
+
+### Step 3: 各 source repo openspec apply
+
+归档 `openspec/changes/{{ req_id }}/` → `openspec/specs/`。由 leader repo 负责（多 repo 场景共享一份 spec）：
+
+```bash
+LEADER=$(kubectl -n $NS exec $POD -- yq '.sources[] | select(.role == "leader") | .path' /workspace/.sisyphus/manifest.yaml)
+kubectl -n $NS exec $POD -- bash -c "cd /workspace/$LEADER && openspec apply {{ req_id }}"
+# 这会更新 openspec/specs/ 然后 commit 一个 "archive $REQ" patch
+# push 到 main（通过 follow-up PR 或 admin 直推）
+```
+
+### Step 4: 写结果到**本 issue**
+
+```markdown
+## Archive Result
+- merged: [repo1: pr_url, repo2: pr_url, ...]
+- openspec apply: commit sha
+- (optional) any skipped
+```
+
+follow-up-issue 追加。
+
+### Step 5: 贴 tag + status=done
+
+update-issue:
+- tags: `[done-archive, {{ req_id }}, result:pass]` + per-repo `pr-merged:<repo>`
+- statusId=**done**（不 review，归档直接 done）
+
+---
+
+## 硬约束
+
+1. **不要** `kubectl delete pod / pvc`：sisyphus 的 GC 会在 state=done 后清（保留 N 分钟给 admin 翻现场）
+2. merge 顺序严格按 manifest.merge_order；不要跳步
+3. merge 失败（比如 check 没过）→ 贴 `archive-fail` tag + move review，让人介入
+4. 所有 update-issue 的 issueId 必须是**本** issue（不是 ACCEPT_ISSUE）

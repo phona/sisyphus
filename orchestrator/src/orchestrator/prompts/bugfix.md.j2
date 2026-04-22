@@ -34,12 +34,12 @@ BRANCH_WORK=stage/bugfix-dev-{{ req_id }}-round-{{ round_n }}
 
 ## 步骤
 Step 1 切到 work 分支:
-  docker exec $CONTAINER bash -c "git fetch origin && git checkout -B $BRANCH_WORK origin/$BRANCH_BASE"
+  kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c "git fetch origin && git checkout -B $BRANCH_WORK origin/$BRANCH_BASE"
 
 Step 2 读 SOURCE_ISSUE（mcp__bkd__get-issue）取 `## CI Result` 或 `## Accept Result`，
        看 stderr_tail / failed_tests 推断 root cause。
 
-Step 3 改代码（只改 internal/ cmd/ main/）→ docker exec 内 commit → push 到 $BRANCH_WORK。
+Step 3 改代码（只改 internal/ cmd/ main/）→ kubectl exec 内 commit → push 到 $BRANCH_WORK。
 
 Step 4 写结果到**本 issue**：
   A. follow-up-issue 追加 `## Bugfix Result`: diagnosis / branch / commit_sha

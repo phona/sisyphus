@@ -32,10 +32,10 @@ PARENT_STAGE={{ parent_stage }}
 
 ## 步骤
 Step 1 同步分支:
-  docker exec $CONTAINER bash -c "git fetch origin && git reset --hard origin/$BRANCH"
+  kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c "git fetch origin && git reset --hard origin/$BRANCH"
 
 Step 2 跑测试:
-  docker exec $CONTAINER bash -c "time BASE_REV=origin/master make ci-$TARGET 2>&1"
+  kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c "time BASE_REV=origin/master make ci-$TARGET 2>&1"
   记录 exit_code / duration_ms / stderr 最后 50 行 / 失败测试名列表。
 
 Step 3 写结果（对**本 issue**操作，不是 PARENT_ISSUE）:
@@ -45,7 +45,7 @@ Step 3 写结果（对**本 issue**操作，不是 PARENT_ISSUE）:
 target: $TARGET
 branch: $BRANCH
 container: $CONTAINER
-commit: <docker exec $CONTAINER git rev-parse --short HEAD>
+commit: <kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- git rev-parse --short HEAD>
 exit_code: <0 或非 0>
 duration_ms: <ms>
 coverage: <% 或空>

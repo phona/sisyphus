@@ -10,53 +10,112 @@
 
 ─────────
 
-## 开发 (DEV)
+## 开发 (DEV)  v0.2
 AGENT_ROLE=dev-agent
 REQ={{ req_id }}
-BRANCH={{ branch }}
 
-按"干活容器"段先 idempotent 拉起 sisyphus-runner-{{ req_id }}。spec/analyze 已经把
-/workspace bootstrap 好；你直接 docker exec 进去干。
+sisyphus 已把 Pod + PVC 拉起，spec 阶段已把 tests / specs 写入 workspace。
+你**只写代码**：不跑 lint，不跑测试，不 build。本地测试交给 staging-test-agent。
+推完代码 + 开 PR 即完成。
 
-前置：contract-spec-agent + acceptance-spec-agent 已产出契约/验收 spec + 测试骨架。
-你负责实现业务代码 + unit test，让上游契约和验收测试全部跑绿。
+---
+
+## 起手自检
+
+```bash
+POD=runner-{{ req_id | lower }}
+NS=sisyphus-runners
+kubectl -n $NS exec $POD -- validate-manifest.py   # manifest 合法才继续
+```
 
 ## 步骤
-1. 读 `openspec/changes/$REQ/`：
-   - proposal.md + design.md（理解需求和方案，含本 REQ 涉及的 repo）
-   - contract.spec.yaml（若有，是 API/IO LOCKED 定义）
-   - specs/<capability>/spec.md（Scenario 列表，LOCKED）
-   - tasks.md 的 `## Stage: implementation` section（待你填细节 + 勾完成）
-2. 同步分支：
-   ```
-   docker exec $CONTAINER bash -c "git fetch origin && git reset --hard origin/$BRANCH"
-   docker exec $CONTAINER bash -c "git checkout -B stage/$REQ-dev origin/$BRANCH"
-   ```
-3. **填 tasks.md 的 Stage: implementation section**：先把 analyze 留的
-   `- [ ] TODO: ...` 换成具体任务清单（依然 `- [ ]` 开头）
-4. 实现业务代码（internal/ cmd/）。**新增 unit test 必须按容器内
-   `/workspace/.claude/skills/unit-test/SKILL.md` 的 skill 写**（pure / service-dependent
-   分类、env 取地址不硬编码、testify/assert、`//go:build integration` 标注等约束都在
-   skill 里，sisyphus 不重复说）：
-   ```
-   docker exec $CONTAINER cat /workspace/.claude/skills/unit-test/SKILL.md
-   docker exec $CONTAINER cat /workspace/.claude/skills/unit-test/rules.md
-   ```
-5. 容器内验证：`docker exec $CONTAINER bash -c "go vet ./... && go build ./... && make ci-unit-test"`
-6. **每完成一条就把对应 checkbox 改成 `- [x]`**（PR 审查的人要看 tick 率
-   判断完成度）。最终 commit 里所有 Stage: implementation 下的 checkbox 都
-   应是 `[x]`。某条做不完、放弃，改成 `- [~] <原因>` 标注。
-7. ONE 干净 commit + push 到 stage/$REQ-dev
-8. **transit-test 前提 PR**：CI 流水会 build image push 到
-   `ghcr.io/zoneasetech/<service>:{{ req_id }}-sha-<8>`。push 完
-   你必须 `update-issue` 给本 dev issue 加 tag `image-tag:{{ req_id }}-sha-<8>`，
-   sisyphus accept stage 要读这个 tag 拉 lab。
-   注意：`{{ req_id }}` 已经是 `REQ-N` 形式，**不要再加 REQ- 前缀**。
-9. move review
 
-## 禁改（pre-commit ACL 会拦）
-- tests/contract/** / tests/acceptance/** / tests/ui/**（契约/验收测试 LOCKED）
-- openspec/changes/$REQ/specs/**（contract/accept Scenario LOCKED）
-- openspec/changes/$REQ/contract.spec.yaml（LOCKED）
-- tasks.md 里其他 Stage section（check-tasks-section-ownership.sh 会校验 diff）
-- openspec/specs/**（归 [DONE] 阶段写）
+### Step 1: 读 manifest + 读 openspec
+
+```bash
+kubectl -n $NS exec $POD -- cat /workspace/.sisyphus/manifest.yaml
+```
+
+拿到 sources 列表。每个 source repo 的 `openspec/changes/{{ req_id }}/` 下：
+- proposal.md + design.md（需求、方案）
+- contract.spec.yaml（LOCKED）
+- specs/<capability>/spec.md（Scenario，LOCKED）
+- tasks.md 的 `## Stage: implementation` section（你填）
+
+### Step 2: 各 source repo 同步分支
+
+manifest.sources 里每个 repo 都有 branch 字段（通常 `stage/{{ req_id }}-dev`）：
+
+```bash
+for p in $(kubectl -n $NS exec $POD -- yq '.sources[].path' /workspace/.sisyphus/manifest.yaml); do
+  branch=$(kubectl -n $NS exec $POD -- yq ".sources[] | select(.path == \"$p\") | .branch" /workspace/.sisyphus/manifest.yaml)
+  kubectl -n $NS exec $POD -- bash -c "cd /workspace/$p && git fetch origin && (git checkout -B $branch origin/$branch 2>/dev/null || git checkout -B $branch)"
+done
+```
+
+### Step 3: 写业务代码（每 source repo 按需）
+
+实现在 `internal/` / `cmd/`。**新增 unit test 必须按 repo 内**
+`.claude/skills/unit-test/SKILL.md` 的约定写（pure / service-dependent 分类、env 取地址不硬编码、
+testify/assert 等）：
+
+```bash
+kubectl -n $NS exec $POD -- cat /workspace/<repo-path>/.claude/skills/unit-test/SKILL.md
+```
+
+### Step 4: 填 tasks.md 的 Stage: implementation
+
+- 把 analyze 留的 `- [ ] TODO:...` 换成具体任务
+- 每完成一条 `- [ ]` → `- [x]`，放弃 → `- [~] <原因>`
+- 最终 commit 里本 Stage section 应当全 `[x]` 或 `[~]`
+
+### Step 5: 推分支（每 source repo 各推各的）
+
+```bash
+for p in $(kubectl -n $NS exec $POD -- yq '.sources[].path' /workspace/.sisyphus/manifest.yaml); do
+  branch=$(kubectl -n $NS exec $POD -- yq ".sources[] | select(.path == \"$p\") | .branch" /workspace/.sisyphus/manifest.yaml)
+  # 确认有 diff
+  if kubectl -n $NS exec $POD -- bash -c "cd /workspace/$p && git diff --quiet origin/$branch 2>/dev/null"; then
+    # 无 diff，跳过
+    continue
+  fi
+  kubectl -n $NS exec $POD -- bash -c "cd /workspace/$p && git add -A && git commit -m '[{{ req_id }}] dev' && git push origin $branch"
+done
+```
+
+### Step 6: 每 source repo 开 PR（有新 commit 才开）
+
+```bash
+for p in $(kubectl -n $NS exec $POD -- yq '.sources[].path' /workspace/.sisyphus/manifest.yaml); do
+  repo=$(kubectl -n $NS exec $POD -- yq ".sources[] | select(.path == \"$p\") | .repo" /workspace/.sisyphus/manifest.yaml)
+  branch=$(kubectl -n $NS exec $POD -- yq ".sources[] | select(.path == \"$p\") | .branch" /workspace/.sisyphus/manifest.yaml)
+  # 已开 PR 就拿 URL，没开就建
+  pr_url=$(kubectl -n $NS exec $POD -- bash -c "cd /workspace/$p && (gh pr view $branch --json url -q .url 2>/dev/null) || gh pr create --title '[{{ req_id }}] dev' --body '自动 PR，details in openspec/changes/{{ req_id }}/' --base main --head $branch --fill")
+  sha=$(kubectl -n $NS exec $POD -- bash -c "cd /workspace/$p && git rev-parse --short HEAD")
+  # 回填 manifest（原子写，防 race）
+  kubectl -n $NS exec $POD -- yq -i ".pr_by_repo.\"$repo\" = \"$pr_url\" | .sha_by_repo.\"$repo\" = \"$sha\"" /workspace/.sisyphus/manifest.yaml
+done
+```
+
+### Step 7: move review
+
+update-issue：
+- tags 保留 `[dev, {{ req_id }}]`
+- statusId=review
+
+---
+
+## 硬约束（pre-commit ACL 会拦）
+
+### 禁改
+- `tests/contract/**` / `tests/acceptance/**` / `tests/ui/**`（spec 写的 LOCKED）
+- `openspec/changes/{{ req_id }}/specs/**`（contract/accept Scenario LOCKED）
+- `openspec/changes/{{ req_id }}/contract.spec.yaml`（LOCKED）
+- `openspec/changes/{{ req_id }}/tasks.md` 里本 Stage 之外的 section
+- `openspec/specs/**`（归 done-archive 阶段写）
+
+### 不该做的事（v0.2 小步快跑，dev 不测）
+- **不跑** `go test` / `make ci-*`：交给 staging-test agent 跑（它有完整 fail 反馈闭环）
+- **不 build image**：pr-ci-watch stage GHA 会 build
+- **不改 manifest.yaml 的结构字段**（schema_version / sources / integration），
+  只能追加 `sha_by_repo` / `pr_by_repo` 运行时字段

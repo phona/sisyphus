@@ -31,13 +31,13 @@ BRANCH_BASE={{ branch }}
 
 ## 步骤
 Step 1 sync base:
-  docker exec $CONTAINER bash -c "git fetch origin && git checkout $BRANCH_BASE && git reset --hard origin/$BRANCH_BASE"
+  kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c "git fetch origin && git checkout $BRANCH_BASE && git reset --hard origin/$BRANCH_BASE"
 
 Step 2 fetch 两条候选分支:
-  docker exec $CONTAINER bash -c "git fetch origin stage/bugfix-dev-$REQ-round-$ROUND stage/bugfix-test-$REQ-round-$ROUND"
+  kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c "git fetch origin stage/bugfix-dev-$REQ-round-$ROUND stage/bugfix-test-$REQ-round-$ROUND"
 
 Step 3 对照 spec 比较 diff，选胜者：
-  docker exec $CONTAINER bash -c "git merge --no-ff origin/<胜者分支>"
+  kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c "git merge --no-ff origin/<胜者分支>"
   解冲突（若有）→ commit → push origin $BRANCH_BASE
 
 Step 4 写结果到**本 issue**：

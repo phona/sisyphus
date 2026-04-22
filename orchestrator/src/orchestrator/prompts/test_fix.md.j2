@@ -26,7 +26,7 @@ BRANCH_WORK=stage/bugfix-test-{{ req_id }}-round-{{ round_n }}
 
 ## 步骤
 Step 1 切到 work 分支:
-  docker exec $CONTAINER bash -c "git fetch origin && git checkout -B $BRANCH_WORK origin/$BRANCH_BASE"
+  kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c "git fetch origin && git checkout -B $BRANCH_WORK origin/$BRANCH_BASE"
 
 Step 2 读 PREV_BUGFIX 的 tags 看 diagnosis:
   - diagnosis:test-bug → 重点修 test
