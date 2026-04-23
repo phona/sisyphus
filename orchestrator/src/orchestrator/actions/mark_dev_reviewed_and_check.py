@@ -2,11 +2,11 @@
 
 仿 mark_spec_reviewed_and_check（M14d）：
 - 打 ci-passed tag + 推 done（幂等）
-- 全量扫本 REQ 下所有 dev issues，数 ci-passed 是否达到 expected_dev_count
+- 全量扫本 REQ 下所有 dev issues，数 ci-passed 是否达到总数
 - 齐了 emit `dev.all-passed` → 进 staging-test
 - 不齐等下次 DEV_DONE
 
-expected_dev_count 由 fanout_dev 写入 ctx（单 dev 模式 = 1，并行 = len(tasks)）。
+dev issue 总数由查询 tag=dev+REQ 的 issue 数量动态决定。
 """
 from __future__ import annotations
 
@@ -34,12 +34,12 @@ async def mark_dev_reviewed_and_check(*, body, req_id, tags, ctx):
         )
         all_issues = await bkd.list_issues(proj, limit=200)
 
-    expected = (ctx or {}).get("expected_dev_count") or 1
     dev_issues = [
         i for i in all_issues
         if req_id in i.tags and "dev" in i.tags
     ]
     passed = [i for i in dev_issues if "ci-passed" in i.tags]
+    expected = len(dev_issues)
 
     log.info(
         "mark_dev_reviewed.gate",
