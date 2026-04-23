@@ -7,8 +7,6 @@ handler 内部按 body.event 字段分流。
 from __future__ import annotations
 
 import hmac
-import json
-import re
 from typing import Any
 
 import structlog
@@ -204,35 +202,6 @@ async def webhook(request: Request) -> JSONResponse:
             return {"action": "error", "reason": "init failed"}
     cur_state = row.state
     ctx = row.context
-
-    # ─── 5.5 analyze-agent 输出信息提取到 ctx ────────────────────────────
-    if event is not None and event.value == "analyze.done":
-        try:
-            async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
-                issue = await bkd.get_issue(body.projectId, body.issueId)
-                # 从 analyze issue description 最后的 json 代码块提取 leader_repo_path 等信息
-                # 格式：```json {"leader_repo_path": "..."} ```
-                description = issue.description or ""
-                blocks = re.findall(r"```json\s*(\{.*?\})\s*```", description, flags=re.DOTALL)
-                for blk in reversed(blocks):
-                    try:
-                        data = json.loads(blk)
-                        patch = {}
-                        if "leader_repo_path" in data:
-                            patch["leader_repo_path"] = data["leader_repo_path"]
-                        if "feature_repo_path" in data:
-                            patch["feature_repo_path"] = data["feature_repo_path"]
-                        if patch:
-                            await req_state.update_context(pool, req_id, patch)
-                            ctx = {**ctx, **patch}
-                            log.info("webhook.analyze.context_extracted",
-                                     req_id=req_id, keys=list(patch.keys()))
-                            break
-                    except Exception:
-                        continue
-        except Exception as e:
-            log.warning("webhook.analyze.context_extract_failed",
-                        req_id=req_id, error=str(e))
 
     # ─── 5.6 verifier decision payload 落 ctx（start_fixer 等 action 读）──
     if decision_payload is not None:

@@ -1,7 +1,7 @@
 """checkers/staging_test.py 单测：mock RunnerController，验 CheckResult 字段。
 
-M15：run_staging_test 不再读 manifest；命令固定为 `cd /workspace && make ci-test`。
-业务 repo 自己在 Makefile 聚合实际跑啥（unit / integration / lint / ...）。
+多仓重构后：cmd 遍历 /workspace/source/*，并行对每个含 `ci-test` target 的仓
+跑 `make ci-test`。业务 repo 自己在 Makefile 聚合实际跑啥（unit / integration / lint / ...）。
 """
 from __future__ import annotations
 
@@ -13,8 +13,6 @@ from orchestrator.checkers._types import CheckResult
 from orchestrator.checkers.staging_test import run_staging_test
 from orchestrator.k8s_runner import ExecResult
 
-_EXPECTED_CMD = "cd /workspace && make ci-test"
-
 
 def make_fake_controller(exit_code: int, stdout: str = "", stderr: str = "", duration: float = 1.0):
     class FakeRC:
@@ -25,7 +23,17 @@ def make_fake_controller(exit_code: int, stdout: str = "", stderr: str = "", dur
     return FakeRC
 
 
-# ── pass：验 cmd 是固定的 make ci-test ─────────────────────────────────────
+def _assert_for_each_repo_cmd(cmd: str) -> None:
+    """验证 cmd 是 for-each-repo 并行 shell 模板（关键标记即可，别拘束全文）。"""
+    assert "/workspace/source/*/" in cmd
+    assert "make ci-test" in cmd
+    assert "ci-test:" in cmd  # grep Makefile target 过滤
+    assert " & " in cmd  # 后台并行
+    assert "wait $pid" in cmd
+    assert "exit $fail" in cmd
+
+
+# ── pass：验 cmd 是 for-each-repo 并行版 ─────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_run_staging_test_pass(monkeypatch):
@@ -42,8 +50,8 @@ async def test_run_staging_test_pass(monkeypatch):
     assert result.stdout_tail == "ok\n"
     assert result.stderr_tail == ""
     assert result.duration_sec == 3.5
-    assert result.cmd == _EXPECTED_CMD
-    assert FakeRC.last_cmd == _EXPECTED_CMD
+    _assert_for_each_repo_cmd(result.cmd)
+    assert FakeRC.last_cmd == result.cmd
 
 
 # ── fail ──────────────────────────────────────────────────────────────────
