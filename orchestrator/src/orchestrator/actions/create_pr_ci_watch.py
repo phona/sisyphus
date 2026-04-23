@@ -1,19 +1,18 @@
-"""create_pr_ci_watch（v0.2 + M2 checker + M11 manifest-driven）：
+"""create_pr_ci_watch（v0.2 + M2 checker + M15）：
 staging-test pass → 等 PR CI 全套绿。
 
 feature flag checker_pr_ci_watch_enabled:
   False（默认）: 创建 BKD agent issue（老路，agent 用 gh CLI 轮询，报 tag）
   True: sisyphus 自己调 GitHub REST API 轮询 check-runs，emit PR_CI_PASS/FAIL/TIMEOUT
 
-M11：pr_repo / pr_number 不再从 ctx 读，checker 自己从 PVC manifest.yaml 的
-`pr` 段读。上游（dev / staging-test agent）开 PR 后要回写 manifest 填 pr.number。
+M15：repo 从环境变量 SISYPHUS_BUSINESS_REPO 拿，branch 从 ctx 或默认 feat/{req_id}。
+不再读 manifest。
 """
 from __future__ import annotations
 
 import structlog
 
 from ..bkd import BKDClient
-from ..checkers import manifest_io
 from ..checkers import pr_ci_watch as checker
 from ..config import settings
 from ..prompts import render
@@ -25,13 +24,13 @@ from ._skip import skip_if_enabled
 log = structlog.get_logger(__name__)
 
 
-@register("create_pr_ci_watch", idempotent=False)  # 老路创 BKD issue；checker 模式安全但保守 False
+@register("create_pr_ci_watch", idempotent=False)
 async def create_pr_ci_watch(*, body, req_id, tags, ctx):
     if rv := skip_if_enabled("pr-ci", Event.PR_CI_PASS, req_id=req_id):
         return rv
 
     if settings.checker_pr_ci_watch_enabled:
-        return await _run_checker(req_id=req_id, ctx=ctx)
+        return await _run_checker(req_id=req_id, ctx=ctx or {})
 
     return await _dispatch_bkd_agent(body=body, req_id=req_id, ctx=ctx)
 
@@ -40,18 +39,20 @@ async def create_pr_ci_watch(*, body, req_id, tags, ctx):
 
 async def _run_checker(*, req_id: str, ctx: dict) -> dict:
     log.info("create_pr_ci_watch.checker_path", req_id=req_id)
+    branch = ctx.get("branch") or f"feat/{req_id}"
 
     try:
         result = await checker.watch_pr_ci(
             req_id,
+            branch=branch,
             poll_interval_sec=settings.pr_ci_watch_poll_interval_sec,
             timeout_sec=settings.pr_ci_watch_timeout_sec,
         )
-    except manifest_io.ManifestReadError as e:
-        log.error("create_pr_ci_watch.manifest_read_failed", req_id=req_id, error=str(e))
+    except ValueError as e:
+        log.error("create_pr_ci_watch.config_error", req_id=req_id, error=str(e))
         return {
             "emit": Event.PR_CI_FAIL.value,
-            "reason": f"manifest read failed: {e}"[:200],
+            "reason": f"config error: {e}"[:200],
             "exit_code": -1,
         }
     except Exception as e:

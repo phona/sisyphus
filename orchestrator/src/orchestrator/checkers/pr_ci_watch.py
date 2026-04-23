@@ -1,9 +1,8 @@
-"""pr-ci-watch 自检（M2 + M11）：sisyphus 直接调 GitHub REST API 轮询 PR check-runs，
-不再起 BKD agent 让它跑 `gh pr checks` 然后报 tag。
+"""pr-ci-watch 自检（M2）：sisyphus 直接调 GitHub REST API 轮询 PR check-runs。
 
-M11：repo / pr_number 从 /workspace/.sisyphus/manifest.yaml 的 `pr` 段读。
-admission 强制 `pr.repo` 必填；`pr.number` 由 dev / staging-test agent
-开 PR 后回写 manifest — pr-ci-watch 跑到这里时必须已有 number，否则直接抛。
+M15：repo / pr_number 用 gh api 实时查，不读 manifest。
+repo 从环境变量 SISYPHUS_BUSINESS_REPO 拿，branch 从参数传入。
+dev agent 只需 push branch + 创 PR，不用回写任何东西。
 
 GH API:
 - GET /repos/{owner}/{repo}/pulls/{pr_number}        → head.sha
@@ -17,13 +16,14 @@ GH API:
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
 import time
 
 import httpx
 import structlog
 
 from ..config import settings
-from . import manifest_io
 from ._types import CheckResult
 
 log = structlog.get_logger(__name__)
@@ -31,42 +31,28 @@ log = structlog.get_logger(__name__)
 _GH_API = "https://api.github.com"
 _TAIL = 2048
 
-# check-run conclusion 分类
-# https://docs.github.com/en/rest/checks/runs#about-check-runs
 _PASS_CONCLUSIONS = {"success", "neutral", "skipped"}
 _FAIL_CONCLUSIONS = {"failure", "cancelled", "timed_out", "action_required", "stale"}
 
 
 async def watch_pr_ci(
     req_id: str,
+    branch: str,
     poll_interval_sec: int = 30,
     timeout_sec: int = 1800,
 ) -> CheckResult:
-    """读 manifest.pr → 轮询 check-runs → 全绿 / 任一失败 / 超时返 CheckResult。
-
-    Raises:
-        manifest_io.ManifestReadError: 读 manifest 失败或 pr 段缺字段
-          （包括 pr.number 缺失 —— admission 不强制，但 pr-ci 阶段必须已由
-          上游 agent 写入，缺了按 infra fail 走 retry）。
-    """
-    manifest = await manifest_io.read_manifest(req_id)
-
-    pr = manifest.get("pr")
-    if not isinstance(pr, dict):
-        raise manifest_io.ManifestReadError("manifest 缺 pr 段（admission 应已挡）")
-
-    repo = pr.get("repo")
-    pr_number = pr.get("number")
+    """轮询 PR check-runs → 全绿 / 任一失败 / 超时返 CheckResult。"""
+    repo = os.getenv("SISYPHUS_BUSINESS_REPO")
     if not repo:
-        raise manifest_io.ManifestReadError(f"manifest.pr.repo 缺失：{pr!r}")
+        raise ValueError("SISYPHUS_BUSINESS_REPO env var not set")
+
+    pr_number = await _get_pr_number(repo, branch)
     if not pr_number:
-        raise manifest_io.ManifestReadError(
-            "manifest.pr.number 缺失 —— 上游应在开 PR 后回写 manifest"
-        )
+        raise ValueError(f"No PR found for branch {branch} in {repo}")
 
     return await _watch_pr_ci_inner(
         repo=repo,
-        pr_number=int(pr_number),
+        pr_number=pr_number,
         poll_interval_sec=poll_interval_sec,
         timeout_sec=timeout_sec,
     )
@@ -205,3 +191,22 @@ def _summarize(runs: list[dict], failed_only: bool = False) -> str:
             continue
         parts.append(f"{name}={conclusion}")
     return " ".join(parts)
+
+
+async def _get_pr_number(repo: str, branch: str) -> int | None:
+    """用 gh cli 查 PR#。返 None if 找不到。"""
+    try:
+        output = subprocess.check_output(
+            ["gh", "pr", "list", "--head", branch, "--repo", repo, "--json", "number"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        if not output:
+            return None
+        import json
+        data = json.loads(output)
+        if data and len(data) > 0:
+            return data[0].get("number")
+    except Exception as e:
+        log.warning("_get_pr_number.failed", repo=repo, branch=branch, error=str(e))
+    return None
