@@ -9,12 +9,11 @@ from orchestrator.state import TRANSITIONS, Event, ReqState, decide, dump_transi
 EXPECTED = [
     # state, event, next_state, action
     (ReqState.INIT,                 Event.INTENT_ANALYZE,      ReqState.ANALYZING,           "start_analyze"),
-    (ReqState.ANALYZING,            Event.ANALYZE_DONE,        ReqState.SPECS_RUNNING,       "fanout_specs"),
-    (ReqState.SPECS_RUNNING,        Event.SPEC_DONE,           ReqState.SPECS_RUNNING,       "mark_spec_reviewed_and_check"),
-    (ReqState.SPECS_RUNNING,        Event.SPEC_ALL_PASSED,     ReqState.DEV_RUNNING,         "fanout_dev"),
-    # M14d: dev 自循环 gate
-    (ReqState.DEV_RUNNING,          Event.DEV_DONE,            ReqState.DEV_RUNNING,          "mark_dev_reviewed_and_check"),
-    (ReqState.DEV_RUNNING,          Event.DEV_ALL_PASSED,      ReqState.STAGING_TEST_RUNNING, "create_staging_test"),
+    (ReqState.ANALYZING,            Event.ANALYZE_DONE,        ReqState.SPEC_LINT_RUNNING,   "create_spec_lint"),
+    (ReqState.SPEC_LINT_RUNNING,    Event.SPEC_LINT_PASS,      ReqState.DEV_CROSS_CHECK_RUNNING, "create_dev_cross_check"),
+    (ReqState.SPEC_LINT_RUNNING,    Event.SPEC_LINT_FAIL,      ReqState.REVIEW_RUNNING,      "invoke_verifier_for_spec_lint_fail"),
+    (ReqState.DEV_CROSS_CHECK_RUNNING, Event.DEV_CROSS_CHECK_PASS, ReqState.STAGING_TEST_RUNNING, "create_staging_test"),
+    (ReqState.DEV_CROSS_CHECK_RUNNING, Event.DEV_CROSS_CHECK_FAIL, ReqState.REVIEW_RUNNING, "invoke_verifier_for_dev_cross_check_fail"),
     (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_PASS,   ReqState.PR_CI_RUNNING,       "create_pr_ci_watch"),
     # M14c：fail 全部走 verifier（B2：3 个专门 action 替代旧统一路由）
     (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_FAIL,   ReqState.REVIEW_RUNNING,      "invoke_verifier_for_staging_test_fail"),
@@ -46,7 +45,7 @@ def test_transition(st, ev, next_st, action):
 
 def test_session_failed_escalates_all_running_states():
     running = [
-        ReqState.ANALYZING, ReqState.SPECS_RUNNING, ReqState.DEV_RUNNING,
+        ReqState.ANALYZING, ReqState.SPEC_LINT_RUNNING, ReqState.DEV_CROSS_CHECK_RUNNING,
         ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
         ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
         # M14b：verifier / fixer running state 也必须 escalate
@@ -75,19 +74,26 @@ def test_m14b_verifier_events_present():
         assert ev in values, f"M14b 缺 event: {ev}"
 
 
-def test_m14d_dev_all_passed_event_present():
-    """M14d：dev.all-passed 新事件 + dev 自循环 gate。"""
+def test_new_checker_events_and_states():
+    """新架构：spec-lint 和 dev-cross-check 为客观 checker stages。"""
     values = {e.value for e in Event}
-    assert "dev.all-passed" in values
+    assert "spec-lint.pass" in values
+    assert "spec-lint.fail" in values
+    assert "dev-cross-check.pass" in values
+    assert "dev-cross-check.fail" in values
 
-    # DEV_DONE 自循环到 mark_dev_reviewed_and_check，不再直推 STAGING_TEST_RUNNING
-    t = decide(ReqState.DEV_RUNNING, Event.DEV_DONE)
+    states = {s.value for s in ReqState}
+    assert "spec-lint-running" in states
+    assert "dev-cross-check-running" in states
+
+    # SPEC_LINT_PASS 推进到 dev-cross-check
+    t = decide(ReqState.SPEC_LINT_RUNNING, Event.SPEC_LINT_PASS)
     assert t is not None
-    assert t.next_state == ReqState.DEV_RUNNING
-    assert t.action == "mark_dev_reviewed_and_check"
+    assert t.next_state == ReqState.DEV_CROSS_CHECK_RUNNING
+    assert t.action == "create_dev_cross_check"
 
-    # DEV_ALL_PASSED 才推进到 staging-test
-    t = decide(ReqState.DEV_RUNNING, Event.DEV_ALL_PASSED)
+    # DEV_CROSS_CHECK_PASS 推进到 staging-test
+    t = decide(ReqState.DEV_CROSS_CHECK_RUNNING, Event.DEV_CROSS_CHECK_PASS)
     assert t is not None
     assert t.next_state == ReqState.STAGING_TEST_RUNNING
     assert t.action == "create_staging_test"

@@ -21,8 +21,8 @@
 ```
 ┌────────────────────────────────────────────────────────┐
 │  研发组织层： sisyphus (本仓库)                        │
-│    - 串 analyze → spec → dev → staging-test → pr-ci    │
-│      → accept → archive                                 │
+│    - 串 analyze → spec-lint → dev-cross-check          │
+│      → staging-test → pr-ci → accept → archive         │
 │    - verifier-agent 主观决策替代固定 fail 分流          │
 │    - watchdog / GC / 指标采集                           │
 ├────────────────────────────────────────────────────────┤
@@ -38,15 +38,14 @@
 
 ## 2. 主流水线
 
-happy path 七段，从 `intent:analyze` tag 一路自动到 `done`。
+happy path 九段，从 `intent:analyze` tag 一路自动到 `done`。
 
 ```mermaid
 flowchart TD
     Human[人在 BKD 打<br/>intent:analyze tag]
     Analyze[analyze-agent<br/>写 proposal/design/tasks<br/>+ 决定多少 dev agent]
-    Specs[spec-agent (1~N 并行)<br/>写 contract + acceptance spec]
-    AdmissionS{admission:<br/>全部 spec issue ci-passed?}
-    Dev[dev-agent (1~N 并行)<br/>开 PR 到 feat/REQ-x]
+    SpecLint[spec-lint checker<br/>openspec validate<br/>+ check-scenario-refs.sh]
+    DevCheck[dev-cross-check checker<br/>业务 repo 侧定制检查<br/>例:编译 / 开发框架检查]
     Staging[staging-test checker<br/>kubectl exec runner<br/>cd source/leader && make ci-test]
     PRCI[pr-ci-watch checker<br/>GitHub REST 轮 check-runs<br/>按 feat/REQ-x 查 PR]
     EnvUp[sisyphus pre-accept:<br/>make accept-up]
@@ -55,17 +54,14 @@ flowchart TD
     Archive[done_archive<br/>合 PR + 关 issue]
     Done([done])
 
-    Human --> Analyze --> Specs --> AdmissionS
-    AdmissionS -->|reviewed| Dev --> Staging --> PRCI --> EnvUp --> Accept --> Teardown --> Archive --> Done
+    Human --> Analyze --> SpecLint --> DevCheck --> Staging --> PRCI --> EnvUp --> Accept --> Teardown --> Archive --> Done
 
     classDef agent fill:#e1f5ff,stroke:#0288d1
     classDef checker fill:#fff3e0,stroke:#f57c00
-    classDef admission fill:#fce4ec,stroke:#c2185b
     classDef terminal fill:#e8f5e9,stroke:#388e3c
 
-    class Analyze,Specs,Dev,Accept agent
-    class Staging,PRCI checker
-    class AdmissionS admission
+    class Analyze,Accept agent
+    class SpecLint,DevCheck,Staging,PRCI checker
     class Done terminal
 ```
 
@@ -193,14 +189,15 @@ flowchart LR
 | # | Stage | 触发 | 产物 / 副作用 | 推进信号 |
 |---|---|---|---|---|
 | 1 | **analyze** | `intent:analyze` tag | `openspec/changes/REQ-x/{proposal,design,tasks}.md` 在 leader source repo | session.completed + analyze tag |
-| 2 | **specs (1~N 并行)** | analyze pass | `tests/contract/*` + `tests/acceptance/*` LOCKED；默认 1 个 spec-agent 写完全部，analyze-agent 可按需拆多个并行 | 每个 spec session.completed → mark_spec_reviewed_and_check 聚合 → SPEC_ALL_PASSED |
-| 3 | **dev (1~N 并行)** | SPEC_ALL_PASSED | 业务代码 + push `feat/REQ-x` + 开 PR；按 tasks.md 拆任务可起 N 个 dev agent | 每个 dev session.completed → mark_dev_reviewed_and_check 聚合 → DEV_ALL_PASSED |
-| 4 | **staging-test** (机械) | DEV_ALL_PASSED | `cd /workspace/source/<leader> && make ci-test` 退码 0 / 1 | sisyphus 自己判，无 BKD agent |
-| 5 | **pr-ci-watch** (机械) | staging-test pass | GitHub REST 轮 PR check-runs（按 `feat/REQ-x` branch 查 PR）直至全绿 / 任一红 / 1800s 超时 | sisyphus 自己判 |
-| 6a | **accept env-up** (机械) | pr-ci pass | runner pod 跑 `make accept-up`，stdout 尾行 JSON 取 `endpoint` | env-up 失败 → ESCALATED |
-| 6b | **accept** | env-up 完 | 跑 FEATURE-A* scenarios → result:pass / fail tag | session.completed + accept tag |
-| 7 | **teardown** (机械, 必跑) | accept 完（pass 或 fail） | `make accept-down`，best-effort 失败只 warning | TEARDOWN_DONE_PASS / FAIL |
-| 8 | **archive** | teardown_done_pass | 合 PR + 关 issue | ARCHIVE_DONE → DONE |
+| 2 | **spec-lint** (机械) | analyze done | `openspec validate openspec/changes/REQ-x` + `check-scenario-refs.sh` —— 验证 spec 完整性和场景引用 | sisyphus 自己判，无 BKD agent |
+| 3 | **dev-cross-check** (机械) | spec-lint pass | 业务 repo 自定义检查（例：编译、框架约束）；runner pod 执行 | sisyphus 自己判，无 BKD agent |
+| 4 | **dev (1~N 并行)** | dev-cross-check pass | 业务代码 + push `feat/REQ-x` + 开 PR；按 tasks.md 拆任务可起 N 个 dev agent | 每个 dev session.completed → mark_dev_reviewed_and_check 聚合 → DEV_ALL_PASSED |
+| 5 | **staging-test** (机械) | DEV_ALL_PASSED | `cd /workspace/source/<leader> && make ci-test` 退码 0 / 1 | sisyphus 自己判，无 BKD agent |
+| 6 | **pr-ci-watch** (机械) | staging-test pass | GitHub REST 轮 PR check-runs（按 `feat/REQ-x` branch 查 PR）直至全绿 / 任一红 / 1800s 超时 | sisyphus 自己判 |
+| 7a | **accept env-up** (机械) | pr-ci pass | runner pod 跑 `make accept-up`，stdout 尾行 JSON 取 `endpoint` | env-up 失败 → ESCALATED |
+| 7b | **accept** | env-up 完 | 跑 FEATURE-A* scenarios → result:pass / fail tag | session.completed + accept tag |
+| 8 | **teardown** (机械, 必跑) | accept 完（pass 或 fail） | `make accept-down`，best-effort 失败只 warning | TEARDOWN_DONE_PASS / FAIL |
+| 9 | **archive** | teardown_done_pass | 合 PR + 关 issue | ARCHIVE_DONE → DONE |
 
 完整状态转移见 [state-machine.md](./state-machine.md)。
 
@@ -218,6 +215,29 @@ M15 起 sisyphus 不再维护 `manifest.yaml` 这种集中式 IDL。stage 间靠
 | **BKD issue tags** | 各 agent | router.py | stage 完成信号、result:pass/fail、verifier decision |
 
 详见 [integration-contracts.md](./integration-contracts.md)。
+
+## 7b. Objective Checker 框架（M15）
+
+**spec-lint**（analyze 完 → dev-cross-check 前）
+
+目的：规范 spec 的完整性和引用一致性。
+
+```bash
+openspec validate openspec/changes/{REQ}   # 检查 spec 文件格式和结构
+check-scenario-refs.sh {leader_repo_root}  # 检查 task.md / reports 引用的场景都在 specs 中定义
+```
+
+- 两个检查都通过才算 pass
+- 失败 → verifier-agent 决策
+- 实现：`checkers/spec_lint.py`
+
+**dev-cross-check**（spec-lint 完 → staging-test 前）
+
+目的：业务 repo 定制检查（编译、框架约束等）。
+
+- 由业务 repo 集成脚本（runner pod 内执行）
+- 退码 0 = pass，非 0 = fail
+- 失败 → verifier-agent 决策
 
 ## 8. Runner（K8s Pod + PVC，per-REQ）
 
@@ -245,10 +265,11 @@ stateDiagram-v2
 - `runner/Dockerfile` —— Flutter 全家桶（~5GB），跑 ttpos-flutter
 - `runner/go.Dockerfile` —— 精简 Go 镜像（~1GB）
 
-镜像内 `/opt/sisyphus/scripts/` 挂着合约脚本（spec/dev pre-commit 用）：
-- `check-scenario-refs.sh`
-- `check-tasks-section-ownership.sh`
-- `pre-commit-acl.sh`
+镜像内 `/opt/sisyphus/scripts/` 挂着合约脚本（M15 objective checkers 用）：
+- `check-scenario-refs.sh` —— spec-lint checker 用，验证 spec 中引用的场景名必须在 specs 中定义
+- `check-tasks-section-ownership.sh` —— 用于 dev-cross-check 或业务定制检查
+- `pre-commit-acl.sh` —— 用于 dev-cross-check 或业务定制检查
+- `validate-manifest.py` —— 用于 dev-cross-check 或业务定制检查
 
 orchestrator 注入 env：
 

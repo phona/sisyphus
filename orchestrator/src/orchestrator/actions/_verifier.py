@@ -38,7 +38,8 @@ log = structlog.get_logger(__name__)
 
 
 # 支持的 stage 名（对应 prompts/verifier/{stage}_{trigger}.md.j2）
-_STAGES = {"analyze", "spec", "dev", "staging_test", "pr_ci", "accept"}
+# 包括 agent stage（analyze）和 checker stage（spec_lint / dev_cross_check / staging_test / pr_ci）
+_STAGES = {"analyze", "spec_lint", "dev_cross_check", "staging_test", "pr_ci", "accept"}
 
 # Trigger 类型
 Trigger = Literal["success", "fail"]
@@ -47,23 +48,22 @@ Trigger = Literal["success", "fail"]
 # 用于 apply_verify_pass 手工把 state 从 REVIEW_RUNNING 回推到对应 stage_running，
 # 随后链式 emit 该 stage 的 done/pass 事件走原 transition。
 _PASS_ROUTING: dict[str, tuple[ReqState, Event]] = {
-    "analyze":       (ReqState.ANALYZING,            Event.ANALYZE_DONE),
-    "spec":          (ReqState.SPECS_RUNNING,        Event.SPEC_ALL_PASSED),
-    "dev":           (ReqState.DEV_RUNNING,          Event.DEV_ALL_PASSED),
-    "staging_test":  (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_PASS),
-    "pr_ci":         (ReqState.PR_CI_RUNNING,        Event.PR_CI_PASS),
-    "accept":        (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_PASS),
+    "analyze":           (ReqState.ANALYZING,                Event.ANALYZE_DONE),
+    "spec_lint":         (ReqState.SPEC_LINT_RUNNING,        Event.SPEC_LINT_PASS),
+    "dev_cross_check":   (ReqState.DEV_CROSS_CHECK_RUNNING,  Event.DEV_CROSS_CHECK_PASS),
+    "staging_test":      (ReqState.STAGING_TEST_RUNNING,     Event.STAGING_TEST_PASS),
+    "pr_ci":             (ReqState.PR_CI_RUNNING,            Event.PR_CI_PASS),
+    "accept":            (ReqState.ACCEPT_RUNNING,           Event.ACCEPT_PASS),
 }
 
 # stage → retry_checker 时回推的 state（checker 类 stage 才真有意义）
-# 对 agent 类 stage（analyze/spec/dev）本期先按"回 stage_running 重跑"兜底。
 _RETRY_TARGET_STATE: dict[str, ReqState] = {
-    "analyze":      ReqState.ANALYZING,
-    "spec":         ReqState.SPECS_RUNNING,
-    "dev":          ReqState.DEV_RUNNING,
-    "staging_test": ReqState.STAGING_TEST_RUNNING,
-    "pr_ci":        ReqState.PR_CI_RUNNING,
-    "accept":       ReqState.ACCEPT_RUNNING,
+    "analyze":          ReqState.ANALYZING,
+    "spec_lint":        ReqState.SPEC_LINT_RUNNING,
+    "dev_cross_check":  ReqState.DEV_CROSS_CHECK_RUNNING,
+    "staging_test":     ReqState.STAGING_TEST_RUNNING,
+    "pr_ci":            ReqState.PR_CI_RUNNING,
+    "accept":           ReqState.ACCEPT_RUNNING,
 }
 
 
@@ -330,3 +330,17 @@ async def invoke_verifier_for_accept_fail(*, body, req_id, tags, ctx):
     )
 
 
+@register("invoke_verifier_for_spec_lint_fail", idempotent=False)
+async def invoke_verifier_for_spec_lint_fail(*, body, req_id, tags, ctx):
+    """SPEC_LINT_FAIL → 起 verifier-agent(stage=spec_lint, trigger=fail)。"""
+    return await _invoke_verifier_fail(
+        stage="spec_lint", body=body, req_id=req_id, ctx=ctx,
+    )
+
+
+@register("invoke_verifier_for_dev_cross_check_fail", idempotent=False)
+async def invoke_verifier_for_dev_cross_check_fail(*, body, req_id, tags, ctx):
+    """DEV_CROSS_CHECK_FAIL → 起 verifier-agent(stage=dev_cross_check, trigger=fail)。"""
+    return await _invoke_verifier_fail(
+        stage="dev_cross_check", body=body, req_id=req_id, ctx=ctx,
+    )

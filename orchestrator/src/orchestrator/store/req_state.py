@@ -40,12 +40,16 @@ async def get(pool: asyncpg.Pool, req_id: str) -> ReqRow | None:
     )
 
 
-async def insert_init(pool: asyncpg.Pool, req_id: str, project_id: str, context: dict | None = None) -> None:
-    """新 REQ 落地，state=init。冲突直接 ignore（CAS transition 自己处理）。"""
+async def insert_init(pool: asyncpg.Pool, req_id: str, project_id: str, context: dict | None = None, state: ReqState | None = None) -> None:
+    """新 REQ 落地，默认 state=init；支持通过 state 参数指定自定义初始状态（中流注入）。
+
+    冲突直接 ignore（CAS transition 自己处理）。
+    """
+    initial_state = (state or ReqState.INIT).value
     await pool.execute(
         "INSERT INTO req_state(req_id, project_id, state, context) VALUES($1, $2, $3, $4) "
         "ON CONFLICT (req_id) DO NOTHING",
-        req_id, project_id, ReqState.INIT.value, json.dumps(context or {}),
+        req_id, project_id, initial_state, json.dumps(context or {}),
     )
 
 
