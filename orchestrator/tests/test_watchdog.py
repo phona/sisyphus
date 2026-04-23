@@ -102,11 +102,11 @@ def _patch_artifact(monkeypatch):
 @pytest.mark.asyncio
 async def test_stuck_with_failed_session_escalates(monkeypatch):
     pool = FakePool(rows=[
-        _row("REQ-1", ReqState.DEV_RUNNING.value,
-             ctx={"dev_issue_id": "dev-1", "intent_issue_id": "intent-1"}),
+        _row("REQ-1", ReqState.STAGING_TEST_RUNNING.value,
+             ctx={"staging_test_issue_id": "st-1", "intent_issue_id": "intent-1"}),
     ])
     _patch_pool(monkeypatch, pool)
-    _patch_bkd(monkeypatch, FakeIssue(session_status="failed", id="dev-1"))
+    _patch_bkd(monkeypatch, FakeIssue(session_status="failed", id="st-1"))
     step_calls = _patch_engine(monkeypatch)
     art_calls = _patch_artifact(monkeypatch)
 
@@ -116,12 +116,12 @@ async def test_stuck_with_failed_session_escalates(monkeypatch):
     # engine 被调且是 SESSION_FAILED
     assert len(step_calls) == 1
     assert step_calls[0]["event"] == Event.SESSION_FAILED
-    assert step_calls[0]["cur_state"] == ReqState.DEV_RUNNING
-    assert step_calls[0]["body_issue"] == "dev-1"
+    assert step_calls[0]["cur_state"] == ReqState.STAGING_TEST_RUNNING
+    assert step_calls[0]["body_issue"] == "st-1"
     assert step_calls[0]["body_proj"] == "proj-1"
-    # artifact_checks 写了一笔 stage=watchdog:dev-running
+    # artifact_checks 写了一笔 stage=watchdog:staging-test-running
     assert len(art_calls) == 1
-    assert art_calls[0]["stage"] == "watchdog:dev-running"
+    assert art_calls[0]["stage"] == "watchdog:staging-test-running"
     assert art_calls[0]["result"].passed is False
     assert art_calls[0]["result"].reason == "watchdog_stuck"
 
@@ -130,11 +130,11 @@ async def test_stuck_with_failed_session_escalates(monkeypatch):
 @pytest.mark.asyncio
 async def test_stuck_but_session_running_skips(monkeypatch):
     pool = FakePool(rows=[
-        _row("REQ-2", ReqState.DEV_RUNNING.value,
-             ctx={"dev_issue_id": "dev-2"}),
+        _row("REQ-2", ReqState.STAGING_TEST_RUNNING.value,
+             ctx={"staging_test_issue_id": "st-2"}),
     ])
     _patch_pool(monkeypatch, pool)
-    _patch_bkd(monkeypatch, FakeIssue(session_status="running", id="dev-2"))
+    _patch_bkd(monkeypatch, FakeIssue(session_status="running", id="st-2"))
     step_calls = _patch_engine(monkeypatch)
     art_calls = _patch_artifact(monkeypatch)
 
@@ -164,11 +164,12 @@ async def test_stuck_bkd_lookup_fails_escalates(monkeypatch):
     assert step_calls[0]["event"] == Event.SESSION_FAILED
 
 
-# ─── Case 4：state 无 issue_key 映射（SPECS_RUNNING）→ 不查 BKD 直接 escalate
+# ─── Case 4：state 无 issue_key 映射（M15 objective checker）→ 不查 BKD 直接 escalate
 @pytest.mark.asyncio
-async def test_specs_running_escalates_without_bkd_lookup(monkeypatch):
+async def test_spec_lint_escalates_without_bkd_lookup(monkeypatch):
+    """M15 spec-lint 是 orchestrator 驱动的 objective checker，无关联 BKD issue。"""
     pool = FakePool(rows=[
-        _row("REQ-4", ReqState.SPECS_RUNNING.value,
+        _row("REQ-4", ReqState.SPEC_LINT_RUNNING.value,
              ctx={"intent_issue_id": "intent-4"}),
     ])
     _patch_pool(monkeypatch, pool)
@@ -179,7 +180,7 @@ async def test_specs_running_escalates_without_bkd_lookup(monkeypatch):
     result = await watchdog._tick()
 
     assert result == {"checked": 1, "escalated": 1}
-    # 没 issue_key → 不查 BKD
+    # spec-lint 无 issue_key → 不查 BKD
     fake_bkd.get_issue.assert_not_called()
     assert len(step_calls) == 1
     # body.issueId 回落到 intent_issue_id
@@ -189,8 +190,9 @@ async def test_specs_running_escalates_without_bkd_lookup(monkeypatch):
 # ─── Case 5：ctx 里没 issue_id（比如 create_dev 还没落 ctx 就挂了）→ escalate
 @pytest.mark.asyncio
 async def test_missing_issue_id_in_ctx_escalates(monkeypatch):
+    """stage 有 issue_key 但 ctx 里缺少该 issue_id → 无法查 BKD，保守 escalate。"""
     pool = FakePool(rows=[
-        _row("REQ-5", ReqState.DEV_RUNNING.value, ctx={}),
+        _row("REQ-5", ReqState.STAGING_TEST_RUNNING.value, ctx={}),
     ])
     _patch_pool(monkeypatch, pool)
     fake_bkd = _patch_bkd(monkeypatch, FakeIssue(session_status="running"))
@@ -259,9 +261,10 @@ async def test_loop_disabled_returns_immediately(monkeypatch):
 # ─── Case 9：engine.step 抛异常不阻塞后续 row ─────────────────────────────
 @pytest.mark.asyncio
 async def test_engine_step_failure_isolated(monkeypatch):
+    """engine.step 对某行抛异常不阻塞后续行处理（fault isolation）。"""
     pool = FakePool(rows=[
-        _row("REQ-A", ReqState.DEV_RUNNING.value, ctx={"dev_issue_id": "d-a"}),
-        _row("REQ-B", ReqState.DEV_RUNNING.value, ctx={"dev_issue_id": "d-b"}),
+        _row("REQ-A", ReqState.STAGING_TEST_RUNNING.value, ctx={"staging_test_issue_id": "st-a"}),
+        _row("REQ-B", ReqState.STAGING_TEST_RUNNING.value, ctx={"staging_test_issue_id": "st-b"}),
     ])
     _patch_pool(monkeypatch, pool)
     _patch_bkd(monkeypatch, FakeIssue(session_status="failed"))

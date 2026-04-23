@@ -19,7 +19,7 @@ from orchestrator.state import Event, ReqState
 # ─── In-memory pool stub ─────────────────────────────────────────────────
 @dataclass
 class FakeReq:
-    state: str = ReqState.SPECS_RUNNING.value
+    state: str = ReqState.SPEC_LINT_RUNNING.value
     history: list[dict] = field(default_factory=list)
     context: dict = field(default_factory=dict)
 
@@ -96,43 +96,39 @@ def stub_actions(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chain_emit_spec_to_dev(stub_actions):
+async def test_chain_emit_spec_lint_pass(stub_actions):
+    """spec-lint.pass 事件直接触发 create_dev_cross_check 链式推进。"""
     calls, reg = stub_actions
 
-    async def mark_spec(*, body, req_id, tags, ctx):
-        calls.append(("mark_spec_reviewed_and_check", {"req_id": req_id}))
-        return {"emit": Event.SPEC_ALL_PASSED.value}
+    async def create_dev_cross_check(*, body, req_id, tags, ctx):
+        calls.append(("create_dev_cross_check", {"req_id": req_id}))
+        return {"passed": True}
 
-    async def fanout_dev(*, body, req_id, tags, ctx):
-        calls.append(("fanout_dev", {"req_id": req_id}))
-        return {"dev_issue_id": "dev-1"}
+    reg["create_dev_cross_check"] = create_dev_cross_check
 
-    reg["mark_spec_reviewed_and_check"] = mark_spec
-    reg["fanout_dev"] = fanout_dev
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.SPEC_LINT_RUNNING.value)})
 
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.SPECS_RUNNING.value)})
-
-    body = type("B", (), {"issueId": "spec-1", "projectId": "p", "event": "session.completed"})()
+    body = type("B", (), {"issueId": "spec-1", "projectId": "p", "event": "check.passed"})()
     result = await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p",
-        tags=["spec", "REQ-1"], cur_state=ReqState.SPECS_RUNNING,
-        ctx={}, event=Event.SPEC_DONE,
+        tags=["spec_lint", "REQ-1"], cur_state=ReqState.SPEC_LINT_RUNNING,
+        ctx={}, event=Event.SPEC_LINT_PASS,
     )
 
-    # 1. mark_spec ran, emitted SPEC_ALL_PASSED
-    # 2. engine.step recursed → fanout_dev ran
-    assert [n for n, _ in calls] == ["mark_spec_reviewed_and_check", "fanout_dev"]
-    assert pool.rows["REQ-1"].state == ReqState.DEV_RUNNING.value
-    assert result["chained"]["action"] == "fanout_dev"
+    # create_dev_cross_check 被调用（spec-lint.pass → dev-cross-check 转移）
+    assert [n for n, _ in calls] == ["create_dev_cross_check"]
+    assert pool.rows["REQ-1"].state == ReqState.DEV_CROSS_CHECK_RUNNING.value
+    assert result["action"] == "create_dev_cross_check"
 
 
 @pytest.mark.asyncio
 async def test_illegal_transition_skips(stub_actions):
+    """terminal state DONE 不接受任何事件。"""
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.DONE.value)})
-    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "check.passed"})()
     result = await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p", tags=[],
-        cur_state=ReqState.DONE, ctx={}, event=Event.DEV_DONE,
+        cur_state=ReqState.DONE, ctx={}, event=Event.STAGING_TEST_PASS,
     )
     assert result["action"] == "skip"
     assert "no transition" in result["reason"]
@@ -140,13 +136,13 @@ async def test_illegal_transition_skips(stub_actions):
 
 @pytest.mark.asyncio
 async def test_cas_failure_skips(stub_actions):
-    """expected != actual → CAS 不推进 → skip。"""
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.DEV_RUNNING.value)})
-    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    """expected != actual → CAS 不推进 → skip（并发抢占）。"""
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.STAGING_TEST_RUNNING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "check.passed"})()
     result = await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p", tags=[],
-        cur_state=ReqState.SPECS_RUNNING,  # 与实际 DEV_RUNNING 不一致
-        ctx={}, event=Event.SPEC_ALL_PASSED,
+        cur_state=ReqState.SPEC_LINT_RUNNING,  # 与实际 STAGING_TEST_RUNNING 不一致
+        ctx={}, event=Event.SPEC_LINT_PASS,
     )
     assert result["action"] == "skip"
     assert "concurrent" in result["reason"]
@@ -203,11 +199,11 @@ async def test_terminal_escalated_triggers_cleanup_retain_pvc(
 
     reg["escalate"] = escalate
 
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.DEV_RUNNING.value)})
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.STAGING_TEST_RUNNING.value)})
     body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.failed"})()
     await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p", tags=[],
-        cur_state=ReqState.DEV_RUNNING, ctx={}, event=Event.SESSION_FAILED,
+        cur_state=ReqState.STAGING_TEST_RUNNING, ctx={}, event=Event.SESSION_FAILED,
     )
     await _drain_tasks()
 
@@ -221,20 +217,20 @@ async def test_terminal_escalated_triggers_cleanup_retain_pvc(
 async def test_non_terminal_does_not_trigger_cleanup(
     stub_actions, mock_runner_controller,
 ):
-    """非 terminal 转移不该 cleanup（如 DEV_RUNNING + DEV_DONE → STAGING_TEST_RUNNING）。"""
+    """非 terminal 转移不该 cleanup（如 STAGING_TEST_RUNNING + staging-test.pass → PR_CI_RUNNING）。"""
     calls, reg = stub_actions
 
-    async def create_staging_test(*, body, req_id, tags, ctx):
-        calls.append(("create_staging_test", {"req_id": req_id}))
+    async def create_pr_ci_watch(*, body, req_id, tags, ctx):
+        calls.append(("create_pr_ci_watch", {"req_id": req_id}))
         return {"ok": True}
 
-    reg["create_staging_test"] = create_staging_test
+    reg["create_pr_ci_watch"] = create_pr_ci_watch
 
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.DEV_RUNNING.value)})
-    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.STAGING_TEST_RUNNING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "check.passed"})()
     await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p", tags=[],
-        cur_state=ReqState.DEV_RUNNING, ctx={}, event=Event.DEV_DONE,
+        cur_state=ReqState.STAGING_TEST_RUNNING, ctx={}, event=Event.STAGING_TEST_PASS,
     )
     await _drain_tasks()
 
@@ -317,30 +313,40 @@ async def test_action_fail_escalates_no_retry(stub_actions):
 
 @pytest.mark.asyncio
 async def test_recursion_depth_guard(stub_actions, monkeypatch):
-    """防 emit 死循环。"""
+    """防 emit 死循环（depth > 12 返回 error）。"""
     calls, reg = stub_actions
 
-    # 自指环 emit（拿正常的 transition 起手，每次都 emit 一个会再 emit 的事件）
+    # 自指环 emit（每个 action 都 emit 同一事件导致无限递归）
     async def loopy(*, body, req_id, tags, ctx):
         calls.append(("loopy", {}))
-        return {"emit": Event.SPEC_ALL_PASSED.value}
+        return {"emit": Event.SPEC_LINT_PASS.value}
 
-    # 让 SPEC_ALL_PASSED 也走 loopy（覆盖 fanout_dev）
-    reg["fanout_dev"] = loopy
-    reg["mark_spec_reviewed_and_check"] = loopy
-    # mock state.decide 让 DEV_RUNNING + SPEC_ALL_PASSED 也合法走 fanout_dev（自指环）
+    reg["create_spec_lint"] = loopy
+    reg["create_dev_cross_check"] = loopy
+    # 让 DEV_CROSS_CHECK_RUNNING + SPEC_LINT_PASS 也能走 create_dev_cross_check（模拟死循环）
     from orchestrator import state as state_mod
     monkeypatch.setitem(
         state_mod.TRANSITIONS,
-        (ReqState.DEV_RUNNING, Event.SPEC_ALL_PASSED),
-        state_mod.Transition(ReqState.DEV_RUNNING, "fanout_dev"),
+        (ReqState.DEV_CROSS_CHECK_RUNNING, Event.SPEC_LINT_PASS),
+        state_mod.Transition(ReqState.DEV_CROSS_CHECK_RUNNING, "create_dev_cross_check"),
     )
 
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.SPECS_RUNNING.value)})
-    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
-    await engine.step(
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.SPEC_LINT_RUNNING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "check.passed"})()
+    result = await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p", tags=[],
-        cur_state=ReqState.SPECS_RUNNING, ctx={}, event=Event.SPEC_DONE,
+        cur_state=ReqState.SPEC_LINT_RUNNING, ctx={}, event=Event.SPEC_LINT_PASS,
     )
-    # depth 限制 12 次，加上首次共 13 次以内（比例足以容纳 test_mode 全跳 7 emit）
-    assert len(calls) <= 14
+    # depth 限制 12 次，应该在 ~13 步内被击中
+    assert len(calls) >= 13
+    # 最终应触发 depth guard 返回 error（error 在嵌套 chained 中）
+    current = result
+    found_error = False
+    for _ in range(15):  # safety limit on chain traversal
+        if current.get("action") == "error" and "recursion" in current.get("reason", ""):
+            found_error = True
+            break
+        current = current.get("chained")
+        if not current:
+            break
+    assert found_error, "Expected recursion guard error in chained results"
