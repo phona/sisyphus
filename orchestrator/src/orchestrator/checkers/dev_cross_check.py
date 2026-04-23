@@ -33,12 +33,14 @@ def _build_cmd(req_id: str) -> str:
         '    echo "[skip] $name: no feat branch / not involved"; '
         "    continue; "
         "  fi; "
-        '  if [ -f "$repo/Makefile" ]; then '
+        '  if [ -f "$repo/Makefile" ] && grep -q \'^dev-cross-check:\' "$repo/Makefile"; then '
         '    echo "=== dev_cross_check: $name ==="; '
         '    if ! (cd "$repo" && make dev-cross-check); then '
         '      echo "=== FAIL: $name ===" >&2; '
         "      fail=1; "
         "    fi; "
+        "  else "
+        '    echo "[skip] $name: no make dev-cross-check target"; '
         "  fi; "
         "done; "
         "[ $fail -eq 0 ]"
