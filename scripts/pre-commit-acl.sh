@@ -5,6 +5,11 @@
 # AGENT_ROLE 来自 agent worktree 的环境变量（BKD 启 agent 时注入）。
 # 未设置则 skip，便于本地人工编辑。
 #
+# M14d：并行 dev agent 额外收 DEV_TASK_SCOPE（`:` 分隔的 glob 列表），
+# 限制当前 dev task 只能改自己声明的 scope。例如：
+#   DEV_TASK_SCOPE="internal/auth/*:tests/unit/auth_test.go"
+# DEV_TASK_SCOPE 留空则不做 scope 限制（单 dev 模式 / 兼容老流程）。
+#
 # 当前支持的角色及其禁写范围：
 #   analyze-agent       : —                              （全权）
 #   dev-spec-agent      : openspec/specs/**              contract.spec.yaml
@@ -157,6 +162,43 @@ if [[ "$AGENT_ROLE" == "ci-runner-agent" ]]; then
   echo "FAIL: [ci-runner-agent] 不应 commit 任何文件（只跑 make ci-*，结果写进 BKD issue 不写 repo）"
   echo "$CHANGED" | sed 's/^/  /'
   FAILED=1
+fi
+
+# ---- M14d: DEV_TASK_SCOPE 任务维度 scope（dev-agent 并行 fanout 专用） ----
+# DEV_TASK_SCOPE 非空时，dev-agent / bugfix-agent 只许改匹配 scope 的文件。
+# scope 间用 `:` 分隔；每项是 shell glob（fnmatch 风格）。
+if [[ -n "${DEV_TASK_SCOPE:-}" ]]; then
+  if [[ "$AGENT_ROLE" == "dev-agent" || "$AGENT_ROLE" == "bugfix-agent" ]]; then
+    # 用 awk 做 scope 匹配：任一 pattern 命中即 allow
+    IFS=':' read -ra SCOPE_PATTERNS <<< "$DEV_TASK_SCOPE"
+    out_of_scope=""
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      matched=0
+      for pat in "${SCOPE_PATTERNS[@]}"; do
+        # bash extglob + 按需支持 `foo/**` → 简化成前缀或 fnmatch
+        if [[ "$pat" == */ ]]; then
+          # 目录前缀
+          if [[ "$f" == "$pat"* ]]; then matched=1; break; fi
+        elif [[ "$f" == $pat ]]; then   # bash glob，未 quote 触发匹配
+          matched=1; break
+        elif [[ "$f" == "$pat" ]]; then
+          matched=1; break
+        elif [[ "$f" == "$pat"/* ]]; then
+          matched=1; break
+        fi
+      done
+      if [[ $matched -eq 0 ]]; then
+        out_of_scope+="  - $f"$'\n'
+      fi
+    done <<< "$CHANGED"
+
+    if [[ -n "$out_of_scope" ]]; then
+      echo "FAIL: [$AGENT_ROLE] 越出 DEV_TASK_SCOPE=$DEV_TASK_SCOPE："
+      echo -n "$out_of_scope"
+      FAILED=1
+    fi
+  fi
 fi
 
 if [[ $FAILED -eq 0 ]]; then
