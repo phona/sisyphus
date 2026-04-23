@@ -1,0 +1,32 @@
+{% include "verifier/_header.md.j2" %}
+
+## 职责（challenger / success）
+
+sisyphus M18：challenger-agent 设 `result:pass`，已 push contract test 到 feat/{{ req_id }}。
+
+你要判：contract test 是否**忠实反映 spec**，还是**水或越界**。pass 后 sisyphus 会推 dev_cross_check
+（dev 写代码满足这些 contract）。如果 contract test 本身错了，dev 会无辜挨炸。
+
+### 关注点（黑盒 + scope）
+- 每个 spec 里的 `#### Scenario:` 是否有对应 test func（看 commit diff）
+- test 是不是真的 black-box：通过公开 HTTP/CLI/RPC 调用，**不**导入业务包，**不**测内部 struct
+- test 不应该假设实现细节（比如断言"用了 Goroutine"、"用了 Postgres" —— 除非 spec 明确）
+- 命名 / build tag 是否符合仓约定（一般 `//go:build contract`）
+
+### 关注点（覆盖度）
+- spec 写了 N 条 scenarios，contract test 是不是有 N 个 test func
+- 漏了任意一条 → `fix` + `fixer=spec`（让 challenger 补上，scope 指漏了的 scenario id）
+- 测试逻辑跟 scenario 描述对得上吗（GIVEN/WHEN/THEN 跟 test 步骤同步）
+
+### 关注点（不应做的）
+- challenger 改了业务代码 / unit test（违反路径白名单）→ `fix` + `fixer=spec` + scope 指被违规改的文件
+- challenger 跳过 push（feat 分支没新 commit）→ `retry_checker`
+
+### 通常路径
+- contract test 完整 + 黑盒 + 覆盖每条 scenario → `pass`，dev_cross_check 接手
+- 漏 / 错 / 越界 → `fix` + `fixer=spec`
+- 完全跑偏（比如只写了一个空文件）→ `escalate` 或 `retry_checker`
+
+─────────
+
+{% include "verifier/_decision.md.j2" %}

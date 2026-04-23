@@ -10,8 +10,11 @@ EXPECTED = [
     # state, event, next_state, action
     (ReqState.INIT,                 Event.INTENT_ANALYZE,      ReqState.ANALYZING,           "start_analyze"),
     (ReqState.ANALYZING,            Event.ANALYZE_DONE,        ReqState.SPEC_LINT_RUNNING,   "create_spec_lint"),
-    (ReqState.SPEC_LINT_RUNNING,    Event.SPEC_LINT_PASS,      ReqState.DEV_CROSS_CHECK_RUNNING, "create_dev_cross_check"),
+    (ReqState.SPEC_LINT_RUNNING,    Event.SPEC_LINT_PASS,      ReqState.CHALLENGER_RUNNING,  "start_challenger"),
     (ReqState.SPEC_LINT_RUNNING,    Event.SPEC_LINT_FAIL,      ReqState.REVIEW_RUNNING,      "invoke_verifier_for_spec_lint_fail"),
+    # M18: challenger between spec_lint and dev_cross_check
+    (ReqState.CHALLENGER_RUNNING,   Event.CHALLENGER_PASS,     ReqState.DEV_CROSS_CHECK_RUNNING, "create_dev_cross_check"),
+    (ReqState.CHALLENGER_RUNNING,   Event.CHALLENGER_FAIL,     ReqState.REVIEW_RUNNING,      "invoke_verifier_for_challenger_fail"),
     (ReqState.DEV_CROSS_CHECK_RUNNING, Event.DEV_CROSS_CHECK_PASS, ReqState.STAGING_TEST_RUNNING, "create_staging_test"),
     (ReqState.DEV_CROSS_CHECK_RUNNING, Event.DEV_CROSS_CHECK_FAIL, ReqState.REVIEW_RUNNING, "invoke_verifier_for_dev_cross_check_fail"),
     (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_PASS,   ReqState.PR_CI_RUNNING,       "create_pr_ci_watch"),
@@ -86,8 +89,13 @@ def test_new_checker_events_and_states():
     assert "spec-lint-running" in states
     assert "dev-cross-check-running" in states
 
-    # SPEC_LINT_PASS 推进到 dev-cross-check
+    # M18: SPEC_LINT_PASS 推进到 challenger（再 challenger.pass → dev-cross-check）
     t = decide(ReqState.SPEC_LINT_RUNNING, Event.SPEC_LINT_PASS)
+    assert t is not None
+    assert t.next_state == ReqState.CHALLENGER_RUNNING
+    assert t.action == "start_challenger"
+
+    t = decide(ReqState.CHALLENGER_RUNNING, Event.CHALLENGER_PASS)
     assert t is not None
     assert t.next_state == ReqState.DEV_CROSS_CHECK_RUNNING
     assert t.action == "create_dev_cross_check"

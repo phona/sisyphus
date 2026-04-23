@@ -150,6 +150,14 @@ def derive_event(event_type: str, tags: Iterable[str], result_tags_only: bool = 
     if "fixer" in tagset:
         return Event.FIXER_DONE
 
+    # M18：challenger-agent 写完 contract test → result:pass / result:fail
+    if "challenger" in tagset:
+        if "result:pass" in tagset:
+            return Event.CHALLENGER_PASS
+        if "result:fail" in tagset:
+            return Event.CHALLENGER_FAIL
+        return None
+
     # v0.2：staging-test agent 在调试环境跑 unit+int，结果带 result:pass/fail
     if "staging-test" in tagset:
         if "result:pass" in tagset:
