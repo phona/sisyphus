@@ -97,14 +97,14 @@ def stub_actions(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_chain_emit_spec_lint_pass(stub_actions):
-    """spec-lint.pass 事件直接触发 create_dev_cross_check 链式推进。"""
+    """spec-lint.pass 触发 start_challenger（M18：spec_lint → challenger → dev_cross_check）。"""
     calls, reg = stub_actions
 
-    async def create_dev_cross_check(*, body, req_id, tags, ctx):
-        calls.append(("create_dev_cross_check", {"req_id": req_id}))
-        return {"passed": True}
+    async def start_challenger(*, body, req_id, tags, ctx):
+        calls.append(("start_challenger", {"req_id": req_id}))
+        return {"challenger_issue_id": "ch-1"}
 
-    reg["create_dev_cross_check"] = create_dev_cross_check
+    reg["start_challenger"] = start_challenger
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.SPEC_LINT_RUNNING.value)})
 
@@ -115,7 +115,32 @@ async def test_chain_emit_spec_lint_pass(stub_actions):
         ctx={}, event=Event.SPEC_LINT_PASS,
     )
 
-    # create_dev_cross_check 被调用（spec-lint.pass → dev-cross-check 转移）
+    # start_challenger 被调用（M18 spec-lint.pass → CHALLENGER_RUNNING）
+    assert [n for n, _ in calls] == ["start_challenger"]
+    assert pool.rows["REQ-1"].state == ReqState.CHALLENGER_RUNNING.value
+    assert result["action"] == "start_challenger"
+
+
+@pytest.mark.asyncio
+async def test_chain_emit_challenger_pass(stub_actions):
+    """challenger.pass → create_dev_cross_check（M18：challenger 写完 contract 后接 dev_cross_check）。"""
+    calls, reg = stub_actions
+
+    async def create_dev_cross_check(*, body, req_id, tags, ctx):
+        calls.append(("create_dev_cross_check", {"req_id": req_id}))
+        return {"passed": True}
+
+    reg["create_dev_cross_check"] = create_dev_cross_check
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.CHALLENGER_RUNNING.value)})
+    body = type("B", (), {"issueId": "ch-1", "projectId": "p", "event": "session.completed"})()
+    result = await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p",
+        tags=["challenger", "REQ-1", "result:pass"],
+        cur_state=ReqState.CHALLENGER_RUNNING,
+        ctx={}, event=Event.CHALLENGER_PASS,
+    )
+
     assert [n for n, _ in calls] == ["create_dev_cross_check"]
     assert pool.rows["REQ-1"].state == ReqState.DEV_CROSS_CHECK_RUNNING.value
     assert result["action"] == "create_dev_cross_check"
@@ -322,13 +347,13 @@ async def test_recursion_depth_guard(stub_actions, monkeypatch):
         return {"emit": Event.SPEC_LINT_PASS.value}
 
     reg["create_spec_lint"] = loopy
-    reg["create_dev_cross_check"] = loopy
-    # 让 DEV_CROSS_CHECK_RUNNING + SPEC_LINT_PASS 也能走 create_dev_cross_check（模拟死循环）
+    reg["start_challenger"] = loopy
+    # 让 CHALLENGER_RUNNING + SPEC_LINT_PASS 也能走 start_challenger（模拟死循环）
     from orchestrator import state as state_mod
     monkeypatch.setitem(
         state_mod.TRANSITIONS,
-        (ReqState.DEV_CROSS_CHECK_RUNNING, Event.SPEC_LINT_PASS),
-        state_mod.Transition(ReqState.DEV_CROSS_CHECK_RUNNING, "create_dev_cross_check"),
+        (ReqState.CHALLENGER_RUNNING, Event.SPEC_LINT_PASS),
+        state_mod.Transition(ReqState.CHALLENGER_RUNNING, "start_challenger"),
     )
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.SPEC_LINT_RUNNING.value)})

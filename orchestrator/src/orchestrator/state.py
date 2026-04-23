@@ -26,6 +26,7 @@ class ReqState(StrEnum):
     INIT = "init"                               # 还没 analyze / 待初始化
     ANALYZING = "analyzing"                     # analyze-agent 在跑
     SPEC_LINT_RUNNING = "spec-lint-running"     # openspec validate 检查（sisyphus 下发 runner 任务）
+    CHALLENGER_RUNNING = "challenger-running"   # M18：challenger-agent 读 spec 写 contract test（黑盒，不看 dev 代码）
     DEV_CROSS_CHECK_RUNNING = "dev-cross-check-running"  # 开发交叉验证（sisyphus 下发 runner 任务）
     STAGING_TEST_RUNNING = "staging-test-running"  # 调试环境 build + unit + int test
     PR_CI_RUNNING = "pr-ci-running"             # PR 已开，等 GHA 全套绿
@@ -45,6 +46,8 @@ class Event(StrEnum):
     ANALYZE_DONE = "analyze.done"                   # analyze-agent 完成
     SPEC_LINT_PASS = "spec-lint.pass"               # openspec validate 通过
     SPEC_LINT_FAIL = "spec-lint.fail"               # openspec validate 失败 → verifier
+    CHALLENGER_PASS = "challenger.pass"             # M18：challenger 写完 contract test 推 feat 分支
+    CHALLENGER_FAIL = "challenger.fail"             # M18：challenger 写失败 / 拒绝（spec 自相矛盾等）→ verifier
     DEV_CROSS_CHECK_PASS = "dev-cross-check.pass"   # 开发交叉验证通过
     DEV_CROSS_CHECK_FAIL = "dev-cross-check.fail"   # 开发交叉验证失败 → verifier
     STAGING_TEST_PASS = "staging-test.pass"         # 调试环境测试全绿
@@ -86,12 +89,20 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
         Transition(ReqState.SPEC_LINT_RUNNING, "create_spec_lint", "下发 openspec validate 任务"),
 
     (ReqState.SPEC_LINT_RUNNING, Event.SPEC_LINT_PASS):
-        Transition(ReqState.DEV_CROSS_CHECK_RUNNING, "create_dev_cross_check",
-                   "spec lint 通过 → 开发交叉验证"),
+        Transition(ReqState.CHALLENGER_RUNNING, "start_challenger",
+                   "spec lint 通过 → 起 challenger 写 contract test (M18)"),
 
     (ReqState.SPEC_LINT_RUNNING, Event.SPEC_LINT_FAIL):
         Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_spec_lint_fail",
                    "spec lint 失败 → verifier"),
+
+    (ReqState.CHALLENGER_RUNNING, Event.CHALLENGER_PASS):
+        Transition(ReqState.DEV_CROSS_CHECK_RUNNING, "create_dev_cross_check",
+                   "challenger 写完 contract test → 开发交叉验证"),
+
+    (ReqState.CHALLENGER_RUNNING, Event.CHALLENGER_FAIL):
+        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_challenger_fail",
+                   "challenger 失败（spec 自相矛盾 / 写不出 test 等）→ verifier 判"),
 
     (ReqState.DEV_CROSS_CHECK_RUNNING, Event.DEV_CROSS_CHECK_PASS):
         Transition(ReqState.STAGING_TEST_RUNNING, "create_staging_test",
@@ -168,7 +179,8 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     **{
         (st, Event.SESSION_FAILED): Transition(ReqState.ESCALATED, "escalate", "agent session crashed")
         for st in [
-            ReqState.ANALYZING, ReqState.SPEC_LINT_RUNNING, ReqState.DEV_CROSS_CHECK_RUNNING,
+            ReqState.ANALYZING, ReqState.SPEC_LINT_RUNNING, ReqState.CHALLENGER_RUNNING,
+            ReqState.DEV_CROSS_CHECK_RUNNING,
             ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
             ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
             ReqState.REVIEW_RUNNING, ReqState.FIXER_RUNNING,

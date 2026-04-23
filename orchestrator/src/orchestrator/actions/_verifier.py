@@ -39,7 +39,7 @@ log = structlog.get_logger(__name__)
 
 # 支持的 stage 名（对应 prompts/verifier/{stage}_{trigger}.md.j2）
 # 包括 agent stage（analyze）和 checker stage（spec_lint / dev_cross_check / staging_test / pr_ci）
-_STAGES = {"analyze", "spec_lint", "dev_cross_check", "staging_test", "pr_ci", "accept"}
+_STAGES = {"analyze", "spec_lint", "challenger", "dev_cross_check", "staging_test", "pr_ci", "accept"}
 
 # Trigger 类型
 Trigger = Literal["success", "fail"]
@@ -50,6 +50,7 @@ Trigger = Literal["success", "fail"]
 _PASS_ROUTING: dict[str, tuple[ReqState, Event]] = {
     "analyze":           (ReqState.ANALYZING,                Event.ANALYZE_DONE),
     "spec_lint":         (ReqState.SPEC_LINT_RUNNING,        Event.SPEC_LINT_PASS),
+    "challenger":        (ReqState.CHALLENGER_RUNNING,       Event.CHALLENGER_PASS),
     "dev_cross_check":   (ReqState.DEV_CROSS_CHECK_RUNNING,  Event.DEV_CROSS_CHECK_PASS),
     "staging_test":      (ReqState.STAGING_TEST_RUNNING,     Event.STAGING_TEST_PASS),
     "pr_ci":             (ReqState.PR_CI_RUNNING,            Event.PR_CI_PASS),
@@ -60,6 +61,7 @@ _PASS_ROUTING: dict[str, tuple[ReqState, Event]] = {
 _RETRY_TARGET_STATE: dict[str, ReqState] = {
     "analyze":          ReqState.ANALYZING,
     "spec_lint":        ReqState.SPEC_LINT_RUNNING,
+    "challenger":       ReqState.CHALLENGER_RUNNING,
     "dev_cross_check":  ReqState.DEV_CROSS_CHECK_RUNNING,
     "staging_test":     ReqState.STAGING_TEST_RUNNING,
     "pr_ci":            ReqState.PR_CI_RUNNING,
@@ -345,4 +347,16 @@ async def invoke_verifier_for_dev_cross_check_fail(*, body, req_id, tags, ctx):
     """DEV_CROSS_CHECK_FAIL → 起 verifier-agent(stage=dev_cross_check, trigger=fail)。"""
     return await _invoke_verifier_fail(
         stage="dev_cross_check", body=body, req_id=req_id, ctx=ctx,
+    )
+
+
+@register("invoke_verifier_for_challenger_fail", idempotent=False)
+async def invoke_verifier_for_challenger_fail(*, body, req_id, tags, ctx):
+    """CHALLENGER_FAIL (M18) → 起 verifier-agent(stage=challenger, trigger=fail)。
+
+    challenger 拒写 contract test 通常意味着 spec 自相矛盾 / 缺关键定义 —— verifier
+    判要不要回头让 spec_fixer 修 spec 还是 escalate 给 user。
+    """
+    return await _invoke_verifier_fail(
+        stage="challenger", body=body, req_id=req_id, ctx=ctx,
     )
