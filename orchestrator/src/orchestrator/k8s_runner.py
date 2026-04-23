@@ -209,6 +209,11 @@ class RunnerController:
         container = client.V1Container(
             name="runner",
             image=self.runner_image,
+            # Always pull —— runner image 是 :main 浮动 tag，IfNotPresent 时节点
+            # 缓存的旧 image 永远不会被刷新（实测：PR #34 加 sisyphus-clone-repos.sh
+            # + check-scenario-refs --specs-search-path 后，runner pod 仍跑老 script
+            # 报 'cd: --: invalid option'，因为节点缓存没更新）。
+            image_pull_policy="Always",
             command=["/usr/local/bin/sisyphus-entrypoint.sh"],
             args=["sleep", "infinity"],
             # privileged: DinD 必须；fuse-overlayfs 要 /dev/fuse + CAP_SYS_ADMIN
