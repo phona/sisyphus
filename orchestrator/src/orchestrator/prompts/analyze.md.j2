@@ -36,7 +36,11 @@ session 结束 + move review 时，每个被改的 source repo 的 `feat/{{ req_
     ```markdown
     ## ADDED Requirements
 
-    ### Requirement: The system SHALL expose /buildinfo returning git_sha/build_id/go_version
+    ### Requirement: /buildinfo endpoint exposes build metadata
+
+    The system SHALL expose `GET /buildinfo` returning a JSON object with three fields:
+    `git_sha` (7-char short SHA), `build_id` (env BUILD_ID or "dev" default), and
+    `go_version` (literal "go1.23"). The endpoint MUST be unauthenticated.
 
     #### Scenario: UBOX-S1 returns 200 with three fields on bare GET
     - **GIVEN** server started with BUILD_ID=dev
@@ -46,10 +50,15 @@ session 结束 + move review 时，每个被改的 source repo 的 `feat/{{ req_
     #### Scenario: UBOX-S2 ...
     ```
 
-    关键：顶部 `## ADDED Requirements`（或 MODIFIED/REMOVED/RENAMED）+ 每需求 `### Requirement: ...`
-    + 每 Scenario 用 `#### Scenario: <ID> <desc>` 开头（**`Scenario:` 这 9 个字符必须有**，
-    不能只写 `### [UBOX-S1]` 这种形式 —— check-scenario-refs.sh 的 `HEADING_PATTERN: ^##+ Scenario:`
-    匹配不上 = 0 scenarios 定义 + 引用全失败）
+    **关键 3 条**（违反任意一条 openspec validate 立马红）：
+    1. 顶部 `## ADDED Requirements`（或 MODIFIED/REMOVED/RENAMED）
+    2. 每个 `### Requirement: <短描述>` 标题**之后必须有一段 prose 文本，含 SHALL 或 MUST**
+       —— openspec 的 `extractRequirementText` **跳过标题行**，从下一非空行起读 prose 直到
+       第一个 `####`，找不到 SHALL/MUST 就报 `must contain SHALL or MUST`。
+       **不能只在标题写 SHALL** —— 必须在 body 段落里再有一次。
+    3. 每 Scenario 用 `#### Scenario: <ID> <desc>` 开头（**`Scenario:` 这 9 个字符必须有**，
+       不能只写 `### [UBOX-S1]` 这种形式 —— check-scenario-refs.sh 的
+       `HEADING_PATTERN: ^##+ Scenario:` 匹配不上 = 0 scenarios 定义 + 引用全失败）
 - ✅ 实际业务代码（cmd/、internal/、handlers、migrations 等）
 - ✅ unit test —— **如果业务仓有 `.claude/skills/unit-test/SKILL.md`，先读它跟模板，按仓约定写**；
   没有则按 Go test 默认（`*_test.go` 同包）。**integration test 不是你的活**（M18 challenger 写）。
