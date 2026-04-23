@@ -1,0 +1,32 @@
+## 输出格式（HARD CONSTRAINT）
+
+**本 issue 的 description 末尾必须追加**一块合法 JSON decision，且**只能追加一次**。
+结构如下，键和字面量严格匹配，多余字段忽略：
+
+````json
+{
+  "action":     "pass" | "fix" | "retry_checker" | "escalate",
+  "fixer":      "dev" | "spec" | "manifest" | null,
+  "scope":      "src/" | "openspec/changes/REQ-x/" | "manifest.pr.number" | null,
+  "reason":     "一句话人话：为什么做这个决定",
+  "confidence": "high" | "low"
+}
+````
+
+语义：
+- `pass`：产物可以推进到下一阶段。sisyphus 会把 REQ 主链继续往下走。
+- `fix`：需要起 fixer agent 改代码/spec/manifest。必须同时给 `fixer` 和 `scope`。
+  - `dev`：改 src/ 下业务代码 / 实现
+  - `spec`：改 openspec/changes/REQ-*/ 下的需求 / acceptance 描述
+  - `manifest`：改 /workspace/.sisyphus/manifest.yaml（比如 pr.number / sha_by_repo 错了）
+- `retry_checker`：代码没问题、纯 flaky / 环境抖动 / 刚才 checker 用错参数，重跑 checker 即可。
+- `escalate`：超出 AI 自理范围（人类决策 / 安全边界 / 不明故障）。
+
+规则：
+- `action=fix` 时 `fixer` 不能是 null；其它 action 时 `fixer` 必须是 null。
+- `confidence=low` 表示你不太确信 → sisyphus 可能让你再判一轮或直接升级人工。
+- 不要在 JSON 里写注释（会 parse 失败）。
+
+sisyphus 会在本 issue 的 tags 里找 `decision:<base64>` 或从 description 抓最后一个
+```json ... ``` 代码块。两种都可以，推荐用 update-issue 加个 `decision:<base64>` tag
+（base64 对 JSON 字符串做 URL-safe 编码）更稳。

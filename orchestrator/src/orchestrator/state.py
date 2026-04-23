@@ -40,6 +40,9 @@ class ReqState(StrEnum):
     DIAGNOSE_RUNNING = "diagnose-running"       # bugfix 反复失败 → 轻 agent 分流
     GH_INCIDENT_OPEN = "gh-incident-open"       # GitHub issue 已开，等人
     ARCHIVING = "archiving"                     # done-archive agent（合 PR 等）
+    # M14b：verifier-agent 框架
+    REVIEW_RUNNING = "review-running"           # verifier-agent 在跑（success / fail 两触发统一入口）
+    FIXER_RUNNING = "fixer-running"             # verifier decision=fix → 起对应 fixer agent（dev/spec/manifest）
     DONE = "done"                               # REQ 完成
     ESCALATED = "escalated"                     # 熔断 / session-failed / 人工止损
 
@@ -68,6 +71,12 @@ class Event(StrEnum):
     SPEC_REWORK = "spec.rework"                     # diagnose:spec-bug → escalate（spec-fix 本期不做）
     ARCHIVE_DONE = "archive.done"
     SESSION_FAILED = "session.failed"
+    # M14b：verifier-agent 决策事件（webhook.py 从 verifier issue 的 decision JSON 派发）
+    VERIFY_PASS = "verify.pass"                     # decision.action = pass → 推下一 stage
+    VERIFY_FIX_NEEDED = "verify.fix-needed"         # decision.action = fix → 起 fixer agent
+    VERIFY_RETRY_CHECKER = "verify.retry-checker"   # decision.action = retry_checker → 重跑当前 checker
+    VERIFY_ESCALATE = "verify.escalate"             # decision.action = escalate
+    FIXER_DONE = "fixer.done"                       # fixer agent 跑完 → 回对应 stage 重跑 checker
 
 
 @dataclass(frozen=True)
@@ -160,6 +169,30 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
         Transition(ReqState.ESCALATED, "escalate",
                    "diagnosis:env-bug / unknown → escalate"),
 
+    # ─── M14b verifier 子链 ─────────────────────────────────────────────
+    # verifier-agent 完成 → webhook 解 decision JSON → emit 对应事件。
+    # 注意：VERIFY_PASS 的目标 stage 由 ctx.verifier_stage 决定 —— transition 表无法静态表达
+    # next_state 随 stage 变化，所以 apply_verify_pass action 内部手工 CAS 到对应 stage_running
+    # 再链式 emit 该 stage 的 done/pass 事件（走原主链 transition）。VERIFY_RETRY_CHECKER
+    # 类似。此处 next_state 声明为 REVIEW_RUNNING（self-loop），实际目标状态由 action 改。
+    (ReqState.REVIEW_RUNNING, Event.VERIFY_PASS):
+        Transition(ReqState.REVIEW_RUNNING, "apply_verify_pass",
+                   "decision=pass → action 读 stage 手动推进"),
+    (ReqState.REVIEW_RUNNING, Event.VERIFY_FIX_NEEDED):
+        Transition(ReqState.FIXER_RUNNING, "start_fixer",
+                   "decision=fix → 起对应 fixer（dev/spec/manifest）"),
+    (ReqState.REVIEW_RUNNING, Event.VERIFY_RETRY_CHECKER):
+        Transition(ReqState.REVIEW_RUNNING, "apply_verify_retry_checker",
+                   "decision=retry_checker → 重跑当前 stage 的 checker"),
+    (ReqState.REVIEW_RUNNING, Event.VERIFY_ESCALATE):
+        Transition(ReqState.ESCALATED, "escalate",
+                   "verifier decision=escalate 或 schema invalid"),
+
+    # fixer agent 完成 → 回 REVIEW_RUNNING 让 verifier 再判一次（pass / 再 fix）
+    (ReqState.FIXER_RUNNING, Event.FIXER_DONE):
+        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_after_fix",
+                   "fixer 完 → 再跑 verifier 复查"),
+
     # ─── 终态 ───────────────────────────────────────────────────────────
     (ReqState.ARCHIVING, Event.ARCHIVE_DONE):
         Transition(ReqState.DONE, None, "REQ complete"),
@@ -173,6 +206,7 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
             ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
             ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
             ReqState.BUGFIX_RUNNING, ReqState.DIAGNOSE_RUNNING,
+            ReqState.REVIEW_RUNNING, ReqState.FIXER_RUNNING,
             ReqState.ARCHIVING,
         ]
     },

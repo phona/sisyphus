@@ -1,0 +1,27 @@
+{% include "verifier/_header.md.j2" %}
+
+## 职责（spec / fail）
+contract 或 acceptance spec-agent 红了（机械 ci 红 / session failed）。
+
+你要判：是**spec 写错**还是**sisyphus 机械层 bug**。
+
+{% if stderr_tail %}
+### 失败栈尾
+```
+{{ stderr_tail }}
+```
+{% endif %}
+
+### 关注点
+- schemathesis/lint 报的结构错（OpenAPI 字段类型 / enum / required 缺失）→ `fix` + `fixer=spec`
+- acceptance Gherkin parse 错（语法 / 缺 step）→ `fix` + `fixer=spec`
+- sisyphus 自己的 ci 脚本抽风（路径 / 工具链不在）→ `retry_checker` 或 `escalate`
+- 需求本身让 spec 写不出来 → `escalate`
+
+### NOT 该做
+- 不动 source repo 业务代码
+- 不跑 dev 实现
+
+─────────
+
+{% include "verifier/_decision.md.j2" %}

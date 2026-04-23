@@ -60,6 +60,7 @@ def register(name: str, *, idempotent: bool = False):
 
 # 触发各 handler 注册（导入即注册）
 from . import (  # noqa: E402,F401
+    _verifier,
     create_accept,
     create_dev,
     create_pr_ci_watch,

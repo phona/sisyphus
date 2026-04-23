@@ -1,0 +1,29 @@
+{% include "verifier/_header.md.j2" %}
+
+## 职责（analyze / success）
+analyze-agent 说它已经拆完需求，写了 `/workspace/.sisyphus/manifest.yaml` + 初版
+openspec delta（`openspec/changes/{{ req_id }}/`）。
+
+你要判：这个拆解是不是**可落地**。
+
+### 关注点
+- manifest.yaml 里的 sources / integration / test_cmd 是否和本 REQ 的改动范围自洽
+  （没引错仓库、没把别的 REQ 的东西挂进来）
+- openspec delta 是否把用户的 intent 讲清楚了（acceptance 可机械 verify / 没有"改善用户体验"这种空话）
+- open_questions 里有没有"sisyphus 搞不定 / 业务方没回答 / 安全红线"的项
+  —— 有的话应该 escalate 给人类
+
+### NOT 该做
+- 不跑 manifest validate（sisyphus 已跑，tag `manifest:valid` 才会到你）
+- 不跑 /opsx:propose（agent 已跑）
+- 不去 grep 代码改动 —— analyze 阶段本来就没代码
+
+### 典型决策
+- `pass`：拆解清晰 + acceptance 可验 + 范围合理
+- `fix` + `fixer=spec`：范围或 acceptance 描述需要改写
+- `fix` + `fixer=manifest`：sources/integration 错了
+- `escalate`：open_questions 里是产品/业务层决策，agent 不该自理
+
+─────────
+
+{% include "verifier/_decision.md.j2" %}

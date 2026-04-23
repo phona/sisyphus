@@ -1,0 +1,29 @@
+{% include "verifier/_header.md.j2" %}
+
+## 职责（pr_ci / fail）
+PR 上某 GHA job 红了 / 超时。checker 把失败的 check-run 名字 + 最后几行日志
+放 artifact 里。
+
+{% if stderr_tail %}
+### 失败日志尾
+```
+{{ stderr_tail }}
+```
+{% endif %}
+
+你要判：失败是**本次 REQ 的 code 问题**、**基础设施问题**、还是 **flaky**。
+
+### 关注点
+- 失败 job 是 lint / unit / int / sonar / image-publish 哪一个？
+- 失败栈指向新改动 → `fix` + `fixer=dev`
+- 失败栈指向 CI 配置（workflow YAML、docker build 脚本）→ `escalate`
+  （sisyphus 的 fixer 本期不改 .github/ 目录）
+- 明显 flaky（网络、docker rate limit）→ `retry_checker`
+
+### NOT 该做
+- 不在本地重跑业务代码
+- 不 close PR / 不 force-push
+
+─────────
+
+{% include "verifier/_decision.md.j2" %}

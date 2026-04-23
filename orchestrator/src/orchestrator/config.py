@@ -119,6 +119,13 @@ class Settings(BaseSettings):
     # 默认 3 × 120s = 6min，覆盖 K3s 节点偶发慢启动；生产可调更高。
     runner_ready_attempts: int = 3
 
+    # ─── M14b：verifier-agent 框架 ──────────────────────────────────────
+    # True = 每个 stage transition（成功 or 失败）先起一个 verifier-agent 做主观判断
+    # （pass / fix / retry_checker / escalate），再由 webhook 路由推进状态机。
+    # 替代 M4 fail_kind 分类 + M5 diagnose 子链（PR3 砍旧逻辑后翻 true）。
+    # 默认 false：老路径完全不变，PR1 仅铺框架。
+    verifier_enabled: bool = False
+
     # ─── M8：watchdog 兜底卡死 stage ────────────────────────────────────
     # 周期扫 req_state，发现某 stage 超过阈值没 transition 且关联 BKD session
     # 不在 running → emit SESSION_FAILED 走 escalate。兜底 BKD spawn-time
