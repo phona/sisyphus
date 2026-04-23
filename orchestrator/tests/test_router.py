@@ -21,8 +21,8 @@ CASES: list[tuple[str, list[str], Event | None]] = [
 
     # session.completed dispatch
     ("session.completed", ["analyze", "REQ-1"],                              Event.ANALYZE_DONE),
-    ("session.completed", ["contract-spec", "REQ-1"],                        Event.SPEC_DONE),
-    ("session.completed", ["acceptance-spec", "REQ-1"],                          Event.SPEC_DONE),
+    # M16：单 tag=spec（不再分 contract-spec / acceptance-spec）
+    ("session.completed", ["spec", "REQ-1"],                                 Event.SPEC_DONE),
     ("session.completed", ["dev", "REQ-1"],                                  Event.DEV_DONE),
     # v0.2：staging-test + pr-ci 新 agent role
     ("session.completed", ["staging-test", "REQ-1", "result:pass"],          Event.STAGING_TEST_PASS),

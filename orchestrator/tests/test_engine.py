@@ -115,7 +115,7 @@ async def test_chain_emit_spec_to_dev(stub_actions):
     body = type("B", (), {"issueId": "spec-1", "projectId": "p", "event": "session.completed"})()
     result = await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p",
-        tags=["contract-spec", "REQ-1"], cur_state=ReqState.SPECS_RUNNING,
+        tags=["spec", "REQ-1"], cur_state=ReqState.SPECS_RUNNING,
         ctx={}, event=Event.SPEC_DONE,
     )
 

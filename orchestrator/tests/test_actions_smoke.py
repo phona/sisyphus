@@ -111,26 +111,34 @@ async def test_start_analyze_title_format(monkeypatch):
 
 # ─── fanout_specs ────────────────────────────────────────────────────────
 @pytest.mark.asyncio
-async def test_fanout_specs_creates_two(monkeypatch):
+async def test_fanout_specs_single_mode(monkeypatch):
+    """M16：fanout_specs 退化成单 spec 模式（不再硬分 contract / acceptance）。
+
+    并行 spec 任务的决策权交给 analyze-agent —— 它直接创多个 tag=spec issue，
+    本 action 只起一个默认 spec agent。
+    """
     from orchestrator.actions import fanout_specs as mod
+
     fake = make_fake_bkd()
-    fake.create_issue.side_effect = [FakeIssue(id="ct-1"), FakeIssue(id="at-1")]
+    fake.create_issue.return_value = FakeIssue(id="spec-1")
     patch_bkd(monkeypatch, "fanout_specs", fake)
     patch_db(monkeypatch, "fanout_specs")
     body = make_body(issue_id="anz-1")
     out = await mod.fanout_specs(body=body, req_id="REQ-9", tags=["analyze"], ctx={})
-    assert out["specs_created"] == ["contract-spec", "acceptance-spec"]
-    assert out["spec_issue_ids"] == {"contract-spec": "ct-1", "acceptance-spec": "at-1"}
-    assert fake.create_issue.await_count == 2
-    # update-issue 调用：1 (analyze→done) + 2 (each spec→working) = 3
-    assert fake.update_issue.await_count == 3
+    assert out == {"spec_issue_id": "spec-1"}
+    fake.create_issue.assert_awaited_once()
+    _, kwargs = fake.create_issue.await_args
+    assert "spec" in kwargs["tags"] and "REQ-9" in kwargs["tags"]
+    assert "[REQ-9] [SPEC]" in kwargs["title"]
+    # update-issue 调用：1 (analyze→done) + 1 (spec→working) = 2
+    assert fake.update_issue.await_count == 2
 
 
 def test_fanout_specs_no_manifest_validate_import():
-    """M12：fanout_specs 不再跑 manifest_validate admission。
+    """M12：fanout_specs 不再跑 manifest_validate admission。M16：也不再 hardcode SPEC_STAGES。
 
-    确认模块不 import checkers.manifest_validate，也不构造 ANALYZE_PENDING_HUMAN。
-    （open_questions 非空 / 空都不影响 spec 创建 — agent 自己跟 user 谈歧义。）
+    确认模块不 import checkers.manifest_validate / 不构造 ANALYZE_PENDING_HUMAN /
+    不 hardcode 多个 spec stage（双 fanout 已砍）。
     """
     import inspect
 
@@ -139,47 +147,72 @@ def test_fanout_specs_no_manifest_validate_import():
     assert "manifest_validate" not in src
     assert "ANALYZE_PENDING_HUMAN" not in src
     assert "pending_human" not in src
+    # M16：不再硬编码 contract-spec / acceptance-spec 两个 stage
+    assert "contract-spec" not in src
+    assert "acceptance-spec" not in src
+    assert "SPEC_STAGES" not in src
 
 
 # ─── mark_spec_reviewed_and_check ────────────────────────────────────────
 @pytest.mark.asyncio
-async def test_mark_spec_gate_open(monkeypatch):
-    """当 list-issues 返回 2 个 ci-passed spec → emit spec.all-passed。"""
+async def test_mark_spec_gate_open_single_mode(monkeypatch):
+    """M16：单 spec issue ci-passed → emit spec.all-passed。"""
     from orchestrator.actions import mark_spec_reviewed_and_check as mod
     fake = make_fake_bkd()
     fake.list_issues.return_value = [
-        FakeIssue(id="ct-1", tags=["contract-spec", "REQ-9", "ci-passed"]),
-        FakeIssue(id="at-1", tags=["acceptance-spec",   "REQ-9", "ci-passed"]),
+        FakeIssue(id="spec-1", tags=["spec", "REQ-9", "ci-passed"]),
     ]
     patch_bkd(monkeypatch, "mark_spec_reviewed_and_check", fake)
     patch_db(monkeypatch, "mark_spec_reviewed_and_check")
-    body = make_body(issue_id="ct-1")
+    body = make_body(issue_id="spec-1")
     out = await mod.mark_spec_reviewed_and_check(
-        body=body, req_id="REQ-9", tags=["contract-spec", "REQ-9"],
-        ctx={"expected_spec_count": 2},
+        body=body, req_id="REQ-9", tags=["spec", "REQ-9"], ctx={},
     )
     assert out["emit"] == "spec.all-passed"
+    assert out["passed_count"] == 1
+    assert out["expected"] == 1
     fake.merge_tags_and_update.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_mark_spec_gate_wait(monkeypatch):
-    """只有 1 个 ci-passed → 不 emit。"""
+async def test_mark_spec_gate_open_parallel(monkeypatch):
+    """analyze-agent 自开多 spec 并行：2/2 ci-passed → emit spec.all-passed。"""
     from orchestrator.actions import mark_spec_reviewed_and_check as mod
     fake = make_fake_bkd()
     fake.list_issues.return_value = [
-        FakeIssue(id="ct-1", tags=["contract-spec", "REQ-9", "ci-passed"]),
-        FakeIssue(id="at-1", tags=["acceptance-spec",   "REQ-9"]),  # not yet
+        FakeIssue(id="spec-1", tags=["spec", "REQ-9", "ci-passed"]),
+        FakeIssue(id="spec-2", tags=["spec", "REQ-9", "ci-passed"]),
     ]
     patch_bkd(monkeypatch, "mark_spec_reviewed_and_check", fake)
     patch_db(monkeypatch, "mark_spec_reviewed_and_check")
-    body = make_body(issue_id="ct-1")
     out = await mod.mark_spec_reviewed_and_check(
-        body=body, req_id="REQ-9", tags=["contract-spec"],
-        ctx={"expected_spec_count": 2},
+        body=make_body(issue_id="spec-2"), req_id="REQ-9",
+        tags=["spec", "REQ-9"], ctx={},
+    )
+    assert out["emit"] == "spec.all-passed"
+    assert out["passed_count"] == 2
+    assert out["expected"] == 2
+
+
+@pytest.mark.asyncio
+async def test_mark_spec_gate_wait_parallel(monkeypatch):
+    """2 个并行 spec，只有 1 个 ci-passed → 不 emit。"""
+    from orchestrator.actions import mark_spec_reviewed_and_check as mod
+    fake = make_fake_bkd()
+    fake.list_issues.return_value = [
+        FakeIssue(id="spec-1", tags=["spec", "REQ-9", "ci-passed"]),
+        FakeIssue(id="spec-2", tags=["spec", "REQ-9"]),  # not yet
+    ]
+    patch_bkd(monkeypatch, "mark_spec_reviewed_and_check", fake)
+    patch_db(monkeypatch, "mark_spec_reviewed_and_check")
+    body = make_body(issue_id="spec-1")
+    out = await mod.mark_spec_reviewed_and_check(
+        body=body, req_id="REQ-9", tags=["spec"], ctx={},
     )
     assert "emit" not in out
     assert out["gate"] == "wait"
+    assert out["passed_count"] == 1
+    assert out["expected"] == 2
 
 
 # ─── fanout_dev / create_accept ────────────────────────
