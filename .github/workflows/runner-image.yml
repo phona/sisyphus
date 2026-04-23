@@ -4,18 +4,14 @@ on:
   pull_request:
     paths:
       - 'runner/**'
-      - 'scripts/check-scenario-refs.sh'
-      - 'scripts/check-tasks-section-ownership.sh'
-      - 'scripts/pre-commit-acl.sh'
+      - 'scripts/**'    # 任意 helper 改动都重 build runner image
       - '.github/workflows/runner-image.yml'
   push:
     branches: [main]
     tags: ['runner-v*']
     paths:
       - 'runner/**'
-      - 'scripts/check-scenario-refs.sh'
-      - 'scripts/check-tasks-section-ownership.sh'
-      - 'scripts/pre-commit-acl.sh'
+      - 'scripts/**'
       - '.github/workflows/runner-image.yml'
 
 env:

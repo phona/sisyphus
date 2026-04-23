@@ -29,6 +29,7 @@ async def done_archive(*, body, req_id, tags, ctx):
             title=f"[{req_id}] [DONE] archive & PR{short_title(ctx)}",
             tags=["done-archive", req_id, f"parent-id:{accept_issue_id}"],
             status_id="todo",
+            model=settings.agent_model,
         )
         prompt = render(
             "done_archive.md.j2",

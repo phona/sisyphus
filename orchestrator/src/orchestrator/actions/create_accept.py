@@ -107,6 +107,7 @@ async def create_accept(*, body, req_id, tags, ctx):
             title=f"[{req_id}] [ACCEPT] AI-QA{short_title(ctx)}",
             tags=["accept", req_id, f"parent-id:{source_issue_id}"],
             status_id="todo",
+            model=settings.agent_model,
         )
         prompt = render(
             "accept.md.j2",
