@@ -8,14 +8,14 @@ from orchestrator.state import Event
 def test_skip_disabled_returns_none(monkeypatch):
     monkeypatch.setattr("orchestrator.actions._skip.settings.test_mode", False)
     monkeypatch.setattr("orchestrator.actions._skip.settings.skip_dev", False)
-    assert skip_if_enabled("dev", Event.DEV_DONE) is None
+    assert skip_if_enabled("dev", Event.DEV_CROSS_CHECK_PASS) is None
 
 
 def test_skip_specific_stage(monkeypatch):
     monkeypatch.setattr("orchestrator.actions._skip.settings.test_mode", False)
     monkeypatch.setattr("orchestrator.actions._skip.settings.skip_dev", True)
-    out = skip_if_enabled("dev", Event.DEV_DONE, req_id="REQ-1")
-    assert out == {"skipped": True, "stage": "dev", "emit": "dev.done"}
+    out = skip_if_enabled("dev", Event.DEV_CROSS_CHECK_PASS, req_id="REQ-1")
+    assert out == {"skipped": True, "stage": "dev", "emit": "dev-cross-check.pass"}
 
 
 def test_test_mode_skips_all(monkeypatch):

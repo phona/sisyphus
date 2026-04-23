@@ -21,9 +21,10 @@ CASES: list[tuple[str, list[str], Event | None]] = [
 
     # session.completed dispatch
     ("session.completed", ["analyze", "REQ-1"],                              Event.ANALYZE_DONE),
-    # M16：单 tag=spec（不再分 contract-spec / acceptance-spec）
-    ("session.completed", ["spec", "REQ-1"],                                 Event.SPEC_DONE),
-    ("session.completed", ["dev", "REQ-1"],                                  Event.DEV_DONE),
+    # M15：spec / dev agent 的 session.completed 不再 router 映射 event
+    # sisyphus 内部 emit SPEC_LINT_RUNNING / DEV_CROSS_CHECK_RUNNING
+    ("session.completed", ["spec", "REQ-1"],                                 None),
+    ("session.completed", ["dev", "REQ-1"],                                  None),
     # v0.2：staging-test + pr-ci 新 agent role
     ("session.completed", ["staging-test", "REQ-1", "result:pass"],          Event.STAGING_TEST_PASS),
     ("session.completed", ["staging-test", "REQ-1", "result:fail"],          Event.STAGING_TEST_FAIL),
