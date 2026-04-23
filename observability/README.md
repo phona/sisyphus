@@ -1,15 +1,18 @@
-# Sisyphus 可观测性
+# Sisyphus 可观测性 — 部署与运维
 
-Postgres + Metabase + n8n tap 的最小可观测系统。设计原理见 [docs/observability.md](../docs/observability.md)；本文只讲怎么部署、怎么查、怎么加新规则。
+> Postgres + Metabase 最小可观测系统。设计原理见 [docs/observability.md](../docs/observability.md)；
+> 看板配置 + SQL 详细见 [sisyphus-dashboard.md](./sisyphus-dashboard.md)。
+>
+> 本文只讲怎么部署、怎么查、怎么加新规则。
 
 ## 组件清单
 
 | 组件 | 部署方式 | 职责 |
 |---|---|---|
-| Postgres 15 | Bitnami helm chart，values: [../values/postgresql.yaml](../values/postgresql.yaml) | 事件 + 快照 + 配置版本 + 改进日志 |
-| Metabase | pmint/metabase helm，values: [../values/metabase.yaml](../values/metabase.yaml) | BI 看板 + Alert + Lark webhook 通知 |
-| n8n tap 节点 | 现有 n8n workflow 里加 Postgres Insert 节点 | 把事件推到 event_log |
-| n8n BKD sync | 新增一个 Schedule workflow，每 5 分钟 list-issues → upsert bkd_snapshot | 把 BKD 当前状态镜像到 Postgres |
+| Postgres 15 | Bitnami helm chart, values: [../values/postgresql.yaml](../values/postgresql.yaml) | 事件 + 快照 + 配置版本 + 改进日志 |
+| Metabase | pmint/metabase helm, values: [../values/metabase.yaml](../values/metabase.yaml) | BI 看板 + Alert + 飞书 webhook 通知 |
+| orchestrator `store/` 模块 | 内嵌在 orchestrator Pod | 写 event_log / req_state / artifact_checks / stage_runs / verifier_decisions |
+| orchestrator `snapshot.py` cron | 内嵌后台 task，每 5 min | BKD list-issues → upsert bkd_snapshot |
 
 ## 部署
 
@@ -17,19 +20,19 @@ Postgres + Metabase + n8n tap 的最小可观测系统。设计原理见 [docs/o
 
 ```bash
 helm repo add bitnami https://charts.bitnami.com/bitnami
-helm install sisyphus-pg bitnami/postgresql \
+helm install sisyphus-postgresql bitnami/postgresql \
   -n sisyphus --create-namespace \
   -f values/postgresql.yaml
 ```
 
-chart 的 `initdb.scripts` 已经把 [schema.sql](./schema.sql) 挂进去，启动时自动建表。确认：
+orchestrator 启动时跑 [migrations/](../orchestrator/migrations/) 0001~0005，建所有表 + view。手动确认：
 
 ```bash
-kubectl exec -n sisyphus sisyphus-pg-postgresql-0 -- \
-  psql -U sisyphus -d sisyphus_obs -c '\dt'
+kubectl exec -n sisyphus sisyphus-postgresql-0 -- \
+  psql -U sisyphus -d sisyphus -c '\dt'
 ```
 
-应该看到 4 张表 + 4 个 view。
+应看到：`req_state` / `event_log` / `bkd_snapshot` / `artifact_checks` / `stage_runs` / `verifier_decisions` / `config_version` / `improvement_log`。
 
 ### 2. Metabase
 
@@ -40,143 +43,142 @@ helm install sisyphus-bi pmint/metabase \
   -f values/metabase.yaml
 ```
 
-启动后访问 Metabase UI → **Admin → Databases → Add database**：
+启动后 UI → **Admin → Databases → Add database**：
 
 - Engine: PostgreSQL
-- Host: `sisyphus-pg-postgresql.sisyphus.svc.cluster.local`
-- Database name: `sisyphus_obs`
+- Host: `sisyphus-postgresql.sisyphus.svc.cluster.local`
+- Database: `sisyphus`
 - Username / Password: 见 `values/postgresql.yaml`
 
-### 3. n8n tap 节点
+### 3. orchestrator 写入
 
-在现有 `charts/n8n-workflows/v3.1/v3-events.json` 里，**5 个位置**各加一个 Postgres Insert 节点（不改现有节点，并联挂出去）：
+不需要单独配 —— orchestrator 服务起来后，每条 webhook 处理都会自动写表（`store/event_log.py` / `store/req_state.py` / `store/artifact_checks.py` 等）。
 
-| tap | 位置 | kind |
-|---|---|---|
-| tap1 | `[ENTRY] Ctx 提取` 后 | `webhook.received` |
-| tap2 | `Router` 节点后 | `router.decision` |
-| tap3 | 每个 action HTTP 节点的成功输出后 | `action.executed` |
-| tap4 | 每个 action HTTP 节点的 error 输出 | `action.failed` |
-| tap5 | `[SPG] Gate check` 后 | `gate.check` |
+### 4. BKD 快照同步
 
-tap 节点配置模板见 [docs/observability.md#tap-节点模板](../docs/observability.md#tap-节点模板)。
+orchestrator 内置后台 task `snapshot.py`，每 5 分钟跑：BKD list-issues → 解析 → upsert `bkd_snapshot`。无需额外部署。
 
-**关键**：tap 节点必须 `timeout=2s` + `onError=continueRegularOutput`。**观测不能阻塞业务**。
+间隔 / on/off 由 config 控（`bkd_snapshot_enabled` / `bkd_snapshot_interval_sec`）。
 
-### 4. BKD sync workflow
-
-新建一个 n8n workflow：Schedule (每 5 min) → BKD list-issues → Code 节点 parse SSE + flatten → Postgres Upsert。
-
-样板在 [docs/observability.md#bkd-sync-workflow](../docs/observability.md#bkd-sync-workflow)。
-
-## 4 条 Metabase Alert（实时兜底）
+## Alert（实时兜底）
 
 每条在 Metabase 里存为 Question + Alert：
 
 | Alert | SQL 文件 | 触发频率 | 命中动作 |
 |---|---|---|---|
-| Layers drift | [queries/alert-layers-drift.sql](./queries/alert-layers-drift.sql) | 每 5 分钟 | Lark webhook |
-| Duplicate stage | [queries/alert-duplicate-stage.sql](./queries/alert-duplicate-stage.sql) | 每 5 分钟 | Lark + BKD cancel 较新的 issue |
-| Bugfix runaway | [queries/alert-bugfix-runaway.sql](./queries/alert-bugfix-runaway.sql) | 每 10 分钟 | Lark + BKD 加 circuit-breaker tag |
-| Stuck session | [queries/alert-stuck-session.sql](./queries/alert-stuck-session.sql) | 每 5 分钟 | Lark + BKD cancel-issue |
+| Duplicate stage | [queries/alert-duplicate-stage.sql](./queries/alert-duplicate-stage.sql) | 每 5 分钟 | 飞书 + （未来）orchestrator emit cancel |
+| Stuck session | [queries/alert-stuck-session.sql](./queries/alert-stuck-session.sql) | 每 5 分钟 | 飞书（双保险；watchdog M8 已自动 escalate） |
+| Layers drift | [queries/alert-layers-drift.sql](./queries/alert-layers-drift.sql) | （已废）v0.2 不再硬编码 layers，可删 |
+| Bugfix runaway | （文件已删）M14c 后由 verifier escalate 接管 | — | — |
 
-起步全部跑**被动模式**（只发 Lark，不自动干预）。攒 2 周数据，误报率 < 5% 才升级为主动模式。
+起步全部跑**被动模式**（只发飞书，不自动干预）。攒 2 周数据，误报率 < 5% 才升级为主动模式。
 
-## 5 个 Metabase 看板
+## 13 个 Metabase 看板（Q1-Q13）
 
-| 看板 | 来源 |
-|---|---|
-| REQ timeline | view: `req_timeline` |
-| Agent 质量 | view: `agent_quality` |
-| REQ 成本 | view: `req_cost` |
-| 失败模式分布 | ad-hoc SQL on `event_log` |
-| 检测规则命中 | view: `recent_violations` |
+完整 SQL + Question 配置在 [sisyphus-dashboard.md](./sisyphus-dashboard.md)。SQL 文件在 [queries/sisyphus/](./queries/sisyphus/)。
 
-**所有看板按 `config_version` 拆列/筛选**，否则改进前后的数据混一起看不出效果。
+| Question | 主题 | 数据源 |
+|---|---|---|
+| Q1-Q5（M7） | 钻牛角尖 / 慢异常 / 通过率 / 失败分桶 / 在飞 REQ | `artifact_checks` |
+| Q6-Q7 | 周通过率趋势 / duration P50/P95 | `stage_runs` |
+| Q8-Q9 | verifier 准确率 / fixer 修复成功率 | `verifier_decisions` |
+| Q10 | token 成本 | `stage_runs` |
+| Q11 | dev 并行加速比 | `stage_runs`（M14d 后启用） |
+| Q12-Q13 | bugfix loop 异常 / watchdog escalate 频率 | 多表 join |
+
+**所有看板按 `config_version` 切片**，否则改进前后的数据混在一起看不出效果。
 
 ## 可持续改进闭环
 
-1. Metabase 看板发现异常（例：某 agent 一把过率 < 50%）
-2. 诊断根因（`SELECT failed_tests FROM event_log WHERE stage='X' GROUP BY ...`）
-3. 改 prompt / Router 规则，**bump config_version**（见下）
+1. Metabase 看板发现异常（例：verifier pr_ci_fail 一把就 escalate 占 60%）
+2. 诊断根因（看 `verifier_decisions.reason` + 关联 `event_log`）
+3. 改 prompt / 阈值，**bump config_version**（见下）
 4. 在 `improvement_log` 插一行假设 + baseline + target
 5. 等 2 周，跑 `metric_sql` 拿 `observed_value`，填 `verdict`
 
 ```sql
 -- 改动时 bump 版本
 INSERT INTO config_version (version_hash, kind, target, git_commit, diff_summary, author)
-VALUES ('prompt-ctrtest-v2', 'prompt', 'contract-test-agent',
-        '<git sha>', '加 oneOf schema 处理指令', 'weifashi@jbcnet.co.jp');
+VALUES ('verifier-pr-ci-v2', 'prompt', 'verifier/pr_ci_fail.md.j2',
+        '<git sha>', '加 retry_checker 提示', 'tc@uzaqfood.com');
 
--- 把当前版本的旧行标记过期
 UPDATE config_version SET retired_at = now()
-WHERE kind='prompt' AND target='contract-test-agent'
-  AND version_hash <> 'prompt-ctrtest-v2' AND retired_at IS NULL;
+WHERE kind='prompt' AND target='verifier/pr_ci_fail.md.j2'
+  AND version_hash <> 'verifier-pr-ci-v2' AND retired_at IS NULL;
 
--- 记录改进假设
 INSERT INTO improvement_log
   (hypothesis, config_version, metric_name, metric_sql, baseline_value, target_value)
 VALUES
-  ('改 contract-test prompt 加 oneOf 处理指令，预期一把过率 ↑',
-   'prompt-ctrtest-v2',
-   'contract_test_first_pass_rate',
-   'SELECT first_pass_rate_pct FROM agent_quality WHERE agent_role=''contract-spec''',
-   40, 65);
+  ('verifier pr_ci_fail prompt 加 retry_checker 选项，预期 retry 占比 ↑',
+   'verifier-pr-ci-v2',
+   'retry_checker_share',
+   'SELECT 100.0 * SUM(CASE WHEN decision_action=''retry_checker'' THEN 1 ELSE 0 END) / COUNT(*) FROM verifier_decisions WHERE stage=''pr_ci''',
+   5, 25);
 ```
 
 ## 查询速查
 
 ```sql
--- REQ 全貌
-SELECT * FROM req_timeline WHERE req_id='REQ-669' ORDER BY created_at;
+-- REQ 全貌（卡哪了）
+SELECT req_id, state, updated_at, context->>'verifier_stage' AS verifier_stage
+FROM req_state
+WHERE req_id = 'REQ-29';
+
+-- 看一个 REQ 的事件历史
+SELECT ts, kind, router_action, exit_code
+FROM event_log
+WHERE req_id = 'REQ-29'
+ORDER BY ts;
 
 -- 过去 7 天各 stage P50/P95 耗时
 SELECT stage,
        percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_sec) AS p50,
        percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_sec) AS p95
-FROM req_timeline
-WHERE last_update > now() - interval '7 days'
+FROM stage_runs
+WHERE started_at > now() - interval '7 days'
 GROUP BY stage ORDER BY p95 DESC;
 
--- Router 的决策分布
-SELECT router_action, COUNT(*) AS cnt
-FROM event_log WHERE kind='router.decision' AND ts > now() - interval '7 days'
-GROUP BY router_action ORDER BY cnt DESC;
+-- verifier 决策分布
+SELECT decision_action, COUNT(*) AS cnt
+FROM verifier_decisions
+WHERE created_at > now() - interval '7 days'
+GROUP BY decision_action
+ORDER BY cnt DESC;
 
 -- 某改进前后对比
 SELECT config_version,
-       ROUND(100.0 * COUNT(*) FILTER (WHERE round=0 AND status='done')
-             / NULLIF(COUNT(*), 0), 1) AS first_pass_rate
-FROM event_log
-WHERE stage = 'contract-spec' AND ts > now() - interval '30 days'
+       ROUND(100.0 * SUM(CASE WHEN final_state = 'pass' THEN 1 ELSE 0 END)
+             / NULLIF(COUNT(*), 0), 1) AS pass_rate
+FROM stage_runs
+WHERE stage = 'staging-test' AND started_at > now() - interval '30 days'
 GROUP BY config_version;
 ```
 
-## 加新检测规则的流程
+## 加新检测规则
 
 1. 在 `queries/` 加一个 SQL 文件 `alert-xxx.sql`
-2. 在 Metabase 里 **New Question → SQL → 贴 SQL**
-3. 保存后 **Add Alert → 条件：row count > 0 → 通道：Lark webhook**
+2. Metabase 里 **New Question → SQL → 贴 SQL**
+3. 保存后 **Add Alert → 条件：row count > 0 → 通道：飞书 webhook**
 4. 攒 2 周数据验证误报率
-5. 误报率合格后，把 Alert 升级成"主动干预"：
-   - Lark webhook → n8n webhook endpoint
-   - n8n 里写一个 action workflow 调 BKD/GH
+5. 误报率合格后升级为"主动干预"：写 orchestrator action 调 BKD cancel / emit Event
 
 ## 容量
 
 | 表 | 日增 | 年增 | 备注 |
 |---|---|---|---|
-| event_log | ~50 行 × 5 REQ = 250 行 | ~100K | 10Gi 盘撑 20 年 |
+| event_log | ~100 行 × 5 REQ = 500 行 | ~180K | 10Gi 盘撑 20 年 |
+| artifact_checks | ~20 行 × 5 REQ = 100 行 | ~36K | — |
+| stage_runs | ~10 行 × 5 REQ = 50 行 | ~18K | — |
+| verifier_decisions | ~5 行 × 5 REQ = 25 行 | ~9K | — |
 | bkd_snapshot | 覆盖式，~几千行 | 不增长 | — |
-| config_version | 改一次加一行 | < 100 | — |
-| improvement_log | 每次改动加一行 | < 100 | — |
+| config_version / improvement_log | 改一次加一行 | < 100 | — |
 
 ## 备份
 
 ```bash
-# 每日 dump（k3s CronJob）
-pg_dump -h sisyphus-pg-postgresql -U sisyphus sisyphus_obs \
-  | gzip > /backup/sisyphus_obs_$(date +%F).sql.gz
+# 每日 dump（K3s CronJob）
+pg_dump -h sisyphus-postgresql -U sisyphus sisyphus \
+  | gzip > /backup/sisyphus_$(date +%F).sql.gz
 ```
 
-event_log 是 append-only 可以放心 dump；Metabase 元数据（看板、用户、凭证）在 Metabase 自己的数据库里，单独 dump。
+event_log / artifact_checks / stage_runs / verifier_decisions 都是 append-only，可以放心 dump；Metabase 元数据（看板、用户、凭证）在 Metabase 自己的 H2/Postgres 里，单独 dump。

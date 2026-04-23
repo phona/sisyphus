@@ -1,364 +1,347 @@
-# Sisyphus 架构设计
+# Sisyphus 架构（v0.2 + M14）
 
-> 契约驱动 + 测试先行 + 对抗验证 的 AI 无人值守开发平台。
+> **AI-native CI 编排层**：薄薄一层调度 + 机械 checker + 度量，让 agent 干完整链路活。
+>
+> **不抢 AI 决定权**。内容质量、bug 该不该修、怎么改 —— 永远是 agent 的事。
+> sisyphus 跑硬指标 / 路由 / 兜底 / 度量。
 
-## 核心哲学
+## 1. 哲学
 
-- **契约驱动（CDD）**：OpenAPI + Scenario 为唯一真相源
-- **测试先行（TDD）**：测试先写、LOCKED 后不可改
-- **对抗验证**：开发 / 测试 / 验收分属独立 agent，角色边界靠 pre-commit 硬拦截
-- **分层职责**：OpenSpec 管"规格如何演进"，GitHub Issues 管"运行时 bug 如何修"
+| 原则 | 含义 | 体现在哪 |
+|---|---|---|
+| **薄编排，agent 决定** | 路由 / 状态机 / checker 是 sisyphus；判 PR 内容好不好、bug 该不该修是 agent | router.py 只翻译 webhook 不判内容；verifier-agent 主观决策 |
+| **机械层 ≠ agent 层** | 跑测试 / 轮 GHA / 校验 schema 不绕 agent，sisyphus 自己干 | M1 staging-test / M2 pr-ci-watch / M3 manifest_validate 都是 sisyphus checker |
+| **失败先验，再试错** | stage fail 不直接 bugfix，先让 verifier-agent 看一眼是 fix / retry / spec / escalate | M14b/c verifier 框架 |
+| **指标驱动改进** | 每条决策入表，看板回答"哪条 prompt 该改" | stage_runs / verifier_decisions / 13 张 Metabase 卡 |
+| **生产用最强模型** | 无"失败升级模型"自适应；haiku 只用于测试加速 | config.py 单模型字段 |
+
+### 跟相邻系统的层级
 
 ```
-有人                            无人
-需求分析 → N 路并行 Spec → Dev → [转测] → verify ⇄ Bug 循环 → 验收 → apply/archive
-         (按 layer 动态展开)    ↑ 分界 ↑                  ↑ 熔断 ↑
+┌────────────────────────────────────────────────────────┐
+│  研发组织层： sisyphus (本仓库)                        │
+│    - 串 analyze → spec → dev → staging-test → pr-ci    │
+│      → accept → archive                                 │
+│    - verifier-agent 主观决策替代固定 fail 分流          │
+│    - watchdog / GC / 指标采集                           │
+├────────────────────────────────────────────────────────┤
+│  脚本 CI 层： GitHub Actions（互补不替代）              │
+│    - lint / unit / integration / sonar / image-publish  │
+│    - sisyphus pr-ci-watch checker 直接轮它的 check-runs │
+├────────────────────────────────────────────────────────┤
+│  agent 工具层： pure Claude Code skill / agent prompt   │
+│    - IDE 内 turbo dev tool                              │
+│    - 跟 sisyphus 不同层；sisyphus 在外面组织调度        │
+└────────────────────────────────────────────────────────┘
 ```
 
-**关键分界**：**push 到 `feat/REQ-xx` 之前**的 FAIL 是"任务未完成"（checkbox 未勾），**push 之后**的 FAIL 是"bug"（GH issue 立案）。
+## 2. 主流水线
 
-## 真实 REQ 是跨层复合的
+happy path 七段，从 `intent:analyze` tag 一路自动到 `done`。
 
-一个典型业务需求（如"用户头像上传"）往往同时改：
-- **data** 层：DB migration（表/列变更）
-- **backend** 层：HTTP API
-- **frontend** 层：UI 组件 + 交互
-- **跨层**：端到端用户旅程
+```mermaid
+flowchart TD
+    Human[人在 BKD 打<br/>intent:analyze tag]
+    Analyze[analyze-agent<br/>写 manifest.yaml<br/>+ specs 骨架]
+    AdmissionA{admission:<br/>manifest schema?}
+    Specs[contract-spec + acceptance-spec<br/>并行 spec-agent]
+    AdmissionS{admission:<br/>两 spec 都 reviewed?}
+    Dev[dev-agent<br/>开 PR + 写 manifest.pr.number]
+    Staging[staging-test checker<br/>kubectl exec runner<br/>cd cwd && cmd]
+    PRCI[pr-ci-watch checker<br/>GitHub REST 轮 check-runs]
+    EnvUp[sisyphus pre-accept:<br/>make ci-accept-env-up]
+    Accept[accept-agent<br/>跑 FEATURE-A* scenarios]
+    Teardown[teardown_accept_env<br/>make ci-accept-env-down<br/>幂等必跑]
+    Archive[done_archive<br/>合 PR + 关 issue]
+    Done([done])
 
-所以流程里的"N 路并行 Spec"按 **proposal.md 声明的 layers** 动态展开，不是固定 3 路。
+    Human --> Analyze --> AdmissionA
+    AdmissionA -->|invalid| Escalate1[ESCALATED]
+    AdmissionA -->|ok| Specs --> AdmissionS
+    AdmissionS -->|reviewed| Dev --> Staging --> PRCI --> EnvUp --> Accept --> Teardown --> Archive --> Done
 
-### proposal.md frontmatter 声明 layers
+    classDef agent fill:#e1f5ff,stroke:#0288d1
+    classDef checker fill:#fff3e0,stroke:#f57c00
+    classDef admission fill:#fce4ec,stroke:#c2185b
+    classDef terminal fill:#e8f5e9,stroke:#388e3c
+
+    class Analyze,Specs,Dev,Accept agent
+    class Staging,PRCI checker
+    class AdmissionA,AdmissionS admission
+    class Done,Escalate1 terminal
+```
+
+## 3. 失败与迭代场景（verifier 子链）
+
+任何 stage（含 staging-test、pr-ci、accept）失败 **不直接 bugfix**，先入 `REVIEW_RUNNING` 让 verifier-agent 主观判：
+
+```mermaid
+flowchart TD
+    Stage[任意 stage_RUNNING]
+    StageFail{stage 结果}
+    Verifier[REVIEW_RUNNING<br/>verifier-agent 跑<br/>verifier/{stage}_{trigger}.md.j2]
+    Decision{decision JSON<br/>action ?}
+    NextStage[下一 stage]
+    Fixer[FIXER_RUNNING<br/>start_fixer 起<br/>dev / spec / manifest fixer]
+    Reverify[invoke_verifier_after_fix<br/>回 REVIEW_RUNNING]
+    Retry[apply_verify_retry_checker<br/>回 stage_RUNNING<br/>重跑机械 checker]
+    Escalated([ESCALATED])
+
+    Stage --> StageFail
+    StageFail -->|pass| Verifier
+    StageFail -->|fail| Verifier
+    Verifier --> Decision
+    Decision -->|pass| NextStage
+    Decision -->|fix + fixer={dev,spec,manifest}| Fixer --> Reverify --> Verifier
+    Decision -->|retry_checker| Retry --> Stage
+    Decision -->|escalate / schema invalid| Escalated
+
+    classDef verifier fill:#f3e5f5,stroke:#7b1fa2
+    classDef terminal fill:#ffebee,stroke:#c62828
+    class Verifier,Reverify,Decision verifier
+    class Escalated terminal
+```
+
+**为什么 success 也走 verifier**：M14b 让 verifier-agent 也对"机械 pass"做最后一道主观判（避免假阳性 / 偷工减料）。`trigger=success` 跟 `trigger=fail` 复用同一框架，prompt 模板分别在 `prompts/verifier/{stage}_success.md.j2` 和 `_fail.md.j2`。
+
+**verifier decision 协议**（router.py:33 `validate_decision`）：
+
+```json
+{
+  "action": "pass | fix | retry_checker | escalate",
+  "fixer": "dev | spec | manifest | null",
+  "confidence": "high | low",
+  "reason": "..."
+}
+```
+
+注：`action=fix` 时 `fixer` 必须非 null；其他 action `fixer` 必须 null。
+
+decision 写在 BKD verifier issue 的：
+1. `decision:<urlsafe-base64-json>` tag（首选，机器写最稳）
+2. issue description 里的 ```` ```json ```` 块（兜底）
+
+schema 不合规 → `VERIFY_ESCALATE` → 终态 ESCALATED。
+
+## 4. 三类决定者职责
+
+| | 决定什么 | 谁做 | 怎么做 |
+|---|---|---|---|
+| **机械事实** | 测试是否退 0、CI 是否绿、manifest 是否合 schema、env 是否起来 | sisyphus checker | exec / REST / jsonschema |
+| **主观判断** | 这次 fail 是 spec 错 / 代码错 / flaky / 该 escalate | verifier-agent | LLM + decision JSON |
+| **写代码** | 实现 / 修 bug / 改 spec / 改 manifest | stage agent + fixer agent | Claude Agent in BKD issue |
+
+```mermaid
+flowchart LR
+    subgraph sisyphus["sisyphus 编排层 (Python)"]
+        Router[router.py<br/>tag → Event]
+        SM[state.py<br/>状态机]
+        Engine[engine.py<br/>action 调度]
+        Watchdog[watchdog.py<br/>卡死兜底]
+        GC[runner_gc.py<br/>资源回收]
+    end
+
+    subgraph mechanical["机械层 checker (Python in sisyphus)"]
+        Manifest[manifest_validate<br/>jsonschema + 跨字段]
+        Staging[staging_test<br/>kubectl exec 跑 make]
+        PRCI[pr_ci_watch<br/>GitHub REST]
+    end
+
+    subgraph subjective["主观层 (BKD agent)"]
+        VerifierA[verifier-agent<br/>12 个 prompt 模板<br/>输出 decision JSON]
+    end
+
+    subgraph stages["stage / fixer agent (BKD agent)"]
+        Analyze[analyze]
+        Spec[contract-spec<br/>acceptance-spec]
+        Dev[dev]
+        Accept[accept]
+        Fixer[fixer:dev<br/>fixer:spec<br/>fixer:manifest]
+        Archive[done-archive]
+    end
+
+    subgraph metrics["指标层 (Postgres + Metabase)"]
+        EventLog[event_log]
+        StageRuns[stage_runs<br/>M14e]
+        VDecision[verifier_decisions<br/>M14e]
+        Dashboards[13 张 Metabase 看板]
+    end
+
+    sisyphus --> mechanical
+    sisyphus --> subjective
+    sisyphus --> stages
+    sisyphus --> metrics
+    mechanical -.写结果.-> sisyphus
+    subjective -.decision JSON.-> sisyphus
+    stages -.session.completed.-> sisyphus
+    metrics --> Dashboards
+```
+
+## 5. 角色分工详表
+
+| 角色 | 职责 | 实现 | LOCKED 边界 |
+|---|---|---|---|
+| **sisyphus orchestrator** | 状态机 + 路由 + watchdog + GC + 指标采集 | Python, K8s Deployment | 不写业务代码、不审 PR 内容 |
+| **机械 checker** | manifest schema / 跑测试 / 轮 CI / 跑 env-up/down | Python, runner pod 内 exec | 只看 exit code / API 返回 |
+| **analyze-agent** | 写 `manifest.yaml`（schema_version / req_id / sources / test / pr）+ 写 specs/ 骨架 | BKD agent + analyze.md.j2 | 不写业务代码 |
+| **spec-agent (×2)** | 写 contract-spec / acceptance-spec | BKD agent + spec.md.j2 | 一个 LOCKED 之后另一个仍可改 |
+| **dev-agent** | 实现业务代码 + **真开 PR** + 把 PR number 回写 manifest | BKD agent + dev.md.j2 | 测试 LOCKED 不可改 |
+| **verifier-agent** | 主观判 stage 是否真过（pass / fix / retry / escalate） | BKD agent + verifier/{stage}_{trigger}.md.j2 | 不写代码，只输出 decision JSON |
+| **fixer-agent** | 改一类东西：dev fixer 改业务码、spec fixer 改 spec、manifest fixer 改 manifest | BKD agent + bugfix.md.j2（过渡） | scope 由 verifier 指定 |
+| **accept-agent** | 跑 FEATURE-A* scenarios，写 result:pass/fail tag | BKD agent + accept.md.j2 | 不改业务代码 |
+| **done-archive agent** | 合 PR + 关 issue | BKD agent + done_archive.md.j2 | — |
+
+## 6. Stage 与产物
+
+| # | Stage | 触发 | 产物 / 副作用 | 推进信号 |
+|---|---|---|---|---|
+| 1 | **analyze** | `intent:analyze` tag | `/workspace/.sisyphus/manifest.yaml` + specs 骨架 | session.completed + analyze tag |
+| — | admission(manifest) | analyze 完 | jsonschema + 跨字段（一个 leader、source 路径前缀、test/pr 必填） | 通过 → SPECS_RUNNING；不过 → ESCALATED |
+| 2 | **specs (×2 并行)** | analyze pass | `tests/contract/*` + `tests/acceptance/*` LOCKED | 两个 spec 都 reviewed → SPEC_ALL_PASSED |
+| 3 | **dev** | SPEC_ALL_PASSED | 业务代码 + 推 PR + `manifest.pr.number` 回写 | session.completed + dev tag |
+| 4 | **staging-test** (机械) | dev push | `cd <manifest.test.cwd> && <manifest.test.cmd>` 退码 0 / 1 | sisyphus 自己判，无 BKD agent |
+| 5 | **pr-ci-watch** (机械) | staging-test pass | GitHub REST 轮 check-runs 直至 conclusion 全绿 / 任一红 / 1800s 超时 | sisyphus 自己判 |
+| 6a | **accept env-up** (机械) | pr-ci pass | runner pod 跑 `make ci-accept-env-up`，stdout 尾行 JSON 取 `endpoint` | env-up 失败 → ESCALATED |
+| 6b | **accept** | env-up 完 | 跑 FEATURE-A* scenarios → result:pass / fail tag | session.completed + accept tag |
+| 7 | **teardown** (机械, 必跑) | accept 完（pass 或 fail） | `make ci-accept-env-down`，best-effort 失败只 warning | TEARDOWN_DONE_PASS / FAIL |
+| 8 | **archive** | teardown_done_pass | 合 PR + 关 issue | ARCHIVE_DONE → DONE |
+
+完整状态转移见 [state-machine.md](./state-machine.md)。
+
+## 7. 数据流：manifest.yaml 是核心契约
+
+`/workspace/.sisyphus/manifest.yaml` 由 analyze-agent 写，被 admission / staging-test / pr-ci-watch / accept env / teardown 反复读。schema 在 [orchestrator/src/orchestrator/schemas/manifest.json](../orchestrator/src/orchestrator/schemas/manifest.json)。
 
 ```yaml
----
-req_id: REQ-10
-category: feature
-layers:
-  - data        # 涉及 DB schema 变更
-  - backend     # 涉及 HTTP API
-  - frontend    # 涉及 UI
----
-
-# REQ-10: 用户头像上传
-...
+schema_version: 1
+req_id: REQ-29
+sources:
+  - repo: phona/ttpos-server-go
+    path: source/ttpos-server-go
+    role: leader              # 必有且仅有 1 个 leader
+    branch: stage/REQ-29
+integration:                  # 可选；仅 accept 用
+  repo: phona/ttpos-arch-lab
+  path: integration/ttpos-arch-lab
+test:
+  cmd: make ci-unit-test ci-integration-test
+  cwd: source/ttpos-server-go
+  timeout_sec: 600
+pr:
+  repo: phona/ttpos-server-go
+  number: 123                 # dev-agent 开 PR 后回写
 ```
 
-### n8n 按 layers 动态展开 Spec 阶段
+各字段消费者：
 
-| Layer | 并行 Spec 阶段 | 交付物 | LOCKED |
+| 字段 | 谁读 | 用途 |
+|---|---|---|
+| `sources[].repo / path / branch` | runner 镜像内的 git clone 脚本 | 准备 working tree |
+| `sources[].role=leader` | manifest_validate | 校验"恰好一个 leader" |
+| `test.cmd / cwd / timeout_sec` | staging_test checker | 跑命令 |
+| `pr.repo / number` | pr_ci_watch checker | 找 PR 头 SHA + check-runs |
+| `integration.path` | create_accept / teardown | `cd /workspace/integration/* && make ci-*` |
+
+## 8. Runner（K8s Pod + PVC，per-REQ）
+
+每个 REQ 在 `sisyphus-runners` namespace 起一个：
+- **Pod** `runner-<REQ>` —— privileged + DinD + fuse-overlayfs
+- **PVC** `workspace-<REQ>` —— 挂 `/workspace`，存 clone 的 repos + manifest.yaml + 中间产物
+
+生命周期由 `k8s_runner.py` 管：
+
+```mermaid
+stateDiagram-v2
+    [*] --> Created: ensure_runner (analyze 起)
+    Created --> Running: K8s 调度 + entrypoint.sh
+    Running --> Restarting: Pod crash (restartPolicy=Always)
+    Restarting --> Running: 自动拉起 (PVC 不变)
+    Running --> Paused: pause (delete Pod, 留 PVC)
+    Paused --> Running: resume (重建 Pod)
+    Running --> Cleaned: M10 即时 cleanup\n(state ∈ {done})
+    Running --> Retained: state=escalated\n(PVC 留 N 天给人查)
+    Retained --> Cleaned: runner_gc 超过 retention
+    Cleaned --> [*]
+```
+
+镜像两种：
+- `runner/Dockerfile` —— Flutter 全家桶（~5GB），跑 ttpos-flutter
+- `runner/go.Dockerfile` —— 精简 Go 镜像（~1GB）
+
+镜像内 `/opt/sisyphus/scripts/` 挂着合约脚本：
+- `validate-manifest.py` —— admission 兜底
+- `check-scenario-refs.sh` / `check-tasks-section-ownership.sh` / `pre-commit-acl.sh` —— spec/dev pre-commit 用
+
+orchestrator 注入 env：
+
+| env | 何时注入 | 用途 |
+|---|---|---|
+| `SISYPHUS_REQ_ID` | 所有 stage | 业务 Makefile 拼 namespace / 标签 |
+| `SISYPHUS_NAMESPACE=accept-<req-id>` | accept 阶段 | `helm install -n $SISYPHUS_NAMESPACE` |
+| `SISYPHUS_STAGE` | accept env-up / teardown | 给业务 Makefile 区分阶段 |
+| `SISYPHUS_RUNNER=1` | 镜像内置 | 让脚本判断"在 sisyphus runner 里" |
+
+详见 [integration-contracts.md](./integration-contracts.md)。
+
+## 9. BKD 客户端（REST 默认）
+
+PR #1 起 sisyphus 调 BKD 走 REST（BKD ≥ 0.0.65 已废 `/api/mcp`）：
+
+- **transport**: `bkd_transport=rest`（默认）/ `mcp`（兜底）
+- **入口**: `BKDClient(base_url, token)` factory（`orchestrator/src/orchestrator/bkd.py`）
+- **方法**: `create_issue` / `follow_up_issue` / `update_issue` / `get_issue`
+- **PR #18 起 `create_issue` 默认 `useWorktree=True`** —— 强制 agent 隔离 working tree，并行多 agent 不互抢
+
+webhook 反向：BKD `session.completed` / `session.failed` / `issue.updated` → orchestrator `webhook.py` → router 翻译 → engine.step 推状态机。
+
+## 10. 观测系统
+
+```
+┌─────────────────────────┐
+│ orchestrator 写表       │
+│  - event_log (kind)     │   ← 任何决策、check 结果都写
+│  - stage_runs (M14e)    │   ← stage 起止 / agent / token / model
+│  - verifier_decisions   │   ← 每条 verifier JSON + 后续 actual_outcome
+│  - bkd_snapshot         │   ← BKD issue 状态镜像（5 min sync）
+└─────────────────────────┘
+            │
+            ▼ Postgres (sisyphus 库)
+            │
+┌─────────────────────────┐
+│ Metabase                │
+│  Q1-Q5  (M7)  artifact_checks 钻牛角尖、慢异常、通过率、失败分桶 │
+│  Q6-Q13 (M14e) duration P95 / verifier 准确率 / fixer 命中率   │
+│           / token 成本 / 并行加速比 / bugfix loop 异常        │
+│           / watchdog escalate 频率                            │
+└─────────────────────────┘
+```
+
+详细：[observability.md](./observability.md) + [observability/sisyphus-dashboard.md](../observability/sisyphus-dashboard.md)。
+
+**核心准则**：观测不是"看好看的图"，是**让每次改 prompt / 阈值能用数据验证效果**。`config_version` + `improvement_log` 两张表锁住"改动 → 度量"循环。
+
+## 11. 兜底机制
+
+| 机制 | 触发 | 行为 | 文件 |
 |---|---|---|---|
-| backend | Contract Test Spec | `tests/contract/*.go`（`//go:build contract`） | ✅ |
-| frontend | UI Test Spec | `tests/ui/*.spec.ts`（Playwright）或 `tests/mobile/*.kt`（Android Espresso） | ✅ |
-| data | Migration Spec | `migrations/NNN_xxx.{up,down}.sql` + `migrations/NNN_xxx.md`（dry-run + rollback 计划） | ✅ |
-| 全 REQ | Accept Test Spec | `tests/acceptance/*.ts`（Playwright E2E）或 `*.go`（纯 API 时） | ✅ |
-| 全 REQ | Dev Spec | tasks.md 的 `Stage: Dev` section | - |
-
-**Gate 按 layers 算**：涉及哪些 layer 就等哪些 Spec 都 review：
-- 只 backend：2 路（Contract + Dev Spec）
-- backend + frontend：4 路（Contract + UI + Accept + Dev Spec）
-- 全三层：5 路（Contract + UI + Migration + Accept + Dev Spec）
-
-### Spec 文件也按 layer 切分
-
-```
-openspec/changes/REQ-10/
-├── proposal.md
-├── design.md
-├── specs/
-│   ├── avatar-api.md          ← backend layer 行为（HEALTH-S1、UPLOAD-S1...）
-│   ├── avatar-ui.md           ← frontend layer 行为（UI-UPLOAD-S1...）
-│   └── avatar-data.md         ← data layer 约束（DATA-S1 列非空、DATA-S2 索引）
-├── contract.spec.yaml
-├── tasks.md
-└── reports/qa.md
-```
-
-Scenario ID 的 FEATURE prefix 可跨 layer 用不同命名（`UPLOAD-S*`, `UI-UPLOAD-S*`, `DATA-UPLOAD-S*`）或统一用 capability slug。
-
-## 目录结构
-
-```
-openspec/
-├── project.md                           ← 稳定项目约定（技术栈、代码规范、领域术语）
-├── specs/health.md                      ← 权威 capability spec，apply 时追加 Change History
-└── changes/
-    ├── REQ-06/                          ← OpenSpec 原生 4 件套 + reports/
-    │   ├── proposal.md                  ← OpenSpec 原生：需求 + Scenario 索引
-    │   ├── design.md                    ← OpenSpec 原生：设计权衡
-    │   ├── specs/health.md              ← OpenSpec 原生：spec-delta
-    │   ├── tasks.md                     ← OpenSpec 原生：多 Stage section 分工
-    │   ├── contract.spec.yaml           ← 非 OpenSpec，OpenAPI 3.0+ 契约
-    │   └── reports/                     ← 非 OpenSpec，pipeline 产物
-    │       └── qa.md                    ← 验收签收（仅 QA 阶段启用后才有）
-    └── archive/REQ-05/                  ← OpenSpec 原生：已 apply 的 change
-
-scripts/                                 ← sidecar linter（~200 行 bash）
-├── check-scenario-refs.sh               ← Scenario ID 引用完整性
-├── check-tasks-section-ownership.sh     ← tasks.md section 属主校验
-├── pre-commit-acl.sh                    ← 按 AGENT_ROLE 拦截跨权限改动
-├── bugfix-commit-hook.sh                ← （规划）bug fix commit 自动注入 issue 引用
-└── check-qa-evidence.sh                 ← （规划）qa.md 自包含审计检查
-```
-
-## OpenSpec 原生 vs 自定义约定
-
-### 原生（OpenSpec 直接支持）
-
-| 文件 | 用途 | 写者 |
-|---|---|---|
-| `changes/REQ-xx/proposal.md` | 需求描述 + Scenario 索引 | TL (ANALYZE agent) |
-| `changes/REQ-xx/design.md` | 设计权衡 | TL |
-| `changes/REQ-xx/specs/*.md` | spec-delta | TL |
-| `changes/REQ-xx/tasks.md` | 任务清单 | 各 Stage agent 协作 |
-| `openspec/specs/*.md` | 长期权威 capability spec | apply 流程 |
-| `openspec/project.md` | 稳定项目约定 | TL（项目演进时） |
-| `openspec/changes/archive/` | 已完成 change 归档 | archive 流程 |
-
-### 自定义约定（OpenSpec 不认）
-
-| 约定 | 强制手段 | 作用 |
-|---|---|---|
-| Scenario ID 命名 `FEATURE-S{N}` | `check-scenario-refs.sh` | 跨阶段产物统一标识 |
-| Task 必须以 `[SCENARIO-ID]` 前缀 | `check-scenario-refs.sh` | 每条 task 追溯到需求 |
-| `tasks.md` 的 `## Stage: X (owner: Y)` section | `check-tasks-section-ownership.sh` | 多 agent 协作边界 |
-| `contract.spec.yaml`（OpenAPI）放在 change 目录 | pre-commit-acl.sh（仅 TL 可写） | Contract Test 机读 schema |
-| `reports/qa.md` 自包含 | `check-qa-evidence.sh`（规划） | 验收审计 BKD log 失效后仍可追溯 |
-| 文件级 read/write ACL 按角色 | `pre-commit-acl.sh` | 对抗验证边界 |
-| Push 到 feat 分支 = 转测分界线 | n8n workflow 规则 | 区分"任务未完成" vs "bug" |
-| Bug 走 GH Issues 单一事实源 | n8n 主动创建/关闭（规划） | 与 OpenSpec change 解耦 |
-| 回归问题 = 新 REQ 不回滚 | n8n ANALYZE 规则 | OpenSpec 演进 append-only |
-
-## 阶段与交付物
-
-| # | 阶段 | 触发条件 | 输入 | 交付物 | LOCKED | OpenSpec 认 |
-|---|---|---|---|---|---|---|
-| 1 | **需求分析** (TL) | 新 REQ 进入 | `project.md` + 近期 archive | proposal（含 layers 声明）/ design / specs/ / contract.spec.yaml / tasks.md 骨架 | - | ✅ (前 4) |
-| 2a | **开发 Spec** | 所有 REQ | specs + contract + design | tasks.md `Stage: Dev` section（每条 task 含文件路径+函数签名） | - | ✅ |
-| 2b | **契约测试 Spec** | `layers` 含 backend | contract.yaml + specs | `tests/contract/*.go` | ✅ | ❌ |
-| 2c | **UI 测试 Spec** | `layers` 含 frontend | specs/*-ui.md | `tests/ui/*.spec.ts`（Playwright）或 `tests/mobile/*.kt` | ✅ | ❌ |
-| 2d | **Migration Spec** | `layers` 含 data | specs/*-data.md | `migrations/NNN_*.up.sql`, `.down.sql` + `.md`（dry-run 计划） | ✅ | ❌ |
-| 2e | **验收测试 Spec** | 所有 REQ | specs（禁 contract.yaml + 禁代码） | `tests/acceptance/*.ts`（Playwright E2E）或 `*.go`（纯 API 时） | ✅ | ❌ |
-| 3 | **开发** | Gate 通过后 | design + specs + contract + tasks Dev section + LOCKED 测试（只读） | 业务代码 + unit test + tasks 勾选完成 | - | 业务代码 ❌，tasks ✅ |
-| 3.5 | **CI 核验 (dev 自检)** | Dev session.completed | dev 分支代码 | BKD issue `## CI Result` block + `ci:pass/fail` + `target:unit` tag | - | ❌ |
-| 4 | **测试验证 (Verify / CI integration)** | CI 自检 pass 后 | feat/REQ 分支 | `make ci-integration-test` output + `ci:pass/fail` + `target:integration` tag | - | - |
-| 5 | **Bug Fix Round N** | Verify/QA FAIL | Bug tracker + design + specs + 代码 + 测试（只读） | 改业务代码（**先诊断 CODE/TEST/SPEC bug**，见下） | - | - |
-| 5b | **Test Bug Fix** | Bug Fix 诊断为 TEST BUG | 原失败测试 + specs | 改测试 | - | - |
-| 6 | **验收 (QA)**（待 ttpos-arch-lab 就位） | Verify PASS 后 | specs + acceptance 测试（禁代码 + 禁 design rationale） | 部署临时环境（含 Playwright/Android emulator）→ 跑 E2E → `reports/qa.md` → tear down | - | ❌ |
-
-### Scenario ID 约定
-
-`{FEATURE}-S{N}`：FEATURE 大写字母+数字+短横线（如 `HEALTH`, `USER-AUTH`），S 后跟整数。
-
-- ANALYZE 在 `specs/*.md` 定义：`## Scenario: HEALTH-S1 (简短描述)`
-- 其它阶段只能引用，不能重命名
-- pre-commit + CI 跑 `check-scenario-refs.sh` 保证每个引用都能找到定义
-
-### tasks.md 结构
-
-```markdown
-# Tasks — REQ-06
-
-## Stage: Contract Test (owner: contract-test-agent)
-- [ ] [HEALTH-S1] 写 TestHealth_S1_Returns200
-- [ ] [HEALTH-S2] 写 TestHealth_S2_HasTimestampField
-
-## Stage: Accept Test (owner: accept-test-agent)
-- [ ] [HEALTH-S1] 写 TestHealth_S1_E2E
-- [ ] [HEALTH-S4] 写 TestHealth_S4_ConcurrentP99
-
-## Stage: Dev Spec (owner: dev-spec-agent)
-- [ ] [HEALTH-S1,S2] 设计 handler.go 签名
-- [ ] [HEALTH-S3] 设计 method 检查
-
-## Stage: Dev (owner: dev-agent)
-- [ ] [HEALTH-S1,S2] 实现 Handle()
-- [ ] [HEALTH-S3] 实现 method 拒绝
-- [ ] 路由注册
-- [ ] 本地 L0/L1 通过
-```
-
-**约束**（pre-commit 强制）：
-- 每条 task 必须以 `[SCENARIO-ID]` 前缀（一条 task 可覆盖多：`[HEALTH-S1,S2]`）
-- Section heading 必须含 `(owner: <agent-role>)`
-- 每个 agent 只能勾自己 section 下的 checkbox
-- 所有 task 勾完 + 本地 L0/L1 绿 → push → 进转测
-
-### 阶段 4: 测试验证执行层级
-
-- **L0** lint/compile
-- **L1** unit test（贴业务代码的 `*_test.go`）
-- **L2** contract test（`//go:build contract`，需 local HTTP listener 或 mock）
-- **L3** acceptance test（`//go:build acceptance`，需 ttpos-arch-lab ephemeral env）
-
-**MVP 阶段**：Verify 只跑 L0-L2。L3 + QA 阶段等 ttpos-arch-lab 数据裁剪 + 环境拉起能力就绪后接入。
-
-### 阶段 5: Bug Fix 先诊断再动手
-
-Bug Fix agent 必须先判故障类型，不能直接改代码：
-
-| 类型 | 判定 | 处理 |
-|---|---|---|
-| **CODE BUG** | spec 说 X，test 正确验 X，code 输出 Y | Dev Bug Fix agent 改代码（禁改测试） |
-| **TEST BUG** | test 检查了 spec 没说的东西；test 断言写错；test 有竞态 | title 加 `TEST-BUG`，写 `reports/bugfix-r{n}-diagnosis.md`，move review → n8n 路由到 **Test Bug Fix agent**（有改测试权限） |
-| **SPEC BUG** | spec 本身模糊/矛盾/漏场景 | title 加 `SPEC-BUG`，写 diagnosis，move review → n8n 升级人工（或触发 REANALYZE 新 REQ） |
-| **判不出** | 先按 CODE BUG 试；连续 N 轮同一位置不收敛 → 强制重新诊断 | 按 CODE BUG 默认 |
-
-Prompt 硬性要求动手前走完这个诊断流程，pre-commit 仍然拦改测试（保证 TEST BUG 路径必须绕到 Test Bug Fix）。
-
-### 阶段 6: QA（规划中，多层 E2E 验收）
-
-QA 不是"签字"，是**真正的独立端到端验收**，借助环境里的观察工具（Playwright / Android emulator / log / DB query）跨层验证：
-
-```
-1. 从 feat/REQ-10 拉最新代码
-2. build artifact（后端 binary + 前端 bundle）
-3. 在 ttpos-arch-lab 拉起全新 ephemeral 环境
-   包含：DB + 后端 + 前端 + Playwright / Android emulator runner
-4. 跑 migration（如有 data layer）
-5. 部署本次构建到该环境
-6. 跑 tests/acceptance/*（E2E 跨层）
-7. AI 观测（按 layer 组合）：
-   - Playwright screenshot + DOM snapshot → 判页面对不对
-   - 后端 log → 判请求链路
-   - DB query → 判数据持久化
-   - trace → 判跨服务调用
-8. 记录证据到 qa.md（内联全文、截图 base64、DOM diff、不引用外部 log）
-9. tear down 环境
-10. 签收 qa.md → move review
-```
-
-`reports/qa.md` 必含字段（`check-qa-evidence.sh` 强制）：
-- `## Summary`（REQ + overall PASS/FAIL + date + signer）
-- `## Git Commit`（40 位 SHA）
-- `## Test Binary`（64 位 sha256）
-- `## Deploy Env`
-- `## Scenario Matrix`（每条 scenario → PASS/FAIL + 证据）
-- `## Test Output`（内联测试全文，禁链接）
-
-## 角色读写权限矩阵
-
-| Agent | 可写 | 禁写（硬拦截） | 禁读（软约束） |
-|---|---|---|---|
-| **TL (ANALYZE)** | 全 openspec/ | — | — |
-| **Dev Spec** | tasks.md 的 Dev section | 测试、业务代码、openspec/specs/ | — |
-| **Contract Test** | `tests/contract/*` + tasks Contract Test section | 业务代码、acceptance 测试、openspec/specs/ | — |
-| **UI Test** | `tests/ui/*` / `tests/mobile/*` + tasks UI Test section | 业务代码、其它测试、openspec/specs/ | — |
-| **Migration** | `migrations/*.sql`, `migrations/*.md` + tasks Migration section | 业务代码、测试、openspec/specs/ | — |
-| **Accept Test** | `tests/acceptance/*` + tasks Accept Test section | 业务代码、其它测试、openspec/specs/ | `contract.spec.yaml` / 业务代码 / design.md |
-| **Dev** | 业务代码 + unit test + tasks Dev 勾选 | 测试 LOCKED、openspec/specs/ | — |
-| **Verify** | 无（不 commit） | 全部 | — |
-| **CI Runner** | 无（不 commit，只写 BKD issue） | 全部 repo 文件 | — |
-| **Bug Fix** (code) | 业务代码 | 测试 LOCKED、openspec/specs/ | — |
-| **Test Bug Fix** | `tests/contract/*` / `tests/acceptance/*` / `tests/ui/*` | 业务代码、openspec/specs/ | — |
-| **QA**（规划） | `reports/qa.md` | 业务代码、测试、openspec/specs/ | 业务代码、design.md rationale |
-
-**硬拦截**靠 `pre-commit-acl.sh`（CI 也跑）。**软约束**靠 prompt 明令。未来可加 git sparse-checkout 物化禁读。
-
-## 分支策略
-
-```
-main
-└── feat/REQ-06                              ← REQ 特性分支
-    ├── stage/REQ-06-analyze                 ← TL 子分支
-    ├── stage/REQ-06-dev-spec                ← dev-spec agent
-    ├── stage/REQ-06-contract-test           ← contract-test agent
-    ├── stage/REQ-06-accept-test             ← accept-test agent
-    ├── stage/REQ-06-dev                     ← dev agent
-    └── bugfix/REQ-06-round-N                ← 每轮 Bug Fix 独立分支
-```
-
-每个 agent：从 `feat/REQ-06` 拉子分支 → 干活 → merge 回特性分支。rebase 冲突自己解，复杂冲突升级。验收 PASS → PR → merge `main` → `openspec apply` → archive。
-
-## n8n 编排
-
-**无状态路由器**，按**大类 workflow** 分入口（每类 workflow 内部再按 layer 动态展开 Spec 阶段）：
-
-- `/v2` — Feature 入口：新增 / 扩展能力（可跨 data/backend/frontend 任意组合）
-- `/v2-hotfix` — Hotfix 入口（规划）：紧急修复，精简 pipeline，不走完整 Spec 阶段
-- `/v2-maintenance` — 运维入口：压缩归档、基础设施变更，禁动 `specs/`
-- `/bkd-events` — BKD `session.completed` 路由（共享）
-
-**大类 workflow**（入口）定行为总体 shape；**layers 声明**（proposal.md）决定内部 Spec 阶段怎么动态展开。这两个正交。
-
-### 共享 vs 变体
-
-```
-n8n workflows/
-├── shared/                      ← 所有 workflow 共用
-│   ├── bug-fix-diagnose.json    ← Bug Fix 三类诊断子流程
-│   ├── circuit-breaker.json     ← 熔断
-│   ├── escalation.json          ← 升级人工
-│   └── openspec-apply.json      ← apply + archive
-└── variants/
-    ├── v3-feature-entry.json    ← /v2（已实现）
-    ├── v3-hotfix-entry.json     ← /v2-hotfix（规划）
-    ├── v3-maintenance-entry.json← /v2-maintenance（已实现）
-    └── v3-bkd-events.json       ← /bkd-events 路由器
-```
-
-路由器实现见 `charts/n8n-workflows/v3-events.json`。harness 在 `testcases/test-events-harness.sh`。
-
-### 熔断
-
-Bug Fix 轮次 ≥ 3 → escalate（加 label + assign 人工 + 停自动 Bug Fix）。
-
-- **MVP**：按 BKD issue 的 `round-N` tag 数累计
-- **GH 集成后**：按 `gh issue list --state all --label REQ-xx scenario:XX-S{n}` 数累计
-
-## 转测后 Bug 流程（规划，待 GH 集成）
-
-1. verify/accept FAIL → n8n 调 `gh issue create`，label: `bug,REQ-06,scenario:HEALTH-S3,round:N`
-2. n8n 写 `.bugfix-context` 到 worktree（含 issue 号），创 BKD "Bug Fix" issue
-3. bugfix agent 启动，commit 时 `bugfix-commit-hook.sh` 自动 append `Bugfix-Issue: N`
-4. push 后 n8n 重跑 verify
-5. PASS → n8n 主动 `gh issue close #N`（不信 commit message）
-6. 累计 round 触发熔断
-
-**MVP 阶段**：仍用 BKD issue 做 bug tracker（title 里带 round-N 标签），等 GH 集成就位后迁。
-
-## 回归问题 ≠ 回滚
-
-`openspec apply` 是 append-only，历史不撤销。发现回归/漏场景 → 开新 REQ（REQ-06b）修正 spec → 走完整 pipeline。
-
-## Scope 与不支持的场景
-
-**当前 MVP 支持**：新增 / 扩展**业务能力**类 REQ，可跨 data / backend / frontend 任意 layer 组合（前提是各 layer 的测试工具已就位：后端 Go + HTTP ✅、前端 Playwright 🚧、Android emulator 🚧、DB migration 🚧）。
-
-**ANALYZE agent 判"不支持"立即 abort 的场景**：
-- **紧急 hotfix**：要求 5 分钟内上线的修复 → 走 `/v2-hotfix`（规划中）或人工
-- **跨服务协调**（一个 REQ 改多个 repo / 微服务）→ 当前不支持
-- **Breaking change / API v2**：需要版本迁移 + 兼容层 → 当前不支持，拆 REQ 或人工
-- **纯 config/flag 调整**：不需要 test 阶段 → 走 PR
-- **纯文档 PR**：不进 pipeline → 走 PR
-- **实验性 feature flag / 灰度 / A/B**：需要 flag 管理和 metrics 观察 → 当前不支持
-
-## 已知未解问题
-
-1. **并发 REQ 对同一 capability spec 冲突**：REQ-06 / REQ-07 都改 `health.md`，PR 合入顺序决定谁 rebase。目前依赖人工 serialize。
-2. **ttpos-arch-lab ephemeral 环境 + Playwright/Android 工具链**：数据裁剪中，还没 ready。
-3. **Token 成本监控**：n8n 暂未汇总 agent token 消耗。
-4. **Regression suite 持续化**：archive 的测试不会自动纳入以后的全仓 regression suite。
-5. **设计缺陷兜底（观测中）**：layers 双真相源、幂等性软闸、action 无幂等 key、熔断粒度太粗等已识别缺陷通过可观测系统检测兜底，尚未从根源修复。见 [observability.md](./observability.md#覆盖的已知缺陷)。
-
-## 可观测性
-
-配套独立的观测系统支撑 **实时兜底 + 离线分析 + 可持续改进** 三个目标。组件：Postgres + Metabase + n8n tap 节点。
-
-- 设计：[observability.md](./observability.md)
-- 部署 / 运维：[../observability/README.md](../observability/README.md)
-- Schema：[../observability/schema.sql](../observability/schema.sql)
-
-**定位**：不是"日志收集"或"APM"，是**把 n8n 决策流水 + BKD 状态镜像做成 SQL 可查的账本**，让每次改 prompt / Router 规则都能用数据验证效果。改进循环通过 `config_version` + `improvement_log` 两张表固化。
-
-## 未来扩展点（按优先级）
-
-1. **ttpos-arch-lab 临时环境 + QA agent 接入**（最急，带来真 e2e 验收）
-   - 含 Playwright / Android emulator / DB / 后端容器
-   - AI 能 driver UI（点击、输入、观察）+ 读 DB + 读 log
-2. **Migration / UI Test / 多 layer Spec 阶段**（workflow + linter 配套）
-3. **`/v2-hotfix` 入口**：按 hotfix 模式精简 pipeline（跳 3-spec 等）
-4. **GH Issues bug 流程替换 BKD bug tag**（需 GitHub token + gh CLI 在 worktree 可用）
-5. **sparse-checkout 物化 read ACL**（对抗强度上限）
-6. **NFR spec 分层 `specs/*.nfr.md`**（有 NFR 需求出现时）
-7. **design.md 拆 constraints / rationale**（Test agent 偷看 rationale 造成 bug 时）
-8. **diff 不相交熔断**（相比简单计数更智能，有足够样本再调）
+| **admission gate** | analyze / spec 完 | manifest schema 不过 → ESCALATED；不卡 ambiguity（M12 已砍交回 agent 自管） | checkers/manifest_validate.py |
+| **verifier-agent** | 任意 stage 完成 | LLM 主观判 pass/fix/retry/escalate；无效 JSON → escalate | actions/_verifier.py |
+| **watchdog** (M8) | 后台轮询 | REQ 卡 in-flight 超 N 秒 + BKD session 不在跑 → SESSION_FAILED → ESCALATED | watchdog.py |
+| **runner GC** (M10) | 后台轮询 | done 立删；escalated 留 N 天再删；孤儿 runner 也删 | runner_gc.py |
+| **CAS state transition** | 每条 transition | Postgres 行级 CAS 防并发抢同 REQ | store/req_state.py |
+| **idempotent action** | webhook 重试 | 大部分 action 标 `idempotent=True`；create_* 例外 | actions/__init__.py |
+
+## 12. 已知约束 / 不支持
+
+- **跨 repo 协调**：当前一个 REQ 主改一个 leader repo，integration 用 single integration 块。多 leader 暂不支持。
+- **回归归档**：accept 通过的 spec 不会自动并入更大 regression suite，需要新 REQ 显式补。
+- **Hotfix 入口**：紧急修复目前还是走完整流水线 + skip flag，没有专门的 hotfix mode。
+- **Token 成本告警**：Q10 已出图但未自动告警。
+- **真正的 root-cause fixer prompt**：当前 fixer 复用 `bugfix.md.j2` 过渡，PR4 / 后续 PR 才会做 dev/spec/manifest 三类专用 prompt。
+
+## 13. 演进路线（in-flight）
+
+- **M14d** —— dev 并行 fanout（按 source repo 切多 dev-agent，加速大改）
+- **专用 fixer prompts** —— `verifier-fix-dev.md.j2` / `verifier-fix-spec.md.j2` / `verifier-fix-manifest.md.j2`
+- **接 ttpos-arch-lab 真 e2e** —— accept env-up / env-down 落到生产 lab
+- **Token 自动告警** —— Q10 + 阈值 → notification

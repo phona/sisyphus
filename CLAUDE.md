@@ -1,76 +1,106 @@
 # Sisyphus
 
-AI 驱动的无人值守开发平台。契约驱动 + 测试先行。
+> AI-native CI 编排层。**调度 + 机械 checker + 度量** 三件套，让 agent-driven 研发流水线跑得起来、跑得稳、能被指标驱动改进。
 
-## 架构
+权威架构：[docs/architecture.md](docs/architecture.md)
+状态机权威：[docs/state-machine.md](docs/state-machine.md)
+业务 repo 接入契约：[docs/integration-contracts.md](docs/integration-contracts.md)
 
-架构文档为唯一权威参考：[docs/architecture.md](docs/architecture.md)
+## 核心哲学
 
-### 核心哲学
+- **薄编排，agent 决定** —— 路由 / 状态机 / checker 是 sisyphus；判 PR 内容、bug 该不该修是 agent。**永远不抢 AI 决定权**。
+- **机械层 ≠ agent 层** —— 跑测试 / 轮 GHA / 校 schema 不绕 agent，sisyphus 是唯一裁判（M1 staging-test / M2 pr-ci-watch / M3 admission）。
+- **失败先验，再试错** —— stage fail 不直接 bugfix，verifier-agent 主观判 pass / fix / retry / escalate（M14b/c）。
+- **指标驱动改进** —— 每条决策入 `stage_runs` / `verifier_decisions`，13 张 Metabase 看板（M7 + M14e）回答"哪条 prompt 该改"。
+- **生产用最强模型** —— 不做"失败升级模型"自适应；haiku 只用于测试加速。
 
-- **契约驱动（CDD）**：OpenAPI Spec 为唯一真相源
-- **测试先行（TDD）**：先写测试，再写实现，测试 LOCKED 不可改
-- **两段式流程**：有人阶段（需求分析，有歧义就停）→ 无人阶段（全自动，熔断兜底）
+## 跟相邻系统的层级
 
-### 分工
+| | 干啥 |
+|---|---|
+| sisyphus | **研发组织层**：编排 analyze → spec → dev → staging-test → pr-ci → accept → archive |
+| GitHub Actions | **脚本 CI 层**：lint / unit / integration / sonar / image-publish。**互补不替代** —— pr-ci-watch 直接轮它的 check-runs |
+| Pure prompt skill | **IDE 内 turbo dev tool**：Claude Code 单 turn 内的高级 prompt。不同层；sisyphus 在它之上做组织 |
 
-| 角色 | 职责 |
-|------|------|
-| **n8n** | 门控：阶段串联、熔断、超时、可观测性 |
-| **BKD** | 执行：每个 issue 是一个纯粹的单任务 |
-| **OpenSpec** | 需求拆解：/opsx:propose |
-| **aissh MCP** | 唯一桥梁：远程控制调试环境 |
+## 分工
 
-### 阶段
+| 角色 | 实现 | 职责 |
+|---|---|---|
+| **orchestrator** | Python（K8s Deployment） | 状态机 + 路由 + watchdog + GC + 指标采集 |
+| **机械 checker** | Python（runner pod 内 exec / GitHub REST / jsonschema） | 客观事实：测试退码 / CI 绿不绿 / manifest 合 schema 不合 |
+| **stage agent** | BKD agent + Jinja2 prompt | analyze / spec / dev / accept / done-archive |
+| **verifier-agent** | BKD agent + 12 个 verifier/{stage}\_{trigger} 模板 | 主观决策：pass / fix / retry_checker / escalate（输出 decision JSON） |
+| **fixer-agent** | BKD agent + bugfix.md.j2（过渡） | 改一类东西：dev fixer 改业务码 / spec fixer 改 spec / manifest fixer 改 manifest |
+
+## Stage 流（happy path 七段）
 
 ```
-需求分析 → 测试编写 → 开发 → 测试验证 → 验收 → review
+intent:analyze → analyze → admission(manifest) → specs(×2 并行) → dev(开 PR + 写 manifest.pr.number)
+  → staging-test(机械: kubectl exec runner make ci-*) → pr-ci-watch(机械: GitHub REST 轮 check-runs)
+  → accept(env-up + agent 跑 FEATURE-A* + env-down 必跑) → archive → DONE
 ```
 
-每个阶段是一个独立的 BKD issue，通过 tag（REQ-xx）关联，n8n 通过 BKD webhook 事件驱动串联。
+任何 stage（含 staging-test / pr-ci / accept）失败入 `REVIEW_RUNNING`，verifier-agent 决策：
+- `pass` → 推下一 stage
+- `fix` + `fixer` → 起 dev / spec / manifest fixer，回 `REVIEW_RUNNING` 再判
+- `retry_checker` → 回 stage_running 重跑机械 checker
+- `escalate` → 终态 ESCALATED
+
+state 转移完整定义在 [orchestrator/src/orchestrator/state.py](orchestrator/src/orchestrator/state.py)（13 ReqState × 18 Event × 30+ transition）。
 
 ## 技术栈
 
-- **编排**：n8n（vm-node04 K3s）
-- **AI 执行**：BKD + Claude Agent（Coder Workspace）
-- **需求拆解**：OpenSpec
-- **远程控制**：aissh MCP
-- **代码托管**：GitHub
-- **调试环境**：K3s namespace 隔离
+- **orchestrator**: Python 3.12+，async（asyncpg + httpx + kubernetes asyncio）
+- **持久化**: Postgres（req_state 行级 CAS / event_log / stage_runs / verifier_decisions / artifact_checks）
+- **runner**: K8s Pod (`sisyphus-runners` namespace) + per-REQ PVC，privileged + DinD + fuse-overlayfs
+- **AI agent**: BKD（≥0.0.65）跑 Claude Agent。**走 REST 不走 MCP**（PR #1）
+- **prompt**: Jinja2 模板（`orchestrator/src/orchestrator/prompts/`）
+- **观测**: Postgres + Metabase（不引 Prometheus / OTel —— 数据形状是事件不是 metric）
+- **代码托管**: GitHub（pr-ci-watch checker 直接走 REST API）
+- **部署**: Helm chart on K3s
 
 ## 项目结构
 
 ```
 sisyphus/
-├── charts/n8n-workflows/   # n8n 工作流 JSON（v3-*.json）
-├── docs/
-│   ├── architecture.md      # 架构设计（权威）
-│   ├── observability.md     # 可观测性设计
-│   ├── n8n-k3s-pitfalls.md  # n8n on K3s 踩坑手册
-│   └── n8n-workflow-usage.md
-├── observability/           # Postgres schema + Metabase 查询
-│   ├── schema.sql
-│   ├── README.md
-│   └── queries/             # 4 条 Alert SQL
-├── router/                  # Router 纯函数 + 单测
-├── values/                  # helm values（n8n / postgresql / metabase）
-├── testcases/               # 测试用例
-└── Makefile
+├── orchestrator/             # 核心 Python 服务
+│   ├── src/orchestrator/
+│   │   ├── state.py / router.py / engine.py / webhook.py
+│   │   ├── actions/          # 15 个 stage 推进动作
+│   │   ├── checkers/         # M1/M2/M3/M11 机械 checker
+│   │   ├── prompts/          # stage agent + verifier/* + _shared/
+│   │   ├── schemas/          # manifest.json schema (draft-07)
+│   │   ├── k8s_runner.py / bkd.py / watchdog.py / runner_gc.py
+│   │   └── store/            # req_state CAS / db pool / 各表写入
+│   └── migrations/           # 0001_init / 0002_views / 0003_artifact_checks / 0004_stage_runs / 0005_verifier_decisions
+├── runner/                   # Dockerfile (Flutter) + go.Dockerfile + entrypoint.sh
+├── scripts/                  # validate-manifest.py + ACL/scenario lint 脚本（runner 镜像挂这些）
+├── observability/
+│   ├── schema.sql / agent_quality.sql
+│   ├── queries/sisyphus/     # 13 条 Metabase SQL (Q1-Q13)
+│   └── sisyphus-dashboard.md
+├── docs/                     # 见下方文档索引
+└── values/                   # helm values（postgresql / metabase）
 ```
 
 ## 文档索引
 
 | 文档 | 内容 |
-|------|------|
-| [architecture.md](docs/architecture.md) | 架构设计 + 流程图（权威） |
-| [observability.md](docs/observability.md) | 可观测性设计（Postgres + Metabase + n8n tap） |
-| [n8n-k3s-pitfalls.md](docs/n8n-k3s-pitfalls.md) | n8n on K3s 踩坑手册（11 个坑）|
-| [n8n-workflow-usage.md](docs/n8n-workflow-usage.md) | n8n 使用说明 |
-| [observability/README.md](observability/README.md) | 观测系统部署 / 运维 / 查询速查 |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | 架构权威：哲学、角色分工、流程图、stage 契约（含 mermaid） |
+| [docs/state-machine.md](docs/state-machine.md) | 状态机权威：state / event / transition 表 + stateDiagram |
+| [docs/integration-contracts.md](docs/integration-contracts.md) | sisyphus ↔ 业务 repo 契约（Makefile target、env、JSON 输出） |
+| [docs/observability.md](docs/observability.md) | 观测设计哲学（Postgres + Metabase） |
+| [observability/sisyphus-dashboard.md](observability/sisyphus-dashboard.md) | 13 张 Metabase 看板 + SQL（M7 + M14e） |
+| [docs/prompts.md](docs/prompts.md) | 各阶段 agent prompt 总览（按 role） |
+| [docs/api-tag-management-spec.md](docs/api-tag-management-spec.md) | BKD issue tag 命名规范（router 依赖） |
 
 ## 开发规范
 
 - 用中文交流
-- 改完代码检查是否存在问题
-- 每个流程节点必须有存在的理由，不搞花里胡哨
-- 目标是加速开发，走向无人值守
+- 代码改完检查问题；测试能跑就跑
+- 每个流程节点必须有存在的理由 —— 不搞花里胡哨
+- 不抢 AI 决定权 —— 加新 stage / checker 之前先问"这真该 sisyphus 干，还是 agent 干"
+- 接 BKD 走 REST，不走 MCP
+- BKD 并行派 agent 必加 `useWorktree=True`（PR #18 起默认开）
+- 目标是加速 agent-driven 开发，让"无人值守"真正可观测、可改进
