@@ -66,7 +66,9 @@ _RETRY_TARGET_STATE: dict[str, ReqState] = {
 # M14c：fail event tag → verifier stage（invoke_verifier_for_fail 用）
 # tag 来自 BKD webhook 的 issue tags（agent role）。teardown 是内部 emit，
 # 复用上游 accept tag。
+# M15：加 "dev" tag → dev stage（dev issue 失败时）
 _FAIL_TAG_TO_STAGE: dict[str, str] = {
+    "dev":          "dev",
     "staging-test": "staging_test",
     "pr-ci":        "pr_ci",
     "accept":       "accept",
