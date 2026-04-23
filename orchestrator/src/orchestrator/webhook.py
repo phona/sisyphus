@@ -99,10 +99,20 @@ async def webhook(request: Request) -> JSONResponse:
     pool = db.get_pool()
 
     # ─── 1. Dedup ───────────────────────────────────────────────────────────
-    eid_parts = [body.timestamp or "", body.issueId, body.event]
-    if body.executionId:
-        eid_parts.append(body.executionId)
-    eid = "|".join(eid_parts)
+    # 不要带 timestamp —— BKD 重发时 timestamp 通常变（实测 REQ-final7 同 issue 的
+    # session.completed 间隔 10min 重发了一次，timestamp 不同绕过原 dedup → 触发
+    # 已 superseded 的 verifier decision，把已推进的 REQ 反向 escalate）。
+    # 用 (issueId, event_type, executionId) 作 key —— 同一 BKD execution 只能处理一次
+    # session.completed / session.failed；issue.updated 没 executionId 用 timestamp 兜底
+    # （issue.updated 不会触发 verifier 决策，timestamp 重发危害有限）
+    if body.event in ("session.completed", "session.failed") and body.executionId:
+        eid = f"{body.issueId}|{body.event}|{body.executionId}"
+    else:
+        # issue.updated 等：用 timestamp + issueId + event 兜底
+        eid_parts = [body.timestamp or "", body.issueId, body.event]
+        if body.executionId:
+            eid_parts.append(body.executionId)
+        eid = "|".join(eid_parts)
     if not await dedup.check_and_record(pool, eid):
         log.debug("webhook.dedup.skip", event_id=eid)
         await obs.record_event("dedup.hit", issue_id=body.issueId, extras={"event_id": eid})
