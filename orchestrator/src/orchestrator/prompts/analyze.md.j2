@@ -10,16 +10,13 @@
 
 ─────────
 
-## 需求分析 (ANALYZE)  v0.2
+## 需求分析 (ANALYZE)  M15
 AGENT_ROLE=analyze-agent
 REQ={{ req_id }}
 
-你是本 REQ 的**首个 stage**，要同时做两件事：
-1. 分析需求（跟之前一样）
-2. **初始化 workspace 结构 + 写 manifest.yaml**（v0.2 新增）
+你是本 REQ 的**首个 stage**。职责：分析需求、初始化 workspace、产出规范文档。
 
-后续 stage agent（spec/dev/staging-test/pr-ci-watch/accept/done-archive）都依赖你立好的
-workspace 结构运转。
+后续 stage agent（spec/dev/staging-test/pr-ci/accept/archive）依赖你的初始化和分析决策推进。
 
 ---
 
@@ -30,7 +27,7 @@ workspace 结构运转。
 按"干活容器"段（上面 runner_container.md.j2）**先拉起 Pod + 进去**。然后建约定结构：
 
 ```bash
-kubectl exec runner-{{ req_id | lower }} -- bash -c "mkdir -p /workspace/.sisyphus /workspace/source /workspace/integration"
+kubectl exec runner-{{ req_id | lower }} -- bash -c "mkdir -p /workspace/source /workspace/integration"
 ```
 
 ### Step A2: 决定涉及哪些 repo
@@ -38,14 +35,13 @@ kubectl exec runner-{{ req_id | lower }} -- bash -c "mkdir -p /workspace/.sisyph
 看 BKD intent issue 的 description，判断本 REQ 改什么：
 
 - **source repo**：要改代码的 repo（可能 1-3 个；其中一个是 leader = 业务主入口）
-- **integration repo**（可选）：如果需要集成环境（比如 ttpos 要 helm 起 lab），声明它；
+- **integration repo**（可选）：如果需要集成环境（比如 k3s lab 起环境），声明它；
   纯单仓库 / 纯 library REQ 不声明
 
 ### Step A3: clone repo 到约定结构（runner pod 里，只读 clone）
 
 source / integration repo 拷进 runner PVC 的约定路径。runner pod 的 `GH_TOKEN` 是
-只读 PAT —— clone + fetch 够用，不创建 stage 分支（后续 dev-agent 在自己 cwd 里创分支
-再 push）：
+只读 PAT —— clone + fetch 够用，不创建分支（后续 dev-agent 在自己 cwd 里创分支再 push）：
 
 ```bash
 POD=runner-{{ req_id | lower }}
@@ -58,120 +54,7 @@ done
 # integration repo（如有）clone 到 /workspace/integration/
 ```
 
-每个 repo 都 clone 一遍。**不在 runner pod 创分支也不 push** —— 那是 dev-agent 的活，
-它在自己 cwd 里干。
-
-### Step A4: 写 /workspace/.sisyphus/manifest.yaml
-
-**严格按 schema**：schema 详见 `docs/sisyphus-integration.md`，核心如下：
-
-```yaml
-schema_version: 1
-req_id: {{ req_id }}
-sources:
-  - repo: <owner>/<repo>
-    path: source/<repo>
-    role: leader              # 有且仅有 1 个 leader
-    branch: stage/{{ req_id }}-dev
-    depends_on: []            # 若依赖其他 source repo 列在这
-  - repo: <owner>/<repo2>
-    path: source/<repo2>
-    role: source
-    branch: stage/{{ req_id }}-dev
-integration:
-  repo: <owner>/<integration-repo>
-  path: integration/<integration-repo>
-
-# ↓ ambiguity tracking（可选字段，给人 review 参考）
-# sisyphus 不再卡 open_questions 非空 —— 歧义直接在 BKD chat 跟 user 谈，不要摆烂进 manifest
-# 写这里的 open_questions 仅当"你独立思考后仍悬而未决的疑点清单"，**move review 之前自己消化完**
-open_questions: []            # 推进前必须清零：要么谈完写进 assumptions，要么明确写进 out_of_scope
-assumptions: []               # 你为了能继续推进所做的假设（给人事后审）
-out_of_scope: []              # 主动划出的边界，避免 scope creep
-
-# ↓ M11 staging-test checker 配置（必填，schema validator 会强制）
-test:
-  cmd: "make ci-unit-test ci-integration-test"   # sisyphus 在 runner pod 里执行的测试命令
-  cwd: "source/ubox-crosser"                     # 相对 /workspace 的工作目录（通常 = leader source 的 path）
-  timeout_sec: 1800                              # 可选，默认 600，范围 30..3600
-
-# ↓ M11 pr-ci-watch checker 配置（repo 必填，number 由 dev agent 开 PR 后回写）
-pr:
-  repo: "phona/ubox-crosser"                     # leader source 的 GitHub 仓库
-  # number: 123                                   # 开 PR 后由 dev/staging-test agent 填回
-
-# ↓ M14d：dev 阶段并行拆分（可选，没声明 = 单 dev agent 干全部）
-# 只在"需求天然可并行"时才拆；单块代码硬拆反而增加通信成本。典型可拆场景：
-#   - 新增端点 A + 新增端点 B，互不依赖
-#   - internal/foo/ 改动 + tests/unit/foo_test.go 改动，可同时进行
-# 不适合拆的：共享 state machine、schema、migration 这类强耦合改动
-parallelism:
-  dev:                                            # list；单任务也用 list（长度=1）
-    - id: auth-endpoint                           # 小写短横线，REQ 内唯一
-      scope:                                      # 相对各 source repo 根的 path glob 列表
-        - "internal/auth/**"
-        - "cmd/server/routes_auth.go"
-      depends_on: []                              # 无依赖 → 第一波启动
-      description: "/login /logout 端点 + JWT 签发"
-    - id: user-model
-      scope:
-        - "internal/model/user.go"
-        - "migrations/*user*.sql"
-      depends_on: []
-      description: "user 表 + User model"
-```
-
-如果没 integration（纯 source repo REQ），省略整个 `integration:` 段。
-
-#### Step A4.0: `test` / `pr` 字段怎么填
-
-- **`test.cmd`**：看 leader source repo 的 Makefile / package.json / justfile 挑 CI 级别测试 target
-  （别写 `make test` 之类的通用别名，要写真实 target 比如 `make ci-unit-test`、
-  `npm run test:ci`、`pytest tests/`）。
-- **`test.cwd`**：一般是 `source/<leader-repo>`；若 leader 仓里测试脚本挂在子目录
-  （monorepo），写该子目录路径。
-- **`pr.repo`**：leader source 的 `<owner>/<name>`，跟 `sources[0].repo` 对齐。
-- **`pr.number`**：analyze 阶段还没 PR，**留空**即可；dev agent 开 PR 后
-  会回写 manifest 填上。
-
-#### Step A4.1: 歧义处理 — 跟 user 直接谈，不要卡 sisyphus
-
-**sisyphus 是 CI 编排层，不负责 human-AI 歧义对话。** 看到需求歧义？
-**直接在 BKD issue chat 里发清楚问题问 user**，别写进 manifest 摆烂等 sisyphus 兜。
-
-举例——在 chat 发消息：
-
-> 我需要确认两点才能继续：
-> 1. /version 端点返回 JSON 还是 plain text？
-> 2. commit SHA 用完整 40 字符还是缩短到 7？
-
-BKD 会把 user 答复以 follow-up 形式回给你。处理完答复，把答案融进 `assumptions`
-（或依情况放 `out_of_scope`），然后继续推进，最后 move review。
-
-manifest 的三个字段按下面的语义来用，**move review 之前必须自己消化完**：
-
-1. **open_questions**（move review 前必须清零）：你**独立思考过但仍悬而未决**的
-   疑点清单。要么跟 user 谈完转进 assumptions / out_of_scope，要么 scope 上明确
-   划出。不允许留着非空 open_questions 就 move review。
-
-2. **assumptions**（推进前提）：你为了能写出 tasks 骨架而**做的假设**，留给人
-   事后审。举例：
-   - "假设 REQ 只改 ttpos-server-go，不动 ttpos-flutter"
-   - "假设现有 user table 已经有 phone 字段"
-
-3. **out_of_scope**（边界）：相关但本 REQ 不做的东西。举例：
-   - "不改 admin 后台的用户列表显示"
-   - "不动 OAuth 第三方登录"
-
-三个字段都是**可选**（schema validator 只校验类型）；非空时每条字符串 1..500 字。
-
-### Step A5: 跑 validator 确认 manifest 合法
-
-```bash
-kubectl exec runner-{{ req_id | lower }} -- /opt/sisyphus/scripts/validate-manifest.py
-```
-
-exit 0 才往下走。非 0 根据 stderr 修 manifest 再跑。
+每个 repo 都 clone 一遍。**不在 runner pod 创分支也不 push** —— 那是 dev-agent 的活。
 
 ---
 
@@ -181,13 +64,14 @@ exit 0 才往下走。非 0 根据 stderr 修 manifest 再跑。
 - 看清需求要改什么 / 怎么改 / 联动哪些仓库
 - 定高层方案（选型、取舍、风险）
 - **立 tasks.md 骨架**（三个 Stage section，section 下只列 TODO checkbox，不填细节）
+- **决定是否需要多 dev agent**（如果需要拆任务，记在 proposal/design/tasks 里，sisyphus 会自动创多个 tag=dev issue）
 
 ### 产出（严格对齐 openspec 规范，不自创文件）
 
 这些文件放在 **leader source repo 的 openspec/changes/{{ req_id }}/** 下（dev 时会一起 push）：
 
 1. `openspec/changes/{{ req_id }}/proposal.md` — 一句话需求 + 影响范围 + 支持性判定
-2. `openspec/changes/{{ req_id }}/design.md`（可选）— 高层方案、选型、风险
+2. `openspec/changes/{{ req_id }}/design.md`（可选）— 高层方案、选型、风险、并行拆分建议
 3. `openspec/changes/{{ req_id }}/tasks.md` —— 三个 Stage section 骨架：
 ```markdown
 ## Stage: contract-tests (owner: contract-spec-agent)
@@ -200,16 +84,63 @@ exit 0 才往下走。非 0 根据 stderr 修 manifest 再跑。
 - [ ] TODO: ...
 ```
 
+### 多 dev agent 拆分指南
+
+M15 中 analyze 不再写 manifest，改成：**在 proposal/design/tasks 里清楚表达所有任务和并行拆分需求，
+sisyphus 的 fanout_dev action 会根据这些文件动态创建 N 个 tag=dev 的 BKD issue**。
+
+只在"需求天然可并行"时才拆；单块代码硬拆反而增加通信成本。典型可拆场景：
+-  新增端点 A + 新增端点 B，互不依赖
+- internal/foo/ 改动 + tests/unit/foo_test.go 改动，可同时进行
+
+不适合拆的：共享 state machine、schema、migration 这类强耦合改动
+
+示例 tasks.md：
+
+```markdown
+## Stage: implementation (owner: dev-agent)
+
+### 任务 1：auth 端点（独立可行）
+- [ ] 新增 /login, /logout 端点 + JWT 签发逻辑
+- [ ] 单测 auth 模块
+- [ ] 涉及 internal/auth/**, cmd/server/routes_auth.go
+
+### 任务 2：user model（可与任务 1 并行）
+- [ ] user 表 + User model
+- [ ] migrations/*user*.sql
+- [ ] 涉及 internal/model/user.go, migrations/
+- [ ] 不依赖任务 1（创表 / model 是独立的）
+```
+
+sisyphus 会看到这个结构，创建 2 个 tag=dev+REQ-xxx 的 BKD issue，并行跑两个 dev agent。
+
 ### 禁止越权
-- 不要写 `contract.spec.yaml` / `specs/**` / `tests/**` / `tasks.md 的具体任务`
-- 不要 push manifest.yaml 到 git（manifest 是 workspace-local state，仅留 PVC 里）
+- 不要写 `contract.spec.yaml` / `specs/**` / `tests/**` / `tasks.md 的具体任务代码`
+- 在 openspec/changes/REQ-xxx/ 下**只产** proposal.md / design.md / tasks.md
+
+### 歧义处理 — 跟 user 直接谈
+
+看到需求歧义？**直接在 BKD issue chat 里发清楚问题问 user**（不堆进 proposal 摆烂）。
+
+举例——在 chat 发消息：
+
+> 我需要确认两点才能继续：
+> 1. /version 端点返回 JSON 还是 plain text？
+> 2. commit SHA 用完整 40 字符还是缩短到 7？
+
+BKD 会把 user 答复以 follow-up 形式回给你。处理完答复，把答案融进 design.md 或 tasks.md 的注释，
+然后继续推进。
 
 ---
 
 ## 完成时
 
-- manifest.yaml validator 通过（**硬约束，不过就是 fail**）
-- analyze 产物（proposal/design/tasks）**在你自己 cwd** 里 commit + push 到
-  leader repo 的 `stage/{{ req_id }}-dev`（用你自己的 GH_TOKEN，runner 不负责 push）
+- 产物（proposal.md / design.md / tasks.md）**在你自己 cwd** 里 commit + push 到
+  leader repo 的 `feat/{{ req_id }}`（用你自己的 GH_TOKEN，runner 不负责 push）
 - update-issue tags 保留 `analyze` + `{{ req_id }}`
 - move review
+
+sisyphus 之后会：
+1. 读你的产物决定开几个 tag=dev 的 BKD issue（可能 1 个，也可能多个并行）
+2. 调度对应数量的 dev agent
+3. 等所有 dev 通过 staging-test / pr-ci，再进 accept
