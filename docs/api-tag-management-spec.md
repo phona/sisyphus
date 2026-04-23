@@ -455,9 +455,9 @@ jobs:
 
 ### 10.2 相关文档
 
-- [V2 架构设计](./workflow-v2-architecture.md)
-- [API 生命周期管理](./api-lifecycle-management.md)
-- [Apifox 契约测试工作流](./workflow-apifox-contract-testing.md)
+- [架构设计](./architecture.md)
+- [状态机权威](./state-machine.md)
+- [Prompt 索引](./prompts.md)
 
 ### 10.3 修订记录
 

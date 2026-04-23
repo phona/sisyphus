@@ -1,0 +1,170 @@
+# Sisyphus 状态机
+
+> 唯一真相源是 [orchestrator/src/orchestrator/state.py](../orchestrator/src/orchestrator/state.py)。
+> 本文档把 `ReqState`、`Event`、`TRANSITIONS` 三个枚举可视化，方便看代码前先建立心智模型。
+>
+> 状态机当前形态：M14c —— verifier-agent 接管所有 stage fail 路径，旧 BUGFIX/DIAGNOSE 子链已砍。
+
+## 1. 设计要点
+
+- **每个 REQ 同一时刻只在一个 state**。store 表 `req_state` 行级 CAS 保并发（`store/req_state.py`）。
+- **transition 是 (state, event) → (next_state, action)** 的纯映射；非法组合直接 skip + log。
+- **action 异步副作用**：起 BKD issue / 跑 checker / 写表 / emit 后续 event。idempotent action 标 `idempotent=True`，create_* 那种不幂等的会防重复触发。
+- **CAS 失败 = 并发抢同 REQ**：另一个 webhook 已推过 state，本次 skip。
+- **terminal state 只有 2 个**：`done`（archive 完）和 `escalated`（人介入 / lab 起不来 / verifier 投降）。
+
+## 2. ReqState 枚举（13 个）
+
+| state | 含义 | 类型 |
+|---|---|---|
+| `init` | 还没 analyze（intent_analyze 之前） | start |
+| `analyzing` | analyze-agent 在跑 | in-flight |
+| `specs-running` | contract + acceptance spec-agent 并行 | in-flight |
+| `dev-running` | SPG gate 通过，dev-agent 写代码 + 开 PR | in-flight |
+| `staging-test-running` | 调试环境跑 unit + integration test（机械） | in-flight |
+| `pr-ci-running` | PR 已开，等 GHA 全套绿（机械） | in-flight |
+| `accept-running` | env-up 完，accept-agent 跑 FEATURE-A* | in-flight |
+| `accept-tearing-down` | env-down 清 lab（无论 accept pass/fail 都跑） | in-flight |
+| `review-running` | **M14b** verifier-agent 在跑（success / fail 两触发统一入口） | in-flight |
+| `fixer-running` | **M14b** decision=fix → 起对应 fixer agent | in-flight |
+| `archiving` | done-archive agent 跑（合 PR + 关 issue） | in-flight |
+| `gh-incident-open` | （已规划，未启用）GitHub issue 已开等人 | wait-human |
+| **`done`** | REQ 完成 | **terminal** |
+| **`escalated`** | 熔断 / session-failed / 人工止损 | **terminal** |
+
+## 3. Event 枚举（18 个）
+
+| event | 来源 | 触发什么 |
+|---|---|---|
+| `intent.analyze` | 人在 BKD 打 `intent:analyze` tag | start_analyze |
+| `analyze.done` | analyze-agent session.completed | fanout_specs |
+| `spec.done` | 单个 spec-agent session.completed | mark_spec_reviewed_and_check |
+| `spec.all-passed` | 聚合事件：N/N spec 都 reviewed | create_dev |
+| `dev.done` | dev-agent session.completed | create_staging_test |
+| `staging-test.pass` | M1 checker 退码 0 | create_pr_ci_watch |
+| `staging-test.fail` | M1 checker 退码非 0 | invoke_verifier_for_fail |
+| `pr-ci.pass` | M2 checker 全绿 | create_accept |
+| `pr-ci.fail` | M2 checker 任一红 | invoke_verifier_for_fail |
+| `pr-ci.timeout` | M2 checker 超时 | escalate（PR repo 可能没配 CI） |
+| `accept-env-up.fail` | create_accept 内部 emit | escalate（lab 起不来） |
+| `accept.pass` | accept-agent 写 result:pass tag | teardown_accept_env |
+| `accept.fail` | accept-agent 写 result:fail tag | teardown_accept_env |
+| `teardown-done.pass` | 上一个是 accept.pass 的 teardown 完 | done_archive |
+| `teardown-done.fail` | 上一个是 accept.fail 的 teardown 完 | invoke_verifier_for_fail |
+| `archive.done` | done_archive agent session.completed | （进入 done） |
+| `session.failed` | 任意 stage agent session 崩 / watchdog 超时 | escalate |
+| **`verify.pass`** | M14b verifier decision=pass | apply_verify_pass（手工 CAS 推进下一 stage） |
+| **`verify.fix-needed`** | M14b verifier decision=fix | start_fixer |
+| **`verify.retry-checker`** | M14b verifier decision=retry_checker | apply_verify_retry_checker |
+| **`verify.escalate`** | M14b decision=escalate / schema invalid | escalate |
+| **`fixer.done`** | fixer agent session.completed | invoke_verifier_after_fix |
+
+## 4. 完整状态转移图
+
+```mermaid
+stateDiagram-v2
+    [*] --> init
+
+    init --> analyzing: intent.analyze
+    analyzing --> specs_running: analyze.done
+    specs_running --> specs_running: spec.done
+    specs_running --> dev_running: spec.all-passed
+    dev_running --> staging_test_running: dev.done
+
+    staging_test_running --> pr_ci_running: staging-test.pass
+    staging_test_running --> review_running: staging-test.fail
+
+    pr_ci_running --> accept_running: pr-ci.pass
+    pr_ci_running --> review_running: pr-ci.fail
+    pr_ci_running --> escalated: pr-ci.timeout
+
+    accept_running --> escalated: accept-env-up.fail
+    accept_running --> accept_tearing_down: accept.pass / accept.fail
+
+    accept_tearing_down --> archiving: teardown-done.pass
+    accept_tearing_down --> review_running: teardown-done.fail
+
+    archiving --> done: archive.done
+
+    review_running --> review_running: verify.pass\n(action 手工 CAS 推进)
+    review_running --> fixer_running: verify.fix-needed
+    review_running --> review_running: verify.retry-checker\n(action 手工 CAS 回 stage)
+    review_running --> escalated: verify.escalate
+
+    fixer_running --> review_running: fixer.done\n(invoke_verifier_after_fix)
+
+    state "session.failed (any in-flight)" as anyfail
+    anyfail --> escalated
+
+    done --> [*]
+    escalated --> [*]
+```
+
+> mermaid `stateDiagram-v2` 用 `_` 替 `-` 是因为 stateName 不允许 `-`。实际 enum 是 `staging-test-running` / `pr-ci-running` / `review-running` 等。
+
+## 5. verifier 子链特殊性（M14b/c）
+
+`VERIFY_PASS` / `VERIFY_RETRY_CHECKER` 在 transition 表里看起来是 self-loop（next_state 还是 `review-running`），但 **action 内部手工 CAS 推到目标 stage_running 再链式 emit 该 stage 的 done/pass 事件**。这是因为目标 stage 由 `ctx.verifier_stage` 决定，transition 表静态表达不了。
+
+具体见 [actions/_verifier.py](../orchestrator/src/orchestrator/actions/_verifier.py)：
+
+```
+apply_verify_pass:
+  REVIEW_RUNNING --CAS--> {stage}_RUNNING
+  emit {stage}.done / .pass
+  → 走原主链 transition 推下一 stage
+
+apply_verify_retry_checker:
+  REVIEW_RUNNING --CAS--> {stage}_RUNNING
+  set ctx.retry_checker_pending=True
+  → 后续 stage action 自己处理"再触发一次 checker"
+```
+
+## 6. CAS 失败如何处理
+
+`store/req_state.cas_transition(pool, req_id, expected_state, target_state, event, action)` —— 行级 UPDATE WHERE state=expected。返回 False 表示并发抢占：
+
+- transition 直接 skip（不 emit、不报错），日志 `*.cas_failed`
+- 上层 webhook handler 也 skip 重复回放
+- 这是 idempotency 的最后一道防线
+
+## 7. session.failed 兜底
+
+任何 in-flight state 收到 `session.failed`（agent 崩 / watchdog 判超时）→ 直接 ESCALATED。
+
+watchdog (M8) 把"BKD session 卡 N 秒不动"翻译成 SESSION_FAILED 喂回状态机：
+- 后台轮 `req_state` 表
+- 选 in-flight state + `updated_at > threshold`
+- 查关联 BKD issue 的 session 状态：不在 running → emit SESSION_FAILED
+
+## 8. 怎么在状态机加新 stage / event
+
+1. 在 `state.py` 加 `ReqState` 枚举值
+2. 加对应 `Event` 枚举值
+3. 写 `actions/<new>.py`，`@register("action_name")` 装饰，签名 `(*, body, req_id, tags, ctx) → dict`
+4. 在 `TRANSITIONS` 加 (state, event) → Transition 行
+5. router.py 加 tag → Event 翻译（如果是新 agent role）
+6. 不忘：观测系统 — `stage_runs` 表自动入；新 agent 类型加 `verifier/<stage>_*.md.j2` prompt（如果走 verifier 框架）
+
+## 9. 调试 tip
+
+```python
+# REPL: 把当前 transition 表 dump 成 markdown，方便对照
+from orchestrator.state import dump_transitions
+print(dump_transitions())
+```
+
+```sql
+-- 找卡死 REQ：in-flight state + 30 min 没动
+SELECT req_id, state, updated_at, context->>'verifier_stage' AS stage
+FROM req_state
+WHERE state NOT IN ('done', 'escalated', 'init', 'gh-incident-open')
+  AND updated_at < NOW() - INTERVAL '30 minutes'
+ORDER BY updated_at;
+
+-- 看一个 REQ 的事件历史
+SELECT ts, kind, router_action, exit_code
+FROM event_log
+WHERE req_id = 'REQ-29'
+ORDER BY ts;
+```
