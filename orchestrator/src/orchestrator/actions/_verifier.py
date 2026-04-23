@@ -46,7 +46,7 @@ Trigger = Literal["success", "fail"]
 _PASS_ROUTING: dict[str, tuple[ReqState, Event]] = {
     "analyze":       (ReqState.ANALYZING,            Event.ANALYZE_DONE),
     "spec":          (ReqState.SPECS_RUNNING,        Event.SPEC_ALL_PASSED),
-    "dev":           (ReqState.DEV_RUNNING,          Event.DEV_DONE),
+    "dev":           (ReqState.DEV_RUNNING,          Event.DEV_ALL_PASSED),
     "staging_test":  (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_PASS),
     "pr_ci":         (ReqState.PR_CI_RUNNING,        Event.PR_CI_PASS),
     "accept":        (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_PASS),

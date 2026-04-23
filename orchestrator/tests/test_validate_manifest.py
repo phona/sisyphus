@@ -219,3 +219,49 @@ def test_yaml_root_not_dict(tmp_path):
     p.write_text("just-a-string\n")
     errs = validate_path(p)
     assert any("object" in e or "dict" in e for e in errs)
+
+
+# ── M14d: parallelism.dev 可选字段 ──────────────────────────────────
+
+
+def test_parallelism_absent_is_ok():
+    assert _collect_errors(_good_manifest()) == []
+
+
+def test_parallelism_dev_valid():
+    m = _good_manifest()
+    m["parallelism"] = {
+        "dev": [
+            {"id": "a", "scope": ["internal/a/**"], "depends_on": [], "description": "A"},
+            {"id": "b", "scope": ["internal/b/**"], "depends_on": ["a"], "description": "B"},
+        ],
+    }
+    assert _collect_errors(m) == []
+
+
+def test_parallelism_dev_must_be_list():
+    m = _good_manifest()
+    m["parallelism"] = {"dev": {"not": "list"}}
+    errs = _collect_errors(m)
+    assert any("parallelism.dev" in e and "list" in e for e in errs)
+
+
+def test_parallelism_dev_requires_id_scope_description():
+    m = _good_manifest()
+    m["parallelism"] = {"dev": [{"id": "", "scope": [], "description": ""}]}
+    errs = _collect_errors(m)
+    assert any("id" in e for e in errs)
+    assert any("scope" in e for e in errs)
+    assert any("description" in e for e in errs)
+
+
+def test_parallelism_dev_duplicate_id_rejected():
+    m = _good_manifest()
+    m["parallelism"] = {
+        "dev": [
+            {"id": "a", "scope": ["x/**"], "description": "A"},
+            {"id": "a", "scope": ["y/**"], "description": "dup"},
+        ],
+    }
+    errs = _collect_errors(m)
+    assert any("重复" in e for e in errs)

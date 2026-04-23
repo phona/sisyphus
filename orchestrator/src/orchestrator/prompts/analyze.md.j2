@@ -99,6 +99,26 @@ test:
 pr:
   repo: "phona/ubox-crosser"                     # leader source 的 GitHub 仓库
   # number: 123                                   # 开 PR 后由 dev/staging-test agent 填回
+
+# ↓ M14d：dev 阶段并行拆分（可选，没声明 = 单 dev agent 干全部）
+# 只在"需求天然可并行"时才拆；单块代码硬拆反而增加通信成本。典型可拆场景：
+#   - 新增端点 A + 新增端点 B，互不依赖
+#   - internal/foo/ 改动 + tests/unit/foo_test.go 改动，可同时进行
+# 不适合拆的：共享 state machine、schema、migration 这类强耦合改动
+parallelism:
+  dev:                                            # list；单任务也用 list（长度=1）
+    - id: auth-endpoint                           # 小写短横线，REQ 内唯一
+      scope:                                      # 相对各 source repo 根的 path glob 列表
+        - "internal/auth/**"
+        - "cmd/server/routes_auth.go"
+      depends_on: []                              # 无依赖 → 第一波启动
+      description: "/login /logout 端点 + JWT 签发"
+    - id: user-model
+      scope:
+        - "internal/model/user.go"
+        - "migrations/*user*.sql"
+      depends_on: []
+      description: "user 表 + User model"
 ```
 
 如果没 integration（纯 source repo REQ），省略整个 `integration:` 段。

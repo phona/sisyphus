@@ -182,19 +182,223 @@ async def test_mark_spec_gate_wait(monkeypatch):
     assert out["gate"] == "wait"
 
 
-# ─── create_dev / create_accept ────────────────────────
+# ─── fanout_dev / create_accept ────────────────────────
 @pytest.mark.asyncio
-async def test_create_dev(monkeypatch):
-    from orchestrator.actions import create_dev as mod
+async def test_fanout_dev_single_mode_no_manifest(monkeypatch):
+    """M14d：没 manifest / parallelism → 兼容老路径单 dev agent。"""
+    from orchestrator.actions import fanout_dev as mod
+    from orchestrator.checkers import manifest_io
+
     fake = make_fake_bkd()
     fake.create_issue.return_value = FakeIssue(id="dev-1")
-    patch_bkd(monkeypatch, "create_dev", fake)
-    patch_db(monkeypatch, "create_dev")
-    out = await mod.create_dev(body=make_body(), req_id="REQ-9", tags=[], ctx={})
-    assert out == {"dev_issue_id": "dev-1"}
+    patch_bkd(monkeypatch, "fanout_dev", fake)
+    patch_db(monkeypatch, "fanout_dev")
+
+    async def fake_read_manifest(req_id, **kw):
+        raise manifest_io.ManifestReadError("no manifest in test")
+
+    monkeypatch.setattr(mod.manifest_io, "read_manifest", fake_read_manifest)
+    monkeypatch.setattr(mod.settings, "test_mode", False)
+    monkeypatch.setattr(mod.settings, "skip_dev", False)
+
+    out = await mod.fanout_dev(body=make_body(), req_id="REQ-9", tags=[], ctx={})
+    assert out["mode"] == "single"
+    assert out["count"] == 1
+    assert out["dev_issue_id"] == "dev-1"
     _, kwargs = fake.create_issue.await_args
     assert "dev" in kwargs["tags"] and "REQ-9" in kwargs["tags"]
     assert "[REQ-9] [DEV]" in kwargs["title"]
+
+
+@pytest.mark.asyncio
+async def test_fanout_dev_parallel_mode(monkeypatch):
+    """M14d：manifest.parallelism.dev 有 2 个无依赖任务 → fanout 2 个 issue。"""
+    from orchestrator.actions import fanout_dev as mod
+
+    fake = make_fake_bkd()
+    fake.create_issue.side_effect = [
+        FakeIssue(id="dev-auth"),
+        FakeIssue(id="dev-user"),
+    ]
+    patch_bkd(monkeypatch, "fanout_dev", fake)
+    patch_db(monkeypatch, "fanout_dev")
+    monkeypatch.setattr(mod.settings, "test_mode", False)
+    monkeypatch.setattr(mod.settings, "skip_dev", False)
+
+    async def fake_read_manifest(req_id, **kw):
+        return {
+            "parallelism": {
+                "dev": [
+                    {
+                        "id": "auth-endpoint",
+                        "scope": ["internal/auth/**"],
+                        "depends_on": [],
+                        "description": "/login /logout 端点",
+                    },
+                    {
+                        "id": "user-model",
+                        "scope": ["internal/model/user.go"],
+                        "depends_on": [],
+                        "description": "user 表 + model",
+                    },
+                ],
+            },
+        }
+
+    monkeypatch.setattr(mod.manifest_io, "read_manifest", fake_read_manifest)
+
+    out = await mod.fanout_dev(body=make_body(), req_id="REQ-9", tags=[], ctx={})
+    assert out["mode"] == "parallel"
+    assert out["total_tasks"] == 2
+    assert set(out["first_wave_ids"]) == {"auth-endpoint", "user-model"}
+    assert fake.create_issue.await_count == 2
+    # 第一个 call：auth 任务
+    c0_kwargs = fake.create_issue.await_args_list[0].kwargs
+    assert "dev-task:auth-endpoint" in c0_kwargs["tags"]
+    assert c0_kwargs["use_worktree"] is True
+
+
+@pytest.mark.asyncio
+async def test_fanout_dev_parallel_first_wave_only(monkeypatch):
+    """有依赖的任务第一波不启动。"""
+    from orchestrator.actions import fanout_dev as mod
+
+    fake = make_fake_bkd()
+    fake.create_issue.return_value = FakeIssue(id="dev-a")
+    patch_bkd(monkeypatch, "fanout_dev", fake)
+    patch_db(monkeypatch, "fanout_dev")
+    monkeypatch.setattr(mod.settings, "test_mode", False)
+    monkeypatch.setattr(mod.settings, "skip_dev", False)
+
+    async def fake_read_manifest(req_id, **kw):
+        return {
+            "parallelism": {
+                "dev": [
+                    {"id": "a", "scope": ["a/**"], "depends_on": [], "description": "A"},
+                    {"id": "b", "scope": ["b/**"], "depends_on": ["a"], "description": "B"},
+                ],
+            },
+        }
+
+    monkeypatch.setattr(mod.manifest_io, "read_manifest", fake_read_manifest)
+
+    out = await mod.fanout_dev(body=make_body(), req_id="REQ-9", tags=[], ctx={})
+    assert out["first_wave_ids"] == ["a"]
+    assert out["total_tasks"] == 2
+    # 只创建 a，b 等 a 完成后另启
+    assert fake.create_issue.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fanout_dev_cycle_raises(monkeypatch):
+    """依赖环应抛 ValueError（engine 会兜成 escalate）。"""
+    from orchestrator.actions import fanout_dev as mod
+
+    patch_bkd(monkeypatch, "fanout_dev", make_fake_bkd())
+    patch_db(monkeypatch, "fanout_dev")
+    monkeypatch.setattr(mod.settings, "test_mode", False)
+    monkeypatch.setattr(mod.settings, "skip_dev", False)
+
+    async def fake_read_manifest(req_id, **kw):
+        return {
+            "parallelism": {
+                "dev": [
+                    {"id": "a", "scope": ["a/**"], "depends_on": ["b"], "description": "A"},
+                    {"id": "b", "scope": ["b/**"], "depends_on": ["a"], "description": "B"},
+                ],
+            },
+        }
+    monkeypatch.setattr(mod.manifest_io, "read_manifest", fake_read_manifest)
+
+    with pytest.raises(ValueError, match="环"):
+        await mod.fanout_dev(body=make_body(), req_id="REQ-9", tags=[], ctx={})
+
+
+@pytest.mark.asyncio
+async def test_fanout_dev_duplicate_id_raises(monkeypatch):
+    from orchestrator.actions import fanout_dev as mod
+
+    patch_bkd(monkeypatch, "fanout_dev", make_fake_bkd())
+    patch_db(monkeypatch, "fanout_dev")
+    monkeypatch.setattr(mod.settings, "test_mode", False)
+    monkeypatch.setattr(mod.settings, "skip_dev", False)
+
+    async def fake_read_manifest(req_id, **kw):
+        return {
+            "parallelism": {
+                "dev": [
+                    {"id": "a", "scope": ["a/**"], "depends_on": [], "description": "A"},
+                    {"id": "a", "scope": ["b/**"], "depends_on": [], "description": "dup"},
+                ],
+            },
+        }
+    monkeypatch.setattr(mod.manifest_io, "read_manifest", fake_read_manifest)
+
+    with pytest.raises(ValueError, match="重复"):
+        await mod.fanout_dev(body=make_body(), req_id="REQ-9", tags=[], ctx={})
+
+
+# ─── mark_dev_reviewed_and_check ────────────────────────
+@pytest.mark.asyncio
+async def test_mark_dev_gate_open_single_mode(monkeypatch):
+    """expected=1 + 当前 issue 打 ci-passed → emit dev.all-passed。"""
+    from orchestrator.actions import mark_dev_reviewed_and_check as mod
+
+    fake = make_fake_bkd()
+    fake.list_issues.return_value = [
+        FakeIssue(id="dev-1", tags=["dev", "REQ-9", "ci-passed"]),
+    ]
+    patch_bkd(monkeypatch, "mark_dev_reviewed_and_check", fake)
+    patch_db(monkeypatch, "mark_dev_reviewed_and_check")
+    out = await mod.mark_dev_reviewed_and_check(
+        body=make_body(issue_id="dev-1"), req_id="REQ-9",
+        tags=["dev", "REQ-9"], ctx={"expected_dev_count": 1},
+    )
+    assert out["emit"] == "dev.all-passed"
+    fake.merge_tags_and_update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mark_dev_gate_wait_parallel(monkeypatch):
+    """3 个并行 dev，只有 1 个 ci-passed → 不 emit。"""
+    from orchestrator.actions import mark_dev_reviewed_and_check as mod
+
+    fake = make_fake_bkd()
+    fake.list_issues.return_value = [
+        FakeIssue(id="d-a", tags=["dev", "REQ-9", "ci-passed", "dev-task:a"]),
+        FakeIssue(id="d-b", tags=["dev", "REQ-9", "dev-task:b"]),
+        FakeIssue(id="d-c", tags=["dev", "REQ-9", "dev-task:c"]),
+    ]
+    patch_bkd(monkeypatch, "mark_dev_reviewed_and_check", fake)
+    patch_db(monkeypatch, "mark_dev_reviewed_and_check")
+    out = await mod.mark_dev_reviewed_and_check(
+        body=make_body(issue_id="d-a"), req_id="REQ-9",
+        tags=["dev", "REQ-9"], ctx={"expected_dev_count": 3},
+    )
+    assert "emit" not in out
+    assert out["gate"] == "wait"
+    assert out["passed_count"] == 1
+    assert out["expected"] == 3
+
+
+@pytest.mark.asyncio
+async def test_mark_dev_gate_all_passed_parallel(monkeypatch):
+    """3/3 ci-passed → emit dev.all-passed。"""
+    from orchestrator.actions import mark_dev_reviewed_and_check as mod
+
+    fake = make_fake_bkd()
+    fake.list_issues.return_value = [
+        FakeIssue(id=f"d-{t}", tags=["dev", "REQ-9", "ci-passed", f"dev-task:{t}"])
+        for t in "abc"
+    ]
+    patch_bkd(monkeypatch, "mark_dev_reviewed_and_check", fake)
+    patch_db(monkeypatch, "mark_dev_reviewed_and_check")
+    out = await mod.mark_dev_reviewed_and_check(
+        body=make_body(issue_id="d-c"), req_id="REQ-9",
+        tags=["dev", "REQ-9"], ctx={"expected_dev_count": 3},
+    )
+    assert out["emit"] == "dev.all-passed"
+    assert out["passed_count"] == 3
 
 
 def test_short_title_helper():

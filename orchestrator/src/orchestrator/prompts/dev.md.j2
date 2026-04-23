@@ -13,6 +13,21 @@
 ## 开发 (DEV)  v0.2
 AGENT_ROLE=dev-agent
 REQ={{ req_id }}
+{% if task_id %}
+DEV_TASK_ID={{ task_id }}
+DEV_TASK_SCOPE={{ task_scope | join(":") }}
+
+**你是本 REQ 的并行 dev 任务之一**（`{{ task_id }}`），只负责：
+> {{ task_description }}
+
+**scope 硬约束**（pre-commit-acl + sisyphus 会复验）：只许改匹配下列 pattern 的文件：
+{% for pat in task_scope %}
+- `{{ pat }}`
+{% endfor %}
+
+其他并行 dev agent 在改本 REQ 的其他部分；不要动他们的 scope，不要等他们 push
+（你们各开各的 PR，gate 聚合）。
+{% endif %}
 
 sisyphus 已把 runner Pod + PVC 拉起（你只读用它存 manifest + 跑自检）。
 你的**代码编辑 + 推送** 全部在**自己的 Coder workspace cwd** 里做，用你自己的

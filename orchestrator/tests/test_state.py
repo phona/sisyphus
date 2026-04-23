@@ -11,8 +11,10 @@ EXPECTED = [
     (ReqState.INIT,                 Event.INTENT_ANALYZE,      ReqState.ANALYZING,           "start_analyze"),
     (ReqState.ANALYZING,            Event.ANALYZE_DONE,        ReqState.SPECS_RUNNING,       "fanout_specs"),
     (ReqState.SPECS_RUNNING,        Event.SPEC_DONE,           ReqState.SPECS_RUNNING,       "mark_spec_reviewed_and_check"),
-    (ReqState.SPECS_RUNNING,        Event.SPEC_ALL_PASSED,     ReqState.DEV_RUNNING,         "create_dev"),
-    (ReqState.DEV_RUNNING,          Event.DEV_DONE,            ReqState.STAGING_TEST_RUNNING, "create_staging_test"),
+    (ReqState.SPECS_RUNNING,        Event.SPEC_ALL_PASSED,     ReqState.DEV_RUNNING,         "fanout_dev"),
+    # M14d: dev 自循环 gate
+    (ReqState.DEV_RUNNING,          Event.DEV_DONE,            ReqState.DEV_RUNNING,          "mark_dev_reviewed_and_check"),
+    (ReqState.DEV_RUNNING,          Event.DEV_ALL_PASSED,      ReqState.STAGING_TEST_RUNNING, "create_staging_test"),
     (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_PASS,   ReqState.PR_CI_RUNNING,       "create_pr_ci_watch"),
     # M14c：fail 全部走 verifier
     (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_FAIL,   ReqState.REVIEW_RUNNING,      "invoke_verifier_for_fail"),
@@ -71,6 +73,24 @@ def test_m14b_verifier_events_present():
         "verify.escalate", "fixer.done",
     ]:
         assert ev in values, f"M14b 缺 event: {ev}"
+
+
+def test_m14d_dev_all_passed_event_present():
+    """M14d：dev.all-passed 新事件 + dev 自循环 gate。"""
+    values = {e.value for e in Event}
+    assert "dev.all-passed" in values
+
+    # DEV_DONE 自循环到 mark_dev_reviewed_and_check，不再直推 STAGING_TEST_RUNNING
+    t = decide(ReqState.DEV_RUNNING, Event.DEV_DONE)
+    assert t is not None
+    assert t.next_state == ReqState.DEV_RUNNING
+    assert t.action == "mark_dev_reviewed_and_check"
+
+    # DEV_ALL_PASSED 才推进到 staging-test
+    t = decide(ReqState.DEV_RUNNING, Event.DEV_ALL_PASSED)
+    assert t is not None
+    assert t.next_state == ReqState.STAGING_TEST_RUNNING
+    assert t.action == "create_staging_test"
 
 
 def test_terminal_states_have_no_outgoing():

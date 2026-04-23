@@ -48,7 +48,8 @@ class Event(StrEnum):
     ANALYZE_DONE = "analyze.done"                   # analyze-agent 完成
     SPEC_DONE = "spec.done"                         # 单个 spec-agent 完成
     SPEC_ALL_PASSED = "spec.all-passed"             # 聚合事件：N/N ci-passed
-    DEV_DONE = "dev.done"                           # dev-agent push 完毕
+    DEV_DONE = "dev.done"                           # 单个 dev-agent push 完毕（并行时 N 次触发）
+    DEV_ALL_PASSED = "dev.all-passed"               # M14d：N/N dev agents ci-passed → 进 staging-test
     STAGING_TEST_PASS = "staging-test.pass"         # 调试环境测试全绿
     STAGING_TEST_FAIL = "staging-test.fail"         # 调试环境测试任一红 → verifier
     PR_CI_PASS = "pr-ci.pass"                       # GHA 全套绿（含 image-publish）
@@ -91,11 +92,17 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
         Transition(ReqState.SPECS_RUNNING, "mark_spec_reviewed_and_check", "tag + maybe gate"),
 
     (ReqState.SPECS_RUNNING, Event.SPEC_ALL_PASSED):
-        Transition(ReqState.DEV_RUNNING, "create_dev", "SPG gate open"),
+        Transition(ReqState.DEV_RUNNING, "fanout_dev",
+                   "SPG gate open → 按 manifest.parallelism.dev fanout（无配置则单 dev）"),
 
+    # M14d：dev 阶段自循环 gate。单个 dev-agent 完 → 聚合 + 检查是否齐
     (ReqState.DEV_RUNNING, Event.DEV_DONE):
+        Transition(ReqState.DEV_RUNNING, "mark_dev_reviewed_and_check",
+                   "dev agent 完 → 打 ci-passed + gate 聚合"),
+
+    (ReqState.DEV_RUNNING, Event.DEV_ALL_PASSED):
         Transition(ReqState.STAGING_TEST_RUNNING, "create_staging_test",
-                   "dev 推完，调试环境跑 unit+int"),
+                   "N/N dev ci-passed → 调试环境跑 unit+int"),
 
     (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_PASS):
         Transition(ReqState.PR_CI_RUNNING, "create_pr_ci_watch", "staging 绿 → 开 PR 等 CI"),

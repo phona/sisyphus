@@ -89,6 +89,45 @@
           "minimum": 1
         }
       }
+    },
+    "parallelism": {
+      "type": "object",
+      "description": "M14d：stage 内并行拆分。分 stage 声明，当前仅支持 dev 阶段。",
+      "additionalProperties": true,
+      "properties": {
+        "dev": {
+          "type": "array",
+          "description": "可并行的 dev 任务单元。单任务也用 list，长度=1。analyze agent 按需拆。",
+          "items": {
+            "type": "object",
+            "required": ["id", "scope", "description"],
+            "additionalProperties": true,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$",
+                "description": "任务 id（小写，短横线），REQ 内唯一；用于 BKD tag + worktree 标识"
+              },
+              "scope": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "minLength": 1},
+                "description": "相对 source repo 根的 path glob 列表（pre-commit-acl + dev_admission checker 用）"
+              },
+              "depends_on": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "该任务依赖的其他 dev 任务 id（拓扑排序分波）"
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              }
+            }
+          }
+        }
+      }
     }
   },
   "definitions": {

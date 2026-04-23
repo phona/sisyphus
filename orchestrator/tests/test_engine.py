@@ -103,12 +103,12 @@ async def test_chain_emit_spec_to_dev(stub_actions):
         calls.append(("mark_spec_reviewed_and_check", {"req_id": req_id}))
         return {"emit": Event.SPEC_ALL_PASSED.value}
 
-    async def create_dev(*, body, req_id, tags, ctx):
-        calls.append(("create_dev", {"req_id": req_id}))
+    async def fanout_dev(*, body, req_id, tags, ctx):
+        calls.append(("fanout_dev", {"req_id": req_id}))
         return {"dev_issue_id": "dev-1"}
 
     reg["mark_spec_reviewed_and_check"] = mark_spec
-    reg["create_dev"] = create_dev
+    reg["fanout_dev"] = fanout_dev
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.SPECS_RUNNING.value)})
 
@@ -120,10 +120,10 @@ async def test_chain_emit_spec_to_dev(stub_actions):
     )
 
     # 1. mark_spec ran, emitted SPEC_ALL_PASSED
-    # 2. engine.step recursed → create_dev ran
-    assert [n for n, _ in calls] == ["mark_spec_reviewed_and_check", "create_dev"]
+    # 2. engine.step recursed → fanout_dev ran
+    assert [n for n, _ in calls] == ["mark_spec_reviewed_and_check", "fanout_dev"]
     assert pool.rows["REQ-1"].state == ReqState.DEV_RUNNING.value
-    assert result["chained"]["action"] == "create_dev"
+    assert result["chained"]["action"] == "fanout_dev"
 
 
 @pytest.mark.asyncio
@@ -325,15 +325,15 @@ async def test_recursion_depth_guard(stub_actions, monkeypatch):
         calls.append(("loopy", {}))
         return {"emit": Event.SPEC_ALL_PASSED.value}
 
-    # 让 SPEC_ALL_PASSED 也走 loopy（覆盖 create_dev）
-    reg["create_dev"] = loopy
+    # 让 SPEC_ALL_PASSED 也走 loopy（覆盖 fanout_dev）
+    reg["fanout_dev"] = loopy
     reg["mark_spec_reviewed_and_check"] = loopy
-    # mock state.decide 让 DEV_RUNNING + SPEC_ALL_PASSED 也合法走 create_dev（自指环）
+    # mock state.decide 让 DEV_RUNNING + SPEC_ALL_PASSED 也合法走 fanout_dev（自指环）
     from orchestrator import state as state_mod
     monkeypatch.setitem(
         state_mod.TRANSITIONS,
         (ReqState.DEV_RUNNING, Event.SPEC_ALL_PASSED),
-        state_mod.Transition(ReqState.DEV_RUNNING, "create_dev"),
+        state_mod.Transition(ReqState.DEV_RUNNING, "fanout_dev"),
     )
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.SPECS_RUNNING.value)})

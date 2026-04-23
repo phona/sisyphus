@@ -116,6 +116,45 @@ def _collect_errors(manifest: dict[str, Any]) -> list[str]:
                 f"{field_name} 存在时必须是 {expected_type.__name__}，实际 {type(val).__name__}"
             )
 
+    # M14d: parallelism.dev 任务列表（可选；存在时做基础 shape 校验）
+    parallelism = manifest.get("parallelism")
+    if parallelism is not None:
+        if not isinstance(parallelism, dict):
+            errs.append("parallelism 必须是 object 或缺省")
+        else:
+            dev_tasks = parallelism.get("dev")
+            if dev_tasks is not None:
+                if not isinstance(dev_tasks, list):
+                    errs.append("parallelism.dev 必须是 list 或缺省")
+                else:
+                    seen_ids: set[str] = set()
+                    for i, t in enumerate(dev_tasks):
+                        if not isinstance(t, dict):
+                            errs.append(f"parallelism.dev[{i}] 必须是 object")
+                            continue
+                        tid = t.get("id")
+                        if not isinstance(tid, str) or not tid:
+                            errs.append(f"parallelism.dev[{i}].id 必须是非空 string")
+                        elif tid in seen_ids:
+                            errs.append(f"parallelism.dev 里 id {tid!r} 重复")
+                        else:
+                            seen_ids.add(tid)
+                        scope = t.get("scope")
+                        if not isinstance(scope, list) or not scope:
+                            errs.append(
+                                f"parallelism.dev[{i}].scope 必须是非空 list"
+                            )
+                        desc = t.get("description")
+                        if not isinstance(desc, str) or not desc:
+                            errs.append(
+                                f"parallelism.dev[{i}].description 必填非空 string"
+                            )
+                        deps = t.get("depends_on", [])
+                        if deps is not None and not isinstance(deps, list):
+                            errs.append(
+                                f"parallelism.dev[{i}].depends_on 必须是 list 或缺省"
+                            )
+
     return errs
 
 
