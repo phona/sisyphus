@@ -41,8 +41,8 @@ _STATE_ISSUE_KEY: dict[ReqState, str | None] = {
     ReqState.PR_CI_RUNNING: "pr_ci_watch_issue_id",
     ReqState.ACCEPT_RUNNING: "accept_issue_id",
     ReqState.ACCEPT_TEARING_DOWN: "accept_issue_id",
-    ReqState.BUGFIX_RUNNING: "bugfix_issue_id",
-    ReqState.DIAGNOSE_RUNNING: "diagnose_issue_id",
+    ReqState.REVIEW_RUNNING: "verifier_issue_id",
+    ReqState.FIXER_RUNNING: "fixer_issue_id",
     ReqState.ARCHIVING: "archive_issue_id",
 }
 

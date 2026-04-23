@@ -454,6 +454,69 @@ async def test_start_fixer_defaults_to_dev(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_invoke_verifier_for_fail_infers_stage_from_tags(monkeypatch):
+    """M14c：staging-test fail webhook tag → verifier stage=staging_test。"""
+    from orchestrator.actions import _verifier as v
+    fake = make_fake_bkd()
+    fake.create_issue.return_value = FakeIssue(id="vfy-3")
+    patch_bkd(monkeypatch, fake)
+
+    async def fake_update(pool, req_id, patch):
+        pass
+    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+
+    out = await v.invoke_verifier_for_fail(
+        body=make_body(project_id="proj-x"),
+        req_id="REQ-9",
+        tags=["staging-test", "REQ-9", "result:fail"],
+        ctx={},
+    )
+    assert out["stage"] == "staging_test"
+    assert out["trigger"] == "fail"
+
+    _, kwargs = fake.create_issue.await_args
+    assert "verify:staging_test" in kwargs["tags"]
+    assert "trigger:fail" in kwargs["tags"]
+
+
+@pytest.mark.asyncio
+async def test_invoke_verifier_for_fail_uses_ctx_stage(monkeypatch):
+    """M14c：teardown 等无 agent role tag 的场景 → ctx.verifier_stage 兜底。"""
+    from orchestrator.actions import _verifier as v
+    fake = make_fake_bkd()
+    fake.create_issue.return_value = FakeIssue(id="vfy-4")
+    patch_bkd(monkeypatch, fake)
+
+    async def fake_update(pool, req_id, patch):
+        pass
+    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+
+    out = await v.invoke_verifier_for_fail(
+        body=make_body(),
+        req_id="REQ-9",
+        tags=["watchdog:accept-tearing-down"],
+        ctx={"verifier_stage": "accept"},
+    )
+    assert out["stage"] == "accept"
+    assert out["trigger"] == "fail"
+
+
+@pytest.mark.asyncio
+async def test_invoke_verifier_for_fail_unknown_stage_emits_escalate(monkeypatch):
+    """M14c：tag/ctx 都推不出 stage → emit VERIFY_ESCALATE。"""
+    from orchestrator.actions import _verifier as v
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+
+    out = await v.invoke_verifier_for_fail(
+        body=make_body(), req_id="REQ-9", tags=["unrelated"], ctx={},
+    )
+    assert out["emit"] == Event.VERIFY_ESCALATE.value
+    assert "cannot infer" in out["reason"]
+
+
+@pytest.mark.asyncio
 async def test_invoke_verifier_after_fix_passes_history(monkeypatch):
     from orchestrator.actions import _verifier as v
     fake = make_fake_bkd()

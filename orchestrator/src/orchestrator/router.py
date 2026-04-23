@@ -149,23 +149,6 @@ def derive_event(event_type: str, tags: Iterable[str], result_tags_only: bool = 
     if "fixer" in tagset:
         return Event.FIXER_DONE
 
-    # diagnose agent（M5）：比 bugfix 先查，因为 diagnose issue 可能也带 bugfix 历史 tag
-    if "diagnose" in tagset:
-        if "diagnosis:code-bug" in tagset:
-            return Event.BUGFIX_RETRY
-        if "diagnosis:spec-bug" in tagset:
-            return Event.SPEC_REWORK
-        # env-bug / unknown / 无 tag 都按 env-bug 走 escalate（统一终态）
-        return Event.BUGFIX_ENV_BUG
-
-    # bugfix agent：老 prompt 自判 diagnosis:spec-bug / env-bug 直接 escalate
-    if "bugfix" in tagset:
-        if "diagnosis:spec-bug" in tagset:
-            return Event.BUGFIX_SPEC_BUG
-        if "diagnosis:env-bug" in tagset:
-            return Event.BUGFIX_ENV_BUG
-        return Event.BUGFIX_DONE
-
     # v0.2：staging-test agent 在调试环境跑 unit+int，结果带 result:pass/fail
     if "staging-test" in tagset:
         if "result:pass" in tagset:
