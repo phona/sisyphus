@@ -3,7 +3,7 @@
 ## 职责（challenger / fail）
 
 sisyphus M18：challenger-agent 设了 `result:fail`。它的任务是**根据 spec 写黑盒 contract test**
-（`tests/contract/`），不看业务代码。设 `result:fail` 通常意味着 spec 本身有问题。
+（`tests/integration/`），不看业务代码。设 `result:fail` 通常意味着 spec 本身有问题。
 
 你要判：是 **spec 模糊/矛盾/漏定义**（spec_fixer 修），还是 challenger 自己**理解错了 spec**
 （retry_checker 重起 challenger），还是**根本没法黑盒测**（escalate 给 user）。

@@ -43,7 +43,7 @@ kubectl exec runner-{{ req_id | lower }} -- ls /workspace/source/<spec_home_repo
 - `openspec/changes/{{ req_id }}/design.md`（如有）
 - `openspec/changes/{{ req_id }}/specs/<capability>/contract.spec.yaml`
 - `openspec/changes/{{ req_id }}/specs/<capability>/spec.md`（scenarios）
-- 仓里**已有的** `tests/contract/` 现存模式（学约定）
+- 仓里**已有的** `tests/integration/` 现存模式（学约定）
 - 仓里 `Makefile` 看 ci-test 入口
 - 仓里 `tests/docker-compose.yml` 看 stack 入口
 
@@ -57,10 +57,33 @@ kubectl exec runner-{{ req_id | lower }} -- ls /workspace/source/<spec_home_repo
 
 ## Part B: 写 contract test
 
+### B.0 必读：业务仓的 integration-test skill（**先读再写**）
+
+业务仓如果有 `.claude/skills/integration-test/SKILL.md`，**必须先读它**：
+```bash
+ls /workspace/source/<repo>/.claude/skills/integration-test/ 2>/dev/null
+# 有的话:
+cat /workspace/source/<repo>/.claude/skills/integration-test/SKILL.md
+cat /workspace/source/<repo>/.claude/skills/integration-test/rules.md
+ls /workspace/source/<repo>/.claude/skills/integration-test/templates/   # 用模板
+```
+
+skill 写明这个仓的：
+- 测试组织方式（per-scenario file / per-capability file / 等）
+- docker-compose 入口 + service 拓扑
+- env 注入约定（`BASE_URL` / `BUILD_ID` 等）
+- build tag 约定（`//go:build integration`）
+- 命名 + assertion 风格
+
+**不读 skill 自己发明 = 偏离仓约定 = staging_test 必跑不通**。如果模板存在直接用模板，
+skill 已规定好一切，你只填 scenario 逻辑。
+
+如果**没有** skill（业务仓还没接入），按下面 B.1 默认约定写。
+
 ### B.1 测试位置 + 命名
 
-写在 spec home repo 的 `tests/contract/<capability>_contract_test.go`（或对应语言）。
-一个 capability 一个文件。
+写在 spec home repo 的 `tests/integration/<capability>_test.go`（一个 capability 一个文件）。
+**优先按仓 skill 的命名规则**；skill 没说时按上面默认。
 
 ### B.2 内容原则
 
@@ -73,7 +96,7 @@ kubectl exec runner-{{ req_id | lower }} -- ls /workspace/source/<spec_home_repo
 
 ### B.3 示例（Go HTTP service）
 
-`tests/contract/buildinfo_contract_test.go`：
+`tests/integration/buildinfo_contract_test.go`：
 ```go
 //go:build contract
 // +build contract
@@ -113,8 +136,8 @@ func TestBuildinfo_S2_JSONShape(t *testing.T) {
 gh repo clone phona/<spec_home_repo> ./repo
 cd ./repo
 git checkout feat/{{ req_id }}     # checkout 到 dev 已用的 feat 分支
-# 写 tests/contract/*.go
-git add tests/contract/
+# 写 tests/integration/*.go
+git add tests/integration/
 git commit -m "test(contract): add contract tests for {{ req_id }} per spec"
 git push
 ```
@@ -126,7 +149,7 @@ git push
 kubectl exec runner-{{ req_id | lower }} -- bash -c "
   cd /workspace/source/<spec_home_repo> && \
   git fetch origin feat/{{ req_id }} && git checkout feat/{{ req_id }} && \
-  go test -tags=contract ./tests/contract/... 2>&1 | tail -20
+  go test -tags=contract ./tests/integration/... 2>&1 | tail -20
 "
 ```
 
