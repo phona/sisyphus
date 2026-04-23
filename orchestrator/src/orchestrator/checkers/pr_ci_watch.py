@@ -5,8 +5,8 @@ repo 从环境变量 SISYPHUS_BUSINESS_REPO 拿，branch 从参数传入。
 dev agent 只需 push branch + 创 PR，不用回写任何东西。
 
 GH API:
-- GET /repos/{owner}/{repo}/pulls/{pr_number}        → head.sha
-- GET /repos/{owner}/{repo}/commits/{sha}/check-runs → check_runs[]
+- GET /repos/{owner}/{repo}/pulls?head={owner}:{branch}&state=open  → PR list（含 number + head.sha）
+- GET /repos/{owner}/{repo}/commits/{sha}/check-runs                 → check_runs[]
 
 退出码：
 - 0   = 全绿（所有 check-run completed 且 conclusion 友好）
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import subprocess
 import time
 
 import httpx
@@ -46,28 +45,6 @@ async def watch_pr_ci(
     if not repo:
         raise ValueError("SISYPHUS_BUSINESS_REPO env var not set")
 
-    pr_number = await _get_pr_number(repo, branch)
-    if not pr_number:
-        raise ValueError(f"No PR found for branch {branch} in {repo}")
-
-    return await _watch_pr_ci_inner(
-        repo=repo,
-        pr_number=pr_number,
-        poll_interval_sec=poll_interval_sec,
-        timeout_sec=timeout_sec,
-    )
-
-
-async def _watch_pr_ci_inner(
-    *,
-    repo: str,
-    pr_number: int,
-    poll_interval_sec: int,
-    timeout_sec: int,
-) -> CheckResult:
-    cmd_label = f"watch-pr-ci {repo}#{pr_number}"
-    start = time.monotonic()
-
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -75,18 +52,20 @@ async def _watch_pr_ci_inner(
     if settings.github_token:
         headers["Authorization"] = f"Bearer {settings.github_token}"
 
-    log.info("checker.pr_ci_watch.start", repo=repo, pr=pr_number,
+    log.info("checker.pr_ci_watch.start", repo=repo, branch=branch,
              poll=poll_interval_sec, timeout=timeout_sec)
 
+    start = time.monotonic()
     async with httpx.AsyncClient(base_url=_GH_API, headers=headers, timeout=30.0) as client:
+        # 1. 用 REST API 查 PR number + head.sha（替代 gh CLI，避免同步阻塞事件循环）
         try:
-            sha = await _get_pr_head_sha(client, repo, pr_number)
+            pr_number, sha = await _get_pr_info(client, repo, branch)
         except httpx.HTTPError as e:
-            log.exception("checker.pr_ci_watch.pr_lookup_failed", repo=repo, pr=pr_number)
+            log.exception("checker.pr_ci_watch.pr_lookup_failed", repo=repo, branch=branch)
             return CheckResult(
                 passed=False, exit_code=1,
                 stdout_tail="", stderr_tail=f"PR lookup failed: {e}"[:_TAIL],
-                duration_sec=time.monotonic() - start, cmd=cmd_label,
+                duration_sec=time.monotonic() - start, cmd=f"watch-pr-ci {repo}@{branch}",
             )
 
         cmd_label = f"watch-pr-ci {repo}#{pr_number}@{sha[:8]}"
@@ -98,7 +77,6 @@ async def _watch_pr_ci_inner(
                 last_runs = await _get_check_runs(client, repo, sha)
             except httpx.HTTPError as e:
                 log.warning("checker.pr_ci_watch.api_error", repo=repo, sha=sha[:8], error=str(e))
-                # 临时网络错误不立即失败，下一轮重试；超时再返 124
                 if time.monotonic() >= deadline:
                     return CheckResult(
                         passed=False, exit_code=124,
@@ -126,7 +104,6 @@ async def _watch_pr_ci_inner(
                     duration_sec=time.monotonic() - start, cmd=cmd_label,
                 )
 
-            # pending：再等一轮
             if time.monotonic() + poll_interval_sec >= deadline:
                 return CheckResult(
                     passed=False, exit_code=124,
@@ -139,10 +116,22 @@ async def _watch_pr_ci_inner(
 
 # ── GH API helpers ───────────────────────────────────────────────────────
 
-async def _get_pr_head_sha(client: httpx.AsyncClient, repo: str, pr_number: int) -> str:
-    r = await client.get(f"/repos/{repo}/pulls/{pr_number}")
+async def _get_pr_info(client: httpx.AsyncClient, repo: str, branch: str) -> tuple[int, str]:
+    """查 branch 对应的 open PR，返 (pr_number, head_sha)。
+
+    用 GitHub REST API `head` 过滤器（替代旧 gh CLI 调用），全程 async 不阻塞事件循环。
+    """
+    owner, _ = repo.split("/", 1)
+    r = await client.get(
+        f"/repos/{repo}/pulls",
+        params={"head": f"{owner}:{branch}", "state": "open"},
+    )
     r.raise_for_status()
-    return r.json()["head"]["sha"]
+    pulls = r.json()
+    if not pulls:
+        raise ValueError(f"No open PR found for branch {branch} in {repo}")
+    pr = pulls[0]
+    return int(pr["number"]), str(pr["head"]["sha"])
 
 
 async def _get_check_runs(client: httpx.AsyncClient, repo: str, sha: str) -> list[dict]:
@@ -191,22 +180,3 @@ def _summarize(runs: list[dict], failed_only: bool = False) -> str:
             continue
         parts.append(f"{name}={conclusion}")
     return " ".join(parts)
-
-
-async def _get_pr_number(repo: str, branch: str) -> int | None:
-    """用 gh cli 查 PR#。返 None if 找不到。"""
-    try:
-        output = subprocess.check_output(
-            ["gh", "pr", "list", "--head", branch, "--repo", repo, "--json", "number"],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        ).strip()
-        if not output:
-            return None
-        import json
-        data = json.loads(output)
-        if data and len(data) > 0:
-            return data[0].get("number")
-    except Exception as e:
-        log.warning("_get_pr_number.failed", repo=repo, branch=branch, error=str(e))
-    return None

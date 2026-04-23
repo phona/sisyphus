@@ -1,10 +1,11 @@
-"""checkers/pr_ci_watch.py 单测：mock GitHub API + gh PR 查询，验全绿/任一失败/全失败/超时。
+"""checkers/pr_ci_watch.py 单测：mock GitHub API，验全绿/任一失败/全失败/超时。
 
 M15：watch_pr_ci(req_id, branch, ...)，repo 从 SISYPHUS_BUSINESS_REPO env 读，
-pr_number 用 gh CLI 按 branch 查（这里 mock 掉），不再读 manifest。
+pr_number + head.sha 用 GitHub REST API `head` 过滤器按 branch 查（这里 mock 掉），不再读 manifest。
 """
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from orchestrator.checkers import pr_ci_watch
@@ -24,12 +25,15 @@ def _run(name: str, status: str = "completed", conclusion: str | None = "success
 
 
 def patch_pr_lookup(monkeypatch, *, repo: str = "phona/ubox-crosser", pr_number: int | None = 42):
-    """SISYPHUS_BUSINESS_REPO env + mock _get_pr_number 返指定 number。"""
+    """SISYPHUS_BUSINESS_REPO env + mock _get_pr_info 返指定 (number, sha)。"""
     monkeypatch.setenv("SISYPHUS_BUSINESS_REPO", repo)
 
-    async def fake_lookup(_repo: str, _branch: str) -> int | None:
-        return pr_number
-    monkeypatch.setattr(pr_ci_watch, "_get_pr_number", fake_lookup)
+    async def fake_lookup(client, _repo: str, _branch: str) -> tuple[int, str]:
+        if pr_number is None:
+            raise ValueError("No open PR found")
+        return pr_number, "deadbeef" * 5
+
+    monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup)
 
 
 # ── 单轮直绿 ──────────────────────────────────────────────────────────────
@@ -39,10 +43,6 @@ async def test_watch_pr_ci_all_green(httpx_mock, monkeypatch):
     monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
     patch_pr_lookup(monkeypatch)
 
-    httpx_mock.add_response(
-        url="https://api.github.com/repos/phona/ubox-crosser/pulls/42",
-        json=_pr_response(),
-    )
     httpx_mock.add_response(
         url="https://api.github.com/repos/phona/ubox-crosser/commits/deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/check-runs?per_page=100",
         json=_runs_payload(_run("lint"), _run("unit"), _run("integration")),
@@ -65,10 +65,6 @@ async def test_watch_pr_ci_any_failed(httpx_mock, monkeypatch):
     monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
     patch_pr_lookup(monkeypatch)
 
-    httpx_mock.add_response(
-        url="https://api.github.com/repos/phona/ubox-crosser/pulls/42",
-        json=_pr_response(),
-    )
     httpx_mock.add_response(
         url="https://api.github.com/repos/phona/ubox-crosser/commits/deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/check-runs?per_page=100",
         json=_runs_payload(
@@ -94,10 +90,6 @@ async def test_watch_pr_ci_all_failed(httpx_mock, monkeypatch):
     monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
     patch_pr_lookup(monkeypatch)
 
-    httpx_mock.add_response(
-        url="https://api.github.com/repos/phona/ubox-crosser/pulls/42",
-        json=_pr_response(),
-    )
     httpx_mock.add_response(
         url="https://api.github.com/repos/phona/ubox-crosser/commits/deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/check-runs?per_page=100",
         json=_runs_payload(
@@ -128,11 +120,6 @@ async def test_watch_pr_ci_timeout(httpx_mock, monkeypatch):
     monkeypatch.setattr(pr_ci_watch.asyncio, "sleep", fast_sleep)
 
     httpx_mock.add_response(
-        url="https://api.github.com/repos/phona/ubox-crosser/pulls/42",
-        json=_pr_response(),
-    )
-    # check-runs 永远 pending：让 mock 复用同一个响应
-    httpx_mock.add_response(
         url="https://api.github.com/repos/phona/ubox-crosser/commits/deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/check-runs?per_page=100",
         json=_runs_payload(_run("integration", status="in_progress", conclusion=None)),
         is_reusable=True,
@@ -158,10 +145,6 @@ async def test_watch_pr_ci_pending_then_pass(httpx_mock, monkeypatch):
         return None
     monkeypatch.setattr(pr_ci_watch.asyncio, "sleep", fast_sleep)
 
-    httpx_mock.add_response(
-        url="https://api.github.com/repos/phona/ubox-crosser/pulls/42",
-        json=_pr_response(),
-    )
     # 第一次：pending
     httpx_mock.add_response(
         url="https://api.github.com/repos/phona/ubox-crosser/commits/deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/check-runs?per_page=100",
@@ -179,18 +162,17 @@ async def test_watch_pr_ci_pending_then_pass(httpx_mock, monkeypatch):
     assert result.exit_code == 0
 
 
-# ── PR 不存在（404）→ fail ───────────────────────────────────────────────
+# ── PR lookup HTTP 错误 → fail ────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_watch_pr_ci_pr_not_found(httpx_mock, monkeypatch):
+async def test_watch_pr_ci_pr_lookup_http_error(monkeypatch):
+    """_get_pr_info 抛 httpx.HTTPError → watch_pr_ci 捕获后返 exit_code=1。"""
     monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
-    patch_pr_lookup(monkeypatch, pr_number=999)
+    monkeypatch.setenv("SISYPHUS_BUSINESS_REPO", "phona/ubox-crosser")
 
-    httpx_mock.add_response(
-        url="https://api.github.com/repos/phona/ubox-crosser/pulls/999",
-        status_code=404,
-        json={"message": "Not Found"},
-    )
+    async def fake_lookup_fail(client, _repo: str, _branch: str) -> tuple[int, str]:
+        raise httpx.HTTPError("mocked API error")
+    monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup_fail)
 
     result = await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9", poll_interval_sec=1, timeout_sec=60)
 
@@ -211,10 +193,6 @@ async def test_watch_pr_ci_empty_runs_times_out(httpx_mock, monkeypatch):
         return None
     monkeypatch.setattr(pr_ci_watch.asyncio, "sleep", fast_sleep)
 
-    httpx_mock.add_response(
-        url="https://api.github.com/repos/phona/ubox-crosser/pulls/42",
-        json=_pr_response(),
-    )
     httpx_mock.add_response(
         url="https://api.github.com/repos/phona/ubox-crosser/commits/deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/check-runs?per_page=100",
         json=_runs_payload(),
@@ -237,9 +215,14 @@ async def test_watch_pr_ci_raises_when_env_missing(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_watch_pr_ci_raises_when_no_pr(monkeypatch):
-    """gh pr list 返 None → 没找到对应 PR → ValueError。"""
-    patch_pr_lookup(monkeypatch, pr_number=None)
-    with pytest.raises(ValueError, match="No PR found"):
+    """_get_pr_info 找不到对应 PR → ValueError。"""
+    monkeypatch.setenv("SISYPHUS_BUSINESS_REPO", "phona/ubox-crosser")
+
+    async def fake_lookup_none(client, _repo: str, _branch: str) -> tuple[int, str]:
+        raise ValueError("No open PR found for branch")
+    monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup_none)
+
+    with pytest.raises(ValueError, match="No open PR found"):
         await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9")
 
 
