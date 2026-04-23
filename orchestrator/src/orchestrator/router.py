@@ -1,4 +1,4 @@
-"""Webhook payload → Event 推断（取代 router/router.js 的 routeKey/resultKey 逻辑）。
+"""Webhook payload → Event 推断。
 
 输入：BKD webhook payload（issue.updated / session.completed / session.failed）
 输出：Event 枚举值 或 None（无映射，skip）
