@@ -41,7 +41,7 @@ def _build_cmd(req_id: str) -> str:
         "    fi; "
         "  fi; "
         "done; "
-        "exit $fail"
+        "[ $fail -eq 0 ]"
     )
 
 

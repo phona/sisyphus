@@ -61,7 +61,7 @@ def _build_cmd(req_id: str) -> str:
         '    tail -10 "/tmp/staging-test-logs/$name.log"; '
         "  fi; "
         "done; "
-        "exit $fail"
+        "[ $fail -eq 0 ]"
     )
 
 
