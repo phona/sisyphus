@@ -108,6 +108,34 @@ class BKDRestClient:
             {},
         )
 
+    async def get_last_assistant_message(
+        self,
+        project_id: str,
+        issue_id: str,
+    ) -> str | None:
+        """从 BKD session logs 取最后一条 assistant-message 文本。
+
+        verifier-agent 的 decision JSON 通常写在最后一条 assistant-message 里
+        （BKD issue 对象没有 description 字段，所以没法从那读）。
+        """
+        try:
+            data = await self._get(
+                f"/projects/{project_id}/issues/{issue_id}/logs?limit=200"
+            )
+        except Exception as e:
+            log.warning("bkd.get_logs_failed", issue_id=issue_id, error=str(e))
+            return None
+        if not isinstance(data, dict):
+            return None
+        logs = data.get("logs") or []
+        # 从尾部向前找第一条 assistant-message
+        for e in reversed(logs):
+            if e.get("entryType") == "assistant-message":
+                c = e.get("content")
+                if isinstance(c, str):
+                    return c
+        return None
+
     async def merge_tags_and_update(
         self,
         project_id: str,

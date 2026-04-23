@@ -43,7 +43,7 @@ def _build_cmd(req_id: str) -> str:
         "  fi; "
         f'  if [ -d "$repo/openspec/changes/{req_id}" ]; then '
         '    echo "=== spec_lint: $name ==="; '
-        f'    if ! (cd "$repo" && openspec validate "openspec/changes/{req_id}"); then '
+        f'    if ! (cd "$repo" && openspec validate "{req_id}"); then '
         '      echo "=== FAIL: $name ===" >&2; '
         "      fail=1; "
         "    fi; "
