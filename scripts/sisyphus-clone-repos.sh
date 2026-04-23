@@ -76,7 +76,18 @@ for repo_spec in "$@"; do
       FAILED+=("$repo_spec")
       continue
     fi
-    # dev-agent 后续要 base 切 feat/REQ-x 分支，需要 full history
+    # --depth=1 默认 refspec 只追默认分支（+refs/heads/master:refs/remotes/origin/master）。
+    # 后续 spec_lint / dev_cross_check / staging_test checker 要 git checkout origin/feat/REQ-x，
+    # 必须把 refspec 改宽 + fetch 全部，否则本地 refs/remotes/origin/feat/* 不会出现，checker
+    # 必 fail（REQ-final2-1776948458 实证）。
+    if ! ( cd "$target" \
+           && git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*' \
+           && git fetch --all --tags ); then
+      echo "=== FAIL clone: $repo_spec (broaden refspec failed) ===" >&2
+      FAILED+=("$repo_spec")
+      continue
+    fi
+    # dev-agent 后续要 base 切 feat/REQ-x 分支，也要 full history
     if ! ( cd "$target" && git fetch --unshallow 2>/dev/null || true ); then
       echo "[sisyphus-clone-repos] WARN: unshallow failed for $repo_spec (continuing)" >&2
     fi

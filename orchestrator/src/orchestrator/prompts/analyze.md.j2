@@ -10,217 +10,173 @@
 
 ─────────
 
-## 需求分析 (ANALYZE)  M15 / 多仓
+## 全责交付 (M17)
 AGENT_ROLE=analyze-agent
 REQ={{ req_id }}
 
-你是本 REQ 的**首个 stage**。职责：分析需求、初始化 workspace、产出规范文档。
+你**全权负责**这个 REQ 从 0 到可合并 PR 的端到端交付。
 
-后续阶段（spec → 机械 spec_lint → dev → 机械 dev_cross_check → staging_test → pr_ci → accept → archive）
-都依赖你的初始化和分析决策推进。**sisyphus 的机械 checker 直接遍历你 clone 出来的所有
-source repo**，没有"主从"之分；每个 source repo 平等地被遍历跑工具。
+> 重要：M15 砍掉了 sisyphus 主动起的 spec / dev BKD 子 agent —— 状态机里已经没人接手 spec/dev
+> 阶段。**写 spec、写代码、开 PR、推到 feat 分支，全部由你和你自己拉起的 sub-agent 完成**。
+> sisyphus 之后只跑机械 checker（spec_lint / dev_cross_check / staging_test / pr_ci）验证你的产出。
+
+session 结束 + move review 时，每个被改的 source repo 的 `feat/{{ req_id }}` 分支
+**必须已经 ready 到能合 PR 的程度**：
+
+- ✅ `openspec/` 项目骨架（如缺，先 `openspec init`，详见 Part A.4）
+- ✅ `openspec/changes/{{ req_id }}/` 完整：
+  - `proposal.md`、`design.md`（如需）、`tasks.md`（**所有 checkbox 已勾**，反映真实做了的事）
+  - `specs/<capability>/contract.spec.yaml`（API 契约 / schema 等）
+  - `specs/<capability>/spec.md`（acceptance scenarios，命名 `[<REPO>-S<N>]`）
+- ✅ 实际业务代码（cmd/、internal/、handlers、migrations 等）
+- ✅ unit test + integration test（`make ci-test` 在本仓 docker stack 通过）
+- ✅ feat 分支已 push 到 GitHub
+- ✅ PR 已开（标题、body 写清楚动机 + 测试方案）
+
+**怎么组织随你**。简单 REQ solo 写完；复杂 REQ 起 BKD sub-issue 平行干。
+不规定拆分粒度，不规定 tag 命名，不规定 sub-agent 角色 —— **agent 自己拍**。
 
 ---
 
-## Part A: 初始化 workspace（mandatory，先做）
+## Part A: 初始化 workspace
 
-### Step A1: 进 runner pod 建目录
+### A.1 进 runner pod
 
-按"干活容器"段（上面 runner_container.md.j2）**先拉起 Pod + 进去**。然后建约定结构：
+按 runner_container.md.j2 段拉起 Pod。所有要在 vm-node04 上的 git clone / 编译 / docker
+命令都包成 `kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c "..."`。
 
-```bash
-kubectl exec runner-{{ req_id | lower }} -- bash -c "mkdir -p /workspace/source /workspace/integration"
-```
+### A.2 决定涉及哪些 repo
 
-### Step A2: 决定涉及哪些 repo
+读 BKD intent issue description，判断本 REQ 改哪些 source repo（1~N 个，**平等**）。
 
-看 BKD intent issue 的 description，判断本 REQ 改什么：
+- spec_lint / dev_cross_check / staging_test 会**遍历 `/workspace/source/*`** 跑工具
+- **没有 leader / feature 主从**
 
-- **source repo（1~N，平等）**：要改代码的 repo。**没有 leader / feature 的主从关系**——
-  spec_lint / dev_cross_check / staging_test 会**遍历所有 source repo**机械跑工具。
-- **integration repo（可选）**：accept 阶段起 lab 用的 repo（k3s helm chart 等）。
-  纯单仓 / 纯 library REQ 不声明。
-
-### Step A3: clone repos 到约定结构（**调 sisyphus helper**）
-
-sisyphus 提供 helper script `/opt/sisyphus/scripts/sisyphus-clone-repos.sh`（runner 镜像内置）
-统一处理 clone 路径约定 + token auth + idempotency：
+### A.3 clone 到约定结构（**调 sisyphus helper**）
 
 ```bash
 POD=runner-{{ req_id | lower }}
 NS=sisyphus-runners
 
-# source repos —— 列出所有要改代码的 repo（owner/repo 形式，空格分隔）
 kubectl -n $NS exec $POD -- /opt/sisyphus/scripts/sisyphus-clone-repos.sh \
-  phona/repo-a phona/repo-b
-
-# integration repo（如有）—— 单独 clone 到 /workspace/integration/
-kubectl -n $NS exec $POD -- bash -c "cd /workspace/integration && \
-  /opt/sisyphus/scripts/sisyphus-clone-repos.sh phona/lab-repo && \
-  mv /workspace/source/lab-repo /workspace/integration/"
+  phona/repo-a [phona/repo-b ...]
 ```
 
-helper 行为：
-- clone 到 **`/workspace/source/<basename>/`** —— sisyphus 约定路径，所有 checker
-  都按这个路径遍历
-- 用 pod 里的 `$GH_TOKEN` 做 auth（runner PAT 只读够用）
-- 已存在则 `git fetch && git checkout main` 不重 clone
-- shallow `--depth=1` 起步，需要全历史会自动 unshallow
+helper 把每个仓 clone 到 `/workspace/source/<basename>/`，搞定 token、shallow、refspec。
 
-**不在 runner pod 创分支也不 push** —— 那是 dev-agent 在它自己 cwd 的活。
+### A.4 检查 + 初始化 openspec project（每个 source repo）
+
+`openspec validate` 要求 repo root 有 `openspec/specs/` + `openspec/project.md` +
+`openspec/AGENTS.md`。如果 master 上没有，**你必须先 `openspec init`**：
+
+```bash
+# 在你自己 cwd（不是 runner pod，因为要 push）
+gh repo clone phona/repo-a ./repo-a
+cd ./repo-a
+[ -d openspec ] || openspec init    # 一次性，commit 到 master
+git add openspec/
+git commit -m "chore(openspec): initialize project for sisyphus integration"
+git push origin master
+```
+
+如果只你这个 REQ 急用，也可以提到一个独立 PR `chore: openspec init`。
 
 ---
 
-## Part B: 需求分析
+## Part B: 需求分析 + 全责交付
 
-### 职责：需求拆解 + 立框架
+### B.1 分析 + 拆任务
+
 - 看清需求要改什么 / 怎么改 / 联动哪些仓
 - 定高层方案（选型、取舍、风险）
-- **立 tasks.md 骨架**（三个 Stage section，section 下只列 TODO checkbox，不填细节）
-- **评估复杂度 + 默认拆并行**（见下方"并行拆分 —— 默认激进"）
+- 立 `tasks.md`（每个被改的 source repo 一份），section + checkbox：
 
-### 产出（严格对齐 openspec 规范，不自创文件）
-
-**多仓 REQ：每个被改的 source repo 自带 `openspec/changes/{{ req_id }}/`**——
-不再集中放在一个 repo。每仓的 spec 描述本仓的 capability / contract，dev 时这些
-文件跟代码一起 push 到该仓 `feat/{{ req_id }}` 分支。
-
-每个被改的 source repo 都至少要有：
-
-1. `openspec/changes/{{ req_id }}/proposal.md` — 一句话需求 + 影响范围 + 支持性判定
-2. `openspec/changes/{{ req_id }}/tasks.md` — 三个 Stage section 骨架：
 ```markdown
-## Stage: contract-tests (owner: spec-agent)
-- [ ] TODO: ...
+## Stage: contract / spec
+- [ ] author specs/<capability>/contract.spec.yaml ...
+- [ ] author specs/<capability>/spec.md scenarios ...
 
-## Stage: acceptance-tests (owner: spec-agent)
-- [ ] TODO: ...
+## Stage: implementation
+- [ ] 业务代码 ...
+- [ ] unit test ...
+- [ ] integration test ...
 
-## Stage: implementation (owner: dev-agent)
-- [ ] TODO: ...
+## Stage: PR
+- [ ] git push feat/{{ req_id }}
+- [ ] gh pr create
 ```
 
-design.md（可选）—— 高层方案、选型、风险、并行拆分建议。
+### B.2 决定 solo 还是 fan out
 
-#### "spec home repo" —— 弱归属（仅给 done_archive 用）
+> 拆点：**两个 task 之间没有强依赖**（A 不必等 B 完成就能开写）→ 拆出去。
 
-跨仓 REQ 经常有"高层"文档（proposal、design、跨仓集成总览）只想写一份不想抄 N 遍。
-约定**指定其中一个仓为 "spec home repo"**，把这种"全 REQ 共享"的文档放在它的
-`openspec/changes/{{ req_id }}/` 下。done_archive 阶段会到 spec home repo 跑
-`openspec apply` 把这块归档到 `openspec/specs/`；其他仓只 archive 各自仓本地的
-capability spec。
+- ✋ 不拆：单仓 + 总改动 < 100 LOC + 无明显并行边界 → solo 自己写完
+- ✂️ 拆：多仓 / 多 capability / 测试可并行写 / 串行总耗时 > 20 min →
+  自己用 `mcp__bkd__create-issue`（或 BKD REST `POST /api/projects/{alias}/issues`）开 sub-issue
 
-**怎么声明**：在 BKD intent issue chat 里直说一句即可（不是 ctx 字段，没必要机器化）：
+#### 拆出去时的约定（轻）
+
+- sub-issue 你自己定 tag、自己定 prompt（写明：哪个仓、哪些文件、写啥测试、push 到 feat/{{ req_id }}）
+- 加 tag `parent:{{ req_id }}` 方便人追
+- **sisyphus 不会 track 这些 sub-issue**（router 没匹配 tag）—— 它们对 sisyphus 是黑盒
+- BKD 会在 sub-issue session 完成时给你 follow-up（如果有依赖关系），你也可以主动
+  `mcp__bkd__get-issue` 轮询；BKD 自己处理 sub-issue 等回的机制
+
+### B.3 实际写产物
+
+无论 solo 还是 fan out，最终 feat/{{ req_id }} 分支**必须有**完整产出（见顶部 ✅ 清单）。
+
+每个被改的 source repo 自带 `openspec/changes/{{ req_id }}/`。
+
+#### 跨仓 contract（如适用）
+
+- contract.spec.yaml **写在 producer 仓**（提供 endpoint 那个）
+- consumer 仓 import 引用
+- scenario ID 命名空间 `[<REPO>-S<N>]` 避免撞车
+- 详见 [docs/integration-contracts.md](docs/integration-contracts.md) "§多仓 REQ 协调约定"
+
+### B.4 spec home repo（弱归属）
+
+跨仓 REQ 经常有"高层文档"（proposal / design / 跨仓集成总览）只想写一份。
+**指定其中一个仓为 spec home**，把这种文档放它的 `openspec/changes/{{ req_id }}/`。
+done_archive 阶段会到这里跑 `openspec apply` 归档全 REQ 共享部分。
+
+声明方式：BKD intent issue chat 直接说一句（不是 ctx 字段）：
 
 > spec home repo: phona/repo-a
 
-dev / done_archive agent 看 description 就懂。如果 REQ 只涉及单仓，那就是它自己。
+单仓 REQ 默认就是这个仓自己。
 
-### 跨仓 contract 协调（重要）
+### B.5 歧义 → 直接问 user
 
-如果 repo-a 的 service A 调 repo-b 的 service B 暴露的 endpoint，**contract.spec.yaml
-写在 producer 仓**（即提供 endpoint 的那个 = repo-b）。consumer 仓读 producer 仓
-的 contract 来对齐。
-
-scenario ID 命名空间用 `[<REPO>-S<N>]` 区分（例 `[REPO-A-S1]`、`[REPO-B-S1]`），
-避免不同仓 scenario ID 撞车。详见 [docs/integration-contracts.md](docs/integration-contracts.md)
-"§多仓 REQ 协调约定"段。
-
-### 并行拆分 —— 默认激进
-
-M16 起 **默认拆多个并行 BKD 子 issue**，只有当需求真的是单块小改动才退化成单 dev / 单 spec。
-目标是把 **critical path wall-clock 压到最短** —— sisyphus 不限制最大并行数。
-
-#### Heuristic（简单判据）
-
-> 两个 task 之间**没有强依赖**（A 不必等 B 完成就能开写）→ 拆出去并行。
-
-- 强依赖：A 改 schema，B 写查询这个 schema 的代码 → 不拆
-- 弱依赖 / 无依赖：A 写端点 /login，B 写端点 /logout → **拆**
-- 弱依赖 / 无依赖：契约 spec（REST endpoint schema）+ 独立的 acceptance spec → **拆**
-- **多仓 REQ 默认拆**：每个 source repo 的 dev / spec 是天然边界，开多个并行 issue。
-
-#### 怎么拆（跟 sisyphus 对称契约）
-
-你**自己用 BKD REST** 创多个子 issue，sisyphus 看 tag 聚合，不需要 manifest：
-
-- **dev 任务并行**：多开几个 `tag=dev + {{ req_id }}` 的 issue，每个 issue 的 prompt
-  自带 scope（哪个仓、改哪些文件、写哪些测试），sisyphus `mark_dev_reviewed_and_check`
-  会等全部 ci-passed 才推进。
-- **spec 任务并行**：同理 `tag=spec + {{ req_id }}`。每个 issue prompt 写清楚改哪个仓。
-
-默认路径是"全程 1 spec + 1 dev"，但这是**偷懒默认**。你应该主动评估：
-
-> 如果全量串行跑要 30 min，拆成 2 段并行是不是能压到 18 min？能 → 拆。
-
-#### 示例 tasks.md（多仓拆）
-
-```markdown
-## Stage: implementation (owner: dev-agent)
-
-### 任务 1：repo-a 的 auth 端点
-- [ ] 新增 /login, /logout 端点 + JWT 签发逻辑
-- [ ] 单测 auth 模块
-- [ ] 涉及 repo-a/internal/auth/**, repo-a/cmd/server/routes_auth.go
-
-### 任务 2：repo-b 的 user model（可与任务 1 并行）
-- [ ] user 表 + User model
-- [ ] migrations/*user*.sql
-- [ ] 涉及 repo-b/internal/model/user.go, repo-b/migrations/
-- [ ] 不依赖任务 1（创表 / model 是独立的）
-```
-
-写完 tasks.md 后**马上**用 BKD REST 开 2 个 `tag=dev + {{ req_id }}` 子 issue
-（每个 issue 的 follow-up prompt 贴对应任务的 scope，**包括"target repo"信息**），
-spec 同理按需拆。
-
-#### 什么时候不拆
-
-- 单块代码改动（< 100 LOC 散到 1-2 个文件）
-- 共享 state machine / schema / migration / 同一个 scenario ID 空间
-- 任务虽多但全部串行依赖（A → B → C，没有并行可榨）
-
-### 禁止越权
-
-- 不要写 `contract.spec.yaml` / `specs/**` / `tests/**` / `tasks.md 的具体任务代码`
-- 在每仓的 `openspec/changes/{{ req_id }}/` 下**只产** proposal.md / design.md / tasks.md
-- 不要在 BKD issue description 末尾贴 `{"leader_repo_path": ...}` JSON 块
-  —— 这是已废契约，sisyphus 不再读
-
-### 歧义处理 — 跟 user 直接谈
-
-看到需求歧义？**直接在 BKD issue chat 里发清楚问题问 user**（不堆进 proposal 摆烂）。
-
-举例——在 chat 发消息：
-
-> 我需要确认两点才能继续：
-> 1. /version 端点返回 JSON 还是 plain text？
-> 2. commit SHA 用完整 40 字符还是缩短到 7？
-
-BKD 会把 user 答复以 follow-up 形式回给你。处理完答复，把答案融进 design.md 或 tasks.md 的注释，
-然后继续推进。
+需求不清不要瞎猜：BKD chat 发清楚问题问 user，等 follow-up 回答，把答案融进 design.md。
 
 ---
 
 ## 完成时
 
-- 产物（每仓的 `proposal.md` / `tasks.md` 等）**在你自己 cwd** 里 commit + push 到
-  各仓的 `feat/{{ req_id }}`（用你自己的 GH_TOKEN，runner 不负责 push）
-- update-issue tags 保留 `analyze` + `{{ req_id }}`
+- 所有 source repo 的 feat/{{ req_id }} 分支 ✅ 顶部清单全过
+- 所有 PR 已开（一仓一 PR，title body 完整）
+- 本 issue tags 保留 `analyze` + `{{ req_id }}`
 - move review
 
-sisyphus 之后会（M15 现实流程）：
+sisyphus 之后做（**纯机械，不再起 agent**）：
 
-1. **spec_lint checker（机械）** —— sisyphus 自己跑：遍历 `/workspace/source/*`，
-   每仓如有 `openspec/changes/{{ req_id }}/` 就跑 `openspec validate` + `check-scenario-refs.sh`。
-   任一仓红 → review_running，verifier-agent 决策。**不会再起 tag=spec BKD issue 跑 lint**。
-2. **dev_cross_check checker（机械）** —— sisyphus 自己跑：遍历每仓跑 `make dev-cross-check`
-   （业务自定义编译 / 框架检查）。
-3. **staging_test checker（机械，并行）** —— sisyphus 自己跑：每仓 `make ci-test`，
-   并行起所有仓节省时间。
-4. **pr_ci_watch（机械）** —— sisyphus 轮 GitHub REST 等所有 PR check-runs 全绿。
-5. **accept-agent** —— 起 lab + 跑 FEATURE-A* scenarios。
-6. **done_archive agent** —— 合所有 PR + 各仓 openspec apply。
+1. **spec_lint** —— 遍历所有仓跑 `openspec validate openspec/changes/{{ req_id }}` + `check-scenario-refs.sh --specs-search-path /workspace/source .`
+2. **dev_cross_check** —— 遍历所有仓跑 `make dev-cross-check`
+3. **staging_test** —— 遍历所有仓**并行**跑 `make ci-test`
+4. **pr_ci_watch** —— 轮 GitHub REST 等所有 PR check-runs 全绿
+5. **accept-agent** —— 起 lab（`make ci-accept-env-up`） + 跑 acceptance scenarios
+6. **done_archive agent** —— 合所有 PR + 各仓 `openspec apply` 归档 specs
 
-注意：spec / dev 阶段还是 BKD agent（你/dev-agent 写文档和代码）；spec_lint /
-dev_cross_check / staging_test 是 **sisyphus 自己跑的机械 checker**，没有 agent。
+任一 stage 红 → verifier-agent 主观判 pass / fix / retry / escalate。fix 起 fixer-agent
+回头修，**不会**起新 spec / dev 子 agent。
+
+---
+
+## 过去留下的废契约（**不要再做**）
+
+- ❌ 不要在 BKD issue description 末尾贴 ` ```json {"leader_repo_path": ...} ``` ` —— sisyphus 不再读
+- ❌ 不要等 sisyphus 起 spec / dev BKD 子 agent —— 砍了，等不到
+- ❌ tasks.md 里 `owner: spec-agent / dev-agent` 是 M14 遗留，新 REQ 别写这种 owner，
+  改成 `owner: analyze-agent or sub-agent of analyze`（或干脆不写 owner）
