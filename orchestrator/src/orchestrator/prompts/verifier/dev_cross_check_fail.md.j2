@@ -1,7 +1,8 @@
 {% include "verifier/_header.md.j2" %}
 
-## 职责（dev / fail）
-dev-agent 跑不下去（session failed / 超时 / 没建出 PR / push 失败）。
+## 职责（dev_cross_check / fail）
+sisyphus 的机械 dev_cross_check checker 红了——它**遍历所有 source repo**
+跑 `make dev-cross-check`（业务自定义编译 / 框架约束），任一仓非 0 即整体红。
 
 {% if stderr_tail %}
 ### 失败栈尾
@@ -10,15 +11,24 @@ dev-agent 跑不下去（session failed / 超时 / 没建出 PR / push 失败）
 ```
 {% endif %}
 
+### 多仓识别（重要）
+
+stderr 里 sisyphus 用 `=== FAIL: <repo-basename> ===` 标记**哪个仓**挂了。
+找到后在 decision JSON 里**填 `target_repo`**（如 `phona/repo-a`），
+fixer 不用全仓盲扫。
+
 ### 关注点
-- 编译 / build 错，改 src 能修 → `fix` + `fixer=dev`
-- spec 对不上实现（dev 卡住说"contract 这条实现不了"）→ `fix` + `fixer=spec`
+- 编译 / build 错（具体仓的 src 里），改 src 能修 → `fix` + `fixer=dev` + `target_repo=<挂的仓>`
+- spec 对不上实现（dev_cross_check 检查到 contract 跟实现不一致）→ `fix` + `fixer=spec` + `target_repo=<spec 错的仓>`
+- 跨仓 ABI / contract 不一致（producer 仓提供的不是 consumer 仓预期的）→ 一般是 producer 改了 spec，consumer 没跟 → `fix` + `fixer=dev` + `target_repo=<consumer 仓>`
 - gh CLI / ghcr / PR 创建失败（token、permission）→ `escalate`（环境层）
-- LLM 抽风空输出 → `retry_checker`（让 dev 阶段自己再起一次）
+- 工具链不在（make 找不到 / dev-cross-check target 不存在）→ `escalate`（接入层 bug）
+- LLM 抽风空输出 → `retry_checker`
 
 ### NOT 该做
 - 不帮 dev 改代码
 - 不自己建 PR
+- 不亲自跑 `make dev-cross-check`（已跑过；你只读结果）
 
 ─────────
 

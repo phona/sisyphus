@@ -12,6 +12,9 @@
 - **action 异步副作用**：起 BKD issue / 跑 checker / 写表 / emit 后续 event。idempotent action 标 `idempotent=True`，create_* 那种不幂等的会防重复触发。
 - **CAS 失败 = 并发抢同 REQ**：另一个 webhook 已推过 state，本次 skip。
 - **terminal state 只有 2 个**：`done`（archive 完）和 `escalated`（人介入 / lab 起不来 / verifier 投降）。
+- **多仓 (M16)**：state name 不变；`spec-lint-running` / `dev-cross-check-running` /
+  `staging-test-running` 三个 checker stage 内部从单仓变成 for-each-repo 遍历
+  （任一仓红 → stage fail）。状态机层面无影响。
 
 ## 2. ReqState 枚举（15 个）
 
@@ -19,9 +22,9 @@
 |---|---|---|
 | `init` | 还没 analyze（intent_analyze 之前） | start |
 | `analyzing` | analyze-agent 在跑 | in-flight |
-| `spec-lint-running` | **M15** 客观检查：openspec validate + check-scenario-refs.sh | in-flight |
-| `dev-cross-check-running` | **M15** 客观检查：业务 repo 自定义检查（编译 / 框架约束） | in-flight |
-| `staging-test-running` | 调试环境跑 unit + integration test（机械） | in-flight |
+| `spec-lint-running` | **M15** 客观检查：**for-each-repo** openspec validate + check-scenario-refs.sh（遍历 `/workspace/source/*`） | in-flight |
+| `dev-cross-check-running` | **M15** 客观检查：**for-each-repo** 业务 repo 自定义检查（make dev-cross-check） | in-flight |
+| `staging-test-running` | **for-each-repo 并行** 跑 make ci-test（机械） | in-flight |
 | `pr-ci-running` | PR 已开，等 GHA 全套绿（机械） | in-flight |
 | `accept-running` | env-up 完，accept-agent 跑 FEATURE-A* | in-flight |
 | `accept-tearing-down` | env-down 清 lab（无论 accept pass/fail 都跑） | in-flight |

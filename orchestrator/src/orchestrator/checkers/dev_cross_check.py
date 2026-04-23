@@ -1,6 +1,8 @@
-"""dev_cross_check：开发交叉验证（M1 checker）。
+"""dev_cross_check：开发交叉验证（M1 checker，for-each-repo）。
 
-sisyphus 在 runner pod 直接跑开发交叉验证，吃退出码定 pass/fail。
+多仓重构后：每个 source repo 在 runner pod 里挂在 /workspace/source/<repo-name>/。
+checker 遍历 /workspace/source/*，含 Makefile 的仓逐一跑 `make dev-cross-check`；
+任一失败整体红。每仓失败时 echo `=== FAIL: $repo ===` 到 stderr。
 """
 from __future__ import annotations
 
@@ -17,26 +19,33 @@ log = structlog.get_logger(__name__)
 _TAIL = 2048
 
 
-def _build_cmd(req_id: str, feature_repo_path: str) -> str:
-    """跑开发交叉验证。
-
-    对标 staging-test，开发交叉验证是 dev agent 完成后的客观检查。
-    """
+def _build_cmd(req_id: str) -> str:
+    """遍历 /workspace/source/*/，对含 Makefile 的仓跑 make dev-cross-check。"""
     return (
-        f"set -e; cd \"{feature_repo_path}\" && "
-        f"make dev-cross-check"
+        "set -o pipefail; "
+        "fail=0; "
+        "for repo in /workspace/source/*/; do "
+        '  if [ -d "$repo" ] && [ -f "$repo/Makefile" ]; then '
+        '    name=$(basename "$repo"); '
+        '    echo "=== dev_cross_check: $name ==="; '
+        '    if ! (cd "$repo" && make dev-cross-check); then '
+        '      echo "=== FAIL: $name ===" >&2; '
+        "      fail=1; "
+        "    fi; "
+        "  fi; "
+        "done; "
+        "exit $fail"
     )
 
 
 async def run_dev_cross_check(
     req_id: str,
     *,
-    feature_repo_path: str,
     timeout_sec: int = 300,
 ) -> CheckResult:
-    """kubectl exec runner -- make dev-cross-check ...，收 stdout/stderr/exit。"""
+    """kubectl exec runner -- <for-each-repo make dev-cross-check>。"""
     rc = k8s_runner.get_controller()
-    cmd = _build_cmd(req_id, feature_repo_path)
+    cmd = _build_cmd(req_id)
     log.info(
         "checker.dev_cross_check.start",
         req_id=req_id, timeout=timeout_sec,

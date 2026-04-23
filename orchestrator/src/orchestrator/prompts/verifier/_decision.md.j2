@@ -5,11 +5,12 @@
 
 ````json
 {
-  "action":     "pass" | "fix" | "retry_checker" | "escalate",
-  "fixer":      "dev" | "spec" | null,
-  "scope":      "src/" | "openspec/changes/REQ-x/" | null,
-  "reason":     "一句话人话：为什么做这个决定",
-  "confidence": "high" | "low"
+  "action":      "pass" | "fix" | "retry_checker" | "escalate",
+  "fixer":       "dev" | "spec" | null,
+  "scope":       "src/" | "openspec/changes/REQ-x/" | null,
+  "reason":      "一句话人话：为什么做这个决定",
+  "confidence":  "high" | "low",
+  "target_repo": "phona/repo-a"
 }
 ````
 
@@ -25,6 +26,10 @@
 - `action=fix` 时 `fixer` 不能是 null；其它 action 时 `fixer` 必须是 null。
 - `confidence=low` 表示你不太确信 → sisyphus 可能让你再判一轮或直接升级人工。
 - 不要在 JSON 里写注释（会 parse 失败）。
+- **`target_repo` (可选)**：多仓 REQ 时建议填，告诉 fixer "去哪个仓修"。
+  格式 `owner/repo`（与 BKD intent description 列出的仓名一致）。
+  单仓 REQ 可省略；fixer 会用启发式自定位。**不填不会破坏 schema**——
+  老的 `{action, fixer, scope, reason, confidence}` 五字段 decision 仍合法。
 
 sisyphus 会在本 issue 的 tags 里找 `decision:<base64>` 或从 description 抓最后一个
 ```json ... ``` 代码块。两种都可以，推荐用 update-issue 加个 `decision:<base64>` tag
