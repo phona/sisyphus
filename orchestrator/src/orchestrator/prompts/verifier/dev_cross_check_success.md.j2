@@ -1,17 +1,21 @@
 {% include "verifier/_header.md.j2" %}
 
-## 职责（dev / success）
-dev-agent 说它已经写完代码 + 建 PR。机械层已经确认：
-- git 分支存在、PR 链接 open、state=open
+## 职责（dev_cross_check / success）
+sisyphus 的机械 dev_cross_check checker 全绿——它**遍历所有 source repo**
+跑 `make dev-cross-check`（业务自定义编译 / 框架约束），全部通过。
+机械层确认：
+- 每仓的代码能编译
+- 每仓自己的 dev-time 约束（lint 子集 / contract 自检 / 框架规则）通过
 - staging-test 还没开始
 
 你要判：dev **实现质量**对得起后面跑 staging test 吗？
 
-### 关注点
-- 代码改动**是否真的满足了 contract-spec 的 endpoint 契约**（不是空壳、不是 stub）
+### 关注点（多仓）
+- **每个有改动的仓**都满足了 spec 里的 contract（不是空壳、不是 stub）
+- 跨仓调用：consumer 实际调用形式与 producer 的 contract 对得上
 - 边界场景 / 错误码有没有实现（不是只 happy path）
 - 有没有明显的 spec 对齐遗漏（比如 acceptance 提到的字段漏了）
-- 有没有**改错 scope**（改了不该改的仓库、动了不该动的东西）
+- 有没有**改错 scope**（动了不该动的仓 / 不该动的文件）
 
 ### NOT 该做
 - 不跑 unit / int test —— staging-test 阶段的 checker 会跑
@@ -19,8 +23,8 @@ dev-agent 说它已经写完代码 + 建 PR。机械层已经确认：
 - 不 merge PR
 
 ### 典型决策
-- `pass`：改动覆盖契约，质量可接受，staging 继续跑
-- `fix` + `fixer=dev` + `scope=src/`：需要补逻辑 / 修实现 / 加边界
+- `pass`：所有仓改动覆盖契约，质量可接受，staging 继续跑
+- `fix` + `fixer=dev` + `target_repo=<某仓>` + `scope=src/`：指明哪仓要补逻辑 / 修实现 / 加边界
 - `escalate`：发现 spec 和 dev 都没错但改动根本偏离 intent（需求层 bug）
 
 ─────────

@@ -9,14 +9,41 @@
 
 | 角色 | 例子 | 谁起 |
 |---|---|---|
-| **source repo** | `phona/ttpos-server-go`、`phona/ubox-crosser` | dev-agent 改的代码所在 |
+| **source repo** | `phona/ttpos-server-go`、`phona/ubox-crosser` | dev-agent 改的代码所在；**多仓 REQ 平等列表，无主从** |
 | **integration repo** | `phona/ttpos-arch-lab` | 提供 ephemeral lab env 的 helm chart / 部署脚本 |
 
-source repo 提供 **测试 target**（`ci-test`），integration repo 提供 **环境 target**（`accept-up` / `accept-down`）。
+source repo 提供 **测试 / 自检 target**（`ci-test` / `dev-cross-check`），
+integration repo 提供 **环境 target**（`accept-up` / `accept-down`）。
 
 > M15 砍 manifest：sisyphus 不再有"集中式 IDL 描述本 REQ 涉及哪些 repo"。
 > 涉及的 repo 信息直接写在 BKD intent issue description 里（人或 analyze-agent 负责），
 > 各 stage agent / checker 按需读。sisyphus 只对 **接口层**（Makefile target + branch + tag）做硬约束。
+
+> **M16 多仓** —— 移除 `leader_repo_path` 这个隐式契约。所有机械 checker
+> 直接遍历 `/workspace/source/*`，不再读 ctx 字段。详见 §"多仓 REQ 协调约定"。
+
+## 1b. 路径约定（**sisyphus 强约定**）
+
+所有 source repo 在 runner pod 里**必须** clone 到 `/workspace/source/<repo-basename>/`，
+这是 sisyphus 所有机械 checker（spec_lint / dev_cross_check / staging_test）遍历的根。
+
+```
+/workspace/
+├── source/<repo-basename>/      ← 每仓一个；basename = github 仓名最后一段
+│   ├── .git/
+│   ├── Makefile                 ← ci-test / dev-cross-check
+│   └── openspec/changes/<REQ>/  ← 该仓的 spec（如本 REQ 改了它）
+└── integration/<repo-basename>/ ← lab repo（accept 阶段才用）
+```
+
+clone 用 sisyphus 提供的 helper（不要手写 `git clone`）：
+
+```bash
+/opt/sisyphus/scripts/sisyphus-clone-repos.sh phona/repo-a phona/repo-b
+```
+
+helper 行为：clone 到约定路径、用 `$GH_TOKEN` 做 auth、idempotent
+（已存在则 `git fetch && git checkout main`）、shallow + 按需 unshallow。
 
 ## 2. Makefile target 契约（硬约束）
 
@@ -24,10 +51,12 @@ source repo 提供 **测试 target**（`ci-test`），integration repo 提供 **
 
 | target | 谁调 | 在哪跑 | 期望 |
 |---|---|---|---|
-| `make ci-test` | staging-test checker（M1） | runner pod，`cd /workspace/source/<repo-name> && make ci-test` | 退码 0 = pass，非 0 = fail |
+| `make ci-test` | staging-test checker（M1） | runner pod，**for-each-repo** `cd /workspace/source/<repo-basename> && make ci-test` | 退码 0 = pass，非 0 = fail；checker 并行起所有仓 |
+| `make dev-cross-check` | dev-cross-check checker（M15） | runner pod，**for-each-repo** `cd /workspace/source/<repo-basename> && make dev-cross-check` | 业务自定义编译 / 框架约束；退码 0 = pass |
 
 `make ci-test` 该跑啥（unit / integration / lint / 任何组合）由业务 repo 自己决定。
-sisyphus 硬编码只跑这一条命令，业务方在 Makefile 里聚合。
+`make dev-cross-check` 一般跑 dev-time 静态检查（编译 / 框架规则 / contract 自检），
+失败一般是改 src 能修。sisyphus 硬编码只跑这两条命令，业务方在 Makefile 里聚合。
 
 ### 2.2 integration repo 必须有（accept 阶段需要时）
 
@@ -159,6 +188,87 @@ router.py 完全靠 tag 做路由 —— **issue title 不用作判断**。
 接入卡住时按这个顺序看：
 
 1. **staging-test 总是 fail** → `kubectl exec runner-<REQ> -- bash -c "cd /workspace/source/<repo> && make ci-test"` 手跑一遍
-2. **pr-ci 永远 timeout** → 查 `feat/REQ-x` 分支真有没有 PR、GHA 在 PR 上确实跑了
-3. **accept-up 失败** → 看 stdout 是不是缺最后一行 JSON、`SISYPHUS_NAMESPACE` 是不是被 Makefile 用了
-4. **agent 写 tag 没被路由** → 查 `router.derive_event` 对你的 tag 组合返不返事件
+2. **spec-lint 总是 fail** → `kubectl exec runner-<REQ> -- bash -c "for r in /workspace/source/*; do [ -d \$r/openspec/changes/<REQ> ] && (cd \$r && openspec validate openspec/changes/<REQ>); done"` 手跑
+3. **pr-ci 永远 timeout** → 查 `feat/REQ-x` 分支真有没有 PR、GHA 在 PR 上确实跑了
+4. **accept-up 失败** → 看 stdout 是不是缺最后一行 JSON、`SISYPHUS_NAMESPACE` 是不是被 Makefile 用了
+5. **agent 写 tag 没被路由** → 查 `router.derive_event` 对你的 tag 组合返不返事件
+6. **多仓 checker 抱怨某仓没找到** → 看 `/workspace/source/<basename>/` 目录在不在；
+   `sisyphus-clone-repos.sh` 调过吗；basename 跟 BKD intent description 列的是否一致
+
+## 9. 多仓 REQ 协调约定（M16）
+
+一个 REQ 经常涉及多个 source repo（典型：前端 + 后端、producer + consumer、
+core lib + caller）。M16 起 sisyphus 把多仓当**平等列表**，**不再有 leader 主从概念**。
+
+### 9.1 spec 文档归属
+
+每个被改的 source repo **自带** `openspec/changes/{{ "REQ-x" }}/` —— 不再集中放
+"leader 仓"。analyze-agent 在每仓写 proposal.md / tasks.md。
+
+```
+phona/repo-a/openspec/changes/REQ-29/
+  ├── proposal.md          # repo-a 角度的需求
+  ├── tasks.md
+  └── specs/...
+
+phona/repo-b/openspec/changes/REQ-29/
+  ├── proposal.md          # repo-b 角度的需求
+  ├── tasks.md
+  └── specs/...
+```
+
+### 9.2 跨仓 contract.spec.yaml 的归属
+
+如果 repo-a 的 service 调 repo-b 暴露的 endpoint：
+
+- **contract.spec.yaml 写在 producer 仓**（提供 endpoint 的那一方 = repo-b）
+  路径：`phona/repo-b/openspec/changes/REQ-x/contracts/<endpoint>.spec.yaml`
+- consumer 仓只**引用** producer scenario ID，不重复定义 contract
+- 哪一方是 producer：**API 提供方 = producer**（不管谁先发起调用）
+
+### 9.3 scenario ID 命名空间
+
+多仓 REQ scenario ID **必须** 用 `[<REPO>-S<N>]` 前缀防撞（REPO 用大写 basename）：
+
+- ✅ `[REPO-A-S1] login endpoint returns JWT`
+- ✅ `[REPO-B-S1] user table has unique email constraint`
+- ❌ `S1 ...`（多仓不带前缀容易撞）
+
+单仓 REQ 可用裸 `S<N>`，scenario 数量少时不强制。
+
+### 9.4 跨仓 scenario 引用
+
+`check-scenario-refs.sh` 接受 `--specs-search-path <path>[,<path>...]` flag
+让 lint 把其他仓的 `openspec/specs/` 也加进搜索路径。spec_lint checker 自动
+用所有仓的 specs 互引：
+
+```bash
+check-scenario-refs.sh /workspace/source/repo-a \
+  --specs-search-path /workspace/source/repo-b/openspec/specs
+```
+
+### 9.5 spec home repo（弱归属，仅 done_archive 用）
+
+跨仓 REQ 经常有"全 REQ 共享"的高层文档（proposal、design、跨仓集成总览）只想写
+一份不想抄 N 遍。约定**指定其中一个仓为 "spec home repo"**，把这种共享文档
+放在它的 `openspec/changes/REQ-x/` 下。done_archive 时该仓 `openspec apply`
+会把它一起归档。
+
+**怎么声明**：在 BKD intent issue chat 里直说一句：
+
+> spec home repo: phona/repo-a
+
+不是 ctx 字段、不是机器化结构 —— done_archive agent 看 description 自己识别。
+单仓 REQ 默认就是它自己。
+
+### 9.6 dev / spec agent 默认按仓拆
+
+analyze-agent 默认拆并行：每个被改的 source repo 起一个 `tag=dev + REQ-x`
+BKD issue（每个 issue prompt 写明 target repo + scope）。spec 同理按需拆
+（默认一个 spec-agent 写所有仓 OK）。
+
+### 9.7 verifier decision 的 `target_repo`
+
+多仓 REQ 任一 checker 失败时，verifier 要在 decision JSON 里加可选 `target_repo`
+字段告诉 fixer 去哪修。stderr 里 sisyphus 用 `=== FAIL: <basename> ===` 标记
+失败仓让 verifier 容易识别。详见 [architecture.md §3](./architecture.md)。

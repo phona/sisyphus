@@ -29,23 +29,48 @@ mcp__aissh-tao__exec_run(server_id="{{ aissh_server_id }}", command="kubectl -n 
 ```
 {% endif %}
 
-### workspace 约定结构（analyze-agent 已初始化，所有后续 stage 沿用）
+### workspace 约定结构（**sisyphus 强约定**）
+
+每个 source repo **必须** clone 到 `/workspace/source/<repo-basename>/`——
+sisyphus 的所有机械 checker（spec_lint / dev_cross_check / staging_test）按这个
+路径 **遍历** `/workspace/source/*` 跑工具。
 
 ```
 /workspace/
-├── source/<repo>/               ← 每个 source repo 一个
-└── integration/<repo>/          ← lab repo（accept 阶段才用）
+├── source/<repo-basename>/      ← 每个 source repo 一个，basename = github 仓名最后一段
+│   ├── .git/
+│   ├── Makefile                 ← ci-test / dev-cross-check target
+│   └── openspec/changes/<REQ>/  ← 该仓的 spec（如果本 REQ 改了它）
+└── integration/<repo-basename>/ ← lab repo（accept 阶段才用）
 ```
+
+**没有 leader / feature 主从**——每个 source repo 平等地被遍历。
+
+### 用 sisyphus 的 clone helper（不要手写 clone）
+
+`/opt/sisyphus/scripts/sisyphus-clone-repos.sh` 处理 path / token / idempotency：
+
+```bash
+kubectl -n $NS exec $POD -- /opt/sisyphus/scripts/sisyphus-clone-repos.sh \
+  phona/repo-a phona/repo-b
+```
+
+行为：
+- clone 到 `/workspace/source/<basename>/`（sisyphus 约定路径）
+- 用 pod 的 `$GH_TOKEN` 做 auth
+- 已存在则 `git fetch && git checkout main` 不重 clone
+- shallow `--depth=1` + 按需 unshallow
 
 ### Pod 内已就绪的环境变量（sisyphus 自动注入）
 
 - `SISYPHUS_REQ_ID` = REQ-N
 - `GH_TOKEN` / `SISYPHUS_GHCR_USER` / `SISYPHUS_GHCR_TOKEN`：GitHub / GHCR 凭证
 - `KUBECONFIG=/root/.kube/config`：能访问 vm-node04 K3s（给 accept 阶段 helm install 用）
-- `/opt/sisyphus/scripts/` 在 PATH：check-scenario-refs.sh / 等
+- `/opt/sisyphus/scripts/` 在 PATH：check-scenario-refs.sh / sisyphus-clone-repos.sh / 等
 
 ### 不要做的事
 
 - 在 Pod 外（aissh 直接跑宿主命令）跑业务 —— 缺工具或污染宿主
 - `kubectl delete pod runner-*` —— sisyphus 管生命周期
 - `kubectl delete pvc workspace-*` —— 同上
+- 自己手写 `git clone` 到非 `/workspace/source/<basename>/` 的路径 —— checker 找不到
