@@ -241,7 +241,7 @@ async def test_invoke_verifier_renders_template(monkeypatch):
     patch_db(monkeypatch)
 
     await v.invoke_verifier(
-        stage="dev", trigger="fail",
+        stage="dev_cross_check", trigger="fail",
         req_id="REQ-7", project_id="p",
         stderr_tail="TypeError: whoopsie",
     )
@@ -270,7 +270,7 @@ async def test_invoke_verifier_rejects_unknown_trigger():
     from orchestrator.actions import _verifier as v
     with pytest.raises(ValueError):
         await v.invoke_verifier(
-            stage="dev", trigger="maybe",
+            stage="dev_cross_check", trigger="maybe",
             req_id="R", project_id="p",
         )
 
@@ -278,7 +278,7 @@ async def test_invoke_verifier_rejects_unknown_trigger():
 # ─── 5. 所有 12 个 prompt 模板都能渲染 ─────────────────────────────────────
 
 @pytest.mark.parametrize("stage", [
-    "analyze", "spec", "dev", "staging_test", "pr_ci", "accept",
+    "analyze", "spec_lint", "dev_cross_check", "staging_test", "pr_ci", "accept",
 ])
 @pytest.mark.parametrize("trigger", ["success", "fail"])
 def test_all_verifier_prompts_render(stage, trigger):
@@ -359,7 +359,7 @@ async def test_apply_verify_pass_cas_fail_returns_skip(monkeypatch):
 
     out = await v.apply_verify_pass(
         body=make_body(), req_id="REQ-9", tags=[],
-        ctx={"verifier_stage": "dev"},
+        ctx={"verifier_stage": "dev_cross_check"},
     )
     assert out == {"cas_failed": True}
 

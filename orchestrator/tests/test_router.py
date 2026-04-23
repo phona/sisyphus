@@ -21,9 +21,8 @@ CASES: list[tuple[str, list[str], Event | None]] = [
 
     # session.completed dispatch
     ("session.completed", ["analyze", "REQ-1"],                              Event.ANALYZE_DONE),
-    # M16：单 tag=spec（不再分 contract-spec / acceptance-spec）
-    ("session.completed", ["spec", "REQ-1"],                                 Event.SPEC_DONE),
-    ("session.completed", ["dev", "REQ-1"],                                  Event.DEV_DONE),
+    # M15：spec-lint + dev-cross-check 为 objective checker，不产生 session.completed；
+    # dev agent 已被整合，workflow 现在：analyze → spec-lint (checker) → dev-cross-check (checker) → staging-test
     # v0.2：staging-test + pr-ci 新 agent role
     ("session.completed", ["staging-test", "REQ-1", "result:pass"],          Event.STAGING_TEST_PASS),
     ("session.completed", ["staging-test", "REQ-1", "result:fail"],          Event.STAGING_TEST_FAIL),
