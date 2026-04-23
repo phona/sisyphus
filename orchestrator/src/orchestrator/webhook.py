@@ -152,7 +152,7 @@ async def webhook(request: Request) -> JSONResponse:
                         issue_id=body.issueId, error=str(e))
         event, decision_payload, why = router_lib.derive_verifier_event(description, tags)
         log.info("webhook.verifier.decision",
-                 issue_id=body.issueId, event=event.value,
+                 issue_id=body.issueId, verifier_event=event.value,
                  decision=decision_payload, reason=why)
 
     if event is None:
