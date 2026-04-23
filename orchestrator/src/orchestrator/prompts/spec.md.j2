@@ -58,29 +58,19 @@ Scenario 命名 `FEATURE-A<N>`（Given/When/Then，**用户视角**）。
 **性质**：LOCKED。accept-agent 在验收阶段按这个跑。
 {% endif %}
 
-## 起手自检
-
-```bash
-POD=runner-{{ req_id | lower }}
-NS=sisyphus-runners
-kubectl -n $NS exec $POD -- validate-manifest.py   # 不合法不继续
-```
-
 ## 写 spec：在你自己的 Coder cwd
 
 不要在 runner pod 里改 leader repo 代码（runner PAT 只读，也不能 push）。流程：
 
 ```bash
 # 你自己 cwd
-leader_repo=$(kubectl -n $NS exec $POD -- yq '.sources[] | select(.role == "leader") | .repo' /workspace/.sisyphus/manifest.yaml)
-leader_branch=$(kubectl -n $NS exec $POD -- yq '.sources[] | select(.role == "leader") | .branch' /workspace/.sisyphus/manifest.yaml)
-name=$(basename ${leader_repo})
-
-gh repo clone "$leader_repo" "./$name"
-cd "./$name"
-git checkout -B "$leader_branch" origin/main
+gh repo clone <leader-repo-owner/name> ./leader-repo
+cd ./leader-repo
+git checkout -B {{ branch }} origin/main
 # ... 写 openspec/changes/{{ req_id }}/specs/... 和 tests/contract/ 或 tests/acceptance/ 下文件
 ```
+
+（leader repo 信息在 BKD intent issue description；{{ branch }} 传参默认为 `feat/{{ req_id }}`）
 
 ## 完成前 lint（在本地 cwd 或 runner pod 都行，读 OK）
 

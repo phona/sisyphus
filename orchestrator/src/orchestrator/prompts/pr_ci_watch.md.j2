@@ -25,34 +25,28 @@ PARENT_ISSUE_ID={{ source_issue_id }}    # 上游 staging-test issue，只读
 
 ## 步骤
 
-### Step 1: 起手自检 + 读 manifest
+### Step 1: 找出所有相关 PR
+
+dev-agent 在 feat/{{ req_id }} 分支开了 PR。用 gh 查出这个分支对应的所有 PR（可能多个 repo）：
 
 ```bash
-POD=runner-{{ req_id | lower }}
-NS=sisyphus-runners
-kubectl -n $NS exec $POD -- validate-manifest.py
+# 查询所有 branch=feat/{{ req_id }} 的 PR（遍历所有 source repo）
+# dev-agent 已经开好了，这里直接查
+BRANCH=feat/{{ req_id }}
+PR_LIST=""
 
-MANIFEST=/workspace/.sisyphus/manifest.yaml
-```
-
-### Step 2: 若 manifest.pr_by_repo 缺，先开 PR
-
-dev-agent 正常要开 PR 并写 manifest.yaml.pr_by_repo。若还没开：
-
-```bash
-for repo_path in $(kubectl -n $NS exec $POD -- yq '.sources[].path' $MANIFEST); do
-  repo=$(kubectl -n $NS exec $POD -- yq ".sources[] | select(.path == \"$repo_path\") | .repo" $MANIFEST)
-  branch=$(kubectl -n $NS exec $POD -- yq ".sources[] | select(.path == \"$repo_path\") | .branch" $MANIFEST)
-  # 检查 manifest 里已经记了没
-  existing=$(kubectl -n $NS exec $POD -- yq ".pr_by_repo.\"$repo\" // \"\"" $MANIFEST)
-  if [ -z "$existing" ]; then
-    pr_url=$(kubectl -n $NS exec $POD -- bash -c "cd /workspace/$repo_path && gh pr create --title '[{{ req_id }}] ...' --body '...' --head $branch --base main --fill 2>/dev/null || gh pr view --json url -q .url")
-    kubectl -n $NS exec $POD -- yq -i ".pr_by_repo.\"$repo\" = \"$pr_url\"" $MANIFEST
+for repo in <source-repo-list>; do
+  # gh pr list --head 找这个 branch 的 PR（若有）
+  pr=$(gh pr list --repo $repo --head $BRANCH --json number -q '.[0].number // empty' 2>/dev/null)
+  if [ ! -z "$pr" ]; then
+    PR_LIST="$PR_LIST $repo#$pr"
   fi
 done
 ```
 
-### Step 3: 轮询每个 PR 的 commit statuses
+（source-repo 列表来自 BKD intent issue description；sisyphus 通常作为参数传入）
+
+### Step 2: 轮询每个 PR 的 commit statuses（30 min 超时）
 
 ```bash
 DEADLINE=$(( $(date +%s) + 1800 ))    # 30 min 超时
@@ -63,12 +57,13 @@ while [ $(date +%s) -lt $DEADLINE ]; do
   any_fail=false
   failures=""
 
-  for repo_path in $(kubectl -n $NS exec $POD -- yq '.sources[].path' $MANIFEST); do
-    repo=$(kubectl -n $NS exec $POD -- yq ".sources[] | select(.path == \"$repo_path\") | .repo" $MANIFEST)
-    sha=$(kubectl -n $NS exec $POD -- yq ".sha_by_repo.\"$repo\"" $MANIFEST)
+  for pr_ref in $PR_LIST; do
+    repo=${pr_ref%#*}
+    pr_num=${pr_ref##*#}
 
-    # gh api 拉 combined status
-    json=$(kubectl -n $NS exec $POD -- bash -c "gh api repos/$repo/commits/$sha/status")
+    # 查 PR 的 head commit + 其 status
+    head_sha=$(gh pr view --repo $repo $pr_num --json commits -q '.commits[-1].oid')
+    json=$(gh api repos/$repo/commits/$head_sha/status)
     state=$(echo "$json" | jq -r .state)
 
     if [ "$state" != "success" ]; then
@@ -76,13 +71,13 @@ while [ $(date +%s) -lt $DEADLINE ]; do
       if [ "$state" = "failure" ] || [ "$state" = "error" ]; then
         any_fail=true
         failed_ctx=$(echo "$json" | jq -r '.statuses[] | select(.state != "success") | .context' | head -5 | paste -sd,)
-        failures="$failures $repo: $failed_ctx;"
+        failures="$failures $repo#$pr_num: $failed_ctx;"
       fi
     fi
   done
 
   if [ "$all_green" = true ]; then
-    break   # 跳出 while，下一步收集 image_tag
+    break   # 全绿，下一步
   fi
   if [ "$any_fail" = true ]; then
     # 走 fail 分支
@@ -92,22 +87,13 @@ while [ $(date +%s) -lt $DEADLINE ]; do
 done
 ```
 
-### Step 4a: 全绿 → 收集 image_tag 写 manifest
+### Step 3: 全绿 → 报 pass
 
-每 source repo 的 `CI / image-publish` commit status description 里有 image tag：
+所有 PR 的 status 都是 success。
 
-```bash
-for repo_path in $(kubectl -n $NS exec $POD -- yq '.sources[].path' $MANIFEST); do
-  repo=$(kubectl -n $NS exec $POD -- yq ".sources[] | select(.path == \"$repo_path\") | .repo" $MANIFEST)
-  sha=$(kubectl -n $NS exec $POD -- yq ".sha_by_repo.\"$repo\"" $MANIFEST)
-  tag=$(kubectl -n $NS exec $POD -- bash -c "gh api repos/$repo/commits/$sha/statuses | jq -r '.[] | select(.context == \"CI / image-publish\") | .description' | head -1")
-  kubectl -n $NS exec $POD -- yq -i ".image_tags.\"$repo\" = \"$tag\"" $MANIFEST
-done
-```
+### Step 4: 任一红 → 报 fail + 失败摘要
 
-### Step 4b: 任一红 → 收集失败摘要
-
-收集失败 check 名 + 它们的 target_url（GHA job log 链接）。写到**本 issue** follow-up 让 bugfix-agent 能看日志。
+收集失败 check 名 + 它们的 target_url（GHA job log 链接）。写到**本 issue** follow-up。
 
 ### Step 5: 贴结果 tag + move review
 
@@ -124,6 +110,6 @@ done
 ## 硬约束
 
 - **不能 emit 伪造 pass / fail**：status 没 return success 就别贴 pass
-- **不能改 repo 代码**：只读查询 + 操作 manifest.yaml
+- **不能改 repo 代码**：只读 GitHub REST + 贴 issue tag
 - 超时判断要严格：30 min 没结果就 timeout，不要无限等
 - 轮询间隔 >= 30s，不要 flood GitHub API

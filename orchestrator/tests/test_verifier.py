@@ -32,7 +32,8 @@ from orchestrator.state import Event
     ({"action": "pass", "fixer": None, "scope": None, "reason": "ok", "confidence": "high"}, True),
     ({"action": "fix", "fixer": "dev", "scope": "src/", "reason": "bug", "confidence": "high"}, True),
     ({"action": "fix", "fixer": "spec", "scope": "openspec/changes/REQ-1/", "reason": "x", "confidence": "low"}, True),
-    ({"action": "fix", "fixer": "manifest", "scope": "manifest.pr.number", "reason": "y", "confidence": "high"}, True),
+    # M15: fixer=manifest 已删（manifest 抽象层砍掉），保留作 invalid case 验证
+    ({"action": "fix", "fixer": "manifest", "scope": "manifest.pr.number", "reason": "y", "confidence": "high"}, False),
     ({"action": "retry_checker", "fixer": None, "scope": None, "reason": "flaky", "confidence": "low"}, True),
     ({"action": "escalate", "fixer": None, "scope": None, "reason": "need human", "confidence": "high"}, True),
     # invalid action

@@ -1,21 +1,17 @@
-"""create_staging_test（v0.2 + M1 checker + M11 manifest-driven + M14c）：
+"""create_staging_test（v0.2 + M1 checker + M15）：
 dev.done 后验 staging 测试。
 
 feature flag checker_staging_test_enabled:
   False（默认）: 创建 BKD agent issue（老路，保证老行为不破）
-  True: sisyphus 自己在 runner pod 执行测试，根据退出码 emit STAGING_TEST_PASS/FAIL
+  True: sisyphus 自己在 runner pod 执行 make ci-test，根据退出码 emit STAGING_TEST_PASS/FAIL
 
-M14c：移除 retry_enabled 分支。checker fail 直 emit STAGING_TEST_FAIL，
-状态机会路由到 verifier 做主观判断。
-
-M11：test_cmd / cwd / timeout 不再硬编码，checker 自己从 PVC manifest.yaml 读。
+M15：不再读 manifest；checker 硬编码执行 make ci-test。
 """
 from __future__ import annotations
 
 import structlog
 
 from ..bkd import BKDClient
-from ..checkers import manifest_io
 from ..checkers import staging_test as checker
 from ..config import settings
 from ..prompts import render
@@ -54,14 +50,6 @@ async def _run_checker(*, req_id: str, ctx: dict) -> dict:
             "passed": False,
             "exit_code": -1,
             "reason": "timeout",
-        }
-    except manifest_io.ManifestReadError as e:
-        log.error("create_staging_test.manifest_read_failed", req_id=req_id, error=str(e))
-        return {
-            "emit": Event.STAGING_TEST_FAIL.value,
-            "passed": False,
-            "exit_code": -1,
-            "reason": f"manifest read failed: {e}"[:200],
         }
     except Exception as e:
         log.exception("create_staging_test.checker_error", req_id=req_id, error=str(e))

@@ -10,166 +10,98 @@
 
 ─────────
 
-## 开发 (DEV)  v0.2
+## 开发 (DEV)  M15
 AGENT_ROLE=dev-agent
 REQ={{ req_id }}
-{% if task_id %}
-DEV_TASK_ID={{ task_id }}
-DEV_TASK_SCOPE={{ task_scope | join(":") }}
+BRANCH={{ branch }}
+WORKDIR={{ workdir }}
 
-**你是本 REQ 的并行 dev 任务之一**（`{{ task_id }}`），只负责：
-> {{ task_description }}
+你的职责：修改业务代码，推 PR，sisyphus 会轮 GitHub 看 CI 绿。
 
-**scope 硬约束**（pre-commit-acl + sisyphus 会复验）：只许改匹配下列 pattern 的文件：
-{% for pat in task_scope %}
-- `{{ pat }}`
-{% endfor %}
+sisyphus 已经在 runner pod 拉起了完整开发环境（/workspace 挂 PVC）。
+你的**所有代码工作**（git clone / edit / push / pr create）都在**自己的 Coder workspace cwd**（用你的 GH_TOKEN）。
+runner pod 仅读用（无 write 权限），用于 sisyphus 自检 exec。
 
-其他并行 dev agent 在改本 REQ 的其他部分；不要动他们的 scope，不要等他们 push
-（你们各开各的 PR，gate 聚合）。
-{% endif %}
-
-sisyphus 已把 runner Pod + PVC 拉起（你只读用它存 manifest + 跑自检）。
-你的**代码编辑 + 推送** 全部在**自己的 Coder workspace cwd** 里做，用你自己的
-`$GH_TOKEN`（Coder 里默认有写权限）。runner 的 PAT 也是 admin（实测验证），但
-**约定**：写操作走自己 cwd（trust boundary 清晰），runner pod 仅用于读 manifest +
-sisyphus 自检 exec。
-
-你**只写代码**：不跑 lint，不跑测试，不 build。本地测试交给 staging-test-agent。
+你**只写代码**：不跑 lint / test / build。那些交给 staging-test 阶段（sisyphus 机械自检）。
 
 ---
 
-## 起手自检
-
-```bash
-POD=runner-{{ req_id | lower }}
-NS=sisyphus-runners
-kubectl -n $NS exec $POD -- validate-manifest.py   # manifest 合法才继续
-kubectl -n $NS exec $POD -- cat /workspace/.sisyphus/manifest.yaml > /tmp/manifest.yaml
-```
-
 ## 步骤
 
-### Step 1: clone 本 REQ 涉及的 repo 到你自己 cwd
+### Step 1: 在自己的 cwd clone 涉及的 repo
 
 ```bash
-# 你自己的 $CWD（Coder workspace），clone 各 source repo 到子目录
-for p in $(yq '.sources[].path' /tmp/manifest.yaml); do
-  repo=$(yq ".sources[] | select(.path == \"$p\") | .repo" /tmp/manifest.yaml)
-  branch=$(yq ".sources[] | select(.path == \"$p\") | .branch" /tmp/manifest.yaml)
-  name=$(basename $p)   # source/xxx → xxx
-  gh repo clone "$repo" "./$name" -- --branch main
-  cd "./$name"
-  git checkout -B "$branch" origin/main
-  cd -
-done
+# 各 source repo clone 到自己的工作目录
+gh repo clone <repo> <local-name> -- --branch main
+cd <local-name>
+git checkout -B {{ branch }} origin/main
+cd -
 ```
 
-### Step 2: 读 openspec/changes/{{ req_id }}/
+### Step 2: 读需求和 spec
 
-在 leader repo 下（role=leader 的 source）：
-- proposal.md + design.md（需求、方案）
+在 openspec/changes/{{ req_id }}/ 下：
+- proposal.md + design.md（需求 + 方案）
 - contract.spec.yaml（LOCKED）
-- specs/<capability>/spec.md（Scenario，LOCKED）
-- tasks.md 的 `## Stage: implementation` section（你填）
+- specs/**（Scenario，LOCKED）
 
-### Step 3: 写业务代码（各 source repo 按需改）
+### Step 3: 写业务代码
 
-实现在 `internal/` / `cmd/`。**新增 unit test 按 repo 内**
-`.claude/skills/unit-test/SKILL.md` 的约定写（pure / service-dependent 分类、env
-取地址不硬编码、testify/assert 等）。
+实现在 `internal/` / `cmd/`。新增 unit test 按 repo 内 `.claude/skills/unit-test/SKILL.md` 约定。
 
-### Step 4: 填 tasks.md 的 Stage: implementation
-
-- analyze 留的 `- [ ] TODO:...` 换成具体任务
-- 每完成一条 `- [ ]` → `- [x]`；放弃 → `- [~] <原因>`
-
-### Step 5: 每个改动的 repo 各推各的（在你自己 cwd，**不是** runner pod）
+### Step 4: 提交 + 推送
 
 ```bash
-for name in <每个改过的 repo>; do
-  cd "./$name"
+# 在自己的 cwd
+for repo_name in <改动过的 repo>; do
+  cd $repo_name
   git add -A
   git commit -m "[{{ req_id }}] dev"
-  git push origin "<branch>"
+  git push origin {{ branch }}
   cd -
 done
 ```
 
-### Step 6: 开 PR（还是在你自己 cwd）
-
-**先验环境**（每一步**失败必 escalate**，不要静默 move review）：
+### Step 5: 开 PR
 
 ```bash
-# 6.0 前置检查 — 任一失败 → 跳到 Step 7-fail 引人介入
-which gh || ESCALATE_REASON="gh CLI 未安装"
-gh auth status 2>&1 | grep -q "Logged in" || ESCALATE_REASON="gh 未登录或 token 失效"
-gh repo view phona/ubox-crosser --json viewerPermission -q .viewerPermission \
-  | grep -qE "ADMIN|MAINTAIN|WRITE" || ESCALATE_REASON="GH PAT 对 repo 无写权限"
-```
-
-```bash
-# 6.1 开 PR — 失败也 escalate
-for name in <每个有新 commit 的 repo>; do
-  cd "./$name"
-  branch=<对应 branch>
-  pr_url=$(gh pr view "$branch" --json url -q .url 2>/dev/null) \
-    || pr_url=$(gh pr create --title "[{{ req_id }}] dev" \
-                             --body "auto PR; details in openspec/changes/{{ req_id }}/" \
-                             --base main --head "$branch" --fill 2>&1) \
-    || ESCALATE_REASON="gh pr create 失败: $pr_url"
-  pr_number=$(echo "$pr_url" | grep -oP '/pull/\K\d+')
-  sha=$(git rev-parse HEAD)   # 完整 40 字符
-
-  # 回填 manifest 两份 schema（兼容老 pr_by_repo + 新 pr.{repo,number}）
-  repo=<对应 repo 名>
-  kubectl -n $NS exec $POD -- \
-    yq -i ".pr_by_repo.\"$repo\" = \"$pr_url\" |
-           .sha_by_repo.\"$repo\" = \"$sha\" |
-           .pr.repo = \"$repo\" |
-           .pr.number = $pr_number" \
-    /workspace/.sisyphus/manifest.yaml
+# 在自己的 cwd
+for repo_name in <改动过的 repo>; do
+  cd $repo_name
+  # 检查是否已有同名 PR，如果没有则创建
+  gh pr view {{ branch }} --json url -q .url 2>/dev/null \
+    || gh pr create --title "[{{ req_id }}] dev" \
+                    --body "auto PR; see openspec/changes/{{ req_id }}/" \
+                    --base main --head {{ branch }}
   cd -
 done
 ```
 
-### Step 7-success: 全部 PR 开成功 → move review
+### Step 6: 完成
 
-update-issue（对本 dev BKD issue）：
-- tags 保留 `[dev, {{ req_id }}]`
-- statusId=review
+对本 issue 做 update-issue：
+- tags: `[dev, {{ req_id }}, result:pass]`
+- statusId: review
 
-### Step 7-fail: 任何关键步骤失败 → escalate 通知人
-
-**不要 silent move review** — sisyphus 会以为 dev 完事但 PR 不存在导致下游 pr-ci-watch 卡死。
-
-正确做法：
-1. 在本 issue chat 发**清楚的失败说明**：
-   ```
-   ❌ DEV 阶段无法完成 — 需要人工介入
-   原因：${ESCALATE_REASON}
-   建议：检查 runner 的 gh_token PAT 权限 / 登录状态 / repo 访问权
-   ```
-2. update-issue：tags 加 `escalate:dev-fail`，**保持 statusId=working**（让 sisyphus watchdog 看到没 transition）
-3. 不调 git push / pr create 的重试（环境问题人不动 retry 也不会过）
+sisyphus 会：
+1. 用 `gh pr list --head {{ branch }}` 动态查出 PR 号
+2. 轮 GitHub CI（pr-ci-watch 阶段）
+3. CI 全绿后推进到 accept
 
 ---
 
 ## 硬约束
 
-### 禁改（pre-commit ACL 会拦）
+### 禁改
 - `tests/contract/**` / `tests/acceptance/**` / `tests/ui/**`
 - `openspec/changes/{{ req_id }}/specs/**`
 - `openspec/changes/{{ req_id }}/contract.spec.yaml`
-- `openspec/changes/{{ req_id }}/tasks.md` 里本 Stage 之外的 section
 - `openspec/specs/**`
 
-### v0.2 小步快跑原则
-- **不跑** `go test` / `make ci-*`：交给 staging-test agent 跑（它有完整 fail 反馈）
-- **不 build image**：pr-ci-watch stage GHA 会 build
-- **不改 manifest.yaml 的 schema 字段**（schema_version / sources / integration）
+### M15 原则
+- **不跑 lint / unit / integration test**：交给 staging-test 阶段（`make ci-test` 固定命令）
+- **不 build image**：PR CI 会自动跑
+- 所有代码工作在自己 cwd（GH_TOKEN 权限清晰）
 
-### 权限边界
-- push / gh pr create：**只能在你自己的 Coder workspace cwd**（用你自己的 GH_TOKEN）
-- runner pod 是只读 PAT，**不能** 在 `kubectl exec` 里做这些写操作
-- 只读操作可以在 runner pod（比如 `gh api repos/.../statuses`），但 staging-test / pr-ci 阶段该 agent 自己做，不是 dev 的事
+### 失败处理
+任何步骤失败 → 在本 issue 说清失败原因，tags 加 `escalate:dev-fail`，**保持 statusId=working**（让 sisyphus watchdog 看到异常）

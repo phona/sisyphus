@@ -20,7 +20,7 @@ from . import router as router_lib
 from .bkd import BKDClient
 from .config import settings
 from .state import Event
-from .store import db, dedup, req_state
+from .store import db, dedup, req_state, verifier_decisions
 
 log = structlog.get_logger(__name__)
 api = APIRouter()
@@ -203,6 +203,22 @@ async def webhook(request: Request) -> JSONResponse:
         }
         await req_state.update_context(pool, req_id, patch)
         ctx = {**ctx, **patch}
+
+        # M14e：落 verifier_decisions（best-effort，失败只 log）
+        try:
+            await verifier_decisions.insert_decision(
+                pool, req_id,
+                stage=ctx.get("verifier_stage") or "unknown",
+                trigger=ctx.get("verifier_trigger") or "unknown",
+                action=decision_payload.get("action"),
+                fixer=decision_payload.get("fixer"),
+                scope=decision_payload.get("scope"),
+                reason=decision_payload.get("reason"),
+                confidence=decision_payload.get("confidence"),
+            )
+        except Exception as e:
+            log.warning("webhook.verifier_decisions.write_failed",
+                        req_id=req_id, error=str(e))
 
     # ─── 6. 推进状态机（engine 内部循环 emit）─────────────────────────────
     return await engine.step(

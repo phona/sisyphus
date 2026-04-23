@@ -26,7 +26,7 @@ SPEC_TAGS = {"contract-spec", "acceptance-spec"}
 
 # ─── M14b verifier decision schema 校验 + 映射 ─────────────────────────────
 _VALID_ACTIONS = {"pass", "fix", "retry_checker", "escalate"}
-_VALID_FIXERS = {"dev", "spec", "manifest", None}
+_VALID_FIXERS = {"dev", "spec", None}
 _VALID_CONFIDENCE = {"high", "low"}
 
 

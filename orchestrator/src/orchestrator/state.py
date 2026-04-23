@@ -38,7 +38,7 @@ class ReqState(StrEnum):
     ARCHIVING = "archiving"                     # done-archive agent（合 PR 等）
     # M14b：verifier-agent 框架
     REVIEW_RUNNING = "review-running"           # verifier-agent 在跑（success / fail 两触发统一入口）
-    FIXER_RUNNING = "fixer-running"             # verifier decision=fix → 起对应 fixer agent（dev/spec/manifest）
+    FIXER_RUNNING = "fixer-running"             # verifier decision=fix → 起对应 fixer agent（dev/spec）
     DONE = "done"                               # REQ 完成
     ESCALATED = "escalated"                     # 熔断 / session-failed / 人工止损
 
@@ -93,7 +93,7 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
 
     (ReqState.SPECS_RUNNING, Event.SPEC_ALL_PASSED):
         Transition(ReqState.DEV_RUNNING, "fanout_dev",
-                   "SPG gate open → 按 manifest.parallelism.dev fanout（无配置则单 dev）"),
+                   "SPG gate open → 单 dev agent（M15 砍 manifest 后退化）"),
 
     # M14d：dev 阶段自循环 gate。单个 dev-agent 完 → 聚合 + 检查是否齐
     (ReqState.DEV_RUNNING, Event.DEV_DONE):
@@ -151,7 +151,7 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
                    "decision=pass → action 读 stage 手动推进"),
     (ReqState.REVIEW_RUNNING, Event.VERIFY_FIX_NEEDED):
         Transition(ReqState.FIXER_RUNNING, "start_fixer",
-                   "decision=fix → 起对应 fixer（dev/spec/manifest）"),
+                   "decision=fix → 起对应 fixer（dev/spec）"),
     (ReqState.REVIEW_RUNNING, Event.VERIFY_RETRY_CHECKER):
         Transition(ReqState.REVIEW_RUNNING, "apply_verify_retry_checker",
                    "decision=retry_checker → 重跑当前 stage 的 checker"),

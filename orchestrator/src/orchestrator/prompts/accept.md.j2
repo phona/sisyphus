@@ -10,82 +10,86 @@
 
 ─────────
 
-## 验收 (ACCEPT / AI-QA)  v0.2
+## 验收 (ACCEPT / AI-QA)  M15
 AGENT_ROLE=accept-agent
 REQ={{ req_id }}
-ENDPOINT={{ endpoint }}                      # sisyphus 已拉好 lab，访问地址
-NAMESPACE={{ namespace }}                    # K8s lab namespace（accept-<req>）
-SOURCE_ISSUE={{ source_issue_id }}           # 触发本 accept 的 pr-ci issue（只读）
+ENDPOINT={{ endpoint }}
+NAMESPACE={{ namespace }}
+SOURCE_ISSUE={{ source_issue_id }}
 
 ---
 
 ## 你的职责
 
 sisyphus 已经：
-- 在 `$NAMESPACE` 跑了 `make ci-accept-env-up` 把 lab 拉起来（helm upgrade）
-- 拿到了 lab 的入口 endpoint（上面 `$ENDPOINT`）
+- 在 `$NAMESPACE` 跑 `make ci-accept-env-up`，lab 已拉起
+- 拿到 lab endpoint（上面 `$ENDPOINT`）
 
-你要做的是**跑 FEATURE-A\* Acceptance Scenario 判 pass/fail**，**不操心环境**。
-跑完不用清，sisyphus 会自己调 `ci-accept-env-down` 拆 lab。
+你要做的：跑 FEATURE-A* Acceptance Scenario 判 pass/fail，不管环境。
+跑完不清，sisyphus 会调 `ci-accept-env-down`。
 
-## 起手自检
+---
+
+## 步骤
+
+### Step 1: 验证 endpoint
 
 ```bash
 POD=runner-{{ req_id | lower }}
 NS=sisyphus-runners
-kubectl -n $NS exec $POD -- validate-manifest.py
 
-# 确认 lab 能访问
-kubectl -n $NS exec $POD -- curl -sf "{{ endpoint }}/healthz" || echo "endpoint unreachable!"
+# 确认 endpoint 可访问
+kubectl -n $NS exec $POD -- curl -sf "{{ endpoint }}/healthz"
+if [ $? -ne 0 ]; then
+  # endpoint 不通 → fail，不白跑
+  exit 1
+fi
 ```
 
-endpoint 不通就贴 `result:fail` + 在 follow-up 注明"env endpoint unreachable"，不白跑场景。
+### Step 2: 读 Acceptance Scenario
 
-## 步骤
-
-### Step 1: 读 Acceptance Scenario
-
-从 manifest 读 leader 路径，从 leader repo 的 openspec 取 FEATURE-A*：
+从 runner 的 /workspace 业务 repo 读 openspec：
 
 ```bash
-LEADER=$(kubectl -n $NS exec $POD -- yq '.sources[] | select(.role == "leader") | .path' /workspace/.sisyphus/manifest.yaml)
-kubectl -n $NS exec $POD -- cat /workspace/$LEADER/openspec/changes/{{ req_id }}/specs/*/spec.md
+kubectl -n $NS exec $POD -- cat /workspace/openspec/changes/{{ req_id }}/specs/*/spec.md
 ```
 
-抓里面所有 `### Scenario: FEATURE-A*` block，每个 block 里有 Given / When / Then。
+找出所有 `### Scenario: FEATURE-A*` block（Given / When / Then）。
 
-### Step 2: 对每个 FEATURE-A* 跑一遍
+### Step 3: 跑每个 scenario
 
-对 `$ENDPOINT` 发 curl / CLI 调用，按 Given/When/Then 走。用**用户视角**判成败（不看实现细节，只看 IO）。
+对 `{{ endpoint }}` 做 curl / gRPC / 等，按 Given→When→Then 验证。
 
 ```bash
-kubectl -n $NS exec $POD -- bash -c "curl -sf -X POST '{{ endpoint }}/api/...' -d '...'"
-# 断言 response body / status code / 副作用（查 DB / 检 log / 看文件）
+# 示例
+kubectl -n $NS exec $POD -- bash -c \
+  "curl -sf -X POST '{{ endpoint }}/api/feature' -d '{...}' | jq .status"
 ```
 
-### Step 3: 记录每场景结果
+记录：pass/fail + evidence（response / logs / side-effects）。
+
+### Step 4: 报告
+
+在本 issue follow-up 追加：
 
 ```markdown
 ## Accept Result
-- FEATURE-A1: PASS — evidence: curl 200 + body `{"ok": true}`
-- FEATURE-A2: FAIL — evidence: curl 500; error "xxx"
-- ...
+
+- FEATURE-A1: PASS — curl 200, response body correct
+- FEATURE-A2: FAIL — curl 500, error: xxx
 ```
 
-follow-up-issue 追加到**本 issue** body。
+### Step 5: 贴 tag + move review
 
-### Step 4: 贴结果 tag + move review
-
-- 全 PASS → tags = `[accept, {{ req_id }}, parent-id:{{ source_issue_id }}, result:pass]`
-- 任一 FAIL → tags = `[accept, {{ req_id }}, parent-id:{{ source_issue_id }}, result:fail]`
-- statusId=review
+- ✅ 全过：tags = `[accept, {{ req_id }}, result:pass]`, statusId=review
+- ❌ 任一失败：tags = `[accept, {{ req_id }}, result:fail]`, statusId=review
 
 ---
 
 ## 硬约束
 
-1. **不用**部署 lab：sisyphus 已调 env-up 搞好了。不要 `helm install`。
-2. **不用**清 lab：sisyphus 会调 env-down 清。你跑完贴 tag 就撒手。
-3. **禁改 repo 代码**：只读 + 调 curl / CLI。
-4. **必须基于真实 endpoint**，不要 mock，不要跑 unit test 冒充 accept。
-5. update-issue 的 issueId 必须是本 accept issue，不是 SOURCE_ISSUE。
+- **不部署 lab**：sisyphus 搞好的
+- **不清 lab**：sisyphus 会做
+- **不改代码**：只读 + curl
+- **真实 endpoint**：不 mock
+- **update-issue** 要指本 accept issue（不是 SOURCE_ISSUE）

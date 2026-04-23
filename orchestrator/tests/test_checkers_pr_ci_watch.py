@@ -1,12 +1,13 @@
-"""checkers/pr_ci_watch.py 单测：mock manifest + GitHub API，验全绿/任一失败/全失败/超时。
+"""checkers/pr_ci_watch.py 单测：mock GitHub API + gh PR 查询，验全绿/任一失败/全失败/超时。
 
-M11：watch_pr_ci 签名改 req_id-first，repo / pr_number 从 manifest.yaml 读。
+M15：watch_pr_ci(req_id, branch, ...)，repo 从 SISYPHUS_BUSINESS_REPO env 读，
+pr_number 用 gh CLI 按 branch 查（这里 mock 掉），不再读 manifest。
 """
 from __future__ import annotations
 
 import pytest
 
-from orchestrator.checkers import manifest_io, pr_ci_watch
+from orchestrator.checkers import pr_ci_watch
 from orchestrator.checkers._types import CheckResult
 
 
@@ -22,14 +23,13 @@ def _run(name: str, status: str = "completed", conclusion: str | None = "success
     return {"name": name, "status": status, "conclusion": conclusion}
 
 
-def patch_manifest(monkeypatch, pr: dict):
-    """让 manifest_io.read_manifest 返 {"pr": pr}。"""
-    async def fake_read(req_id, timeout_sec=30):
-        return {"pr": pr}
-    monkeypatch.setattr(
-        "orchestrator.checkers.pr_ci_watch.manifest_io.read_manifest",
-        fake_read,
-    )
+def patch_pr_lookup(monkeypatch, *, repo: str = "phona/ubox-crosser", pr_number: int | None = 42):
+    """SISYPHUS_BUSINESS_REPO env + mock _get_pr_number 返指定 number。"""
+    monkeypatch.setenv("SISYPHUS_BUSINESS_REPO", repo)
+
+    async def fake_lookup(_repo: str, _branch: str) -> int | None:
+        return pr_number
+    monkeypatch.setattr(pr_ci_watch, "_get_pr_number", fake_lookup)
 
 
 # ── 单轮直绿 ──────────────────────────────────────────────────────────────
@@ -37,7 +37,7 @@ def patch_manifest(monkeypatch, pr: dict):
 @pytest.mark.asyncio
 async def test_watch_pr_ci_all_green(httpx_mock, monkeypatch):
     monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
-    patch_manifest(monkeypatch, {"repo": "phona/ubox-crosser", "number": 42})
+    patch_pr_lookup(monkeypatch)
 
     httpx_mock.add_response(
         url="https://api.github.com/repos/phona/ubox-crosser/pulls/42",
@@ -48,7 +48,7 @@ async def test_watch_pr_ci_all_green(httpx_mock, monkeypatch):
         json=_runs_payload(_run("lint"), _run("unit"), _run("integration")),
     )
 
-    result = await pr_ci_watch.watch_pr_ci("REQ-9", poll_interval_sec=1, timeout_sec=60)
+    result = await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9", poll_interval_sec=1, timeout_sec=60)
 
     assert isinstance(result, CheckResult)
     assert result.passed is True
@@ -63,7 +63,7 @@ async def test_watch_pr_ci_all_green(httpx_mock, monkeypatch):
 @pytest.mark.asyncio
 async def test_watch_pr_ci_any_failed(httpx_mock, monkeypatch):
     monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
-    patch_manifest(monkeypatch, {"repo": "phona/ubox-crosser", "number": 42})
+    patch_pr_lookup(monkeypatch)
 
     httpx_mock.add_response(
         url="https://api.github.com/repos/phona/ubox-crosser/pulls/42",
@@ -78,7 +78,7 @@ async def test_watch_pr_ci_any_failed(httpx_mock, monkeypatch):
         ),
     )
 
-    result = await pr_ci_watch.watch_pr_ci("REQ-9", poll_interval_sec=1, timeout_sec=60)
+    result = await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9", poll_interval_sec=1, timeout_sec=60)
 
     assert result.passed is False
     assert result.exit_code == 1
@@ -92,7 +92,7 @@ async def test_watch_pr_ci_any_failed(httpx_mock, monkeypatch):
 @pytest.mark.asyncio
 async def test_watch_pr_ci_all_failed(httpx_mock, monkeypatch):
     monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
-    patch_manifest(monkeypatch, {"repo": "phona/ubox-crosser", "number": 42})
+    patch_pr_lookup(monkeypatch)
 
     httpx_mock.add_response(
         url="https://api.github.com/repos/phona/ubox-crosser/pulls/42",
@@ -106,7 +106,7 @@ async def test_watch_pr_ci_all_failed(httpx_mock, monkeypatch):
         ),
     )
 
-    result = await pr_ci_watch.watch_pr_ci("REQ-9", poll_interval_sec=1, timeout_sec=60)
+    result = await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9", poll_interval_sec=1, timeout_sec=60)
 
     assert result.passed is False
     assert result.exit_code == 1
@@ -120,7 +120,7 @@ async def test_watch_pr_ci_all_failed(httpx_mock, monkeypatch):
 async def test_watch_pr_ci_timeout(httpx_mock, monkeypatch):
     """所有 check-run 都还 in_progress，到 timeout 返 124。"""
     monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
-    patch_manifest(monkeypatch, {"repo": "phona/ubox-crosser", "number": 42})
+    patch_pr_lookup(monkeypatch)
 
     # 让 sleep 立即返回，避免真等
     async def fast_sleep(_):
@@ -138,7 +138,7 @@ async def test_watch_pr_ci_timeout(httpx_mock, monkeypatch):
         is_reusable=True,
     )
 
-    result = await pr_ci_watch.watch_pr_ci("REQ-9", poll_interval_sec=0, timeout_sec=0)
+    result = await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9", poll_interval_sec=0, timeout_sec=0)
 
     assert result.passed is False
     assert result.exit_code == 124
@@ -152,7 +152,7 @@ async def test_watch_pr_ci_timeout(httpx_mock, monkeypatch):
 async def test_watch_pr_ci_pending_then_pass(httpx_mock, monkeypatch):
     """前一轮 pending，后一轮全绿。"""
     monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
-    patch_manifest(monkeypatch, {"repo": "phona/ubox-crosser", "number": 42})
+    patch_pr_lookup(monkeypatch)
 
     async def fast_sleep(_):
         return None
@@ -173,7 +173,7 @@ async def test_watch_pr_ci_pending_then_pass(httpx_mock, monkeypatch):
         json=_runs_payload(_run("lint")),
     )
 
-    result = await pr_ci_watch.watch_pr_ci("REQ-9", poll_interval_sec=1, timeout_sec=60)
+    result = await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9", poll_interval_sec=1, timeout_sec=60)
 
     assert result.passed is True
     assert result.exit_code == 0
@@ -184,7 +184,7 @@ async def test_watch_pr_ci_pending_then_pass(httpx_mock, monkeypatch):
 @pytest.mark.asyncio
 async def test_watch_pr_ci_pr_not_found(httpx_mock, monkeypatch):
     monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
-    patch_manifest(monkeypatch, {"repo": "phona/ubox-crosser", "number": 999})
+    patch_pr_lookup(monkeypatch, pr_number=999)
 
     httpx_mock.add_response(
         url="https://api.github.com/repos/phona/ubox-crosser/pulls/999",
@@ -192,7 +192,7 @@ async def test_watch_pr_ci_pr_not_found(httpx_mock, monkeypatch):
         json={"message": "Not Found"},
     )
 
-    result = await pr_ci_watch.watch_pr_ci("REQ-9", poll_interval_sec=1, timeout_sec=60)
+    result = await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9", poll_interval_sec=1, timeout_sec=60)
 
     assert result.passed is False
     assert result.exit_code == 1
@@ -205,7 +205,7 @@ async def test_watch_pr_ci_pr_not_found(httpx_mock, monkeypatch):
 async def test_watch_pr_ci_empty_runs_times_out(httpx_mock, monkeypatch):
     """PR 刚开 GHA 还没触发，check-runs 为空 → pending → 超时。"""
     monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
-    patch_manifest(monkeypatch, {"repo": "phona/ubox-crosser", "number": 42})
+    patch_pr_lookup(monkeypatch)
 
     async def fast_sleep(_):
         return None
@@ -221,39 +221,26 @@ async def test_watch_pr_ci_empty_runs_times_out(httpx_mock, monkeypatch):
         is_reusable=True,
     )
 
-    result = await pr_ci_watch.watch_pr_ci("REQ-9", poll_interval_sec=0, timeout_sec=0)
+    result = await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9", poll_interval_sec=0, timeout_sec=0)
     assert result.exit_code == 124
 
 
-# ── manifest 缺 pr 段 / 缺字段 → 抛 ManifestReadError ───────────────────
+# ── env / branch 不全 → 抛 ValueError ────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_watch_pr_ci_raises_when_manifest_missing_pr(monkeypatch):
-    async def fake_read(req_id, timeout_sec=30):
-        return {"schema_version": 1}
-    monkeypatch.setattr(
-        "orchestrator.checkers.pr_ci_watch.manifest_io.read_manifest",
-        fake_read,
-    )
-    with pytest.raises(manifest_io.ManifestReadError) as exc:
-        await pr_ci_watch.watch_pr_ci("REQ-9")
-    assert "pr" in str(exc.value)
+async def test_watch_pr_ci_raises_when_env_missing(monkeypatch):
+    """SISYPHUS_BUSINESS_REPO 没设 → 直接 ValueError。"""
+    monkeypatch.delenv("SISYPHUS_BUSINESS_REPO", raising=False)
+    with pytest.raises(ValueError, match="SISYPHUS_BUSINESS_REPO"):
+        await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9")
 
 
 @pytest.mark.asyncio
-async def test_watch_pr_ci_raises_when_pr_missing_number(monkeypatch):
-    patch_manifest(monkeypatch, {"repo": "phona/ubox-crosser"})   # 缺 number
-    with pytest.raises(manifest_io.ManifestReadError) as exc:
-        await pr_ci_watch.watch_pr_ci("REQ-9")
-    assert "number" in str(exc.value)
-
-
-@pytest.mark.asyncio
-async def test_watch_pr_ci_raises_when_pr_missing_repo(monkeypatch):
-    patch_manifest(monkeypatch, {"number": 42})
-    with pytest.raises(manifest_io.ManifestReadError) as exc:
-        await pr_ci_watch.watch_pr_ci("REQ-9")
-    assert "repo" in str(exc.value)
+async def test_watch_pr_ci_raises_when_no_pr(monkeypatch):
+    """gh pr list 返 None → 没找到对应 PR → ValueError。"""
+    patch_pr_lookup(monkeypatch, pr_number=None)
+    with pytest.raises(ValueError, match="No PR found"):
+        await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9")
 
 
 # ── _classify 单测 ───────────────────────────────────────────────────────

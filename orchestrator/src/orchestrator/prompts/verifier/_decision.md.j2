@@ -6,8 +6,8 @@
 ````json
 {
   "action":     "pass" | "fix" | "retry_checker" | "escalate",
-  "fixer":      "dev" | "spec" | "manifest" | null,
-  "scope":      "src/" | "openspec/changes/REQ-x/" | "manifest.pr.number" | null,
+  "fixer":      "dev" | "spec" | null,
+  "scope":      "src/" | "openspec/changes/REQ-x/" | null,
   "reason":     "一句话人话：为什么做这个决定",
   "confidence": "high" | "low"
 }
@@ -15,10 +15,9 @@
 
 语义：
 - `pass`：产物可以推进到下一阶段。sisyphus 会把 REQ 主链继续往下走。
-- `fix`：需要起 fixer agent 改代码/spec/manifest。必须同时给 `fixer` 和 `scope`。
+- `fix`：需要起 fixer agent 改代码/spec。必须同时给 `fixer` 和 `scope`。
   - `dev`：改 src/ 下业务代码 / 实现
   - `spec`：改 openspec/changes/REQ-*/ 下的需求 / acceptance 描述
-  - `manifest`：改 /workspace/.sisyphus/manifest.yaml（比如 pr.number / sha_by_repo 错了）
 - `retry_checker`：代码没问题、纯 flaky / 环境抖动 / 刚才 checker 用错参数，重跑 checker 即可。
 - `escalate`：超出 AI 自理范围（人类决策 / 安全边界 / 不明故障）。
 

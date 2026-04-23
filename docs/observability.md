@@ -111,7 +111,7 @@ orchestrator 每条决策都写一行：
 
 ### artifact_checks（M3/M7）
 
-每次机械 checker 跑（manifest_validate / staging_test / pr_ci_watch）一行结果，带 `passed / exit_code / stdout_tail / stderr_tail / duration_sec / cmd / reason`。
+每次机械 checker 跑（staging_test / pr_ci_watch）一行结果，带 `passed / exit_code / stdout_tail / stderr_tail / duration_sec / cmd / reason`。
 
 ### stage_runs（M14e）
 
@@ -174,7 +174,7 @@ Metabase 看板直接读这张表就能看"改进成绩单"。
   - Q6 stage 周维度通过率
   - Q7 stage duration P50/P95
   - Q8 verifier 决策准确率（actual_outcome 回填后）
-  - Q9 fixer 修复成功率（按 fixer:dev/spec/manifest 分）
+  - Q9 fixer 修复成功率（按 fixer:dev/spec 分）
   - Q10 token 成本
   - Q11 dev 并行加速比（M14d 后启用）
   - Q12 bugfix loop 异常

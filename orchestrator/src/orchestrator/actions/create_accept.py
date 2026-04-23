@@ -46,7 +46,7 @@ async def create_accept(*, body, req_id, tags, ctx):
         # 没 runner controller → 直接走 skip（等同 dev 环境）
         return {"emit": Event.ACCEPT_PASS.value, "note": "no runner controller, skipped env-up"}
 
-    # image_tags 来自 manifest.yaml（pr-ci-watch agent 已填）；由 agent 在 Makefile 里自己读
+    # 由 accept-agent 在 Makefile 里自己读 image_tags
     exec_env = {
         "SISYPHUS_REQ_ID": req_id,
         "SISYPHUS_STAGE": "accept-env-up",
