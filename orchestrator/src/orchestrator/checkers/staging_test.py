@@ -24,9 +24,10 @@ _TAIL = 2048
 _DEFAULT_TIMEOUT = 1800
 
 
-def _build_cmd() -> str:
+def _build_cmd(req_id: str) -> str:
     """对含 ci-test target 的每个 source repo 并行跑 make ci-test。
 
+    每仓先切到 feat/<REQ>（agent 推到的分支）；fetch/checkout 失败 → not involved 跳过。
     pids 列表存 `pid:name`，结尾按 pid 依次 wait；失败 tail 最后 50 行到 stderr。
     """
     return (
@@ -35,8 +36,12 @@ def _build_cmd() -> str:
         "mkdir -p /tmp/staging-test-logs; "
         'pids=""; '
         "for repo in /workspace/source/*/; do "
+        '  name=$(basename "$repo"); '
+        f'  if ! (cd "$repo" && git fetch origin "feat/{req_id}" 2>/dev/null && git checkout -B "feat/{req_id}" "origin/feat/{req_id}" 2>/dev/null); then '
+        '    echo "[skip] $name: no feat branch / not involved"; '
+        "    continue; "
+        "  fi; "
         '  if [ -f "$repo/Makefile" ] && grep -q \'^ci-test:\' "$repo/Makefile"; then '
-        '    name=$(basename "$repo"); '
         "    ( "
         '      echo "=== staging_test: $name ==="; '
         '      cd "$repo" && make ci-test '
@@ -62,7 +67,7 @@ def _build_cmd() -> str:
 
 async def run_staging_test(req_id: str) -> CheckResult:
     """在 runner pod 并行对每个 source repo 跑 make ci-test，收退出码决定 pass/fail。"""
-    cmd = _build_cmd()
+    cmd = _build_cmd(req_id)
     timeout_sec = _DEFAULT_TIMEOUT
 
     rc = k8s_runner.get_controller()

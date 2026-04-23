@@ -20,13 +20,20 @@ _TAIL = 2048
 
 
 def _build_cmd(req_id: str) -> str:
-    """遍历 /workspace/source/*/，对含 Makefile 的仓跑 make dev-cross-check。"""
+    """遍历 /workspace/source/*/，先切到 feat/<REQ>，对含 Makefile 的仓跑 make dev-cross-check。
+
+    fetch + checkout feat/<REQ> 失败 → 该仓 not involved，跳过不算 fail。
+    """
     return (
         "set -o pipefail; "
         "fail=0; "
         "for repo in /workspace/source/*/; do "
-        '  if [ -d "$repo" ] && [ -f "$repo/Makefile" ]; then '
-        '    name=$(basename "$repo"); '
+        '  name=$(basename "$repo"); '
+        f'  if ! (cd "$repo" && git fetch origin "feat/{req_id}" 2>/dev/null && git checkout -B "feat/{req_id}" "origin/feat/{req_id}" 2>/dev/null); then '
+        '    echo "[skip] $name: no feat branch / not involved"; '
+        "    continue; "
+        "  fi; "
+        '  if [ -f "$repo/Makefile" ]; then '
         '    echo "=== dev_cross_check: $name ==="; '
         '    if ! (cd "$repo" && make dev-cross-check); then '
         '      echo "=== FAIL: $name ===" >&2; '
