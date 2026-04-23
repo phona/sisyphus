@@ -99,6 +99,7 @@ async def _dispatch_bkd_agent(*, body, req_id: str, ctx: dict) -> dict:
             title=f"[{req_id}] [staging-test]{short_title(ctx)}",
             tags=["staging-test", req_id, f"parent-id:{source_issue_id}"],
             status_id="todo",
+            model=settings.agent_model,
         )
         prompt = render(
             "staging_test.md.j2",

@@ -106,6 +106,14 @@ class Settings(BaseSettings):
     # 默认 3 × 120s = 6min，覆盖 K3s 节点偶发慢启动；生产可调更高。
     runner_ready_attempts: int = 3
 
+    # ─── agent model 控制 ─────────────────────────────────────────────────
+    # sisyphus 起的 agent 用哪个模型（verifier / fixer / accept / pr_ci_watch /
+    # done_archive / staging_test）。None = 用 BKD per-engine 默认。
+    # 生产 None 走 BKD 默认（opus）；测试 helm values 覆盖成 'claude-haiku-4-5'。
+    # 注意：analyze agent 的 model 是 user 创 intent issue 时定的，sisyphus 不控；
+    # analyze fan out 的 sub-issue model 由 analyze prompt 自己控（见 analyze.md.j2）。
+    agent_model: str | None = None
+
     # ─── M14b/M14c：verifier-agent 框架 ─────────────────────────────────
     # 每个 stage transition（成功 or 失败）先起一个 verifier-agent 做主观判断
     # （pass / fix / retry_checker / escalate），再由 webhook 路由推进状态机。

@@ -121,6 +121,7 @@ async def invoke_verifier(
             ],
             status_id="todo",
             use_worktree=True,   # 并行 verifier 互不抢 working tree
+            model=settings.agent_model,
         )
         await bkd.follow_up_issue(project_id=project_id, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=project_id, issue_id=issue.id, status_id="working")
@@ -236,6 +237,7 @@ async def start_fixer(*, body, req_id, tags, ctx):
             ],
             status_id="todo",
             use_worktree=True,
+            model=settings.agent_model,
         )
         # 通用 bugfix prompt 作为过渡；PR4 再做每类 fixer 专用模板。
         prompt = render(

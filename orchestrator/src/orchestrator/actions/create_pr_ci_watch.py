@@ -98,6 +98,7 @@ async def _dispatch_bkd_agent(*, body, req_id: str, ctx: dict) -> dict:
             title=f"[{req_id}] [pr-ci-watch]{short_title(ctx)}",
             tags=["pr-ci", req_id, f"parent-id:{source_issue_id}"],
             status_id="todo",
+            model=settings.agent_model,
         )
         prompt = render(
             "pr_ci_watch.md.j2",
