@@ -1,6 +1,6 @@
 """Event ID dedup via Postgres unique key.
 
-event_id 由 webhook handler 算（参考 router/router.js 里 dedup key 设计）：
+event_id 由 webhook handler 算：
   session.completed: timestamp|issueId|event|executionId
   issue.updated:     timestamp|issueId|event
 """
