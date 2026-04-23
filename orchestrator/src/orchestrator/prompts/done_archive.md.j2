@@ -15,8 +15,8 @@ AGENT_ROLE=done-archive-agent
 REQ={{ req_id }}
 ACCEPT_ISSUE={{ accept_issue_id }}
 
-accept 通过 + teardown 已清 lab。你现在要：
-1. 每个 source repo merge PR（按 manifest.merge_order 顺序）
+accept 通过。你现在要：
+1. 从 dev 阶段找出所有 PR，按影响顺序 merge
 2. 各 repo 归档 openspec changes → specs
 3. 写结果到本 issue
 
@@ -24,41 +24,37 @@ accept 通过 + teardown 已清 lab。你现在要：
 
 ---
 
-## 起手自检
-
-```bash
-POD=runner-{{ req_id | lower }}
-NS=sisyphus-runners
-kubectl -n $NS exec $POD -- validate-manifest.py
-kubectl -n $NS exec $POD -- cat /workspace/.sisyphus/manifest.yaml > /tmp/manifest.yaml
-```
-
 ## 步骤
 
-### Step 1: 决定 merge 顺序
+### Step 1: 从 BKD issue 查出所有 dev task 的 PR
 
-看 manifest：
-- 如果 `merge_order` 已填（analyze-agent 可能写过），按它来
-- 如果没填，按 `sources[].depends_on` 拓扑排序（被依赖的 repo 先）
-
-回写到 runner pod 的 manifest：
+sisyphus fanout_dev 为本 REQ 创建了 N 个 `tag=dev+{{ req_id }}` 的 BKD issue。
+查出这些 issue，从各自的 comment 里读 dev-agent 填的 PR 链接（格式：`owner/repo#PR`）。
 
 ```bash
-# 自己算好顺序后
-kubectl -n $NS exec $POD -- yq -i '.merge_order = ["<repo1>", "<repo2>", ...]' /workspace/.sisyphus/manifest.yaml
+# 伪代码：查 parent issue 的 related issues（tag=dev+{{ req_id }}）
+bkd_issue={{ parent_issue_id }}
+gh issue view $bkd_issue --json body  # 确认本 REQ 的内容
+
+# 然后逐个找 tag=dev+{{ req_id }} 的 related issue，读他们的 PR 信息
+# dev-agent 会在 comment 里或 follow-up 写：
+#   "PR: owner/repo#123"
 ```
 
-### Step 2: 按顺序 merge 每个 PR（在你自己 cwd，用自己的 GH_TOKEN 有写权限）
+决定 merge 顺序：
+- 如果没有库间依赖，按任意顺序
+- 如果有依赖（比如库 A 依赖库 B），被依赖的先（B 先 merge）
+
+### Step 2: Merge 每个 PR（在你自己 cwd，用自己的 GH_TOKEN 有写权限）
 
 ```bash
-for repo in $(yq '.merge_order[]' /tmp/manifest.yaml); do
-  pr_url=$(yq ".pr_by_repo.\"$repo\"" /tmp/manifest.yaml)
-  gh pr merge "$pr_url" --squash --delete-branch --auto
+# 按上面决定的顺序
+for pr in "owner1/repo1#123" "owner2/repo2#456"; do
+  gh pr merge "$pr" --squash --delete-branch --auto
 done
 ```
 
 `--auto` 会等分支保护要求的 check 全绿才 merge（如果 repo 配了保护）。
-**不能**在 `kubectl exec runner pod` 里跑 `gh pr merge` —— runner PAT 只读。
 
 ### Step 3: leader repo openspec apply
 
@@ -66,11 +62,10 @@ done
 **在你自己 cwd 里跑**：
 
 ```bash
-leader=$(yq '.sources[] | select(.role == "leader") | .repo' /tmp/manifest.yaml)
-leader_name=$(basename "$leader")
-
-gh repo clone "$leader" "./$leader_name-archive"
-cd "./$leader_name-archive"
+# 从 dev-agent 或本 issue 的 comment 找出 leader repo，比如 owner/leader-repo
+leader="owner/leader-repo"
+gh repo clone "$leader" "./${leader##*/}-archive"
+cd "./${leader##*/}-archive"
 git fetch origin
 git checkout main
 git pull
@@ -84,12 +79,12 @@ cd -
 
 ```markdown
 ## Archive Result
-- merged: [repo1: pr_url, repo2: pr_url, ...]
+- merged: [repo1: owner/repo#PR, repo2: owner/repo#PR, ...]
 - openspec apply: commit sha
 - (optional) any skipped
 ```
 
-follow-up-issue 追加。
+follow-up 追加。
 
 ### Step 5: 贴 tag + status=done
 
@@ -102,6 +97,5 @@ update-issue:
 ## 硬约束
 
 1. **不要** `kubectl delete pod / pvc`：sisyphus 的 GC 会在 state=done 后清（保留 N 分钟给 admin 翻现场）
-2. merge 顺序严格按 manifest.merge_order；不要跳步
-3. merge 失败（比如 check 没过）→ 贴 `archive-fail` tag + move review，让人介入
-4. 所有 update-issue 的 issueId 必须是**本** issue（不是 ACCEPT_ISSUE）
+2. merge 失败（比如 check 没过）→ 贴 `archive-fail` tag + move review，让人介入
+3. 所有 update-issue 的 issueId 必须是**本** issue（不是 ACCEPT_ISSUE）

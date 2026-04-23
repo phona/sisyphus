@@ -1,7 +1,7 @@
 {% include "verifier/_header.md.j2" %}
 
 ## 职责（analyze / fail）
-analyze-agent 跑不下去了（session failed / 超时 / 写出来的 manifest 过不了 schema）。
+analyze-agent 跑不下去了（session failed / 超时 / 写不出 openspec 或 tasks.md）。
 
 你要判：这是**哪一类**失败、能不能重试。
 
@@ -13,13 +13,13 @@ analyze-agent 跑不下去了（session failed / 超时 / 写出来的 manifest 
 {% endif %}
 
 ### 关注点
-- manifest schema 报的字段错 → `fix` + `fixer=manifest`
-- analyze-agent 本身 LLM 抽风（空输出 / 格式乱）→ `retry_checker`（让主链再起一次 analyze）
-- 需求本身矛盾 / 信息不全 → `escalate`
+- openspec validate 报格式错 → `retry_checker`（让 analyze 再跑一次）
+- analyze-agent 本身 LLM 抽风（空输出 / 格式乱 / 无法完成拆解）→ `retry_checker`（让主链再起一次 analyze）
+- 需求本身矛盾 / 信息不全 → `escalate`（需要 user 澄清）
 - sisyphus runner / K8s 环境炸 → `escalate`（sisyphus 自己的锅）
 
 ### NOT 该做
-- 不跑 /opsx:propose
+- 不跑 openspec validate（checker 已跑）
 - 不改任何业务代码
 
 ─────────

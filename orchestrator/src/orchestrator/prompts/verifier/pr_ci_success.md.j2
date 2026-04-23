@@ -17,9 +17,7 @@ image-publish），artifact 里有 check-runs 清单。
 
 ### 典型决策
 - `pass`：关键 check 全在、全绿、产物签出
-- `fix` + `fixer=manifest`：PR 模板没配全套检查（`.github/workflows/` 缺 job）
-  —— scope 其实是源仓库 CI 配置，这种 sisyphus 改不了，`escalate` 更合适
-- `escalate`：漏检查但无法自动补
+- `escalate`：漏检查（`.github/workflows/` 缺 job）—— 源仓库 CI 配置问题，sisyphus 改不了
 
 ─────────
 
