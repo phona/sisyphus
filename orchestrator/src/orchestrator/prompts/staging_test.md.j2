@@ -71,6 +71,6 @@ EXIT_CODE=$?
 ## 硬约束
 
 - **不修改代码**：只读 + 测
-- **不补数据**：manifest 已删，无需 sha_by_repo
+- **不补数据**：sisyphus 不维护任何 repo-level 元信息（M15 砍 manifest）
 - **失败就报**：不分析、不修 bug、不 escalate（下游 verifier-agent 处理）
 - **exit_code 是唯一真相**：0 = pass，非0 = fail

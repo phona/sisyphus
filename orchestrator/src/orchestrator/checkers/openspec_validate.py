@@ -19,19 +19,16 @@ log = structlog.get_logger(__name__)
 _TAIL = 2048
 
 
-def _build_cmd(req_id: str) -> str:
+def _build_cmd(req_id: str, leader_repo_path: str) -> str:
     """跑 openspec validate <change-id>。
 
     spec-agent 把文件写在 leader source repo 的 openspec/changes/<REQ>/ 下，
-    cwd 切到那个 repo 才能让 openspec 找到 openspec/ 配置。leader repo 路径从
-    manifest.yaml 现读，避免 sisyphus 缓存 / agent 改 manifest 不一致。
+    cwd 切到那个 repo 才能让 openspec 找到 openspec/ 配置。leader_repo_path 由
+    caller 传入（M15 砍 manifest 后没有集中存储，按调度上下文传）。
     """
     return (
-        f"set -e; "
-        f"leader_repo=$(yq -r '.sources[] | select(.role==\"leader\") | .repo' "
-        f"/workspace/.sisyphus/manifest.yaml); "
-        f"name=$(basename \"$leader_repo\"); "
-        f"cd \"/workspace/source/$name\" && openspec validate openspec/changes/{req_id}"
+        f"set -e; cd \"{leader_repo_path}\" && "
+        f"openspec validate openspec/changes/{req_id}"
     )
 
 
@@ -39,11 +36,12 @@ async def run_openspec_validate(
     req_id: str,
     *,
     spec_stage: str,
+    leader_repo_path: str,
     timeout_sec: int = 120,
 ) -> CheckResult:
     """kubectl exec runner -- openspec validate ...，收 stdout/stderr/exit。"""
     rc = k8s_runner.get_controller()
-    cmd = _build_cmd(req_id)
+    cmd = _build_cmd(req_id, leader_repo_path)
     log.info(
         "checker.openspec_validate.start",
         req_id=req_id, spec_stage=spec_stage, timeout=timeout_sec,

@@ -110,6 +110,6 @@ done
 ## 硬约束
 
 - **不能 emit 伪造 pass / fail**：status 没 return success 就别贴 pass
-- **不能改 repo 代码**：只读查询 + 操作 manifest.yaml
+- **不能改 repo 代码**：只读 GitHub REST + 贴 issue tag
 - 超时判断要严格：30 min 没结果就 timeout，不要无限等
 - 轮询间隔 >= 30s，不要 flood GitHub API

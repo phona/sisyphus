@@ -288,14 +288,12 @@ async def rebuild_workspace(
     场景：
     - PVC 数据被误删 / 损坏
     - 手动调试需要从 branch 头重新开始
-    - manifest.yaml 丢了
 
     行为：
     1. 删除当前 Pod
-    2. 若 keep_pvc=False，也删 PVC（workspace 清零，但还需人工补 manifest）
+    2. 若 keep_pvc=False，也删 PVC（workspace 清零）
     3. 重建 Pod（PVC 保留则挂原 PVC；删了就挂新的空 PVC）
-    4. 由下一个 stage 的 agent 自行检测 workspace 丢 → 重新 clone + 写 manifest
-       （agent prompt 里的"起手自检"逻辑会处理）
+    4. 由下一个 stage 的 agent 自行检测 workspace 丢 → 重新 clone
 
     **不**触发状态机重走——REQ state 不变，只管 K8s 资源。
     """

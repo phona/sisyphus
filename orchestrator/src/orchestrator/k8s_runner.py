@@ -2,7 +2,7 @@
 
 每个 REQ 对应 sisyphus-runners namespace 下一个 Pod（runner-<REQ>）+ 一个 PVC
 （workspace-<REQ>）。Pod 是 privileged + DinD + fuse-overlayfs 的调试环境，PVC 挂
-/workspace 持久保存 clone 的 repos + manifest.yaml + 中间产物。
+/workspace 持久保存 clone 的 repos + 中间产物。
 
 生命周期绑 REQ：
   - analyze 起：ensure_runner 幂等创建 PVC + Pod

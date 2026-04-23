@@ -12,7 +12,7 @@ webhook.py 解析 decision JSON，映射成 Event 推状态机。
    对应 stage 的 done/pass 事件（走原主链 transition）
 - `apply_verify_retry_checker`：decision=retry_checker → 同手法，回 stage_running
    + 链 emit "restart" 事件触发 checker 重跑
-- `start_fixer`：decision=fix → 起 fixer agent（dev / spec / manifest）
+- `start_fixer`：decision=fix → 起 fixer agent（dev / spec）
 - `invoke_verifier_after_fix`：fixer 完 → 再调 verifier 复查
 - `invoke_verifier_for_fail`：M14c — staging-test / pr-ci / accept fail 全部入口
 
@@ -94,7 +94,7 @@ async def invoke_verifier(
         stage: 被审阶段名（analyze/spec/dev/staging_test/pr_ci/accept）
         trigger: "success"=机械 checker 过 / agent 跑完；"fail"=checker 红 / agent 报错
         req_id / project_id: 绑定 REQ
-        artifact_paths: 可选，给 prompt 提示 agent 要看哪些产物（manifest / spec / 日志）
+        artifact_paths: 可选，给 prompt 提示 agent 要看哪些产物（spec / 日志）
         stderr_tail: fail 触发时的 stderr 尾部
         history: 可选，之前 verifier / fixer 轮次摘要
 
@@ -218,7 +218,7 @@ async def apply_verify_retry_checker(*, body, req_id, tags, ctx):
 
 @register("start_fixer", idempotent=False)
 async def start_fixer(*, body, req_id, tags, ctx):
-    """decision=fix：起对应 fixer agent（dev / spec / manifest）。
+    """decision=fix：起对应 fixer agent（dev / spec）。
 
     ctx 里应有 verifier 之前写的 fixer / scope（webhook 解 decision 时存）。
     本期的 prompt 先用通用 bugfix 模板兜底，PR4 / 独立 PR 再做专用 fixer prompt。
