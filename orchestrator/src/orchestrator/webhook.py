@@ -21,7 +21,7 @@ from . import observability as obs
 from . import router as router_lib
 from .bkd import BKDClient
 from .config import settings
-from .state import Event, ReqState
+from .state import ReqState
 from .store import db, dedup, req_state, verifier_decisions
 
 log = structlog.get_logger(__name__)

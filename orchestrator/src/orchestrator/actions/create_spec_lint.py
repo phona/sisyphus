@@ -12,9 +12,8 @@ from __future__ import annotations
 import structlog
 
 from ..checkers import spec_lint as checker
-from ..config import settings
 from ..state import Event
-from ..store import artifact_checks, db, req_state
+from ..store import artifact_checks, db
 from . import register
 
 log = structlog.get_logger(__name__)
