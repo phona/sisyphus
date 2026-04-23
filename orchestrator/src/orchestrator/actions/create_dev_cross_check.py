@@ -2,6 +2,9 @@
 
 M1 checker 框架：sisyphus 在 runner pod 执行 make dev-cross-check，
 根据退出码 emit DEV_CROSS_CHECK_PASS / DEV_CROSS_CHECK_FAIL。
+
+多仓重构后：checker 自行遍历 /workspace/source/*，含 Makefile 的仓逐一跑
+`make dev-cross-check`，任一失败整体红。
 """
 from __future__ import annotations
 
@@ -20,17 +23,10 @@ _STAGE = "dev-cross-check"
 @register("create_dev_cross_check", idempotent=False)
 async def create_dev_cross_check(*, body, req_id, tags, ctx):
     """下发开发交叉验证任务到 runner pod。"""
-    ctx = ctx or {}
-    feature_repo_path = ctx.get("workdir", f"/var/sisyphus-ci/feat-{req_id}")
-
-    log.info("create_dev_cross_check.start", req_id=req_id, feature_repo_path=feature_repo_path)
+    log.info("create_dev_cross_check.start", req_id=req_id)
 
     try:
-        result = await checker.run_dev_cross_check(
-            req_id,
-            feature_repo_path=feature_repo_path,
-            timeout_sec=300,
-        )
+        result = await checker.run_dev_cross_check(req_id, timeout_sec=300)
     except TimeoutError:
         log.error("create_dev_cross_check.timeout", req_id=req_id)
         return {

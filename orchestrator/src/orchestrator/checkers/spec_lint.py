@@ -1,10 +1,10 @@
-"""spec 完整性检查（M1）：openspec validate + scenario refs linter。
+"""spec 完整性检查（M1）：openspec validate + scenario refs linter（for-each-repo）。
 
-sisyphus 在 runner pod 执行两个检查：
-1. openspec validate：openspec 文件结构和格式校验
-2. check-scenario-refs.sh：场景引用完整性校验（task.md / reports 引用的场景必须在 specs 中定义）
+多仓重构后：每个 source repo 在 runner pod 里挂在 /workspace/source/<repo-name>/，
+各自带 openspec/changes/<REQ>/。checker 遍历 /workspace/source/*，含本 REQ 目录
+的仓逐一跑 openspec validate + check-scenario-refs.sh；任一失败整体红。
 
-两个检查都通过才算 PASS。
+每仓失败时 echo `=== FAIL: $repo ===` 到 stderr 让 verifier 看清。
 """
 from __future__ import annotations
 
@@ -21,32 +21,44 @@ log = structlog.get_logger(__name__)
 _TAIL = 2048
 
 
-def _build_cmd(req_id: str, leader_repo_path: str) -> str:
-    """并行跑两个 spec 检查，都通过才算 pass。
+def _build_cmd(req_id: str) -> str:
+    """遍历 /workspace/source/*/，对含 openspec/changes/<REQ>/ 的仓跑两项检查。
 
     1. openspec validate openspec/changes/<REQ>
-    2. check-scenario-refs.sh <repo_root>
+    2. check-scenario-refs.sh --specs-search-path /workspace/source .
 
-    合并两个命令的输出和退出码。
+    任一仓任一检查失败 → exit 1。check-scenario-refs.sh 的
+    --specs-search-path flag 支持跨仓 scenario 引用（Agent B 实现）。
     """
     return (
-        f"set -e; cd \"{leader_repo_path}\" && "
-        f"echo '=== Running openspec validate ===' && "
-        f"openspec validate openspec/changes/{req_id} && "
-        f"echo '=== Running check-scenario-refs ===' && "
-        f"check-scenario-refs.sh ."
+        "set -o pipefail; "
+        "fail=0; "
+        "for repo in /workspace/source/*/; do "
+        f'  if [ -d "$repo/openspec/changes/{req_id}" ]; then '
+        '    name=$(basename "$repo"); '
+        '    echo "=== spec_lint: $name ==="; '
+        f'    if ! (cd "$repo" && openspec validate "openspec/changes/{req_id}"); then '
+        '      echo "=== FAIL: $name ===" >&2; '
+        "      fail=1; "
+        "    fi; "
+        '    if ! (cd "$repo" && check-scenario-refs.sh --specs-search-path /workspace/source .); then '
+        '      echo "=== FAIL scenario-refs: $name ===" >&2; '
+        "      fail=1; "
+        "    fi; "
+        "  fi; "
+        "done; "
+        "exit $fail"
     )
 
 
 async def run_spec_lint(
     req_id: str,
     *,
-    leader_repo_path: str,
     timeout_sec: int = 120,
 ) -> CheckResult:
-    """kubectl exec runner -- <openspec validate + scenario refs checks>，收 stdout/stderr/exit。"""
+    """kubectl exec runner -- <for-each-repo openspec validate + scenario refs>。"""
     rc = k8s_runner.get_controller()
-    cmd = _build_cmd(req_id, leader_repo_path)
+    cmd = _build_cmd(req_id)
     log.info(
         "checker.spec_lint.start",
         req_id=req_id, timeout=timeout_sec,
