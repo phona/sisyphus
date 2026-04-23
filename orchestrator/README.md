@@ -10,8 +10,8 @@ Python 服务，sisyphus 编排核心。承担状态机 / 路由 / action 调度
 - **REQ 状态显式持久化**：1 张 Postgres 表 (`req_state`)，行级 CAS 保并发
 - **Transition table 驱动**：1 张 dict `(state, event) → (next_state, action)`，单测覆盖（[state.py](src/orchestrator/state.py)）
 - **Event 由 webhook 推断**：tag + event_type → Event 枚举（[router.py](src/orchestrator/router.py)）
-- **Action 处理器一文件一个**：每个 transition 触发的副作用（创 issue / 跑 checker / 更新 manifest）独立可测（[actions/](src/orchestrator/actions/)）
-- **机械 checker 独立**：staging-test / pr-ci-watch / manifest_validate 都是 sisyphus 直接跑，不绕 BKD agent（[checkers/](src/orchestrator/checkers/)）
+- **Action 处理器一文件一个**：每个 transition 触发的副作用（创 issue / 跑 checker / 推 BKD）独立可测（[actions/](src/orchestrator/actions/)）
+- **机械 checker 独立**：staging-test / pr-ci-watch 都是 sisyphus 直接跑，不绕 BKD agent（[checkers/](src/orchestrator/checkers/)）
 - **verifier-agent 框架（M14b/c）**：所有 stage success/fail 走 verifier 主观决策（[actions/_verifier.py](src/orchestrator/actions/_verifier.py)）
 - **Prompt 用 Jinja2 模板**：[prompts/](src/orchestrator/prompts/)，与逻辑解耦
 - **Dedup / 状态 / artifact / stage_runs / verifier_decisions 都持久化**：[store/](src/orchestrator/store/)
@@ -42,10 +42,9 @@ src/orchestrator/
 ├── snapshot.py        # BKD list-issues → bkd_snapshot 同步 cron
 ├── observability.py   # structlog 配置 + 写表 helpers
 ├── store/             # asyncpg pool + req_state CAS + dedup + 各表写入
-├── actions/           # 15 个 action handler（含 _verifier / _skip）
-├── checkers/          # 6 个机械 checker（manifest_io / staging_test / pr_ci_watch / ...）
+├── actions/           # action handler（含 _verifier / _skip）
+├── checkers/          # 机械 checker（staging_test / pr_ci_watch / openspec_validate）
 ├── prompts/           # Jinja2 模板（含 verifier/{stage}_{trigger}.md.j2 共 12 个）
-├── schemas/           # manifest.json (draft-07) + others
 └── retry/             # M9 重试策略
 ```
 

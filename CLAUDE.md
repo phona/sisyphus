@@ -27,22 +27,22 @@
 | 角色 | 实现 | 职责 |
 |---|---|---|
 | **orchestrator** | Python（K8s Deployment） | 状态机 + 路由 + watchdog + GC + 指标采集 |
-| **机械 checker** | Python（runner pod 内 exec / GitHub REST / jsonschema） | 客观事实：测试退码 / CI 绿不绿 / manifest 合 schema 不合 |
+| **机械 checker** | Python（runner pod 内 exec / GitHub REST） | 客观事实：测试退码 / CI 绿不绿 |
 | **stage agent** | BKD agent + Jinja2 prompt | analyze / spec / dev / accept / done-archive |
 | **verifier-agent** | BKD agent + 12 个 verifier/{stage}\_{trigger} 模板 | 主观决策：pass / fix / retry_checker / escalate（输出 decision JSON） |
-| **fixer-agent** | BKD agent + bugfix.md.j2（过渡） | 改一类东西：dev fixer 改业务码 / spec fixer 改 spec / manifest fixer 改 manifest |
+| **fixer-agent** | BKD agent + bugfix.md.j2（过渡） | 改一类东西：dev fixer 改业务码 / spec fixer 改 spec |
 
 ## Stage 流（happy path 七段）
 
 ```
-intent:analyze → analyze → admission(manifest) → specs(×2 并行) → dev(开 PR + 写 manifest.pr.number)
-  → staging-test(机械: kubectl exec runner make ci-*) → pr-ci-watch(机械: GitHub REST 轮 check-runs)
-  → accept(env-up + agent 跑 FEATURE-A* + env-down 必跑) → archive → DONE
+intent:analyze → analyze(写 proposal/design/tasks) → specs(×2 并行) → dev(1~N 并行, push feat/REQ-x + 真开 PR)
+  → staging-test(机械: kubectl exec runner make ci-test) → pr-ci-watch(机械: GitHub REST 轮 check-runs)
+  → accept(make accept-up + agent 跑 FEATURE-A* + make accept-down 必跑) → archive → DONE
 ```
 
 任何 stage（含 staging-test / pr-ci / accept）失败入 `REVIEW_RUNNING`，verifier-agent 决策：
 - `pass` → 推下一 stage
-- `fix` + `fixer` → 起 dev / spec / manifest fixer，回 `REVIEW_RUNNING` 再判
+- `fix` + `fixer` → 起 dev / spec fixer，回 `REVIEW_RUNNING` 再判
 - `retry_checker` → 回 stage_running 重跑机械 checker
 - `escalate` → 终态 ESCALATED
 
@@ -69,12 +69,11 @@ sisyphus/
 │   │   ├── actions/          # 15 个 stage 推进动作
 │   │   ├── checkers/         # M1/M2/M3/M11 机械 checker
 │   │   ├── prompts/          # stage agent + verifier/* + _shared/
-│   │   ├── schemas/          # manifest.json schema (draft-07)
 │   │   ├── k8s_runner.py / bkd.py / watchdog.py / runner_gc.py
 │   │   └── store/            # req_state CAS / db pool / 各表写入
 │   └── migrations/           # 0001_init / 0002_views / 0003_artifact_checks / 0004_stage_runs / 0005_verifier_decisions
 ├── runner/                   # Dockerfile (Flutter) + go.Dockerfile + entrypoint.sh
-├── scripts/                  # validate-manifest.py + ACL/scenario lint 脚本（runner 镜像挂这些）
+├── scripts/                  # ACL/scenario lint 脚本（runner 镜像挂这些）
 ├── observability/
 │   ├── schema.sql / agent_quality.sql
 │   ├── queries/sisyphus/     # 13 条 Metabase SQL (Q1-Q13)
