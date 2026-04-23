@@ -10,92 +10,67 @@
 
 ─────────
 
-## 调试环境测试 (STAGING TEST)  v0.2
+## 调试环境测试 (STAGING TEST)  M15
 AGENT_ROLE=staging-test-agent
 REQ={{ req_id }}
-PARENT_ISSUE_ID={{ source_issue_id }}    # 上游 dev issue，只读
+PARENT_ISSUE_ID={{ source_issue_id }}
 
-你的职责：在调试环境（runner Pod）把 dev 推上来的代码**真跑一遍 lint + unit + integration test**。
-不跑线上 CI，只跑本地。目的是**小步快跑**：把容易修的 bug 提早截下来，不让它堆到 PR CI。
+你的职责：在 runner Pod 的 /workspace 执行 `make ci-test`，验收 dev 推上来的代码。
 
-失败的 bug 会打 `bug:pre-release` label，后续能用 GitHub label 统计"调试环境抓的 bug"。
+这是**机械自检**：无需分析根因，失败就报，bugfix 由另一个 agent 做。
 
 ---
 
 ## 步骤
 
-### Step 1: 起手自检
+### Step 1: 拉最新代码
+
+dev agent 已推过 branch。从上游分支 fetch 最新：
 
 ```bash
 POD=runner-{{ req_id | lower }}
 NS=sisyphus-runners
-kubectl -n $NS exec $POD -- validate-manifest.py   # 硬要求，不过就 fail 自己
+BRANCH={{ source_branch | default('feat/' + req_id) }}
+
+# 业务 repo 的 dev branch 已推，fetch + reset 到最新
+kubectl -n $NS exec $POD -- bash -c \
+  "cd /workspace && git fetch origin && git reset --hard origin/$BRANCH"
 ```
 
-### Step 2: 拉新代码
+### Step 2: 执行测试
 
-每个 source repo 的 dev 分支（dev-agent 刚推过）：
+M15 固定命令：`make ci-test`
 
 ```bash
-MANIFEST=/workspace/.sisyphus/manifest.yaml
-# 遍历 sources 把每个 repo 的分支 fetch + reset 到最新
-for repo_path in $(kubectl -n $NS exec $POD -- yq '.sources[].path' $MANIFEST); do
-  branch=$(kubectl -n $NS exec $POD -- yq ".sources[] | select(.path == \"$repo_path\") | .branch" $MANIFEST)
-  kubectl -n $NS exec $POD -- bash -c "cd /workspace/$repo_path && git fetch origin && git reset --hard origin/$branch"
-done
+kubectl -n $NS exec $POD -- bash -c \
+  "cd /workspace && make ci-test" \
+  2>&1 | tee staging-test.log
+EXIT_CODE=$?
 ```
 
-### Step 3: 每 source repo 跑 ci-lint / ci-unit-test / ci-integration-test
+### Step 3: 报告结果
 
-```bash
-for repo_path in $(kubectl -n $NS exec $POD -- yq '.sources[].path' $MANIFEST); do
-  for tgt in ci-lint ci-unit-test ci-integration-test; do
-    kubectl -n $NS exec $POD -- bash -c "cd /workspace/$repo_path && SISYPHUS_REQ_ID={{ req_id }} SISYPHUS_STAGE=staging-test make $tgt"
-    if [ $? -ne 0 ]; then FAIL_REPO=$repo_path; FAIL_TARGET=$tgt; break 2; fi
-  done
-done
-```
-
-记录每步的 exit_code / duration / stderr 尾 50 行。
-
-### Step 4: 给 dev-agent 留"pushed" 信息（如果还没有）
-
-manifest.yaml 的 `sha_by_repo` 和 `pr_by_repo` 正常应由 dev-agent 写。
-若 dev 漏写，你**补上**（还未开 PR 可跳过 pr_by_repo）：
-
-```bash
-kubectl -n $NS exec $POD -- bash -c '
-MANIFEST=/workspace/.sisyphus/manifest.yaml
-for repo_path in $(yq ".sources[].path" $MANIFEST); do
-  repo=$(yq ".sources[] | select(.path == \"$repo_path\") | .repo" $MANIFEST)
-  sha=$(cd /workspace/$repo_path && git rev-parse --short HEAD)
-  yq -i ".sha_by_repo.\"$repo\" = \"$sha\"" $MANIFEST
-done
-'
-```
-
-### Step 5: 写结果
+在本 issue 用 `mcp__bkd__follow-up-issue` 追加结果：
 
 ```markdown
 ## Staging Test Result
-- pass/fail per repo per target
-- 失败的 stderr 尾 50 行
-- 每个 repo 的 current sha
+
+**Exit Code**: $EXIT_CODE
+**Duration**: [计算]
+**Stderr Tail** (last 100 lines if failed):
+[stderr 尾部]
 ```
 
-用 `mcp__bkd__follow-up-issue` 追加到**本 issue** body。
+### Step 4: 给本 issue 贴 tag + move review
 
-### Step 6: 给本 issue 贴 tag + move review
-
-- 全绿：tags = `[staging-test, {{ req_id }}, result:pass, parent-id:{{ source_issue_id }}]`
-- 任一红：tags = `[staging-test, {{ req_id }}, result:fail, parent-id:{{ source_issue_id }}, fail-target:<ci-lint|ci-unit-test|ci-integration-test>]`
-- status=review
+- ✅ 全绿（exit_code=0）：tags = `[staging-test, {{ req_id }}, result:pass]`, statusId=review
+- ❌ 失败：tags = `[staging-test, {{ req_id }}, result:fail]`, statusId=review
 
 ---
 
 ## 硬约束
 
-- **不能改 repo 代码**（pre-commit ACL 会拦 repo 里的 diff；manifest.yaml 可以写）
-- **不能 git push**（只读 + 测）
-- **不能 emit 伪造 pass**（失败就贴 result:fail，别抢活）
-- 失败时给诊断线索（哪条 make target 挂、stderr 尾 50 行），不分析根因 —— bugfix-agent 去分析
+- **不修改代码**：只读 + 测
+- **不补数据**：manifest 已删，无需 sha_by_repo
+- **失败就报**：不分析、不修 bug、不 escalate（下游 verifier-agent 处理）
+- **exit_code 是唯一真相**：0 = pass，非0 = fail
