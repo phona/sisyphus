@@ -35,7 +35,8 @@ log = structlog.get_logger(__name__)
 
 _STAGE_FROM_TAGS = (
     "analyze",
-    "contract-spec", "acceptance-spec",
+    # M16 起新 issue 走 "spec"；保留 contract-spec/acceptance-spec 识别历史数据
+    "spec", "contract-spec", "acceptance-spec",
     "dev", "ci",
     "accept", "bugfix", "diagnose",
     "done-archive", "github-incident",

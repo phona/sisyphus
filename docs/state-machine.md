@@ -19,7 +19,7 @@
 |---|---|---|
 | `init` | 还没 analyze（intent_analyze 之前） | start |
 | `analyzing` | analyze-agent 在跑 | in-flight |
-| `specs-running` | contract + acceptance spec-agent 并行 | in-flight |
+| `specs-running` | spec-agent 跑（默认 1 个；analyze-agent 可自开多个并行） | in-flight |
 | `dev-running` | SPG gate 通过，dev-agent 写代码 + 开 PR | in-flight |
 | `staging-test-running` | 调试环境跑 unit + integration test（机械） | in-flight |
 | `pr-ci-running` | PR 已开，等 GHA 全套绿（机械） | in-flight |
@@ -39,7 +39,7 @@
 | `intent.analyze` | 人在 BKD 打 `intent:analyze` tag | start_analyze |
 | `analyze.done` | analyze-agent session.completed | fanout_specs |
 | `spec.done` | 单个 spec-agent session.completed | mark_spec_reviewed_and_check |
-| `spec.all-passed` | 聚合事件：N/N spec 都 reviewed | create_dev |
+| `spec.all-passed` | 聚合事件：tag=spec+REQ 的全部 issue ci-passed | fanout_dev |
 | `dev.done` | dev-agent session.completed | create_staging_test |
 | `staging-test.pass` | M1 checker 退码 0 | create_pr_ci_watch |
 | `staging-test.fail` | M1 checker 退码非 0 | invoke_verifier_for_staging_test_fail |

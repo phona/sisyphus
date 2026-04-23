@@ -11,7 +11,7 @@
 | 模板 | Stage | 由谁起 |
 |---|---|---|
 | [analyze.md.j2](../orchestrator/src/orchestrator/prompts/analyze.md.j2) | analyze | `actions/start_analyze.py` |
-| [spec.md.j2](../orchestrator/src/orchestrator/prompts/spec.md.j2) | contract-spec / acceptance-spec | `actions/fanout_specs.py` (×2 并行) |
+| [spec.md.j2](../orchestrator/src/orchestrator/prompts/spec.md.j2) | spec（一个 agent 写 contract + acceptance 两份） | `actions/fanout_specs.py`（1 个；analyze-agent 可按需加 spec 子 issue 并行） |
 | [dev.md.j2](../orchestrator/src/orchestrator/prompts/dev.md.j2) | dev | `actions/create_dev.py` |
 | [accept.md.j2](../orchestrator/src/orchestrator/prompts/accept.md.j2) | accept | `actions/create_accept.py` |
 | [done_archive.md.j2](../orchestrator/src/orchestrator/prompts/done_archive.md.j2) | archive | `actions/done_archive.py` |
@@ -55,7 +55,7 @@ router.py **只看 tag 不看 title**，title 仅供人看。详细 tag 命名�
 | stage agent | 必加 tag |
 |---|---|
 | analyze | `analyze`（spawn 时已带）+ `REQ-xx` |
-| spec (×2) | `contract-spec` 或 `acceptance-spec` + `REQ-xx` |
+| spec (1~N) | `spec` + `REQ-xx` |
 | dev | `dev` + `REQ-xx` + 在 issue description 写明 PR URL |
 | accept | `accept` + `result:pass` 或 `result:fail` + `REQ-xx` |
 | verifier | `verifier` + `verify:<stage>` + `trigger:<success\|fail>` + `decision:<urlsafe-base64-json>` |

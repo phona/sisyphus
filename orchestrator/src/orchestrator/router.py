@@ -20,7 +20,8 @@ from .state import Event
 log = __import__("structlog").get_logger(__name__)
 
 REQ_ID_RE = re.compile(r"^REQ-[\w-]+$")
-SPEC_TAGS = {"contract-spec", "acceptance-spec"}
+# M16：砍 spec 双 fanout，单 tag=spec；analyze-agent 想要多 spec 自己再开 issue
+SPEC_TAGS = {"spec"}
 # v0.2 新增：stage tag 用于区分 agent role
 # staging-test / pr-ci / accept 都走 result:* tag 判 pass/fail
 

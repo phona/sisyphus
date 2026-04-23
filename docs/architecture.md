@@ -44,8 +44,8 @@ happy path 七段，从 `intent:analyze` tag 一路自动到 `done`。
 flowchart TD
     Human[人在 BKD 打<br/>intent:analyze tag]
     Analyze[analyze-agent<br/>写 proposal/design/tasks<br/>+ 决定多少 dev agent]
-    Specs[contract-spec + acceptance-spec<br/>并行 spec-agent]
-    AdmissionS{admission:<br/>两 spec 都 reviewed?}
+    Specs[spec-agent (1~N 并行)<br/>写 contract + acceptance spec]
+    AdmissionS{admission:<br/>全部 spec issue ci-passed?}
     Dev[dev-agent (1~N 并行)<br/>开 PR 到 feat/REQ-x]
     Staging[staging-test checker<br/>kubectl exec runner<br/>cd source/leader && make ci-test]
     PRCI[pr-ci-watch checker<br/>GitHub REST 轮 check-runs<br/>按 feat/REQ-x 查 PR]
@@ -150,7 +150,7 @@ flowchart LR
 
     subgraph stages["stage / fixer agent (BKD agent)"]
         Analyze[analyze]
-        Spec[contract-spec<br/>acceptance-spec]
+        Spec[spec (1~N 并行)]
         Dev[dev (1~N 并行)]
         Accept[accept]
         Fixer[fixer:dev<br/>fixer:spec]
@@ -180,8 +180,8 @@ flowchart LR
 |---|---|---|---|
 | **sisyphus orchestrator** | 状态机 + 路由 + watchdog + GC + 指标采集 | Python, K8s Deployment | 不写业务代码、不审 PR 内容 |
 | **机械 checker** | 跑测试 / 轮 CI / 跑 accept-up/down | Python, runner pod 内 exec | 只看 exit code / API 返回 |
-| **analyze-agent** | 写 `proposal.md` / `design.md` / `tasks.md`（在 leader source repo 的 `openspec/changes/REQ-x/` 下）+ 决定要开几个 dev agent | BKD agent + analyze.md.j2 | 不写业务代码 |
-| **spec-agent (×2)** | 写 contract-spec / acceptance-spec | BKD agent + spec.md.j2 | 一个 LOCKED 之后另一个仍可改 |
+| **analyze-agent** | 写 `proposal.md` / `design.md` / `tasks.md`（在 leader source repo 的 `openspec/changes/REQ-x/` 下）+ **默认激进拆** spec / dev 子 issue 压 wall-clock | BKD agent + analyze.md.j2 | 不写业务代码 |
+| **spec-agent (1~N)** | 写 `contract-tests` + `acceptance-tests` 两块 spec 文档（默认 1 个 agent 一次写完；需要时 analyze-agent 可开多个并行） | BKD agent + spec.md.j2 | 不写业务代码、不改测试产物之外文件 |
 | **dev-agent (1~N)** | 实现业务代码 + push `feat/REQ-x` + **真开 PR** | BKD agent + dev.md.j2 | 测试 LOCKED 不可改 |
 | **verifier-agent** | 主观判 stage 是否真过（pass / fix / retry / escalate） | BKD agent + verifier/{stage}_{trigger}.md.j2 | 不写代码，只输出 decision JSON |
 | **fixer-agent** | 改一类东西：dev fixer 改业务码、spec fixer 改 spec | BKD agent + bugfix.md.j2（过渡） | scope 由 verifier 指定 |
@@ -193,7 +193,7 @@ flowchart LR
 | # | Stage | 触发 | 产物 / 副作用 | 推进信号 |
 |---|---|---|---|---|
 | 1 | **analyze** | `intent:analyze` tag | `openspec/changes/REQ-x/{proposal,design,tasks}.md` 在 leader source repo | session.completed + analyze tag |
-| 2 | **specs (×2 并行)** | analyze pass | `tests/contract/*` + `tests/acceptance/*` LOCKED | 两个 spec 都 reviewed → SPEC_ALL_PASSED |
+| 2 | **specs (1~N 并行)** | analyze pass | `tests/contract/*` + `tests/acceptance/*` LOCKED；默认 1 个 spec-agent 写完全部，analyze-agent 可按需拆多个并行 | 每个 spec session.completed → mark_spec_reviewed_and_check 聚合 → SPEC_ALL_PASSED |
 | 3 | **dev (1~N 并行)** | SPEC_ALL_PASSED | 业务代码 + push `feat/REQ-x` + 开 PR；按 tasks.md 拆任务可起 N 个 dev agent | 每个 dev session.completed → mark_dev_reviewed_and_check 聚合 → DEV_ALL_PASSED |
 | 4 | **staging-test** (机械) | DEV_ALL_PASSED | `cd /workspace/source/<leader> && make ci-test` 退码 0 / 1 | sisyphus 自己判，无 BKD agent |
 | 5 | **pr-ci-watch** (机械) | staging-test pass | GitHub REST 轮 PR check-runs（按 `feat/REQ-x` branch 查 PR）直至全绿 / 任一红 / 1800s 超时 | sisyphus 自己判 |
