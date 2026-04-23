@@ -101,7 +101,7 @@ class BKDMcpClient:
         title: str,
         tags: list[str],
         status_id: str = "todo",
-        use_worktree: bool = False,
+        use_worktree: bool = True,
     ) -> Issue:
         data = await self.call("create-issue", {
             "projectId": project_id,
