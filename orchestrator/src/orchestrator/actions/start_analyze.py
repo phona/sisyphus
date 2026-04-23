@@ -49,7 +49,7 @@ async def start_analyze(*, body, req_id, tags, ctx):
             title=f"[{req_id}] [ANALYZE]{short_title(ctx)}",
             tags=["analyze", req_id],
         )
-        prompt = render("analyze.md.j2", req_id=req_id)
+        prompt = render("analyze.md.j2", req_id=req_id, aissh_server_id=settings.aissh_server_id)
         await bkd.follow_up_issue(project_id=proj, issue_id=issue_id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue_id, status_id="working")
 

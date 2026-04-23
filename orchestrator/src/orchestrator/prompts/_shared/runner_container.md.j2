@@ -9,25 +9,28 @@ dev 启动前把 Pod 拉起好，你**不用**建 Pod，直接 `kubectl exec` �
 - PVC 生命周期：同 Pod；中途 Pod 重启（OOM / node 迁移）PVC 不动
 - 工具链：Go 1.23 + docker DinD + helm + kubectl + gh + openspec + /opt/sisyphus/scripts/
 
-### 所有命令都包成 kubectl exec
+### 所有 kubectl 命令必须通过 mcp__aissh-tao__exec_run（**关键**）
+
+⚠️ **你 (BKD agent) 跑在 Coder workspace，没装 kubectl，没 KUBECONFIG**。直接 `Bash kubectl ...` = `command not found`。
+
+vm-node04 上的所有 `kubectl` 命令**必须**经 aissh-tao MCP 跨过 SSH 跑：
+
+```
+mcp__aissh-tao__exec_run(
+  server_id="{{ aissh_server_id or '5b25f0cd-4fef-4a1f-a4c0-14ecf1395d84' }}",   # vm-node04
+  command="kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c 'YOUR_COMMAND'"
+)
+```
+
+把 `YOUR_COMMAND` 想成"你在 runner pod 里要跑的 shell"，包成 `kubectl exec runner -- bash -c '...'`，再交给 aissh-tao。
+
+下面所有出现 `kubectl -n $NS exec $POD ...` 的例子都是这个意思 —— **不要用 Bash 工具裸跑 kubectl**。
 
 ```bash
+# 假名变量（仅 reference，不要 Bash 跑）
 POD=runner-{{ req_id | lower }}
 NS=sisyphus-runners
-
-# 替代 "cd $WORKDIR && cmd"
-kubectl -n $NS exec $POD -- bash -c "cmd"
-
-# 传环境变量
-kubectl -n $NS exec $POD -- env FOO=bar bash -c "cmd"
 ```
-
-{% if aissh_server_id %}
-sisyphus 通过 aissh-tao MCP 给你运行 kubectl（vm-node04 上）：
-```
-mcp__aissh-tao__exec_run(server_id="{{ aissh_server_id }}", command="kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c '...'")
-```
-{% endif %}
 
 ### workspace 约定结构（**sisyphus 强约定**）
 
