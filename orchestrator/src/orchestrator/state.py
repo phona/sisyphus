@@ -108,14 +108,18 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
         Transition(ReqState.PR_CI_RUNNING, "create_pr_ci_watch", "staging 绿 → 开 PR 等 CI"),
 
     # M14c：fail 全部走 verifier，trigger=fail
+    # 每类 fail 都有专门 action —— stage 由 transition 写死，不从 webhook tags sniff
+    # （机械 checker 没自己 issue，tags 来自上游 dev issue，sniff 会错路）
     (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_FAIL):
-        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_fail", "staging fail → verifier"),
+        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_staging_test_fail",
+                   "staging fail → verifier"),
 
     (ReqState.PR_CI_RUNNING, Event.PR_CI_PASS):
         Transition(ReqState.ACCEPT_RUNNING, "create_accept", "CI 全绿 → 转测"),
 
     (ReqState.PR_CI_RUNNING, Event.PR_CI_FAIL):
-        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_fail", "pr-ci fail → verifier"),
+        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_pr_ci_fail",
+                   "pr-ci fail → verifier"),
 
     (ReqState.PR_CI_RUNNING, Event.PR_CI_TIMEOUT):
         Transition(ReqState.ESCALATED, "escalate", "PR CI 未触发（repo 可能没配模板）"),
@@ -137,7 +141,7 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
         Transition(ReqState.ARCHIVING, "done_archive", "teardown 完 → 归档"),
 
     (ReqState.ACCEPT_TEARING_DOWN, Event.TEARDOWN_DONE_FAIL):
-        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_fail",
+        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_accept_fail",
                    "accept fail + teardown 完 → verifier"),
 
     # ─── M14b verifier 子链 ─────────────────────────────────────────────

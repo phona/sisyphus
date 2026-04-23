@@ -455,8 +455,12 @@ async def test_start_fixer_defaults_to_dev(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_invoke_verifier_for_fail_infers_stage_from_tags(monkeypatch):
-    """M14c：staging-test fail webhook tag → verifier stage=staging_test。"""
+async def test_invoke_verifier_for_staging_test_fail(monkeypatch):
+    """B2：专门 handler 写死 stage=staging_test，不再从 tags sniff。
+
+    用上游 dev issue 的 tags 调（机械 checker 没自己 issue，webhook tags
+    就是 dev）—— 旧实现会按 tag 误路成 dev，新实现应稳定落 staging_test。
+    """
     from orchestrator.actions import _verifier as v
     fake = make_fake_bkd()
     fake.create_issue.return_value = FakeIssue(id="vfy-3")
@@ -467,10 +471,10 @@ async def test_invoke_verifier_for_fail_infers_stage_from_tags(monkeypatch):
     monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
     monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
 
-    out = await v.invoke_verifier_for_fail(
+    out = await v.invoke_verifier_for_staging_test_fail(
         body=make_body(project_id="proj-x"),
         req_id="REQ-9",
-        tags=["staging-test", "REQ-9", "result:fail"],
+        tags=["dev", "REQ-9"],
         ctx={},
     )
     assert out["stage"] == "staging_test"
@@ -482,11 +486,10 @@ async def test_invoke_verifier_for_fail_infers_stage_from_tags(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_invoke_verifier_for_fail_uses_ctx_stage(monkeypatch):
-    """M14c：teardown 等无 agent role tag 的场景 → ctx.verifier_stage 兜底。"""
+async def test_invoke_verifier_for_pr_ci_fail(monkeypatch):
     from orchestrator.actions import _verifier as v
     fake = make_fake_bkd()
-    fake.create_issue.return_value = FakeIssue(id="vfy-4")
+    fake.create_issue.return_value = FakeIssue(id="vfy-pr")
     patch_bkd(monkeypatch, fake)
 
     async def fake_update(pool, req_id, patch):
@@ -494,27 +497,42 @@ async def test_invoke_verifier_for_fail_uses_ctx_stage(monkeypatch):
     monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
     monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
 
-    out = await v.invoke_verifier_for_fail(
-        body=make_body(),
+    out = await v.invoke_verifier_for_pr_ci_fail(
+        body=make_body(project_id="proj-x"),
+        req_id="REQ-9",
+        tags=["dev", "REQ-9"],
+        ctx={},
+    )
+    assert out["stage"] == "pr_ci"
+    assert out["trigger"] == "fail"
+
+    _, kwargs = fake.create_issue.await_args
+    assert "verify:pr_ci" in kwargs["tags"]
+
+
+@pytest.mark.asyncio
+async def test_invoke_verifier_for_accept_fail(monkeypatch):
+    from orchestrator.actions import _verifier as v
+    fake = make_fake_bkd()
+    fake.create_issue.return_value = FakeIssue(id="vfy-ac")
+    patch_bkd(monkeypatch, fake)
+
+    async def fake_update(pool, req_id, patch):
+        pass
+    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+
+    out = await v.invoke_verifier_for_accept_fail(
+        body=make_body(project_id="proj-x"),
         req_id="REQ-9",
         tags=["watchdog:accept-tearing-down"],
-        ctx={"verifier_stage": "accept"},
+        ctx={},
     )
     assert out["stage"] == "accept"
     assert out["trigger"] == "fail"
 
-
-@pytest.mark.asyncio
-async def test_invoke_verifier_for_fail_unknown_stage_emits_escalate(monkeypatch):
-    """M14c：tag/ctx 都推不出 stage → emit VERIFY_ESCALATE。"""
-    from orchestrator.actions import _verifier as v
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
-
-    out = await v.invoke_verifier_for_fail(
-        body=make_body(), req_id="REQ-9", tags=["unrelated"], ctx={},
-    )
-    assert out["emit"] == Event.VERIFY_ESCALATE.value
-    assert "cannot infer" in out["reason"]
+    _, kwargs = fake.create_issue.await_args
+    assert "verify:accept" in kwargs["tags"]
 
 
 @pytest.mark.asyncio

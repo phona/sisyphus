@@ -42,15 +42,15 @@
 | `spec.all-passed` | 聚合事件：N/N spec 都 reviewed | create_dev |
 | `dev.done` | dev-agent session.completed | create_staging_test |
 | `staging-test.pass` | M1 checker 退码 0 | create_pr_ci_watch |
-| `staging-test.fail` | M1 checker 退码非 0 | invoke_verifier_for_fail |
+| `staging-test.fail` | M1 checker 退码非 0 | invoke_verifier_for_staging_test_fail |
 | `pr-ci.pass` | M2 checker 全绿 | create_accept |
-| `pr-ci.fail` | M2 checker 任一红 | invoke_verifier_for_fail |
+| `pr-ci.fail` | M2 checker 任一红 | invoke_verifier_for_pr_ci_fail |
 | `pr-ci.timeout` | M2 checker 超时 | escalate（PR repo 可能没配 CI） |
 | `accept-env-up.fail` | create_accept 内部 emit | escalate（lab 起不来） |
 | `accept.pass` | accept-agent 写 result:pass tag | teardown_accept_env |
 | `accept.fail` | accept-agent 写 result:fail tag | teardown_accept_env |
 | `teardown-done.pass` | 上一个是 accept.pass 的 teardown 完 | done_archive |
-| `teardown-done.fail` | 上一个是 accept.fail 的 teardown 完 | invoke_verifier_for_fail |
+| `teardown-done.fail` | 上一个是 accept.fail 的 teardown 完 | invoke_verifier_for_accept_fail |
 | `archive.done` | done_archive agent session.completed | （进入 done） |
 | `session.failed` | 任意 stage agent session 崩 / watchdog 超时 | escalate |
 | **`verify.pass`** | M14b verifier decision=pass | apply_verify_pass（手工 CAS 推进下一 stage） |
