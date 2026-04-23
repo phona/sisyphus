@@ -22,20 +22,26 @@ _TAIL = 2048
 
 
 def _build_cmd(req_id: str) -> str:
-    """遍历 /workspace/source/*/，对含 openspec/changes/<REQ>/ 的仓跑两项检查。
+    """遍历 /workspace/source/*/，先切到 feat/<REQ>，对含 openspec/changes/<REQ>/ 的仓跑两项检查。
 
-    1. openspec validate openspec/changes/<REQ>
-    2. check-scenario-refs.sh --specs-search-path /workspace/source .
+    1. git fetch origin feat/<REQ> + git checkout -B feat/<REQ> origin/feat/<REQ>
+       —— spec/dev 文件由 agent 推到 feat/<REQ> 分支，runner pod 默认在 main。
+       fetch 失败 / 没有该 branch → 该仓视为 not involved（agent 没改它），跳过不算 fail。
+    2. openspec validate openspec/changes/<REQ>
+    3. check-scenario-refs.sh --specs-search-path /workspace/source .
 
-    任一仓任一检查失败 → exit 1。check-scenario-refs.sh 的
-    --specs-search-path flag 支持跨仓 scenario 引用（Agent B 实现）。
+    任一仓任一检查失败 → exit 1。
     """
     return (
         "set -o pipefail; "
         "fail=0; "
         "for repo in /workspace/source/*/; do "
+        '  name=$(basename "$repo"); '
+        f'  if ! (cd "$repo" && git fetch origin "feat/{req_id}" 2>/dev/null && git checkout -B "feat/{req_id}" "origin/feat/{req_id}" 2>/dev/null); then '
+        '    echo "[skip] $name: no feat branch / not involved"; '
+        "    continue; "
+        "  fi; "
         f'  if [ -d "$repo/openspec/changes/{req_id}" ]; then '
-        '    name=$(basename "$repo"); '
         '    echo "=== spec_lint: $name ==="; '
         f'    if ! (cd "$repo" && openspec validate "openspec/changes/{req_id}"); then '
         '      echo "=== FAIL: $name ===" >&2; '
@@ -45,6 +51,8 @@ def _build_cmd(req_id: str) -> str:
         '      echo "=== FAIL scenario-refs: $name ===" >&2; '
         "      fail=1; "
         "    fi; "
+        "  else "
+        f'    echo "[skip] $name: no openspec/changes/{req_id}/"; '
         "  fi; "
         "done; "
         "exit $fail"
