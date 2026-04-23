@@ -29,9 +29,9 @@ session 结束 + move review 时，每个被改的 source repo 的 `feat/{{ req_
   - `specs/<capability>/contract.spec.yaml`（API 契约 / schema 等）
   - `specs/<capability>/spec.md` —— **必须用 openspec delta 格式**，示例：
 
-  > **M18 注意**：你**不写** `tests/contract/` —— 那是 challenger-agent 的活（spec_lint
+  > **M18 注意**：你**不写** `tests/integration/` —— 那是 challenger-agent 的活（spec_lint
   > 通过后 sisyphus 起 challenger 黑盒读 spec 自己写 contract test）。你只写 spec
-  > + 业务代码 + **unit test**（同包白盒测试）。tests/contract/ 留给 challenger。
+  > + 业务代码 + **unit test**（同包白盒测试）。tests/integration/ 留给 challenger。
 
     ```markdown
     ## ADDED Requirements
@@ -51,7 +51,9 @@ session 结束 + move review 时，每个被改的 source repo 的 `feat/{{ req_
     不能只写 `### [UBOX-S1]` 这种形式 —— check-scenario-refs.sh 的 `HEADING_PATTERN: ^##+ Scenario:`
     匹配不上 = 0 scenarios 定义 + 引用全失败）
 - ✅ 实际业务代码（cmd/、internal/、handlers、migrations 等）
-- ✅ unit test + integration test（`make ci-test` 在本仓 docker stack 通过）
+- ✅ unit test —— **如果业务仓有 `.claude/skills/unit-test/SKILL.md`，先读它跟模板，按仓约定写**；
+  没有则按 Go test 默认（`*_test.go` 同包）。**integration test 不是你的活**（M18 challenger 写）。
+- `make ci-test` 在本仓 docker stack 通过
 - ✅ feat 分支已 push 到 GitHub
 - ✅ PR 已开（标题、body 写清楚动机 + 测试方案）
 
