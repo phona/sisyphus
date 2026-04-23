@@ -16,8 +16,9 @@ REQ={{ req_id }}
 
 sisyphus 已把 runner Pod + PVC 拉起（你只读用它存 manifest + 跑自检）。
 你的**代码编辑 + 推送** 全部在**自己的 Coder workspace cwd** 里做，用你自己的
-`$GH_TOKEN`（Coder 里默认有写权限）。**不要**在 runner pod 里 git push 或 gh pr create
-—— runner 的 PAT 只读，不能 push。
+`$GH_TOKEN`（Coder 里默认有写权限）。runner 的 PAT 也是 admin（实测验证），但
+**约定**：写操作走自己 cwd（trust boundary 清晰），runner pod 仅用于读 manifest +
+sisyphus 自检 exec。
 
 你**只写代码**：不跑 lint，不跑测试，不 build。本地测试交给 staging-test-agent。
 
@@ -82,31 +83,60 @@ done
 
 ### Step 6: 开 PR（还是在你自己 cwd）
 
+**先验环境**（每一步**失败必 escalate**，不要静默 move review）：
+
 ```bash
+# 6.0 前置检查 — 任一失败 → 跳到 Step 7-fail 引人介入
+which gh || ESCALATE_REASON="gh CLI 未安装"
+gh auth status 2>&1 | grep -q "Logged in" || ESCALATE_REASON="gh 未登录或 token 失效"
+gh repo view phona/ubox-crosser --json viewerPermission -q .viewerPermission \
+  | grep -qE "ADMIN|MAINTAIN|WRITE" || ESCALATE_REASON="GH PAT 对 repo 无写权限"
+```
+
+```bash
+# 6.1 开 PR — 失败也 escalate
 for name in <每个有新 commit 的 repo>; do
   cd "./$name"
   branch=<对应 branch>
-  # 已开就拿 URL；没开就建
   pr_url=$(gh pr view "$branch" --json url -q .url 2>/dev/null) \
     || pr_url=$(gh pr create --title "[{{ req_id }}] dev" \
                              --body "auto PR; details in openspec/changes/{{ req_id }}/" \
-                             --base main --head "$branch" --fill)
-  sha=$(git rev-parse --short HEAD)
+                             --base main --head "$branch" --fill 2>&1) \
+    || ESCALATE_REASON="gh pr create 失败: $pr_url"
+  pr_number=$(echo "$pr_url" | grep -oP '/pull/\K\d+')
+  sha=$(git rev-parse HEAD)   # 完整 40 字符
 
-  # 回填 manifest（在 runner pod 里改）
+  # 回填 manifest 两份 schema（兼容老 pr_by_repo + 新 pr.{repo,number}）
   repo=<对应 repo 名>
   kubectl -n $NS exec $POD -- \
-    yq -i ".pr_by_repo.\"$repo\" = \"$pr_url\" | .sha_by_repo.\"$repo\" = \"$sha\"" \
+    yq -i ".pr_by_repo.\"$repo\" = \"$pr_url\" |
+           .sha_by_repo.\"$repo\" = \"$sha\" |
+           .pr.repo = \"$repo\" |
+           .pr.number = $pr_number" \
     /workspace/.sisyphus/manifest.yaml
   cd -
 done
 ```
 
-### Step 7: move review
+### Step 7-success: 全部 PR 开成功 → move review
 
 update-issue（对本 dev BKD issue）：
 - tags 保留 `[dev, {{ req_id }}]`
 - statusId=review
+
+### Step 7-fail: 任何关键步骤失败 → escalate 通知人
+
+**不要 silent move review** — sisyphus 会以为 dev 完事但 PR 不存在导致下游 pr-ci-watch 卡死。
+
+正确做法：
+1. 在本 issue chat 发**清楚的失败说明**：
+   ```
+   ❌ DEV 阶段无法完成 — 需要人工介入
+   原因：${ESCALATE_REASON}
+   建议：检查 runner 的 gh_token PAT 权限 / 登录状态 / repo 访问权
+   ```
+2. update-issue：tags 加 `escalate:dev-fail`，**保持 statusId=working**（让 sisyphus watchdog 看到没 transition）
+3. 不调 git push / pr create 的重试（环境问题人不动 retry 也不会过）
 
 ---
 
