@@ -27,7 +27,25 @@ session 结束 + move review 时，每个被改的 source repo 的 `feat/{{ req_
 - ✅ `openspec/changes/{{ req_id }}/` 完整：
   - `proposal.md`、`design.md`（如需）、`tasks.md`（**所有 checkbox 已勾**，反映真实做了的事）
   - `specs/<capability>/contract.spec.yaml`（API 契约 / schema 等）
-  - `specs/<capability>/spec.md`（acceptance scenarios，命名 `[<REPO>-S<N>]`）
+  - `specs/<capability>/spec.md` —— **必须用 openspec delta 格式**，示例：
+
+    ```markdown
+    ## ADDED Requirements
+
+    ### Requirement: The system SHALL expose /buildinfo returning git_sha/build_id/go_version
+
+    #### Scenario: UBOX-S1 returns 200 with three fields on bare GET
+    - **GIVEN** server started with BUILD_ID=dev
+    - **WHEN** client sends GET /buildinfo
+    - **THEN** response is 200 with JSON containing git_sha, build_id, go_version
+
+    #### Scenario: UBOX-S2 ...
+    ```
+
+    关键：顶部 `## ADDED Requirements`（或 MODIFIED/REMOVED/RENAMED）+ 每需求 `### Requirement: ...`
+    + 每 Scenario 用 `#### Scenario: <ID> <desc>` 开头（**`Scenario:` 这 9 个字符必须有**，
+    不能只写 `### [UBOX-S1]` 这种形式 —— check-scenario-refs.sh 的 `HEADING_PATTERN: ^##+ Scenario:`
+    匹配不上 = 0 scenarios 定义 + 引用全失败）
 - ✅ 实际业务代码（cmd/、internal/、handlers、migrations 等）
 - ✅ unit test + integration test（`make ci-test` 在本仓 docker stack 通过）
 - ✅ feat 分支已 push 到 GitHub

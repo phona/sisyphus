@@ -142,15 +142,24 @@ async def webhook(request: Request) -> JSONResponse:
         and body.event == "session.completed"
         and "verifier" in set(tags)
     ):
-        description = None
+        decision_source = None
         try:
             async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
-                issue = await bkd.get_issue(body.projectId, body.issueId)
-                description = issue.description
+                # BKD ≥0.0.65 的 issue 对象没 `description` 字段 —— verifier 的
+                # decision JSON 写在 session 最后一条 assistant-message 里，
+                # 从 /logs API 读。REST 客户端有 get_last_assistant_message；
+                # MCP 客户端（老路）fallback 到 issue.description（依然是 None）。
+                if hasattr(bkd, "get_last_assistant_message"):
+                    decision_source = await bkd.get_last_assistant_message(
+                        body.projectId, body.issueId,
+                    )
+                else:
+                    issue = await bkd.get_issue(body.projectId, body.issueId)
+                    decision_source = issue.description
         except Exception as e:
-            log.warning("webhook.verifier.fetch_desc_failed",
+            log.warning("webhook.verifier.fetch_decision_failed",
                         issue_id=body.issueId, error=str(e))
-        event, decision_payload, why = router_lib.derive_verifier_event(description, tags)
+        event, decision_payload, why = router_lib.derive_verifier_event(decision_source, tags)
         log.info("webhook.verifier.decision",
                  issue_id=body.issueId, verifier_event=event.value,
                  decision=decision_payload, reason=why)
