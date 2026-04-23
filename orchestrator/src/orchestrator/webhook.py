@@ -7,6 +7,8 @@ handler 内部按 body.event 字段分流。
 from __future__ import annotations
 
 import hmac
+import json
+import re
 from typing import Any
 
 import structlog
@@ -19,7 +21,7 @@ from . import observability as obs
 from . import router as router_lib
 from .bkd import BKDClient
 from .config import settings
-from .state import Event
+from .state import Event, ReqState
 from .store import db, dedup, req_state, verifier_decisions
 
 log = structlog.get_logger(__name__)
@@ -173,19 +175,29 @@ async def webhook(request: Request) -> JSONResponse:
         log.warning("webhook.no_req_id", tags=tags)
         return {"action": "skip", "reason": "no req_id resolvable"}
 
-    # ─── 5. fetch / init REQ state ─────────────────────────────────────────
+    # ─── 5. fetch / init REQ state（支持任意 state init via init:STATE tag）────────────────
     row = await req_state.get(pool, req_id)
+    init_state = None  # 默认 None，insert_init 会用 ReqState.INIT
     if row is None:
-        # 第一次见此 REQ — intent.analyze 才合法 init
-        if event != Event.INTENT_ANALYZE:
-            log.warning("webhook.req_not_init", req_id=req_id, evt=event.value)
-            return {"action": "skip", "reason": "REQ not initialized"}
+        # 支持通过 init:STATE tag 在任意状态初始化（中流注入其他工作流）
+        for tag in tags:
+            if tag.startswith("init:"):
+                state_str = tag[5:].lower()
+                try:
+                    init_state = ReqState(state_str)
+                    log.info("webhook.init_custom_state", req_id=req_id, state=state_str)
+                except ValueError:
+                    log.warning("webhook.init_invalid_state", req_id=req_id, state=state_str)
+                break
+
+        # 初始化 REQ（默认 INIT 或指定的自定义状态）
         await req_state.insert_init(
             pool, req_id, body.projectId,
             context={
                 "intent_issue_id": body.issueId,
-                "intent_title": (body.title or "").strip(),  # 下游 issue 标题带上
+                "intent_title": (body.title or "").strip(),
             },
+            state=init_state,
         )
         row = await req_state.get(pool, req_id)
         if row is None:
@@ -193,7 +205,36 @@ async def webhook(request: Request) -> JSONResponse:
     cur_state = row.state
     ctx = row.context
 
-    # ─── 5.5 verifier decision payload 落 ctx（start_fixer 等 action 读）──
+    # ─── 5.5 analyze-agent 输出信息提取到 ctx ────────────────────────────
+    if event is not None and event.value == "analyze.done":
+        try:
+            async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+                issue = await bkd.get_issue(body.projectId, body.issueId)
+                # 从 analyze issue description 最后的 json 代码块提取 leader_repo_path 等信息
+                # 格式：```json {"leader_repo_path": "..."} ```
+                description = issue.description or ""
+                blocks = re.findall(r"```json\s*(\{.*?\})\s*```", description, flags=re.DOTALL)
+                for blk in reversed(blocks):
+                    try:
+                        data = json.loads(blk)
+                        patch = {}
+                        if "leader_repo_path" in data:
+                            patch["leader_repo_path"] = data["leader_repo_path"]
+                        if "feature_repo_path" in data:
+                            patch["feature_repo_path"] = data["feature_repo_path"]
+                        if patch:
+                            await req_state.update_context(pool, req_id, patch)
+                            ctx = {**ctx, **patch}
+                            log.info("webhook.analyze.context_extracted",
+                                     req_id=req_id, keys=list(patch.keys()))
+                            break
+                    except Exception:
+                        continue
+        except Exception as e:
+            log.warning("webhook.analyze.context_extract_failed",
+                        req_id=req_id, error=str(e))
+
+    # ─── 5.6 verifier decision payload 落 ctx（start_fixer 等 action 读）──
     if decision_payload is not None:
         patch = {
             "verifier_fixer": decision_payload.get("fixer"),

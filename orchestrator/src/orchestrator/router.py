@@ -178,12 +178,6 @@ def derive_event(event_type: str, tags: Iterable[str], result_tags_only: bool = 
     if "done-archive" in tagset:
         return Event.ARCHIVE_DONE
 
-    if "dev" in tagset:
-        return Event.DEV_DONE
-
-    if any(t in tagset for t in SPEC_TAGS):
-        return Event.SPEC_DONE
-
     if "analyze" in tagset:
         return Event.ANALYZE_DONE
 

@@ -61,14 +61,12 @@ def register(name: str, *, idempotent: bool = False):
 from . import (  # noqa: E402,F401
     _verifier,
     create_accept,
+    create_dev_cross_check,
     create_pr_ci_watch,
+    create_spec_lint,
     create_staging_test,
     done_archive,
     escalate,
-    fanout_dev,
-    fanout_specs,
-    mark_dev_reviewed_and_check,
-    mark_spec_reviewed_and_check,
     start_analyze,
     teardown_accept_env,
 )

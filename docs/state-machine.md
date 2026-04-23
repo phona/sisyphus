@@ -13,14 +13,14 @@
 - **CAS 失败 = 并发抢同 REQ**：另一个 webhook 已推过 state，本次 skip。
 - **terminal state 只有 2 个**：`done`（archive 完）和 `escalated`（人介入 / lab 起不来 / verifier 投降）。
 
-## 2. ReqState 枚举（13 个）
+## 2. ReqState 枚举（15 个）
 
 | state | 含义 | 类型 |
 |---|---|---|
 | `init` | 还没 analyze（intent_analyze 之前） | start |
 | `analyzing` | analyze-agent 在跑 | in-flight |
-| `specs-running` | spec-agent 跑（默认 1 个；analyze-agent 可自开多个并行） | in-flight |
-| `dev-running` | SPG gate 通过，dev-agent 写代码 + 开 PR | in-flight |
+| `spec-lint-running` | **M15** 客观检查：openspec validate + check-scenario-refs.sh | in-flight |
+| `dev-cross-check-running` | **M15** 客观检查：业务 repo 自定义检查（编译 / 框架约束） | in-flight |
 | `staging-test-running` | 调试环境跑 unit + integration test（机械） | in-flight |
 | `pr-ci-running` | PR 已开，等 GHA 全套绿（机械） | in-flight |
 | `accept-running` | env-up 完，accept-agent 跑 FEATURE-A* | in-flight |
@@ -32,15 +32,17 @@
 | **`done`** | REQ 完成 | **terminal** |
 | **`escalated`** | 熔断 / session-failed / 人工止损 | **terminal** |
 
-## 3. Event 枚举（18 个）
+## 3. Event 枚举（22 个）
 
 | event | 来源 | 触发什么 |
 |---|---|---|
 | `intent.analyze` | 人在 BKD 打 `intent:analyze` tag | start_analyze |
-| `analyze.done` | analyze-agent session.completed | fanout_specs |
-| `spec.done` | 单个 spec-agent session.completed | mark_spec_reviewed_and_check |
-| `spec.all-passed` | 聚合事件：tag=spec+REQ 的全部 issue ci-passed | fanout_dev |
-| `dev.done` | dev-agent session.completed | create_staging_test |
+| `analyze.done` | analyze-agent session.completed | create_spec_lint |
+| **`spec-lint.pass`** | **M15** spec-lint checker 退码 0 | create_dev_cross_check |
+| **`spec-lint.fail`** | **M15** spec-lint checker 退码非 0 | invoke_verifier_for_spec_lint_fail |
+| **`dev-cross-check.pass`** | **M15** dev-cross-check checker 退码 0 | create_staging_test |
+| **`dev-cross-check.fail`** | **M15** dev-cross-check checker 退码非 0 | invoke_verifier_for_dev_cross_check_fail |
+| `dev.done` | dev-agent session.completed | （aggregated as DEV_ALL_PASSED） |
 | `staging-test.pass` | M1 checker 退码 0 | create_pr_ci_watch |
 | `staging-test.fail` | M1 checker 退码非 0 | invoke_verifier_for_staging_test_fail |
 | `pr-ci.pass` | M2 checker 全绿 | create_accept |
@@ -66,10 +68,12 @@ stateDiagram-v2
     [*] --> init
 
     init --> analyzing: intent.analyze
-    analyzing --> specs_running: analyze.done
-    specs_running --> specs_running: spec.done
-    specs_running --> dev_running: spec.all-passed
-    dev_running --> staging_test_running: dev.done
+    analyzing --> spec_lint_running: analyze.done
+    spec_lint_running --> dev_cross_check_running: spec-lint.pass
+    spec_lint_running --> review_running: spec-lint.fail
+    
+    dev_cross_check_running --> staging_test_running: dev-cross-check.pass
+    dev_cross_check_running --> review_running: dev-cross-check.fail
 
     staging_test_running --> pr_ci_running: staging-test.pass
     staging_test_running --> review_running: staging-test.fail
@@ -100,7 +104,7 @@ stateDiagram-v2
     escalated --> [*]
 ```
 
-> mermaid `stateDiagram-v2` 用 `_` 替 `-` 是因为 stateName 不允许 `-`。实际 enum 是 `staging-test-running` / `pr-ci-running` / `review-running` 等。
+> mermaid `stateDiagram-v2` 用 `_` 替 `-` 是因为 stateName 不允许 `-`。实际 enum 是 `spec-lint-running` / `dev-cross-check-running` / `staging-test-running` / `pr-ci-running` / `review-running` 等。
 
 ## 5. verifier 子链特殊性（M14b/c）
 

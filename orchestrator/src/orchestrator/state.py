@@ -1,16 +1,13 @@
-"""状态机：REQ 全生命周期 transition table（M14c：verifier 接管 fail 路径）。
+"""状态机：REQ 全生命周期 transition table（纯编排引擎，不执行工作）。
 
-M14c 变化：
-- 砍 BUGFIX_RUNNING / DIAGNOSE_RUNNING 子链（M5 的拆分）
-- staging-test / pr-ci / accept / teardown 失败事件全部路由到 REVIEW_RUNNING，
-  由 verifier-agent 主观判 pass / fix / retry_checker / escalate
-- BUGFIX_* / DIAGNOSE_* 事件全部砍掉
-
-保留自 v0.2 / M14b：
-- 加 STAGING_TEST_RUNNING：dev 之后 agent 在调试环境跑 unit + integration test
-- 加 PR_CI_RUNNING：PR 开了，等 GHA 全套（lint/unit/int/sonar/image-publish）全绿
-- 加 ACCEPT_TEARING_DOWN：accept 完成后必跑 env-down 清 lab，保证不漏资源
-- M14b verifier 子链：REVIEW_RUNNING + FIXER_RUNNING
+架构变化（通用编排引擎）：
+- 砍 SPECS_RUNNING / DEV_RUNNING：分别为并行 issue 聚合的 fanout 阶段
+- 砍 fanout_specs / fanout_dev / mark_spec_reviewed_and_check / mark_dev_reviewed_and_check
+- 砍 SPEC_DONE / SPEC_ALL_PASSED / DEV_DONE / DEV_ALL_PASSED 事件（动态聚合逻辑）
+- 加 SPEC_LINT_RUNNING / DEV_CROSS_CHECK_RUNNING：sisyphus 下发的客观 checker 任务
+- sisyphus 不执行工作，只根据 webhook 事件推进状态；所有工作由 BKD agent 或 runner pod 执行
+- 支持通过 init:STATE BKD tag 在任意状态初始化 REQ（中流注入其他工作流）
+- stage_runs / verifier_decisions 表驱动指标优化：高通过率的 stage 可砍掉
 
 设计要点：
 - ReqState 枚举每个 stage（"REQ 在哪一步"）
@@ -26,17 +23,17 @@ from enum import StrEnum
 
 
 class ReqState(StrEnum):
-    INIT = "init"                               # 还没 analyze
+    INIT = "init"                               # 还没 analyze / 待初始化
     ANALYZING = "analyzing"                     # analyze-agent 在跑
-    SPECS_RUNNING = "specs-running"             # contract + acceptance spec-agent
-    DEV_RUNNING = "dev-running"                 # SPG gate 通过，dev-agent 只写代码
+    SPEC_LINT_RUNNING = "spec-lint-running"     # openspec validate 检查（sisyphus 下发 runner 任务）
+    DEV_CROSS_CHECK_RUNNING = "dev-cross-check-running"  # 开发交叉验证（sisyphus 下发 runner 任务）
     STAGING_TEST_RUNNING = "staging-test-running"  # 调试环境 build + unit + int test
     PR_CI_RUNNING = "pr-ci-running"             # PR 已开，等 GHA 全套绿
     ACCEPT_RUNNING = "accept-running"           # env-up 完，accept-agent 跑 FEATURE-A*
     ACCEPT_TEARING_DOWN = "accept-tearing-down" # env-down 清 lab，后续按 accept_result 分流
     GH_INCIDENT_OPEN = "gh-incident-open"       # GitHub issue 已开，等人
     ARCHIVING = "archiving"                     # done-archive agent（合 PR 等）
-    # M14b：verifier-agent 框架
+    # verifier-agent 框架
     REVIEW_RUNNING = "review-running"           # verifier-agent 在跑（success / fail 两触发统一入口）
     FIXER_RUNNING = "fixer-running"             # verifier decision=fix → 起对应 fixer agent（dev/spec）
     DONE = "done"                               # REQ 完成
@@ -44,12 +41,12 @@ class ReqState(StrEnum):
 
 
 class Event(StrEnum):
-    INTENT_ANALYZE = "intent.analyze"               # 人在 BKD 打 intent:analyze tag
+    INTENT_ANALYZE = "intent.analyze"               # 人在 BKD 打 intent:analyze tag（旧入口，现支持 init:STATE）
     ANALYZE_DONE = "analyze.done"                   # analyze-agent 完成
-    SPEC_DONE = "spec.done"                         # 单个 spec-agent 完成
-    SPEC_ALL_PASSED = "spec.all-passed"             # 聚合事件：N/N ci-passed
-    DEV_DONE = "dev.done"                           # 单个 dev-agent push 完毕（并行时 N 次触发）
-    DEV_ALL_PASSED = "dev.all-passed"               # M14d：N/N dev agents ci-passed → 进 staging-test
+    SPEC_LINT_PASS = "spec-lint.pass"               # openspec validate 通过
+    SPEC_LINT_FAIL = "spec-lint.fail"               # openspec validate 失败 → verifier
+    DEV_CROSS_CHECK_PASS = "dev-cross-check.pass"   # 开发交叉验证通过
+    DEV_CROSS_CHECK_FAIL = "dev-cross-check.fail"   # 开发交叉验证失败 → verifier
     STAGING_TEST_PASS = "staging-test.pass"         # 调试环境测试全绿
     STAGING_TEST_FAIL = "staging-test.fail"         # 调试环境测试任一红 → verifier
     PR_CI_PASS = "pr-ci.pass"                       # GHA 全套绿（含 image-publish）
@@ -62,7 +59,7 @@ class Event(StrEnum):
     TEARDOWN_DONE_FAIL = "teardown-done.fail"       # env-down 完（上一个是 accept.fail）→ verifier
     ARCHIVE_DONE = "archive.done"
     SESSION_FAILED = "session.failed"
-    # M14b：verifier-agent 决策事件（webhook.py 从 verifier issue 的 decision JSON 派发）
+    # verifier-agent 决策事件（webhook.py 从 verifier issue 的 decision JSON 派发）
     VERIFY_PASS = "verify.pass"                     # decision.action = pass → 推下一 stage
     VERIFY_FIX_NEEDED = "verify.fix-needed"         # decision.action = fix → 起 fixer agent
     VERIFY_RETRY_CHECKER = "verify.retry-checker"   # decision.action = retry_checker → 重跑当前 checker
@@ -86,30 +83,27 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
         Transition(ReqState.ANALYZING, "start_analyze", "kick off"),
 
     (ReqState.ANALYZING, Event.ANALYZE_DONE):
-        Transition(ReqState.SPECS_RUNNING, "fanout_specs", "create 2 spec issues"),
+        Transition(ReqState.SPEC_LINT_RUNNING, "create_spec_lint", "下发 openspec validate 任务"),
 
-    (ReqState.SPECS_RUNNING, Event.SPEC_DONE):
-        Transition(ReqState.SPECS_RUNNING, "mark_spec_reviewed_and_check", "tag + maybe gate"),
+    (ReqState.SPEC_LINT_RUNNING, Event.SPEC_LINT_PASS):
+        Transition(ReqState.DEV_CROSS_CHECK_RUNNING, "create_dev_cross_check",
+                   "spec lint 通过 → 开发交叉验证"),
 
-    (ReqState.SPECS_RUNNING, Event.SPEC_ALL_PASSED):
-        Transition(ReqState.DEV_RUNNING, "fanout_dev",
-                   "SPG gate open → 单 dev agent（M15 砍 manifest 后退化）"),
+    (ReqState.SPEC_LINT_RUNNING, Event.SPEC_LINT_FAIL):
+        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_spec_lint_fail",
+                   "spec lint 失败 → verifier"),
 
-    # M14d：dev 阶段自循环 gate。单个 dev-agent 完 → 聚合 + 检查是否齐
-    (ReqState.DEV_RUNNING, Event.DEV_DONE):
-        Transition(ReqState.DEV_RUNNING, "mark_dev_reviewed_and_check",
-                   "dev agent 完 → 打 ci-passed + gate 聚合"),
-
-    (ReqState.DEV_RUNNING, Event.DEV_ALL_PASSED):
+    (ReqState.DEV_CROSS_CHECK_RUNNING, Event.DEV_CROSS_CHECK_PASS):
         Transition(ReqState.STAGING_TEST_RUNNING, "create_staging_test",
-                   "N/N dev ci-passed → 调试环境跑 unit+int"),
+                   "开发交叉验证通过 → 调试环境测试"),
+
+    (ReqState.DEV_CROSS_CHECK_RUNNING, Event.DEV_CROSS_CHECK_FAIL):
+        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_dev_cross_check_fail",
+                   "开发交叉验证失败 → verifier"),
 
     (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_PASS):
         Transition(ReqState.PR_CI_RUNNING, "create_pr_ci_watch", "staging 绿 → 开 PR 等 CI"),
 
-    # M14c：fail 全部走 verifier，trigger=fail
-    # 每类 fail 都有专门 action —— stage 由 transition 写死，不从 webhook tags sniff
-    # （机械 checker 没自己 issue，tags 来自上游 dev issue，sniff 会错路）
     (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_FAIL):
         Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_staging_test_fail",
                    "staging fail → verifier"),
@@ -124,8 +118,6 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     (ReqState.PR_CI_RUNNING, Event.PR_CI_TIMEOUT):
         Transition(ReqState.ESCALATED, "escalate", "PR CI 未触发（repo 可能没配模板）"),
 
-    # accept 进入前 sisyphus 内部跑 ci-accept-env-up（aissh kubectl exec）；如挂了
-    # 由 action 发 ACCEPT_ENV_UP_FAIL 直 escalate
     (ReqState.ACCEPT_RUNNING, Event.ACCEPT_ENV_UP_FAIL):
         Transition(ReqState.ESCALATED, "escalate", "lab env-up 起不来"),
 
@@ -144,7 +136,7 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
         Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_accept_fail",
                    "accept fail + teardown 完 → verifier"),
 
-    # ─── M14b verifier 子链 ─────────────────────────────────────────────
+    # ─── verifier 子链 ─────────────────────────────────────────────────
     # verifier-agent 完成 → webhook 解 decision JSON → emit 对应事件。
     # 注意：VERIFY_PASS 的目标 stage 由 ctx.verifier_stage 决定 —— transition 表无法静态表达
     # next_state 随 stage 变化，所以 apply_verify_pass action 内部手工 CAS 到对应 stage_running
@@ -163,7 +155,6 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
         Transition(ReqState.ESCALATED, "escalate",
                    "verifier decision=escalate 或 schema invalid"),
 
-    # fixer agent 完成 → 回 REVIEW_RUNNING 让 verifier 再判一次（pass / 再 fix）
     (ReqState.FIXER_RUNNING, Event.FIXER_DONE):
         Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_after_fix",
                    "fixer 完 → 再跑 verifier 复查"),
@@ -177,7 +168,7 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     **{
         (st, Event.SESSION_FAILED): Transition(ReqState.ESCALATED, "escalate", "agent session crashed")
         for st in [
-            ReqState.ANALYZING, ReqState.SPECS_RUNNING, ReqState.DEV_RUNNING,
+            ReqState.ANALYZING, ReqState.SPEC_LINT_RUNNING, ReqState.DEV_CROSS_CHECK_RUNNING,
             ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
             ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
             ReqState.REVIEW_RUNNING, ReqState.FIXER_RUNNING,

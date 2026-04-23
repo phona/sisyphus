@@ -1,7 +1,6 @@
 """state machine 推进器：抽离 webhook 里 decide+cas+dispatch 的循环。
 
-action handler 可以返回 {"emit": "<event-name>"} 触发链式推进
-（例如 mark_spec_reviewed_and_check 检测到 N/N 后 emit spec.all-passed → fanout_dev）。
+action handler 可以返回 {"emit": "<event-name>"} 触发链式推进。
 
 action handler 抛异常一律走 SESSION_FAILED → ESCALATED（M14c 砍掉 M9 的
 fail_kind/idempotent 自动重试，verifier 接管 fail 决策）。
@@ -30,25 +29,26 @@ _TERMINAL_STATES = {ReqState.DONE, ReqState.ESCALATED}
 
 
 # M14e/M15：state → stage 名（用于 stage_runs 表）。
-# 自循环 state（mark_*_reviewed_and_check 不切换 state）不重复开 run。
 _STATE_TO_STAGE: dict[ReqState, str] = {
-    ReqState.ANALYZING:           "analyze",
-    ReqState.SPECS_RUNNING:       "spec",
-    ReqState.DEV_RUNNING:         "dev",
-    ReqState.STAGING_TEST_RUNNING: "staging_test",
-    ReqState.PR_CI_RUNNING:       "pr_ci",
-    ReqState.ACCEPT_RUNNING:      "accept",
-    ReqState.ACCEPT_TEARING_DOWN: "accept_teardown",
-    ReqState.REVIEW_RUNNING:      "verifier",
-    ReqState.FIXER_RUNNING:       "fixer",
-    ReqState.ARCHIVING:           "archive",
+    ReqState.ANALYZING:              "analyze",
+    ReqState.SPEC_LINT_RUNNING:      "spec_lint",
+    ReqState.DEV_CROSS_CHECK_RUNNING: "dev_cross_check",
+    ReqState.STAGING_TEST_RUNNING:   "staging_test",
+    ReqState.PR_CI_RUNNING:          "pr_ci",
+    ReqState.ACCEPT_RUNNING:         "accept",
+    ReqState.ACCEPT_TEARING_DOWN:    "accept_teardown",
+    ReqState.REVIEW_RUNNING:         "verifier",
+    ReqState.FIXER_RUNNING:          "fixer",
+    ReqState.ARCHIVING:              "archive",
 }
 
 # event → stage_runs.outcome 标签。escalate / session.failed 全归 fail。
 _EVENT_TO_OUTCOME: dict[Event, str] = {
     Event.ANALYZE_DONE:         "pass",
-    Event.SPEC_ALL_PASSED:      "pass",
-    Event.DEV_ALL_PASSED:       "pass",
+    Event.SPEC_LINT_PASS:       "pass",
+    Event.SPEC_LINT_FAIL:       "fail",
+    Event.DEV_CROSS_CHECK_PASS: "pass",
+    Event.DEV_CROSS_CHECK_FAIL: "fail",
     Event.STAGING_TEST_PASS:    "pass",
     Event.STAGING_TEST_FAIL:    "fail",
     Event.PR_CI_PASS:           "pass",
