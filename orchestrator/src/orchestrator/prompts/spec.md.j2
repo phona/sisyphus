@@ -10,55 +10,68 @@
 
 ─────────
 
-## SPEC ({{ spec_stage }})
-AGENT_ROLE={{ spec_stage }}-agent
+## SPEC
+AGENT_ROLE=spec-agent
 REQ={{ req_id }}
 
-{% if spec_stage == "contract-spec" %}
-你是 **contract-spec-agent**，负责所有跨部件 LOCKED 约定的测试层。
+你是 **spec-agent**，负责本 REQ 的**全部**测试契约层产出：契约测试（跨部件 LOCKED 约定）
++ 验收测试（用户视角端到端）。M16 起 sisyphus 不再把 spec 硬分 contract / acceptance
+两个 agent —— 一个 agent 一次产出多份 spec 文档就行。
 
-**读**: openspec/changes/$REQ/proposal.md + design.md + tasks.md 的 `Stage: contract-tests` section。
+---
 
-**怎么写测试 —— 优先调用 repo 里的 skill，sisyphus 不重复定义实践**：
+## 产物
+
+所有文件放在 **leader source repo 的 `openspec/changes/{{ req_id }}/`** 下，
+dev 时会一起 push。按 proposal / design / tasks 的形态挑要写哪几种：
+
+| 类型 | 文件 | Scenario 命名 | 谁在后面跑 |
+|---|---|---|---|
+| **契约测试（LOCKED）** | `specs/<capability>/spec.md` ADDED 块 + `tests/contract/**` | `{{ req_id }}-S<N>` | staging-test checker |
+| **验收测试（LOCKED）** | `specs/<capability>/spec.md` ADDED 块（FEATURE-A<N> Given/When/Then） | `FEATURE-A<N>` | accept-agent |
+| **UI 契约** | `tests/ui/**` | `{{ req_id }}-S<N>` | staging-test checker |
+| **DB schema** | `migrations/*.sql` + 验证 SQL | — | staging-test checker |
+
+填 `tasks.md` 对应 section（`## Stage: contract-tests` / `## Stage: acceptance-tests`）
+的 TODO checkbox。
+
+---
+
+## 怎么写测试 —— 优先调用 repo 里的 skill
 
 容器内 `/workspace/.claude/skills/integration-test/SKILL.md` 是契约测试的标准做法
 （docker-compose 起真实 stack、env BASE_URL 注入、build tag `//go:build integration`、
-test-runner 单独容器等）。**所有 `tests/contract/*.go` 必须遵守这个 skill 的约定，
+test-runner 单独容器等）。**所有 `tests/contract/**` 必须遵守这个 skill 的约定，
 禁止 inline `httptest.NewServer` / 在测试文件里写 mock handler 自测自己**——
 那样既绕过 docker-compose 真实 stack，也让 ci-int "PASS" 失去意义（REQ-969 实证）。
 
-**步骤**：
+步骤：
+
 1. `kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- cat /workspace/.claude/skills/integration-test/SKILL.md` 读 skill
 2. `kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- cat /workspace/.claude/skills/integration-test/rules.md` 读细则
 3. 如有 `templates/` 用之
-4. **根据 proposal 的形态**挑一种或多种写：
-   - REST API → `contract.spec.yaml` (OpenAPI) + `tests/contract/*.go`（按 skill 写）
-   - UI 组件契约 → `tests/ui/*`
-   - DB schema → `migrations/*.sql` + 验证 SQL
-5. 测试要 RED：dev 实现前 `docker compose -f tests/docker-compose.yml up --build --exit-code-from test-runner` 必须 exit 非 0
+4. 测试要 RED：dev 实现前 `docker compose -f tests/docker-compose.yml up --build --exit-code-from test-runner` 必须 exit 非 0
 
-写 specs：`openspec/changes/$REQ/specs/<capability>/spec.md` 的 ADDED 块，
-Scenario 命名 `<REQ>-S<N>`（check-scenario-refs.sh 校验）。
+验收 spec（FEATURE-A*）如果需要可执行 e2e 脚本（非纯人工 QA），同样用容器内 skill 的
+docker-compose blackbox 做法，不要在测试文件里 inline mock。
 
-填 tasks.md 的 `## Stage: contract-tests` section（替换 TODO）。
+---
 
-**性质**：LOCKED。dev-agent 不得改 contract.spec.yaml / tests/contract/**。
-{% elif spec_stage == "acceptance-spec" %}
-你是 **acceptance-spec-agent**，负责用户视角端到端验收。
+## 多 spec agent 拆分（可选，跟 dev 对称）
 
-**产**：`openspec/changes/$REQ/specs/<capability>/spec.md` 的 ADDED 块，
-Scenario 命名 `FEATURE-A<N>`（Given/When/Then，**用户视角**）。
+默认一个 spec-agent 写全部 spec 文档。但如果 proposal 描述的契约**天然可并行**（例如
+REST API 契约 + 独立的 DB schema 契约互不依赖），可以通过 BKD REST 新开一个
+`tag=spec + {{ req_id }}` 的 issue + 自带 sub-scope 的 prompt，把一部分工作分出去。
+sisyphus 会自动聚合所有 tag=spec 的 issue，全部 ci-passed 才推进到 dev。
 
-如果验收场景需要可执行 e2e 脚本（非纯人工 QA），同样优先调用容器内
-`/workspace/.claude/skills/integration-test/SKILL.md` 的 docker-compose blackbox
-做法，不要在测试文件里 inline mock。
+拆的判断：**不同 spec 文档之间不互相引用 scenario/endpoint** → 可以拆；
+共享 state machine / schema / scenario ID 空间 → 不要拆。
 
-填 tasks.md 的 `## Stage: acceptance-tests` section。
+不拆也完全 OK —— 一个 agent 一次写完多份文档是默认路径，省去调度成本。
 
-**性质**：LOCKED。accept-agent 在验收阶段按这个跑。
-{% endif %}
+---
 
-## 写 spec：在你自己的 Coder cwd
+## 在你自己 cwd 写 spec
 
 不要在 runner pod 里改 leader repo 代码（runner PAT 只读，也不能 push）。流程：
 
@@ -66,11 +79,13 @@ Scenario 命名 `FEATURE-A<N>`（Given/When/Then，**用户视角**）。
 # 你自己 cwd
 gh repo clone <leader-repo-owner/name> ./leader-repo
 cd ./leader-repo
-git checkout -B {{ branch }} origin/main
-# ... 写 openspec/changes/{{ req_id }}/specs/... 和 tests/contract/ 或 tests/acceptance/ 下文件
+git checkout -B feat/{{ req_id }} origin/main
+# ... 写 openspec/changes/{{ req_id }}/specs/... 和 tests/contract/ + tests/acceptance/ 下文件
 ```
 
-（leader repo 信息在 BKD intent issue description；{{ branch }} 传参默认为 `feat/{{ req_id }}`）
+（leader repo 信息在 BKD intent issue description）
+
+---
 
 ## 完成前 lint（在本地 cwd 或 runner pod 都行，读 OK）
 
@@ -80,13 +95,26 @@ openspec validate openspec/changes/{{ req_id }}     # 本地跑
 ```
 
 或在 runner pod 跑（只读，不改东西）：
+
 ```bash
 kubectl -n $NS exec $POD -- bash -c "cd /workspace/source/$name && openspec validate openspec/changes/{{ req_id }}"
 ```
 
 spec 阶段**不跑** `make ci-*`（dev 还没实现，integration test 必红，空耗时间）。
 
+---
+
+## 性质
+
+产物 LOCKED：
+
+- dev-agent 不得改 `specs/**` / `tests/contract/**` / `tests/acceptance/**`
+- accept-agent 按 `FEATURE-A*` 跑，不得改 scenario
+
+---
+
 ## 完成时
-- **在你自己 cwd**：git add + commit + push 到 `$leader_branch`（用你 Coder 的 GH_TOKEN，有写权限）
-- update-issue tags 保留 {{ spec_stage }} + {{ req_id }}
+
+- **在你自己 cwd**：git add + commit + push 到 `feat/{{ req_id }}`（用你 Coder 的 GH_TOKEN，有写权限）
+- update-issue tags 保留 `spec` + `{{ req_id }}`
 - move review
