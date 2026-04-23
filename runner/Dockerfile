@@ -53,6 +53,7 @@ RUN pip3 install --break-system-packages pyyaml 2>/dev/null || pip3 install pyya
 COPY scripts/check-scenario-refs.sh \
      scripts/check-tasks-section-ownership.sh \
      scripts/pre-commit-acl.sh \
+     scripts/sisyphus-clone-repos.sh \
      scripts/validate-manifest.py \
      /opt/sisyphus/scripts/
 RUN chmod +x /opt/sisyphus/scripts/*.sh /opt/sisyphus/scripts/*.py
