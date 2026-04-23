@@ -112,7 +112,8 @@ git push origin master
 
 - ✋ 不拆：单仓 + 总改动 < 100 LOC + 无明显并行边界 → solo 自己写完
 - ✂️ 拆：多仓 / 多 capability / 测试可并行写 / 串行总耗时 > 20 min →
-  自己用 `mcp__bkd__create-issue`（或 BKD REST `POST /api/projects/{alias}/issues`）开 sub-issue
+  自己用 BKD REST `POST /api/projects/{alias}/issues` 开 sub-issue
+  （BKD 0.0.65 没 MCP 端点，必须 Bash + curl，详见 tools_whitelist.md.j2）
 
 #### 拆出去时的约定（轻）
 
@@ -120,7 +121,7 @@ git push origin master
 - 加 tag `parent:{{ req_id }}` 方便人追
 - **sisyphus 不会 track 这些 sub-issue**（router 没匹配 tag）—— 它们对 sisyphus 是黑盒
 - BKD 会在 sub-issue session 完成时给你 follow-up（如果有依赖关系），你也可以主动
-  `mcp__bkd__get-issue` 轮询；BKD 自己处理 sub-issue 等回的机制
+  `curl GET /api/projects/{alias}/issues/{id}` 轮询；BKD 自己处理 sub-issue 等回的机制
 
 ### B.3 实际写产物
 

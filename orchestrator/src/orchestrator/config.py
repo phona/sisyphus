@@ -114,6 +114,12 @@ class Settings(BaseSettings):
     # analyze fan out 的 sub-issue model 由 analyze prompt 自己控（见 analyze.md.j2）。
     agent_model: str | None = None
 
+    # ─── aissh-tao MCP server id (vm-node04) ─────────────────────────────
+    # BKD agent 跑在 Coder workspace 没装 kubectl，所有 vm-node04 上的 kubectl 命令
+    # 必须经 aissh-tao MCP 跨 SSH 跑。prompt 模板里需要这个 server_id 告诉 agent。
+    # vm-node04 默认 id 见 runner_container.md.j2 的 fallback。helm values 可覆盖。
+    aissh_server_id: str = "5b25f0cd-4fef-4a1f-a4c0-14ecf1395d84"
+
     # ─── M14b/M14c：verifier-agent 框架 ─────────────────────────────────
     # 每个 stage transition（成功 or 失败）先起一个 verifier-agent 做主观判断
     # （pass / fix / retry_checker / escalate），再由 webhook 路由推进状态机。

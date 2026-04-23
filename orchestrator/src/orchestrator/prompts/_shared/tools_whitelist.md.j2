@@ -1,9 +1,57 @@
 ## 工具白名单 (HARD CONSTRAINT — 第一优先级)
-**仅允许**调用以下 MCP 工具：
-- mcp__bkd__* (管 BKD issue 状态/tags/follow-up/get-issue)
-- mcp__aissh-tao__* (在 vm-node04 exec_run 命令、file_deploy)
+
+**仅允许**调用以下工具：
+
+- `mcp__aissh-tao__*` —— vm-node04 上 exec_run 命令、file_deploy 文件
+- `Bash` —— 跑 curl 调 BKD REST API（见下方）、跑本地 git/gh CLI 命令、跑本地 openspec 等
+- `Read` / `Write` / `Edit` / `Glob` / `Grep` —— agent 自己 cwd 的文件操作
 
 **绝对禁止**调用：
-- mcp__vibe_kanban__* / mcp__erpnext__* / Task / Agent / 其他未列出 MCP
+- `mcp__bkd__*` —— **BKD ≥0.0.65 没 MCP 端点**，全走 REST。调了必失败。
+- `mcp__vibe_kanban__*` / `mcp__erpnext__*` / `Task` / `Agent` / 其他未列出 MCP
 
 违反即视为任务失败。BKD session 日志会记录工具调用，审计会拦截越权调用。
+
+### 你的 BKD 上下文（已知，直接用）
+
+- **PROJECT** = `{{ project_alias or 'workflowtest' }}` （也可用 projectId `{{ project_id or 'illwkr1k' }}` 替代，二者等价）
+- **MY_ISSUE_ID** = `{{ issue_id or '<from-cwd>' }}`
+  - 如果上面是 `<from-cwd>`，从你 cwd 取：cwd 是 `/workspace/worktrees/<projectId>/<issueId>/`，basename 即 issueId
+
+> **REQ id ≠ BKD issue id**。
+> - REQ id（workflow 标识，比如 `REQ-final5-1776...`）= BKD issue 的一个 tag
+> - BKD issue id（数据库行 id，比如 `7m6atxpr`）= REST endpoint `/issues/{id}` 的 id
+> - PATCH / follow-up 接 `MY_ISSUE_ID`（BKD 行 id），不是 REQ id
+
+### BKD REST API 速查（用 Bash + curl）
+
+BKD 在 agent 所在 host 的 `localhost:3000`。**不用 token**（localhost 绕过 Coder 网关）。
+
+```bash
+PROJECT={{ project_alias or 'workflowtest' }}
+MY={{ issue_id or '$(basename $PWD)' }}    # 你自己 issue 的 BKD 行 id
+
+# 取 issue（看 tags / status / prompt）
+curl -sS http://localhost:3000/api/projects/$PROJECT/issues/$MY
+
+# 列 issues
+curl -sS "http://localhost:3000/api/projects/$PROJECT/issues?limit=50"
+
+# 创 sub-issue（fan out 用）
+curl -sS -X POST http://localhost:3000/api/projects/$PROJECT/issues \
+  -H 'content-type: application/json' \
+  -d '{"title":"...", "tags":[...], "statusId":"todo", "useWorktree":true, "engineType":"claude-code"}'
+
+# follow-up（追加 prompt 给 sub-agent，target_id 不是 $MY 而是 sub-issue 的 id）
+curl -sS -X POST http://localhost:3000/api/projects/$PROJECT/issues/<sub_issue_id>/follow-up \
+  -H 'content-type: application/json' -d '{"prompt":"..."}'
+
+# update 自己 issue（改 tags / status / title）—— **tags 是替换不是追加**
+curl -sS -X PATCH http://localhost:3000/api/projects/$PROJECT/issues/$MY \
+  -H 'content-type: application/json' \
+  -d '{"tags":["a","b","c"], "statusId":"review"}'
+
+# cancel session（force=true 才真停）
+curl -sS -X POST http://localhost:3000/api/projects/$PROJECT/issues/<id>/cancel \
+  -H 'content-type: application/json' -d '{"force":true}'
+```
