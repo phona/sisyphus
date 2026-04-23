@@ -149,12 +149,23 @@ async def invoke_verifier(
 
 # ─── action handlers ────────────────────────────────────────────────────
 
+def _stage_from_tags_or_ctx(tags: list[str] | None, ctx: dict | None) -> str | None:
+    """从触发本次 transition 的 issue tags 取 stage（verify:<stage>），fallback ctx。
+
+    多 verifier 并发时 ctx.verifier_stage 会被后来者覆盖，issue tag 是无歧义真相。
+    """
+    for t in (tags or []):
+        if t.startswith("verify:"):
+            return t.removeprefix("verify:")
+    return (ctx or {}).get("verifier_stage")
+
+
 @register("apply_verify_pass", idempotent=True)
 async def apply_verify_pass(*, body, req_id, tags, ctx):
-    """decision=pass：读 ctx.verifier_stage，手工 CAS REVIEW_RUNNING → stage_running，
-    链式 emit 该 stage 的 done/pass 事件（走原主链 transition，推进到下一 stage）。
+    """decision=pass：读 verifier issue 的 verify:<stage> tag，手工 CAS REVIEW_RUNNING
+    → stage_running，链式 emit 该 stage 的 done/pass 事件（走原主链 transition）。
     """
-    stage = (ctx or {}).get("verifier_stage")
+    stage = _stage_from_tags_or_ctx(tags, ctx)
     route = _PASS_ROUTING.get(stage) if stage else None
     if route is None:
         log.error("apply_verify_pass.unknown_stage", req_id=req_id, stage=stage)
@@ -184,7 +195,7 @@ async def apply_verify_retry_checker(*, body, req_id, tags, ctx):
     自己处理"当前在 stage_running 再触发一次 checker" 的语义（或通过 ctx flag）。
     本期先只把 state 回滚并落 ctx 标记，等真正接入时再完善。
     """
-    stage = (ctx or {}).get("verifier_stage")
+    stage = _stage_from_tags_or_ctx(tags, ctx)
     target = _RETRY_TARGET_STATE.get(stage) if stage else None
     if target is None:
         log.error("apply_verify_retry_checker.unknown_stage",
@@ -217,10 +228,20 @@ async def start_fixer(*, body, req_id, tags, ctx):
 
     ctx 里应有 verifier 之前写的 fixer / scope（webhook 解 decision 时存）。
     本期的 prompt 先用通用 bugfix 模板兜底，PR4 / 独立 PR 再做专用 fixer prompt。
+
+    stage 优先从当前 verifier issue 的 tags 取（`verify:<stage>`）—— 多 verifier 并发
+    时 ctx.verifier_stage 可能被后来者覆盖，从触发本次 transition 的 issue tag 直读
+    更稳。
     """
     proj = body.projectId
     ctx = ctx or {}
-    stage = ctx.get("verifier_stage")
+    stage = None
+    for t in (tags or []):
+        if t.startswith("verify:"):
+            stage = t.removeprefix("verify:")
+            break
+    if not stage:
+        stage = ctx.get("verifier_stage")
     fixer = ctx.get("verifier_fixer") or "dev"
     scope = ctx.get("verifier_scope") or ""
     reason = ctx.get("verifier_reason") or ""
@@ -270,9 +291,20 @@ async def start_fixer(*, body, req_id, tags, ctx):
 
 @register("invoke_verifier_after_fix", idempotent=False)
 async def invoke_verifier_after_fix(*, body, req_id, tags, ctx):
-    """fixer 完 → 再跑 verifier 一次（同 stage，trigger=success：fixer 已改过代码）。"""
+    """fixer 完 → 再跑 verifier 一次（同 stage，trigger=success：fixer 已改过代码）。
+
+    stage 必须从**当前 fixer issue 的 tags** 取（`parent-stage:<stage>`），不能依赖
+    ctx.verifier_stage —— 多 verifier 并发时 ctx 是最新一个的 stage，老 fixer 完成时
+    ctx 已被覆盖，会拿错 stage。fixer issue 自带 parent-stage tag 是无歧义的真相。
+    """
     ctx = ctx or {}
-    stage = ctx.get("verifier_stage") or "dev"
+    stage = None
+    for t in (tags or []):
+        if t.startswith("parent-stage:"):
+            stage = t.removeprefix("parent-stage:")
+            break
+    if not stage:
+        stage = ctx.get("verifier_stage") or "dev_cross_check"
     history = [
         *(ctx.get("verifier_history") or []),
         {
