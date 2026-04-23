@@ -52,7 +52,7 @@ class BKDRestClient:
         title: str,
         tags: list[str],
         status_id: str = "todo",
-        use_worktree: bool = False,
+        use_worktree: bool = True,
         engine_type: str | None = None,
         model: str | None = None,
     ) -> Issue:

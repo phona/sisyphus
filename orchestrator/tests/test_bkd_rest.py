@@ -68,7 +68,7 @@ async def test_create_issue_payload_shape(monkeypatch):
     assert captured["json"] == {
         "title": "Add /version",
         "statusId": "todo",
-        "useWorktree": False,
+        "useWorktree": True,
         "tags": ["intent:analyze", "REQ-1"],
     }
     assert issue.id == "new-1"
