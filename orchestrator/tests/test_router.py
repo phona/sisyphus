@@ -43,6 +43,11 @@ CASES: list[tuple[str, list[str], Event | None]] = [
     ("session.completed", ["diagnose", "REQ-1"],                             Event.BUGFIX_ENV_BUG),
     ("session.completed", ["done-archive", "REQ-1"],                         Event.ARCHIVE_DONE),
 
+    # M14b verifier-agent：由 router 主动返 None，交 webhook.derive_verifier_event 解 JSON
+    ("session.completed", ["verifier", "REQ-1", "verify:dev", "trigger:success"], None),
+    # M14b fixer-agent：完成后 FIXER_DONE
+    ("session.completed", ["fixer", "REQ-1", "fixer:dev"],                    Event.FIXER_DONE),
+
     # 没结果 tag → None（agent 没正常完成）
     ("session.completed", ["staging-test", "REQ-1"],                         None),
     ("session.completed", ["pr-ci", "REQ-1"],                                None),

@@ -1,0 +1,26 @@
+{% include "verifier/_header.md.j2" %}
+
+## 职责（pr_ci / success）
+pr-ci-watch checker 看到 PR 的 GHA 全套绿（lint / unit / int / sonar /
+image-publish），artifact 里有 check-runs 清单。
+
+你要判：**"全绿"是不是漏了该跑的检查**。
+
+### 关注点
+- check-runs 列表里有没有少关键项（比如漏跑了 sonar？漏跑了 image-publish？）
+- 各 job 的 duration / 产物 size 合理吗（构建 0 秒 = 缓存吃光？）
+- image tag 是否推到 ghcr 且带 REQ / sha 前缀
+
+### NOT 该做
+- 不自己再调 gh API —— checker 已拉过
+- 不动 PR 状态（merge 留给 archive 阶段）
+
+### 典型决策
+- `pass`：关键 check 全在、全绿、产物签出
+- `fix` + `fixer=manifest`：PR 模板没配全套检查（`.github/workflows/` 缺 job）
+  —— scope 其实是源仓库 CI 配置，这种 sisyphus 改不了，`escalate` 更合适
+- `escalate`：漏检查但无法自动补
+
+─────────
+
+{% include "verifier/_decision.md.j2" %}

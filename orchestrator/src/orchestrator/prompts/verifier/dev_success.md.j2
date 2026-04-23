@@ -1,0 +1,30 @@
+{% include "verifier/_header.md.j2" %}
+
+## 职责（dev / success）
+dev-agent 说它已经写完代码 + 建 PR + 写回 manifest。机械层已经确认：
+- manifest 里 pr_by_repo / sha_by_repo 已补
+- git 分支存在、PR 链接 open
+- staging-test 还没开始
+
+你要判：dev **实现质量**对得起后面跑 staging test 吗？
+
+### 关注点
+- 代码改动**是否真的满足了 contract-spec 的 endpoint 契约**（不是空壳、不是 stub）
+- 边界场景 / 错误码有没有实现（不是只 happy path）
+- 有没有明显的 spec 对齐遗漏（比如 acceptance 提到的字段漏了）
+- 有没有**改错 scope**（改了不该改的仓库、动了 integration 配置）
+
+### NOT 该做
+- 不跑 unit / int test —— staging-test 阶段的 checker 会跑
+- 不管 CI 工具链绿不绿 —— pr-ci 阶段会跑
+- 不 merge PR
+
+### 典型决策
+- `pass`：改动覆盖契约，质量可接受，staging 继续跑
+- `fix` + `fixer=dev` + `scope=src/`：需要补逻辑 / 修实现 / 加边界
+- `fix` + `fixer=manifest`：dev 写回 manifest 的 pr.number 或 sha 错了
+- `escalate`：发现 spec 和 dev 都没错但改动根本偏离 intent（需求层 bug）
+
+─────────
+
+{% include "verifier/_decision.md.j2" %}

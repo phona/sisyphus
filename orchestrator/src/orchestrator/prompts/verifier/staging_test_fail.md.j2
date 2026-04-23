@@ -1,0 +1,29 @@
+{% include "verifier/_header.md.j2" %}
+
+## 职责（staging_test / fail）
+staging-test checker 红了（exit_code != 0 或 timeout）。
+
+{% if stderr_tail %}
+### stderr 尾部
+```
+{{ stderr_tail }}
+```
+{% endif %}
+
+你要判：这失败是 **code bug / spec bug / env bug / flaky** 哪一类，以及能不能修。
+
+### 关注点
+- 失败 assert 是不是对着**新实现**（那就 `fix` + `fixer=dev`）
+- 失败 assert 是不是对着**老逻辑**但被新 spec 重新定义了（那 `fix` + `fixer=spec` 或 dev 看情况）
+- manifest 里 test_cmd 指的用例集合跟 REQ 根本不沾边 → `fix` + `fixer=manifest`
+- stderr 是 network / docker-pull / kubectl race → `retry_checker`
+- 失败栈指向 sisyphus runner 本身（kubectl permission / PVC 挂载）→ `escalate`
+
+### NOT 该做
+- 不 kubectl exec 重跑 test —— 让状态机触发 retry_checker
+- 不改代码
+- 不 cancel dev issue
+
+─────────
+
+{% include "verifier/_decision.md.j2" %}

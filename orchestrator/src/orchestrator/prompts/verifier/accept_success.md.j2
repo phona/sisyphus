@@ -1,0 +1,28 @@
+{% include "verifier/_header.md.j2" %}
+
+## 职责（accept / success）
+accept-agent 跑完 acceptance（FEATURE-A*），标记全 pass，artifact 里有每条 feature
+的 step 结果。env-down 还没跑。
+
+你要判：这些 pass 是**真达标**还是**被 agent 作弊 / 假装通过**。
+
+### 关注点
+- 每条 FEATURE-A* 是否真的跑过（时间戳 / step count 合理）
+- 有没有 agent 把 acceptance 里的 assert 改弱了（`then something happens` 这种）
+- Given 用的 fixture 是不是真的加载了（不是空库 pass all）
+- 日志里有没有"skip / pending / TODO" 字样
+
+### NOT 该做
+- 不跑 env-down —— 下一个 action 会跑
+- 不自己再跑 feature
+- 不 merge PR
+
+### 典型决策
+- `pass`：真的都跑了 + 结果 assert 严格 + 覆盖到 REQ
+- `fix` + `fixer=spec`：acceptance feature 文件有被降标（需要回 spec 阶段修）
+- `fix` + `fixer=dev`：feature 暴露出实际 bug（assert 对着新 bug）
+- `escalate`：明显过不去，且看不出是哪层的锅
+
+─────────
+
+{% include "verifier/_decision.md.j2" %}

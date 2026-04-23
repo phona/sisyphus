@@ -133,6 +133,28 @@ async def webhook(request: Request) -> JSONResponse:
 
     # ─── 3. derive event ────────────────────────────────────────────────────
     event = router_lib.derive_event(body.event, tags)
+
+    # M14b：verifier-agent session.completed → 解 decision JSON（tag 或 description）
+    # router.derive_event 对 `verifier` tag 主动返 None，交给这里 full parse。
+    decision_payload: dict | None = None
+    if (
+        event is None
+        and body.event == "session.completed"
+        and "verifier" in set(tags)
+    ):
+        description = None
+        try:
+            async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+                issue = await bkd.get_issue(body.projectId, body.issueId)
+                description = issue.description
+        except Exception as e:
+            log.warning("webhook.verifier.fetch_desc_failed",
+                        issue_id=body.issueId, error=str(e))
+        event, decision_payload, why = router_lib.derive_verifier_event(description, tags)
+        log.info("webhook.verifier.decision",
+                 issue_id=body.issueId, event=event.value,
+                 decision=decision_payload, reason=why)
+
     if event is None:
         log.debug("webhook.no_event_mapping", tags=tags, event_type=body.event)
         return {"action": "skip", "reason": "no event mapping"}
@@ -170,6 +192,17 @@ async def webhook(request: Request) -> JSONResponse:
             return {"action": "error", "reason": "init failed"}
     cur_state = row.state
     ctx = row.context
+
+    # ─── 5.5 verifier decision payload 落 ctx（start_fixer 等 action 读）──
+    if decision_payload is not None:
+        patch = {
+            "verifier_fixer": decision_payload.get("fixer"),
+            "verifier_scope": decision_payload.get("scope"),
+            "verifier_reason": decision_payload.get("reason"),
+            "verifier_confidence": decision_payload.get("confidence"),
+        }
+        await req_state.update_context(pool, req_id, patch)
+        ctx = {**ctx, **patch}
 
     # ─── 6. 推进状态机（engine 内部循环 emit）─────────────────────────────
     return await engine.step(

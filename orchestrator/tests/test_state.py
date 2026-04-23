@@ -33,6 +33,12 @@ EXPECTED = [
     (ReqState.DIAGNOSE_RUNNING,     Event.SPEC_REWORK,         ReqState.ESCALATED,           "escalate"),
     (ReqState.DIAGNOSE_RUNNING,     Event.BUGFIX_ENV_BUG,      ReqState.ESCALATED,           "escalate"),
     (ReqState.ARCHIVING,            Event.ARCHIVE_DONE,        ReqState.DONE,                None),
+    # M14b verifier 子链
+    (ReqState.REVIEW_RUNNING,       Event.VERIFY_PASS,         ReqState.REVIEW_RUNNING,      "apply_verify_pass"),
+    (ReqState.REVIEW_RUNNING,       Event.VERIFY_FIX_NEEDED,   ReqState.FIXER_RUNNING,       "start_fixer"),
+    (ReqState.REVIEW_RUNNING,       Event.VERIFY_RETRY_CHECKER, ReqState.REVIEW_RUNNING,     "apply_verify_retry_checker"),
+    (ReqState.REVIEW_RUNNING,       Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
+    (ReqState.FIXER_RUNNING,        Event.FIXER_DONE,          ReqState.REVIEW_RUNNING,      "invoke_verifier_after_fix"),
 ]
 
 
@@ -50,11 +56,30 @@ def test_session_failed_escalates_all_running_states():
         ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
         ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
         ReqState.BUGFIX_RUNNING, ReqState.DIAGNOSE_RUNNING,
+        # M14b：verifier / fixer running state 也必须 escalate
+        ReqState.REVIEW_RUNNING, ReqState.FIXER_RUNNING,
         ReqState.ARCHIVING,
     ]
     for st in running:
         t = decide(st, Event.SESSION_FAILED)
         assert t is not None and t.next_state == ReqState.ESCALATED, st
+
+
+def test_m14b_verifier_states_present():
+    """M14b：新引入的 REVIEW_RUNNING / FIXER_RUNNING 应出现在 ReqState 枚举。"""
+    values = {s.value for s in ReqState}
+    assert "review-running" in values
+    assert "fixer-running" in values
+
+
+def test_m14b_verifier_events_present():
+    """M14b：新 events 全部定义。"""
+    values = {e.value for e in Event}
+    for ev in [
+        "verify.pass", "verify.fix-needed", "verify.retry-checker",
+        "verify.escalate", "fixer.done",
+    ]:
+        assert ev in values, f"M14b 缺 event: {ev}"
 
 
 def test_terminal_states_have_no_outgoing():

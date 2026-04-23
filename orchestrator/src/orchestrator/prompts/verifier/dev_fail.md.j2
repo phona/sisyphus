@@ -1,0 +1,25 @@
+{% include "verifier/_header.md.j2" %}
+
+## 职责（dev / fail）
+dev-agent 跑不下去（session failed / 超时 / 没建出 PR / manifest 写回失败）。
+
+{% if stderr_tail %}
+### 失败栈尾
+```
+{{ stderr_tail }}
+```
+{% endif %}
+
+### 关注点
+- 编译 / build 错，改 src 能修 → `fix` + `fixer=dev`
+- spec 对不上实现（dev 卡住说"contract 这条实现不了"）→ `fix` + `fixer=spec`
+- gh CLI / ghcr / PR 创建失败（token、permission）→ `escalate`（环境层）
+- LLM 抽风空输出 → `retry_checker`（让 dev 阶段自己再起一次）
+
+### NOT 该做
+- 不帮 dev 改代码
+- 不自己建 PR
+
+─────────
+
+{% include "verifier/_decision.md.j2" %}
