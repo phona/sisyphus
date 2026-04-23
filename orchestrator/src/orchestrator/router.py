@@ -108,10 +108,30 @@ def extract_decision_from_issue(
                 break   # 继续试 description
     if not description:
         return None
+    # 优先：```json ... ``` 代码块（推荐）
     blocks = re.findall(r"```json\s*(\{.*?\})\s*```", description, flags=re.DOTALL)
     for blk in reversed(blocks):
         try:
             return json.loads(blk)
+        except Exception:
+            continue
+    # Fallback：纯 ``` ... ``` 无 lang 标的代码块（兼容 agent 漏写 json 标签）
+    blocks = re.findall(r"```\s*(\{.*?\})\s*```", description, flags=re.DOTALL)
+    for blk in reversed(blocks):
+        try:
+            data = json.loads(blk)
+            if isinstance(data, dict) and "action" in data:
+                return data
+        except Exception:
+            continue
+    # Fallback：扫所有 {...} 大括号块，找最后一个含 "action" 字段的合法 JSON
+    # （兼容 agent 用 markdown bullet/bold 没用 codeblock）
+    candidates = re.findall(r"\{[^{}]*\"action\"[^{}]*\}", description, flags=re.DOTALL)
+    for blk in reversed(candidates):
+        try:
+            data = json.loads(blk)
+            if isinstance(data, dict) and "action" in data:
+                return data
         except Exception:
             continue
     return None

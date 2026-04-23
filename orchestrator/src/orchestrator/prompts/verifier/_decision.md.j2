@@ -1,6 +1,15 @@
-## 输出格式（HARD CONSTRAINT）
+## 输出格式（HARD CONSTRAINT — 不写 JSON 块就 escalate）
 
-**本 issue 的 description 末尾必须追加**一块合法 JSON decision，且**只能追加一次**。
+**你最后一条 assistant message 必须包含**一块用 ``` ```json ... ``` ``` 包起来的合法
+JSON decision。sisyphus 通过 BKD `/logs` API 取你最后一条 assistant message，正则
+`r"```json\s*(\{.*?\})\s*```"` 匹配 JSON 块。
+
+> ⚠️ **不要只写人话总结**（"Verdict: fix / dev"）—— 那种没 JSON 块，sisyphus 解不到 →
+> 默认 escalate → 你的判断作废。
+
+> ⚠️ **不要把 JSON 写在 BKD issue description** —— BKD 没 description 字段，写了
+> sisyphus 也读不到。直接写在你最后一条 assistant message 里就行。
+
 结构如下，键和字面量严格匹配，多余字段忽略：
 
 ````json
@@ -31,6 +40,12 @@
   单仓 REQ 可省略；fixer 会用启发式自定位。**不填不会破坏 schema**——
   老的 `{action, fixer, scope, reason, confidence}` 五字段 decision 仍合法。
 
-sisyphus 会在本 issue 的 tags 里找 `decision:<base64>` 或从 description 抓最后一个
-```json ... ``` 代码块。两种都可以，推荐用 update-issue 加个 `decision:<base64>` tag
-（base64 对 JSON 字符串做 URL-safe 编码）更稳。
+sisyphus 解析顺序（实际工作的）：
+1. 先看 issue tags 有没有 `decision:<urlsafe-base64-json>` —— 你可以用 curl PATCH 加
+   这个 tag 当显式 marker
+2. 再看你最后一条 assistant message 里的 ```json ... ``` 代码块（**主路径**，比 tag 简单）
+
+任意一条命中即可。**最简单**：把 JSON 块写进你最后回复里就行。
+
+也建议另外加个 human-readable summary tag（如 `decision:fix-spec`、`decision:escalate`），
+方便人 review BKD UI 时一眼看判决（这种 tag 不影响 sisyphus 解析，纯 UX）。
