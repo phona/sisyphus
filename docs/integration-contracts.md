@@ -146,7 +146,7 @@ stage agent 完成时通过 BKD issue tag 报告结果。详见 [api-tag-managem
 | stage agent | tag |
 |---|---|
 | analyze | `analyze` |
-| spec (×2) | `contract-spec` 或 `acceptance-spec` |
+| spec (1~N) | `spec` + `REQ-x`（每个 spec issue 一个；并行时 N 个） |
 | dev (1~N) | `dev` + `REQ-x`（每个 dev issue 一个；并行时 N 个） |
 | accept | `accept` + `result:pass` 或 `result:fail` |
 | verifier | `verifier` + `decision:<base64-json>`（见 architecture.md §3） |
