@@ -78,3 +78,36 @@ async def update_stage_run(
         token_in,
         token_out,
     )
+
+
+async def close_latest_stage_run(
+    pool: asyncpg.Pool,
+    req_id: str,
+    stage: str,
+    *,
+    outcome: str,
+    fail_reason: str | None = None,
+) -> int | None:
+    """关闭 (req_id, stage) 最新一条 ended_at IS NULL 的 stage_run。
+
+    用于 engine 离开 *_RUNNING state 时自动收尾上一阶段，
+    不需要 caller 持有 run_id。返回被关闭的 id；没找到则返 None。
+    """
+    row = await pool.fetchrow(
+        """
+        UPDATE stage_runs SET
+            ended_at     = NOW(),
+            outcome      = $3,
+            fail_reason  = COALESCE($4, fail_reason),
+            duration_sec = EXTRACT(EPOCH FROM (NOW() - started_at))::real
+        WHERE id = (
+            SELECT id FROM stage_runs
+             WHERE req_id = $1 AND stage = $2 AND ended_at IS NULL
+             ORDER BY started_at DESC
+             LIMIT 1
+        )
+        RETURNING id
+        """,
+        req_id, stage, outcome, fail_reason,
+    )
+    return int(row["id"]) if row else None

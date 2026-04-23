@@ -23,3 +23,6 @@ Thumbs.db
 build/
 dist/
 *.tar.gz
+
+# Claude Code local worktrees / cache
+.claude/

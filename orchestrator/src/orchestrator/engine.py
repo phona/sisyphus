@@ -19,7 +19,7 @@ from . import k8s_runner
 from . import observability as obs
 from .actions import REGISTRY
 from .state import Event, ReqState, decide
-from .store import req_state
+from .store import req_state, stage_runs
 
 log = structlog.get_logger(__name__)
 
@@ -27,6 +27,84 @@ log = structlog.get_logger(__name__)
 # 进 terminal state 时立即清 runner（fire-and-forget；runner_gc 仍周期兜底）
 # escalated 保 PVC 给人工 debug，过期由 runner_gc 按 pvc_retain_on_escalate_days 清
 _TERMINAL_STATES = {ReqState.DONE, ReqState.ESCALATED}
+
+
+# M14e/M15：state → stage 名（用于 stage_runs 表）。
+# 自循环 state（mark_*_reviewed_and_check 不切换 state）不重复开 run。
+_STATE_TO_STAGE: dict[ReqState, str] = {
+    ReqState.ANALYZING:           "analyze",
+    ReqState.SPECS_RUNNING:       "spec",
+    ReqState.DEV_RUNNING:         "dev",
+    ReqState.STAGING_TEST_RUNNING: "staging_test",
+    ReqState.PR_CI_RUNNING:       "pr_ci",
+    ReqState.ACCEPT_RUNNING:      "accept",
+    ReqState.ACCEPT_TEARING_DOWN: "accept_teardown",
+    ReqState.REVIEW_RUNNING:      "verifier",
+    ReqState.FIXER_RUNNING:       "fixer",
+    ReqState.ARCHIVING:           "archive",
+}
+
+# event → stage_runs.outcome 标签。escalate / session.failed 全归 fail。
+_EVENT_TO_OUTCOME: dict[Event, str] = {
+    Event.ANALYZE_DONE:         "pass",
+    Event.SPEC_ALL_PASSED:      "pass",
+    Event.DEV_ALL_PASSED:       "pass",
+    Event.STAGING_TEST_PASS:    "pass",
+    Event.STAGING_TEST_FAIL:    "fail",
+    Event.PR_CI_PASS:           "pass",
+    Event.PR_CI_FAIL:           "fail",
+    Event.PR_CI_TIMEOUT:        "fail",
+    Event.ACCEPT_PASS:          "pass",
+    Event.ACCEPT_FAIL:          "fail",
+    Event.ACCEPT_ENV_UP_FAIL:   "fail",
+    Event.TEARDOWN_DONE_PASS:   "pass",
+    Event.TEARDOWN_DONE_FAIL:   "fail",
+    Event.ARCHIVE_DONE:         "pass",
+    Event.SESSION_FAILED:       "fail",
+    Event.VERIFY_PASS:          "pass",
+    Event.VERIFY_FIX_NEEDED:    "fix",
+    Event.VERIFY_RETRY_CHECKER: "retry",
+    Event.VERIFY_ESCALATE:      "escalate",
+    Event.FIXER_DONE:           "pass",
+}
+
+
+async def _record_stage_transitions(
+    pool: asyncpg.Pool,
+    *,
+    req_id: str,
+    cur_state: ReqState,
+    next_state: ReqState,
+    event: Event,
+) -> None:
+    """M14e/M15：CAS 成功后落 stage_runs。
+
+    - 离开 *_RUNNING（cur ≠ next）→ close 上条 run（按事件映射 outcome）
+    - 进入 *_RUNNING（cur ≠ next）→ open 新一条 run
+    - 自循环（mark_*_reviewed_and_check / apply_verify_pass 等）不动
+    任何错误只 log 不抛，避免拖垮主流程。
+    """
+    if cur_state == next_state:
+        return
+    try:
+        cur_stage = _STATE_TO_STAGE.get(cur_state)
+        if cur_stage:
+            outcome = _EVENT_TO_OUTCOME.get(event, "cancelled")
+            await stage_runs.close_latest_stage_run(
+                pool, req_id, cur_stage,
+                outcome=outcome,
+                fail_reason=event.value if outcome != "pass" else None,
+            )
+        next_stage = _STATE_TO_STAGE.get(next_state)
+        if next_stage:
+            await stage_runs.insert_stage_run(
+                pool, req_id, next_stage,
+                agent_type=next_stage,
+            )
+    except Exception as e:
+        log.warning("engine.stage_runs.write_failed",
+                    req_id=req_id, cur=cur_state.value, nxt=next_state.value,
+                    error=str(e))
 
 # 持引用防 fire-and-forget task 被 GC（done_callback 自清）
 _cleanup_tasks: set[asyncio.Task] = set()
@@ -91,6 +169,12 @@ async def step(
         to_state=transition.next_state.value,
         evt=event.value,
         action=transition.action,
+    )
+
+    # M14e：落 stage_runs（best-effort）
+    await _record_stage_transitions(
+        pool, req_id=req_id,
+        cur_state=cur_state, next_state=transition.next_state, event=event,
     )
 
     # M10：转 terminal state 时立即清 runner（fire-and-forget）
