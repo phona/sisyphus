@@ -29,6 +29,10 @@ session 结束 + move review 时，每个被改的 source repo 的 `feat/{{ req_
   - `specs/<capability>/contract.spec.yaml`（API 契约 / schema 等）
   - `specs/<capability>/spec.md` —— **必须用 openspec delta 格式**，示例：
 
+  > **M18 注意**：你**不写** `tests/integration/` —— 那是 challenger-agent 的活（spec_lint
+  > 通过后 sisyphus 起 challenger 黑盒读 spec 自己写 contract test）。你只写 spec
+  > + 业务代码 + **unit test**（同包白盒测试）。tests/integration/ 留给 challenger。
+
     ```markdown
     ## ADDED Requirements
 
