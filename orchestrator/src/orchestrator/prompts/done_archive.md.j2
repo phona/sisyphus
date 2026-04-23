@@ -10,14 +10,14 @@
 
 ─────────
 
-## 归档 (DONE ARCHIVE)  v0.2
+## 归档 (DONE ARCHIVE)  v0.2 / 多仓
 AGENT_ROLE=done-archive-agent
 REQ={{ req_id }}
 ACCEPT_ISSUE={{ accept_issue_id }}
 
 accept 通过。你现在要：
-1. 从 dev 阶段找出所有 PR，按影响顺序 merge
-2. 各 repo 归档 openspec changes → specs
+1. 从 dev 阶段找出**所有仓的所有 PR**，按影响顺序 merge
+2. **逐仓**归档 `openspec/changes/{{ req_id }}/` → `openspec/specs/`
 3. 写结果到本 issue
 
 **别动 runner Pod / PVC**，sisyphus 会自己清（ctrl-loop GC 或 admin 手动）。
@@ -28,8 +28,9 @@ accept 通过。你现在要：
 
 ### Step 1: 从 BKD issue 查出所有 dev task 的 PR
 
-sisyphus fanout_dev 为本 REQ 创建了 N 个 `tag=dev+{{ req_id }}` 的 BKD issue。
-查出这些 issue，从各自的 comment 里读 dev-agent 填的 PR 链接（格式：`owner/repo#PR`）。
+sisyphus fanout_dev 为本 REQ 创建了 N 个 `tag=dev+{{ req_id }}` 的 BKD issue
+（多仓 REQ 会更多——每仓至少 1 个）。查出这些 issue，从各自的 comment 里读
+dev-agent 填的 PR 链接（格式：`owner/repo#PR`）。
 
 ```bash
 # 伪代码：查 parent issue 的 related issues（tag=dev+{{ req_id }}）
@@ -43,44 +44,70 @@ gh issue view $bkd_issue --json body  # 确认本 REQ 的内容
 
 决定 merge 顺序：
 - 如果没有库间依赖，按任意顺序
-- 如果有依赖（比如库 A 依赖库 B），被依赖的先（B 先 merge）
+- 如果有依赖（比如 producer 仓提供 endpoint, consumer 仓调）：**producer 先 merge**
+- 多仓部署到同一环境：先 merge 不会破环境的（library / additive change），
+  后 merge breaking change
 
 ### Step 2: Merge 每个 PR（在你自己 cwd，用自己的 GH_TOKEN 有写权限）
 
 ```bash
 # 按上面决定的顺序
-for pr in "owner1/repo1#123" "owner2/repo2#456"; do
+for pr in "owner1/repo-a#123" "owner2/repo-b#456"; do
   gh pr merge "$pr" --squash --delete-branch --auto
 done
 ```
 
 `--auto` 会等分支保护要求的 check 全绿才 merge（如果 repo 配了保护）。
 
-### Step 3: leader repo openspec apply
+### Step 3: 每仓 openspec apply
 
-归档 `openspec/changes/{{ req_id }}/` → `openspec/specs/`（由 leader repo 管）。
-**在你自己 cwd 里跑**：
+**对每个有 `openspec/changes/{{ req_id }}/` 的仓**跑 `openspec apply`。
+这把该仓的 `openspec/changes/{{ req_id }}/specs/` 里的 ADDED / MODIFIED 块
+合并到 `openspec/specs/` 下，然后删掉 changes/{{ req_id }}/。
 
 ```bash
-# 从 dev-agent 或本 issue 的 comment 找出 leader repo，比如 owner/leader-repo
-leader="owner/leader-repo"
-gh repo clone "$leader" "./${leader##*/}-archive"
-cd "./${leader##*/}-archive"
-git fetch origin
-git checkout main
-git pull
-openspec apply {{ req_id }}
-# 会 commit "archive {{ req_id }}" 本地
-git push origin main    # 或发 follow-up PR，视 repo 分支保护
-cd -
+# 从 BKD intent issue description / dev-agent comment 列出涉及的所有仓
+repos="phona/repo-a phona/repo-b"  # 例
+
+for repo in $repos; do
+  name="${repo##*/}"
+  rm -rf "./$name-archive"
+  gh repo clone "$repo" "./$name-archive"
+  cd "./$name-archive"
+  git fetch origin && git checkout main && git pull
+  if [ -d openspec/changes/{{ req_id }} ]; then
+    openspec apply {{ req_id }}
+    git push origin main || echo "push 失败（分支保护？转 PR）"
+  else
+    echo "$repo 无 openspec/changes/{{ req_id }}，跳过"
+  fi
+  cd -
+done
 ```
+
+### Step 3b: spec home repo 的高层文档归档（弱 leader）
+
+跨仓 REQ 经常有"全 REQ 共享"的高层文档（proposal、design、跨仓集成总览）只放在
+**spec home repo**（看 BKD intent issue description 里 analyze-agent 写的
+"spec home repo: phona/xxx" 那一行）。这些文档随该仓 `openspec apply` 已经一起
+归档到 `openspec/specs/` —— Step 3 的循环已经覆盖。
+
+如果 BKD intent description 里**没有**指明 spec home repo：
+- 单仓 REQ：默认就是那一个仓
+- 多仓 REQ 没指明：往本 BKD issue 追加 follow-up 报"missing spec_home_repo"，
+  贴 `archive-fail` tag + move review，让人介入
 
 ### Step 4: 写结果到**本 issue**
 
 ```markdown
 ## Archive Result
-- merged: [repo1: owner/repo#PR, repo2: owner/repo#PR, ...]
-- openspec apply: commit sha
+- merged:
+  - phona/repo-a#123
+  - phona/repo-b#456
+- openspec apply:
+  - phona/repo-a: commit <sha>
+  - phona/repo-b: commit <sha>
+- spec home repo: phona/repo-a（高层文档归此仓）
 - (optional) any skipped
 ```
 
@@ -98,4 +125,5 @@ update-issue:
 
 1. **不要** `kubectl delete pod / pvc`：sisyphus 的 GC 会在 state=done 后清（保留 N 分钟给 admin 翻现场）
 2. merge 失败（比如 check 没过）→ 贴 `archive-fail` tag + move review，让人介入
-3. 所有 update-issue 的 issueId 必须是**本** issue（不是 ACCEPT_ISSUE）
+3. 任一仓 `openspec apply` 失败 → 同上 `archive-fail`，**不要硬强制 push**
+4. 所有 update-issue 的 issueId 必须是**本** issue（不是 ACCEPT_ISSUE）

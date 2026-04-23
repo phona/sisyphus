@@ -1,9 +1,11 @@
 {% include "verifier/_header.md.j2" %}
 
-## 职责（spec / fail）
-contract 或 acceptance spec-agent 红了（机械 ci 红 / session failed）。
+## 职责（spec_lint / fail）
+sisyphus 的机械 spec_lint checker 红了。它**遍历所有 source repo**——
+对每个有 `openspec/changes/{{ req_id }}/` 的仓跑 `openspec validate` +
+`check-scenario-refs.sh`，**任一仓**红整体红。
 
-你要判：是**spec 写错**还是**sisyphus 机械层 bug**。
+你要判：是**spec 写错**（哪个仓？）还是**sisyphus 机械层 bug**。
 
 {% if stderr_tail %}
 ### 失败栈尾
@@ -12,15 +14,28 @@ contract 或 acceptance spec-agent 红了（机械 ci 红 / session failed）。
 ```
 {% endif %}
 
+### 多仓识别（重要）
+
+stderr 里 sisyphus 用 `=== FAIL: <repo-basename> ===` 标记**哪个仓**挂了。
+找到后在 decision JSON 里**填 `target_repo`**（如 `phona/repo-a`），
+fixer 不用全仓盲扫。
+
+如果多仓同时红，挑**根因仓**填（一般是上游 contract 仓 / producer 仓）；
+其他仓的红可能是连带，fix 完 retry 自然消失。
+
 ### 关注点
-- schemathesis/lint 报的结构错（OpenAPI 字段类型 / enum / required 缺失）→ `fix` + `fixer=spec`
+- `openspec validate` 报 schema 结构错（字段类型 / enum / required 缺失）→ `fix` + `fixer=spec` + `target_repo=<挂的仓>`
+- `check-scenario-refs.sh` 报 scenario 引用不存在 → `fix` + `fixer=spec`，
+  仔细看是**该仓自己缺**还是**跨仓引用没用 `--specs-search-path` 找到** → 后者可能是
+  机械层 bug → `retry_checker`（让 checker 用对参数再跑）
 - acceptance Gherkin parse 错（语法 / 缺 step）→ `fix` + `fixer=spec`
-- sisyphus 自己的 ci 脚本抽风（路径 / 工具链不在）→ `retry_checker` 或 `escalate`
+- sisyphus 自己的 ci 脚本抽风（路径 / 工具链不在 / `/workspace/source/*` 空）→ `retry_checker` 或 `escalate`
 - 需求本身让 spec 写不出来 → `escalate`
 
 ### NOT 该做
 - 不动 source repo 业务代码
 - 不跑 dev 实现
+- 不亲自跑 `openspec validate`（已跑过；你只读结果）
 
 ─────────
 

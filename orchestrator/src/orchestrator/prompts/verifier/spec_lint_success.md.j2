@@ -1,27 +1,33 @@
 {% include "verifier/_header.md.j2" %}
 
-## 职责（spec / success）
-本 REQ 全部 `tag=spec` 的 agent 都已报 ci-passed（M16 后默认 1 个；analyze-agent 可能拆多个并行）。机械层已经确认：
-- OpenAPI spec `schemathesis` lint 通过
-- acceptance feature 文件 parse 成功
-- 契约与 source repo 对得上（没空 endpoint）
+## 职责（spec_lint / success）
+sisyphus 的机械 spec_lint checker 全绿。它**遍历所有 source repo**——
+对每个有 `openspec/changes/{{ req_id }}/` 的仓跑 `openspec validate` +
+`check-scenario-refs.sh`，**全部仓**通过。机械层确认：
+- 每仓 OpenAPI / spec 结构合法
+- 每仓 acceptance feature 文件 parse 成功
+- 跨仓 scenario 引用都能找到（用 `--specs-search-path`）
 
-你要判：spec 产物（contract + acceptance 两部分）**内容是否真的覆盖了 REQ 的意图**。
+你要判：spec 产物（contract + acceptance）**内容是否真的覆盖了 REQ 的意图**。
 
-### 关注点
-- OpenAPI endpoint 有没有把 intent 里提到的所有操作覆盖（CRUD / filter / pagination）
+### 关注点（多仓）
+- 涉及的**所有仓**都有该写的 spec —— 多仓 REQ 容易漏写其中一个仓
+- OpenAPI endpoint 把 intent 里提到的所有操作覆盖（CRUD / filter / pagination）
+- 跨仓 contract 在 producer 仓有定义、consumer 仓的 spec 引用对得上
 - acceptance 的每条 Given/When/Then 是否可机械 verify
 - 有没有漏掉错误场景 / 权限 / 边界值
 - contract 和 acceptance 是否自洽（acceptance 调的 endpoint 在 contract 里都存在）
+- scenario ID 命名空间正确（多仓 REQ 用 `[<REPO>-S<N>]` 不撞车）
 
 ### NOT 该做
-- 不跑 schemathesis / lint —— sisyphus 已跑
-- 不改 spec 本身；有问题就 `fix` + `fixer=spec`
+- 不跑 `openspec validate` —— sisyphus 已跑
+- 不改 spec 本身；有问题就 `fix` + `fixer=spec`（**填 `target_repo`** 指明哪仓要改）
 - 不去看 dev 代码（dev 还没开始）
 
 ### 典型决策
-- `pass`：contract + acceptance 覆盖到位、自洽、可机械 verify
-- `fix` + `fixer=spec` + `scope=openspec/changes/{{ req_id }}/`：需要补/改 spec
+- `pass`：所有仓 spec 覆盖到位、自洽、可机械 verify
+- `fix` + `fixer=spec` + `target_repo=<某仓>` + `scope=openspec/changes/{{ req_id }}/`：
+  指明哪仓要补/改 spec
 - `escalate`：需求本身表达就矛盾，spec 怎么写都不对
 
 ─────────

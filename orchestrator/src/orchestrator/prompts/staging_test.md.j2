@@ -10,43 +10,70 @@
 
 ─────────
 
-## 调试环境测试 (STAGING TEST)  M15
+## 调试环境测试 (STAGING TEST)  M15 / 多仓 / [LEGACY BKD-agent path]
 AGENT_ROLE=staging-test-agent
 REQ={{ req_id }}
 PARENT_ISSUE_ID={{ source_issue_id }}
 
-你的职责：在 runner Pod 的 /workspace 执行 `make ci-test`，验收 dev 推上来的代码。
+> **[LEGACY]** —— `settings.checker_staging_test_enabled=True` 时 sisyphus 自己跑
+> `checkers/staging_test.py`，**不会**起这个 BKD agent issue。仅在 flag=False
+> 兜底路径下用本 prompt（保持老行为不破）。
 
-这是**机械自检**：无需分析根因，失败就报，bugfix 由另一个 agent 做。
+你的职责：在 runner Pod 的 `/workspace/source/<repo>/` **逐仓**执行 `make ci-test`，
+验收 dev 推上来的代码。
+
+这是**机械自检**：无需分析根因，**任一仓**失败就报，bugfix 由另一个 agent 做。
 
 ---
 
 ## 步骤
 
-### Step 1: 拉最新代码
+### Step 1: 拉每个仓的最新代码
 
-dev agent 已推过 branch。从上游分支 fetch 最新：
+dev agent 已经把每仓代码 push 到该仓的 `feat/{{ req_id }}` 分支。逐仓 fetch + reset：
 
 ```bash
 POD=runner-{{ req_id | lower }}
 NS=sisyphus-runners
 BRANCH={{ source_branch | default('feat/' + req_id) }}
 
-# 业务 repo 的 dev branch 已推，fetch + reset 到最新
-kubectl -n $NS exec $POD -- bash -c \
-  "cd /workspace && git fetch origin && git reset --hard origin/$BRANCH"
+kubectl -n $NS exec $POD -- bash -c '
+for repo in /workspace/source/*; do
+  [ -d "$repo/.git" ] || continue
+  echo "=== fetch $(basename $repo) ==="
+  (cd "$repo" && git fetch origin && git reset --hard "origin/'"$BRANCH"'") || \
+    echo "WARN: $(basename $repo) 没 '"$BRANCH"' 分支，跳过 reset（可能本仓不参与本 REQ）"
+done
+'
 ```
 
-### Step 2: 执行测试
+### Step 2: 逐仓执行测试 + 聚合退码
 
-M15 固定命令：`make ci-test`
+任一仓退码非 0 → 整体 fail。**stderr 标记每仓 PASS / FAIL 让 verifier 容易看**：
 
 ```bash
-kubectl -n $NS exec $POD -- bash -c \
-  "cd /workspace && make ci-test" \
-  2>&1 | tee staging-test.log
-EXIT_CODE=$?
+kubectl -n $NS exec $POD -- bash -c '
+overall=0
+for repo in /workspace/source/*; do
+  [ -d "$repo" ] || continue
+  name=$(basename "$repo")
+  [ -f "$repo/Makefile" ] || { echo "=== SKIP: $name (no Makefile) ==="; continue; }
+  echo "=== START: $name ==="
+  if (cd "$repo" && make ci-test); then
+    echo "=== PASS: $name ==="
+  else
+    rc=$?
+    echo "=== FAIL: $name (exit=$rc) ===" >&2
+    overall=1
+  fi
+done
+exit $overall
+' 2>&1 | tee staging-test.log
+EXIT_CODE=${PIPESTATUS[0]}
 ```
+
+> 注：sisyphus 自己跑的 checker（flag=True 路径）会**并行**起每仓，避免串行
+> 30min × N 超 timeout。手动跑这里串行 OK，单仓也常用。
 
 ### Step 3: 报告结果
 
@@ -55,16 +82,19 @@ EXIT_CODE=$?
 ```markdown
 ## Staging Test Result
 
-**Exit Code**: $EXIT_CODE
+**Overall Exit Code**: $EXIT_CODE
+**Per-repo**:
+- repo-a: PASS / FAIL
+- repo-b: PASS / FAIL
 **Duration**: [计算]
-**Stderr Tail** (last 100 lines if failed):
+**Stderr Tail** (last 100 lines if any FAIL):
 [stderr 尾部]
 ```
 
 ### Step 4: 给本 issue 贴 tag + move review
 
 - ✅ 全绿（exit_code=0）：tags = `[staging-test, {{ req_id }}, result:pass]`, statusId=review
-- ❌ 失败：tags = `[staging-test, {{ req_id }}, result:fail]`, statusId=review
+- ❌ 任一仓失败：tags = `[staging-test, {{ req_id }}, result:fail]`, statusId=review
 
 ---
 
@@ -72,5 +102,5 @@ EXIT_CODE=$?
 
 - **不修改代码**：只读 + 测
 - **不补数据**：sisyphus 不维护任何 repo-level 元信息（M15 砍 manifest）
-- **失败就报**：不分析、不修 bug、不 escalate（下游 verifier-agent 处理）
-- **exit_code 是唯一真相**：0 = pass，非0 = fail
+- **任一仓失败就报**：不分析、不修 bug、不 escalate（下游 verifier-agent 处理）
+- **exit_code 是唯一真相**：聚合退码 0 = pass，非0 = fail
