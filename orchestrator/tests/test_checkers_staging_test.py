@@ -30,7 +30,7 @@ def _assert_for_each_repo_cmd(cmd: str) -> None:
     assert "ci-test:" in cmd  # grep Makefile target 过滤
     assert " & " in cmd  # 后台并行
     assert "wait $pid" in cmd
-    assert "exit $fail" in cmd
+    assert "[ $fail -eq 0 ]" in cmd  # 不能用 `exit $fail`：orch 包装的 exit-marker echo 不再跑
 
 
 # ── pass：验 cmd 是 for-each-repo 并行版 ─────────────────────────────────────

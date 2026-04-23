@@ -55,7 +55,7 @@ def _build_cmd(req_id: str) -> str:
         f'    echo "[skip] $name: no openspec/changes/{req_id}/"; '
         "  fi; "
         "done; "
-        "exit $fail"
+        "[ $fail -eq 0 ]"
     )
 
 
