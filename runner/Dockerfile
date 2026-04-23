@@ -46,17 +46,14 @@ ENV PATH="/usr/local/go/bin:/root/go/bin:$PATH" \
 # 退回 openspec 是 npm 上的占位空包，REQ-997 analyze 暴露的）
 RUN npm install -g @fission-ai/openspec@latest && openspec --version
 
-# ─── 4. sisyphus 合约脚本 + v0.2 manifest validator ──────────────────
+# ─── 4. sisyphus 合约脚本 ──────────────────
 # build context 必须是 sisyphus repo 根（CI workflow 已配 context: .）
-# validator 要 PyYAML
-RUN pip3 install --break-system-packages pyyaml 2>/dev/null || pip3 install pyyaml
 COPY scripts/check-scenario-refs.sh \
      scripts/check-tasks-section-ownership.sh \
      scripts/pre-commit-acl.sh \
      scripts/sisyphus-clone-repos.sh \
-     scripts/validate-manifest.py \
      /opt/sisyphus/scripts/
-RUN chmod +x /opt/sisyphus/scripts/*.sh /opt/sisyphus/scripts/*.py
+RUN chmod +x /opt/sisyphus/scripts/*.sh
 ENV PATH="/opt/sisyphus/scripts:$PATH"
 
 # ─── 5. DinD 入口 ─────────────────────────────────────────────────────────

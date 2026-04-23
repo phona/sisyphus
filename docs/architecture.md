@@ -299,10 +299,10 @@ stateDiagram-v2
 - `runner/go.Dockerfile` —— 精简 Go 镜像（~1GB）
 
 镜像内 `/opt/sisyphus/scripts/` 挂着合约脚本（M15 objective checkers 用）：
-- `check-scenario-refs.sh` —— spec-lint checker 用，验证 spec 中引用的场景名必须在 specs 中定义
+- `check-scenario-refs.sh` —— spec-lint checker 用，验证 spec 中引用的场景名必须在 specs 中定义；`--specs-search-path` flag 支持跨仓引用
 - `check-tasks-section-ownership.sh` —— 用于 dev-cross-check 或业务定制检查
 - `pre-commit-acl.sh` —— 用于 dev-cross-check 或业务定制检查
-- `validate-manifest.py` —— 用于 dev-cross-check 或业务定制检查
+- `sisyphus-clone-repos.sh` —— analyze agent 调用统一 clone 多仓 source repo 到 `/workspace/source/<basename>/`
 
 orchestrator 注入 env：
 
