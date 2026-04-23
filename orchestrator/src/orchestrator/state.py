@@ -1,18 +1,16 @@
-"""状态机：REQ 全生命周期 transition table（M5：bugfix 子链简化）。
+"""状态机：REQ 全生命周期 transition table（M14c：verifier 接管 fail 路径）。
 
-M5 变化：
-- 砍 test-fix + reviewer 双链（实测 agent_quality.first_pass 最差那俩，AI Review 标"过度设计"）
-- bugfix 完成回 staging-test 自验（M4 retry policy 在 counter 达阈值时 emit diagnose.needed）
-- 新增 DIAGNOSE_RUNNING：轻 agent 读 bugfix 历史 + 失败栈分流
-  - diagnosis:code-bug → BUGFIX_RETRY → 再起 dev-fix
-  - diagnosis:spec-bug → SPEC_REWORK → escalate（spec-fix agent 本期不做）
-  - diagnosis:env-bug  → BUGFIX_ENV_BUG → escalate（复用旧事件）
+M14c 变化：
+- 砍 BUGFIX_RUNNING / DIAGNOSE_RUNNING 子链（M5 的拆分）
+- staging-test / pr-ci / accept / teardown 失败事件全部路由到 REVIEW_RUNNING，
+  由 verifier-agent 主观判 pass / fix / retry_checker / escalate
+- BUGFIX_* / DIAGNOSE_* 事件全部砍掉
 
-保留自 v0.2：
+保留自 v0.2 / M14b：
 - 加 STAGING_TEST_RUNNING：dev 之后 agent 在调试环境跑 unit + integration test
 - 加 PR_CI_RUNNING：PR 开了，等 GHA 全套（lint/unit/int/sonar/image-publish）全绿
 - 加 ACCEPT_TEARING_DOWN：accept 完成后必跑 env-down 清 lab，保证不漏资源
-- paused：req_state 表上 BOOLEAN flag，不进状态机
+- M14b verifier 子链：REVIEW_RUNNING + FIXER_RUNNING
 
 设计要点：
 - ReqState 枚举每个 stage（"REQ 在哪一步"）
@@ -36,8 +34,6 @@ class ReqState(StrEnum):
     PR_CI_RUNNING = "pr-ci-running"             # PR 已开，等 GHA 全套绿
     ACCEPT_RUNNING = "accept-running"           # env-up 完，accept-agent 跑 FEATURE-A*
     ACCEPT_TEARING_DOWN = "accept-tearing-down" # env-down 清 lab，后续按 accept_result 分流
-    BUGFIX_RUNNING = "bugfix-running"           # bugfix round-N（单 dev-fix agent）
-    DIAGNOSE_RUNNING = "diagnose-running"       # bugfix 反复失败 → 轻 agent 分流
     GH_INCIDENT_OPEN = "gh-incident-open"       # GitHub issue 已开，等人
     ARCHIVING = "archiving"                     # done-archive agent（合 PR 等）
     # M14b：verifier-agent 框架
@@ -54,21 +50,15 @@ class Event(StrEnum):
     SPEC_ALL_PASSED = "spec.all-passed"             # 聚合事件：N/N ci-passed
     DEV_DONE = "dev.done"                           # dev-agent push 完毕
     STAGING_TEST_PASS = "staging-test.pass"         # 调试环境测试全绿
-    STAGING_TEST_FAIL = "staging-test.fail"         # 调试环境测试任一红 → bug:pre-release
+    STAGING_TEST_FAIL = "staging-test.fail"         # 调试环境测试任一红 → verifier
     PR_CI_PASS = "pr-ci.pass"                       # GHA 全套绿（含 image-publish）
-    PR_CI_FAIL = "pr-ci.fail"                       # GHA 任一红 → bug:ci
+    PR_CI_FAIL = "pr-ci.fail"                       # GHA 任一红 → verifier
     PR_CI_TIMEOUT = "pr-ci.timeout"                 # 没收到 CI 结果（可能 repo 没配）
     ACCEPT_ENV_UP_FAIL = "accept-env-up.fail"       # lab 起不来（内部事件，create_accept 发）
     ACCEPT_PASS = "accept.pass"                     # accept-agent 跑完 FEATURE-A* 全 pass
-    ACCEPT_FAIL = "accept.fail"                     # accept-agent 发现 bug → bug:post-release
+    ACCEPT_FAIL = "accept.fail"                     # accept-agent 发现 bug → verifier
     TEARDOWN_DONE_PASS = "teardown-done.pass"       # env-down 完（上一个是 accept.pass）
-    TEARDOWN_DONE_FAIL = "teardown-done.fail"       # env-down 完（上一个是 accept.fail）
-    BUGFIX_DONE = "bugfix.done"                     # dev-fix 改完 → 回 staging-test 重验
-    BUGFIX_SPEC_BUG = "bugfix.spec-bug"             # 老 bugfix prompt 自判 spec-bug → escalate
-    BUGFIX_ENV_BUG = "bugfix.env-bug"               # 老 bugfix prompt 自判 env-bug / 或 diagnose → escalate
-    DIAGNOSE_NEEDED = "diagnose.needed"             # M4 retry policy：round ≥ 阈值，上 diagnose agent
-    BUGFIX_RETRY = "bugfix.retry"                   # diagnose:code-bug → 再起 dev-fix
-    SPEC_REWORK = "spec.rework"                     # diagnose:spec-bug → escalate（spec-fix 本期不做）
+    TEARDOWN_DONE_FAIL = "teardown-done.fail"       # env-down 完（上一个是 accept.fail）→ verifier
     ARCHIVE_DONE = "archive.done"
     SESSION_FAILED = "session.failed"
     # M14b：verifier-agent 决策事件（webhook.py 从 verifier issue 的 decision JSON 派发）
@@ -110,14 +100,15 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_PASS):
         Transition(ReqState.PR_CI_RUNNING, "create_pr_ci_watch", "staging 绿 → 开 PR 等 CI"),
 
+    # M14c：fail 全部走 verifier，trigger=fail
     (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_FAIL):
-        Transition(ReqState.BUGFIX_RUNNING, "open_gh_and_bugfix", "bug:pre-release"),
+        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_fail", "staging fail → verifier"),
 
     (ReqState.PR_CI_RUNNING, Event.PR_CI_PASS):
         Transition(ReqState.ACCEPT_RUNNING, "create_accept", "CI 全绿 → 转测"),
 
     (ReqState.PR_CI_RUNNING, Event.PR_CI_FAIL):
-        Transition(ReqState.BUGFIX_RUNNING, "open_gh_and_bugfix", "bug:ci"),
+        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_fail", "pr-ci fail → verifier"),
 
     (ReqState.PR_CI_RUNNING, Event.PR_CI_TIMEOUT):
         Transition(ReqState.ESCALATED, "escalate", "PR CI 未触发（repo 可能没配模板）"),
@@ -133,41 +124,14 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
 
     (ReqState.ACCEPT_RUNNING, Event.ACCEPT_FAIL):
         Transition(ReqState.ACCEPT_TEARING_DOWN, "teardown_accept_env",
-                   "accept fail → 清 lab 再走 bugfix"),
+                   "accept fail → 清 lab 再走 verifier"),
 
     (ReqState.ACCEPT_TEARING_DOWN, Event.TEARDOWN_DONE_PASS):
         Transition(ReqState.ARCHIVING, "done_archive", "teardown 完 → 归档"),
 
     (ReqState.ACCEPT_TEARING_DOWN, Event.TEARDOWN_DONE_FAIL):
-        Transition(ReqState.BUGFIX_RUNNING, "open_gh_and_bugfix", "bug:post-release"),
-
-    # ─── bugfix 子链（M5 简化：单修 + 失败阈值触发 diagnose 分流）──────────
-    # bugfix 改完 → 回 staging-test 自验（不再 fanout test-fix + reviewer）
-    (ReqState.BUGFIX_RUNNING, Event.BUGFIX_DONE):
-        Transition(ReqState.STAGING_TEST_RUNNING, "create_staging_test",
-                   "bugfix 改完 → staging 重验"),
-
-    # 老 prompt 自判 spec-bug / env-bug 直 escalate（prompt 未改，保留路径）
-    (ReqState.BUGFIX_RUNNING, Event.BUGFIX_SPEC_BUG):
-        Transition(ReqState.ESCALATED, "escalate", "spec-bug needs human"),
-    (ReqState.BUGFIX_RUNNING, Event.BUGFIX_ENV_BUG):
-        Transition(ReqState.ESCALATED, "escalate", "env-bug needs sisyphus runner fix"),
-
-    # M4 retry policy：round ≥ 阈值时 emit diagnose.needed → 起 diagnose agent
-    (ReqState.BUGFIX_RUNNING, Event.DIAGNOSE_NEEDED):
-        Transition(ReqState.DIAGNOSE_RUNNING, "spawn_diagnose",
-                   "多次修复失败 → 上诊断 agent 分流"),
-
-    # diagnose 分流：
-    (ReqState.DIAGNOSE_RUNNING, Event.BUGFIX_RETRY):
-        Transition(ReqState.BUGFIX_RUNNING, "open_gh_and_bugfix",
-                   "diagnosis:code-bug → 再起 dev-fix"),
-    (ReqState.DIAGNOSE_RUNNING, Event.SPEC_REWORK):
-        Transition(ReqState.ESCALATED, "escalate",
-                   "diagnosis:spec-bug → escalate（spec-fix 本期不做）"),
-    (ReqState.DIAGNOSE_RUNNING, Event.BUGFIX_ENV_BUG):
-        Transition(ReqState.ESCALATED, "escalate",
-                   "diagnosis:env-bug / unknown → escalate"),
+        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_fail",
+                   "accept fail + teardown 完 → verifier"),
 
     # ─── M14b verifier 子链 ─────────────────────────────────────────────
     # verifier-agent 完成 → webhook 解 decision JSON → emit 对应事件。
@@ -205,7 +169,6 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
             ReqState.ANALYZING, ReqState.SPECS_RUNNING, ReqState.DEV_RUNNING,
             ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
             ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
-            ReqState.BUGFIX_RUNNING, ReqState.DIAGNOSE_RUNNING,
             ReqState.REVIEW_RUNNING, ReqState.FIXER_RUNNING,
             ReqState.ARCHIVING,
         ]

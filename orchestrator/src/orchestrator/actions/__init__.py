@@ -5,10 +5,9 @@
 
 webhook.py 根据 transition.action 名查表派发。
 
-M9：register 带 idempotent kwarg，engine.step 捕到 action 异常后用
-ACTION_META[name]["idempotent"] 决定是否重试（见 retry.policy.decide_action_fail）。
-非幂等 action（create_* 类：会重复建 BKD issue / GH PR）默认直接 escalate，
-不自动重试。
+`idempotent` 标记保留作为元数据（M14c 砍掉了 engine 自动重试，标记仅用于
+观测和未来 dispatcher 决策）。非幂等 action（create_* 类：会重复建 BKD issue
+/ GH PR）任何异常都直接走 escalate。
 """
 from __future__ import annotations
 
@@ -47,9 +46,9 @@ def register(name: str, *, idempotent: bool = False):
 
     idempotent=True 代表：重试该 handler 不会产生重复副作用
     （例如 ensure_runner 是 409-safe；mark_spec 只查询 + emit）。
-    M9 engine.step 异常路径只重试 idempotent=True 的 action。
 
-    默认 False（保守：创建新 BKD issue / GH PR 的 action 重试会重复建）。
+    M14c 砍掉了 engine 的自动重试，meta 仅作为观测信息保留；任何 action
+    抛异常都走 SESSION_FAILED → ESCALATED。
     """
     def deco(fn: ActionHandler) -> ActionHandler:
         REGISTRY[name] = fn
@@ -69,8 +68,6 @@ from . import (  # noqa: E402,F401
     escalate,
     fanout_specs,
     mark_spec_reviewed_and_check,
-    open_gh_and_bugfix,
-    spawn_diagnose,
     start_analyze,
     teardown_accept_env,
 )

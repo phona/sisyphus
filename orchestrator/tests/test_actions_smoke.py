@@ -210,50 +210,6 @@ def test_short_title_helper():
     assert len(out) < 30
 
 
-@pytest.mark.asyncio
-async def test_open_gh_and_bugfix_normal_round(monkeypatch):
-    from orchestrator.actions import open_gh_and_bugfix as mod
-    fake = make_fake_bkd()
-    # 已有 1 个 bugfix → 第 2 round
-    fake.list_issues.return_value = [
-        FakeIssue(id="bug-old", tags=["bugfix", "REQ-9", "round-1"]),
-    ]
-    fake.create_issue.side_effect = [FakeIssue(id="gh-1"), FakeIssue(id="bug-2")]
-    patch_bkd(monkeypatch, "open_gh_and_bugfix", fake)
-    patch_db(monkeypatch, "open_gh_and_bugfix")
-    body = make_body(issue_id="ci-int-1")
-    out = await mod.open_gh_and_bugfix(
-        body=body, req_id="REQ-9", tags=["ci", "REQ-9"], ctx={},
-    )
-    assert out["round"] == 2
-    assert out["circuit_broken"] is False
-    assert out["gh_issue_id"] == "gh-1"
-    assert out["bugfix_issue_id"] == "bug-2"
-    # 2 issue 创建（gh + bug）
-    assert fake.create_issue.await_count == 2
-
-
-@pytest.mark.asyncio
-async def test_open_gh_and_bugfix_circuit_break(monkeypatch):
-    from orchestrator.actions import open_gh_and_bugfix as mod
-    fake = make_fake_bkd()
-    # 已有 3 个 bugfix → round 4 触发熔断，只开 GH
-    fake.list_issues.return_value = [
-        FakeIssue(id=f"bug-{i}", tags=["bugfix", "REQ-9", f"round-{i}"]) for i in range(1, 4)
-    ]
-    fake.create_issue.return_value = FakeIssue(id="gh-only")
-    patch_bkd(monkeypatch, "open_gh_and_bugfix", fake)
-    patch_db(monkeypatch, "open_gh_and_bugfix")
-    body = make_body(issue_id="acc-1")
-    out = await mod.open_gh_and_bugfix(
-        body=body, req_id="REQ-9", tags=["accept", "REQ-9"], ctx={},
-    )
-    assert out["round"] == 4
-    assert out["circuit_broken"] is True
-    assert out["bugfix_issue_id"] is None
-    assert fake.create_issue.await_count == 1  # 只开 gh
-
-
 # ─── escalate ────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_escalate(monkeypatch):
@@ -269,7 +225,7 @@ async def test_escalate(monkeypatch):
     assert "intent-1" in args  # 标在 intent issue 上
 
 
-# ─── done_archive / spawn_diagnose (M5) ───────────────────────────────────
+# ─── done_archive ─────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_done_archive(monkeypatch):
     from orchestrator.actions import done_archive as mod
@@ -282,58 +238,6 @@ async def test_done_archive(monkeypatch):
         ctx={"accept_issue_id": "acc-1"},
     )
     assert out == {"archive_issue_id": "done-1"}
-
-
-@pytest.mark.asyncio
-async def test_spawn_diagnose_uses_round(monkeypatch):
-    """M5：多轮 bugfix 失败触发诊断，tag=diagnose + parent-id。"""
-    from orchestrator.actions import spawn_diagnose as mod
-    fake = make_fake_bkd()
-    fake.create_issue.return_value = FakeIssue(id="diag-1")
-    patch_bkd(monkeypatch, "spawn_diagnose", fake)
-    patch_db(monkeypatch, "spawn_diagnose")
-    out = await mod.spawn_diagnose(
-        body=make_body(issue_id="bug-3"), req_id="REQ-9", tags=["bugfix"],
-        ctx={"bugfix_round": 3},
-    )
-    assert out == {"diagnose_issue_id": "diag-1", "round": 3}
-    _, kwargs = fake.create_issue.await_args
-    assert "diagnose" in kwargs["tags"]
-    assert "REQ-9" in kwargs["tags"]
-    assert "parent-id:bug-3" in kwargs["tags"]
-    assert "DIAGNOSE after round-3" in kwargs["title"]
-    fake.follow_up_issue.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_spawn_diagnose_without_round(monkeypatch):
-    """M4 尚未填 ctx.bugfix_round 时，round 显 0（action 不抛）。"""
-    from orchestrator.actions import spawn_diagnose as mod
-    fake = make_fake_bkd()
-    fake.create_issue.return_value = FakeIssue(id="diag-2")
-    patch_bkd(monkeypatch, "spawn_diagnose", fake)
-    patch_db(monkeypatch, "spawn_diagnose")
-    out = await mod.spawn_diagnose(
-        body=make_body(issue_id="bug-x"), req_id="REQ-9", tags=["bugfix"], ctx={},
-    )
-    assert out == {"diagnose_issue_id": "diag-2", "round": 0}
-
-
-@pytest.mark.asyncio
-async def test_open_gh_and_bugfix_prefers_ctx_round(monkeypatch):
-    """ctx['bugfix_round']=N 时直接 N+1，不再扫 BKD list-issues（M4 后接入点）。"""
-    from orchestrator.actions import open_gh_and_bugfix as mod
-    fake = make_fake_bkd()
-    fake.create_issue.side_effect = [FakeIssue(id="gh-1"), FakeIssue(id="bug-3")]
-    patch_bkd(monkeypatch, "open_gh_and_bugfix", fake)
-    patch_db(monkeypatch, "open_gh_and_bugfix")
-    out = await mod.open_gh_and_bugfix(
-        body=make_body(issue_id="pr-ci-1"), req_id="REQ-9", tags=["ci"],
-        ctx={"bugfix_round": 2},
-    )
-    assert out["round"] == 3
-    # list_issues 不应被调用（ctx 提供了 round）
-    fake.list_issues.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -489,98 +393,11 @@ async def test_create_staging_test_checker_fail(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_staging_test_checker_fail_retry_enabled(monkeypatch):
-    """retry_enabled=True + checker fail → 调 retry.executor.run，不 emit staging-test.fail。"""
-    from orchestrator.actions import create_staging_test as mod
-    from orchestrator.checkers.staging_test import CheckResult
-
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.checker_staging_test_enabled", True)
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.retry_enabled", True)
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.skip_staging_test", False)
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.test_mode", False)
-
-    fake_result = CheckResult(passed=False, exit_code=1, stdout_tail="FAIL\n", stderr_tail="panic\n", duration_sec=2.0, cmd="cd /workspace/source/foo && make ci-unit-test")
-
-    async def fake_run_check(req_id):
-        return fake_result
-
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.checker.run_staging_test", fake_run_check)
-
-    async def fake_insert(pool, req_id, stage, result):
-        pass
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.artifact_checks.insert_check", fake_insert)
-    patch_db(monkeypatch, "create_staging_test")
-
-    retry_calls: list = []
-
-    async def fake_retry_run(rctx):
-        retry_calls.append(rctx)
-        return {"retry_action": "follow_up", "stage": rctx.stage, "round": 1}
-
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.retry_exec.run", fake_retry_run)
-
-    out = await mod.create_staging_test(
-        body=make_body(project_id="proj-x"),
-        req_id="REQ-9", tags=[], ctx={"dev_issue_id": "dev-1"},
-    )
-
-    assert len(retry_calls) == 1
-    rctx = retry_calls[0]
-    assert rctx.req_id == "REQ-9"
-    assert rctx.project_id == "proj-x"
-    assert rctx.stage == "staging-test"
-    assert rctx.fail_kind == "test"
-    assert rctx.issue_id == "dev-1"
-    assert rctx.details["exit_code"] == 1
-    assert "emit" not in out   # follow_up 不 emit；state 留在 STAGING_TEST_RUNNING
-    assert out["retry_action"] == "follow_up"
-
-
-@pytest.mark.asyncio
-async def test_create_staging_test_checker_pass_retry_enabled_resets_round(monkeypatch):
-    """retry_enabled=True + checker pass → 清 round 计数 + emit staging-test.pass。"""
-    from orchestrator.actions import create_staging_test as mod
-    from orchestrator.checkers.staging_test import CheckResult
-
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.checker_staging_test_enabled", True)
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.retry_enabled", True)
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.skip_staging_test", False)
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.test_mode", False)
-
-    fake_result = CheckResult(passed=True, exit_code=0, stdout_tail="ok\n", stderr_tail="", duration_sec=3.0, cmd="cd /workspace/source/foo && make ci-unit-test")
-
-    async def fake_run_check(req_id):
-        return fake_result
-
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.checker.run_staging_test", fake_run_check)
-
-    async def fake_insert(pool, req_id, stage, result):
-        pass
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.artifact_checks.insert_check", fake_insert)
-    patch_db(monkeypatch, "create_staging_test")
-
-    reset_calls: list = []
-
-    async def fake_reset(req_id, stage):
-        reset_calls.append((req_id, stage))
-
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.retry_exec.reset_stage", fake_reset)
-
-    out = await mod.create_staging_test(
-        body=make_body(), req_id="REQ-9", tags=[], ctx={},
-    )
-
-    assert out["emit"] == "staging-test.pass"
-    assert reset_calls == [("REQ-9", "staging-test")]
-
-
-@pytest.mark.asyncio
-async def test_create_staging_test_checker_timeout_retry_enabled_flaky(monkeypatch):
-    """retry_enabled=True + checker timeout → retry 走 flaky 分支。"""
+async def test_create_staging_test_checker_timeout(monkeypatch):
+    """M14c：checker timeout → emit staging-test.fail（让 verifier 判）。"""
     from orchestrator.actions import create_staging_test as mod
 
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.checker_staging_test_enabled", True)
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.retry_enabled", True)
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.skip_staging_test", False)
     monkeypatch.setattr("orchestrator.actions.create_staging_test.settings.test_mode", False)
 
@@ -590,21 +407,13 @@ async def test_create_staging_test_checker_timeout_retry_enabled_flaky(monkeypat
     monkeypatch.setattr("orchestrator.actions.create_staging_test.checker.run_staging_test", fake_run_check)
     patch_db(monkeypatch, "create_staging_test")
 
-    retry_calls: list = []
-
-    async def fake_retry_run(rctx):
-        retry_calls.append(rctx)
-        return {"retry_action": "skip_check_retry", "stage": rctx.stage, "round": 1, "hint": "retry"}
-
-    monkeypatch.setattr("orchestrator.actions.create_staging_test.retry_exec.run", fake_retry_run)
-
     out = await mod.create_staging_test(
         body=make_body(), req_id="REQ-9", tags=[], ctx={},
     )
 
-    assert len(retry_calls) == 1
-    assert retry_calls[0].fail_kind == "flaky"
-    assert out["retry_action"] == "skip_check_retry"
+    assert out["emit"] == "staging-test.fail"
+    assert out["passed"] is False
+    assert out["reason"] == "timeout"
 
 
 @pytest.mark.asyncio

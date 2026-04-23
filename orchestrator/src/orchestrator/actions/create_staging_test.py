@@ -1,14 +1,12 @@
-"""create_staging_test（v0.2 + M1 checker + M4 retry + M11 manifest-driven）：
+"""create_staging_test（v0.2 + M1 checker + M11 manifest-driven + M14c）：
 dev.done 后验 staging 测试。
 
 feature flag checker_staging_test_enabled:
   False（默认）: 创建 BKD agent issue（老路，保证老行为不破）
   True: sisyphus 自己在 runner pod 执行测试，根据退出码 emit STAGING_TEST_PASS/FAIL
 
-feature flag retry_enabled（仅 checker 路径生效）:
-  False（默认）: checker fail 直 emit STAGING_TEST_FAIL（老行为，进 bugfix 链）
-  True: checker fail 走 retry.executor 分级决策；follow_up/diagnose 不 emit fail，
-        状态留在 STAGING_TEST_RUNNING 等 dev agent 修完再触发重跑
+M14c：移除 retry_enabled 分支。checker fail 直 emit STAGING_TEST_FAIL，
+状态机会路由到 verifier 做主观判断。
 
 M11：test_cmd / cwd / timeout 不再硬编码，checker 自己从 PVC manifest.yaml 读。
 """
@@ -21,8 +19,6 @@ from ..checkers import manifest_io
 from ..checkers import staging_test as checker
 from ..config import settings
 from ..prompts import render
-from ..retry import executor as retry_exec
-from ..retry.executor import RetryContext
 from ..state import Event
 from ..store import artifact_checks, db, req_state
 from . import register, short_title
@@ -39,48 +35,47 @@ async def create_staging_test(*, body, req_id, tags, ctx):
         return rv
 
     if settings.checker_staging_test_enabled:
-        return await _run_checker(body=body, req_id=req_id, ctx=ctx or {})
+        return await _run_checker(req_id=req_id, ctx=ctx or {})
 
     return await _dispatch_bkd_agent(body=body, req_id=req_id, ctx=ctx)
 
 
 # ── 新路：sisyphus 自检 ────────────────────────────────────────────────────
 
-async def _run_checker(*, body, req_id: str, ctx: dict) -> dict:
+async def _run_checker(*, req_id: str, ctx: dict) -> dict:
     log.info("create_staging_test.checker_path", req_id=req_id)
 
     try:
         result = await checker.run_staging_test(req_id)
     except TimeoutError:
         log.error("create_staging_test.checker_timeout", req_id=req_id)
-        return await _handle_fail(
-            body=body, req_id=req_id, ctx=ctx,
-            fail_kind="flaky",   # timeout 归 flaky；不烦 agent，sisyphus 自己重跑
-            details={"reason": "timeout", "exit_code": -1},
-        )
+        return {
+            "emit": Event.STAGING_TEST_FAIL.value,
+            "passed": False,
+            "exit_code": -1,
+            "reason": "timeout",
+        }
     except manifest_io.ManifestReadError as e:
-        # 读 manifest 失败（PVC 挂了 / yaml 坏 / 缺字段）→ infra/flaky，给 retry 重跑一次
         log.error("create_staging_test.manifest_read_failed", req_id=req_id, error=str(e))
-        return await _handle_fail(
-            body=body, req_id=req_id, ctx=ctx,
-            fail_kind="flaky",
-            details={"reason": f"manifest read failed: {e}"[:200], "exit_code": -1},
-        )
+        return {
+            "emit": Event.STAGING_TEST_FAIL.value,
+            "passed": False,
+            "exit_code": -1,
+            "reason": f"manifest read failed: {e}"[:200],
+        }
     except Exception as e:
         log.exception("create_staging_test.checker_error", req_id=req_id, error=str(e))
-        return await _handle_fail(
-            body=body, req_id=req_id, ctx=ctx,
-            fail_kind="test",
-            details={"reason": str(e)[:200], "exit_code": -1},
-        )
+        return {
+            "emit": Event.STAGING_TEST_FAIL.value,
+            "passed": False,
+            "exit_code": -1,
+            "reason": str(e)[:200],
+        }
 
     pool = db.get_pool()
     await artifact_checks.insert_check(pool, req_id, _STAGE, result)
 
     if result.passed:
-        # admission pass：清零 round 计数，保下一阶段 / 后续 REQ 干净
-        if settings.retry_enabled:
-            await retry_exec.reset_stage(req_id, _STAGE)
         log.info("create_staging_test.checker_done", req_id=req_id,
                  passed=True, exit_code=result.exit_code,
                  duration_sec=round(result.duration_sec, 1))
@@ -95,48 +90,13 @@ async def _run_checker(*, body, req_id: str, ctx: dict) -> dict:
     log.info("create_staging_test.checker_done", req_id=req_id,
              passed=False, exit_code=result.exit_code,
              duration_sec=round(result.duration_sec, 1))
-    return await _handle_fail(
-        body=body, req_id=req_id, ctx=ctx,
-        fail_kind="test",
-        details={
-            "cmd": result.cmd,
-            "exit_code": result.exit_code,
-            "stdout_tail": result.stdout_tail,
-            "stderr_tail": result.stderr_tail,
-            "duration_sec": result.duration_sec,
-        },
-    )
-
-
-async def _handle_fail(*, body, req_id: str, ctx: dict, fail_kind: str, details: dict) -> dict:
-    """checker fail 统一出口：按 retry_enabled 决定走 retry.executor 还是直接 emit FAIL。
-
-    retry_enabled=False 时返老 shape（`passed`/`exit_code`/`cmd`/`emit`），保
-    既有 test_create_staging_test_checker_fail 兼容。
-    """
-    if not settings.retry_enabled:
-        out = {
-            "emit": Event.STAGING_TEST_FAIL.value,
-            "passed": False,
-            "exit_code": details.get("exit_code", -1),
-        }
-        if "cmd" in details:
-            out["cmd"] = details["cmd"]
-        if "reason" in details:
-            out["reason"] = details["reason"]
-        return out
-
-    retry_result = await retry_exec.run(RetryContext(
-        req_id=req_id,
-        project_id=body.projectId,
-        stage=_STAGE,
-        fail_kind=fail_kind,
-        issue_id=(ctx or {}).get("dev_issue_id"),   # follow_up / fresh_start 的目标
-        details=details,
-    ))
-    log.info("create_staging_test.retry_dispatched",
-             req_id=req_id, retry_action=retry_result.get("retry_action"))
-    return retry_result
+    return {
+        "emit": Event.STAGING_TEST_FAIL.value,
+        "passed": False,
+        "exit_code": result.exit_code,
+        "cmd": result.cmd,
+        "duration_sec": result.duration_sec,
+    }
 
 
 # ── 老路：BKD agent（flag off 时走这里）────────────────────────────────────

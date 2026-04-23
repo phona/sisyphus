@@ -32,15 +32,9 @@ CASES: list[tuple[str, list[str], Event | None]] = [
     ("session.completed", ["pr-ci", "REQ-1", "pr-ci:timeout"],               Event.PR_CI_TIMEOUT),
     ("session.completed", ["accept", "REQ-1", "result:pass"],                Event.ACCEPT_PASS),
     ("session.completed", ["accept", "REQ-1", "result:fail"],                Event.ACCEPT_FAIL),
-    ("session.completed", ["bugfix", "REQ-1", "round-1"],                    Event.BUGFIX_DONE),
-    ("session.completed", ["bugfix", "REQ-1", "diagnosis:spec-bug"],         Event.BUGFIX_SPEC_BUG),
-    ("session.completed", ["bugfix", "REQ-1", "diagnosis:env-bug"],          Event.BUGFIX_ENV_BUG),
-    # M5 diagnose 分流
-    ("session.completed", ["diagnose", "REQ-1", "diagnosis:code-bug"],       Event.BUGFIX_RETRY),
-    ("session.completed", ["diagnose", "REQ-1", "diagnosis:spec-bug"],       Event.SPEC_REWORK),
-    ("session.completed", ["diagnose", "REQ-1", "diagnosis:env-bug"],        Event.BUGFIX_ENV_BUG),
-    ("session.completed", ["diagnose", "REQ-1", "diagnosis:unknown"],        Event.BUGFIX_ENV_BUG),
-    ("session.completed", ["diagnose", "REQ-1"],                             Event.BUGFIX_ENV_BUG),
+    # M14c：bugfix / diagnose tag 已删除映射（router 不再认这两个 agent role）
+    ("session.completed", ["bugfix", "REQ-1", "round-1"],                    None),
+    ("session.completed", ["diagnose", "REQ-1", "diagnosis:code-bug"],       None),
     ("session.completed", ["done-archive", "REQ-1"],                         Event.ARCHIVE_DONE),
 
     # M14b verifier-agent：由 router 主动返 None，交 webhook.derive_verifier_event 解 JSON

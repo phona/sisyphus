@@ -100,31 +100,17 @@ class Settings(BaseSettings):
     pr_ci_watch_poll_interval_sec: int = 30
     pr_ci_watch_timeout_sec: int = 1800   # 30 min
 
-    # ─── M4：故障分级重试 ────────────────────────────────────────────────
-    # False（默认）= checker fail 直接 emit FAIL event（老行为）
-    # True = checker fail 调 retry.executor，按 policy 决定 follow_up / diagnose / escalate
-    # M9：同一 flag 启用 engine.step action-handler 异常重试（decide_action_fail）
-    # 回滚：set false → rollout restart
-    retry_enabled: bool = False
-    # 到/超过即 escalate 人工（含本次在内的总轮次）
-    retry_max_rounds: int = 5
-    # 测试失败从第 N 轮起改走 diagnose agent（分流 spec-bug/env-bug/code-bug）
-    retry_diagnose_threshold: int = 3
-    # M9：幂等 action 抛 transient 异常时最多重试 N 轮（0/1/2 → retry，round=3 → escalate）
-    retry_action_max_rounds: int = 3
-
-    # ─── M9：runner ready 重试 ──────────────────────────────────────────
+    # ─── runner ready 重试 ─────────────────────────────────────────────
     # ensure_runner 等 Pod Ready 的外层 attempts：N × runner_ready_timeout_sec
-    # 总等待；最后一次抛 TimeoutError 让 engine 的 retry policy 接手。
+    # 总等待；最后一次抛 TimeoutError 让 engine 走 escalate。
     # 默认 3 × 120s = 6min，覆盖 K3s 节点偶发慢启动；生产可调更高。
     runner_ready_attempts: int = 3
 
-    # ─── M14b：verifier-agent 框架 ──────────────────────────────────────
-    # True = 每个 stage transition（成功 or 失败）先起一个 verifier-agent 做主观判断
+    # ─── M14b/M14c：verifier-agent 框架 ─────────────────────────────────
+    # 每个 stage transition（成功 or 失败）先起一个 verifier-agent 做主观判断
     # （pass / fix / retry_checker / escalate），再由 webhook 路由推进状态机。
-    # 替代 M4 fail_kind 分类 + M5 diagnose 子链（PR3 砍旧逻辑后翻 true）。
-    # 默认 false：老路径完全不变，PR1 仅铺框架。
-    verifier_enabled: bool = False
+    # M14c 砍掉 M4 fail_kind 分类 + M5 bugfix/diagnose 子链，verifier 单独接管 fail 路径。
+    verifier_enabled: bool = True
 
     # ─── M8：watchdog 兜底卡死 stage ────────────────────────────────────
     # 周期扫 req_state，发现某 stage 超过阈值没 transition 且关联 BKD session

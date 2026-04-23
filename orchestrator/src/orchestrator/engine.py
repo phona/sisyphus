@@ -3,10 +3,8 @@
 action handler 可以返回 {"emit": "<event-name>"} 触发链式推进
 （例如 mark_spec_reviewed_and_check 检测到 N/N 后 emit spec.all-passed → create_dev）。
 
-M9：action handler 抛异常时，若 retry_enabled + action 标了 idempotent，
-按 retry.policy.decide_action_fail 决策 retry（带 backoff 原地重试 handler）或
-escalate（链式 emit SESSION_FAILED 进状态机 → ESCALATED）。非幂等 action 异常
-或超 max_rounds 一律 escalate。
+action handler 抛异常一律走 SESSION_FAILED → ESCALATED（M14c 砍掉 M9 的
+fail_kind/idempotent 自动重试，verifier 接管 fail 决策）。
 """
 from __future__ import annotations
 
@@ -19,9 +17,7 @@ import structlog
 
 from . import k8s_runner
 from . import observability as obs
-from .actions import ACTION_META, REGISTRY
-from .config import settings
-from .retry import policy as retry_policy
+from .actions import REGISTRY
 from .state import Event, ReqState, decide
 from .store import req_state
 
@@ -188,104 +184,46 @@ async def _dispatch_with_retry(
     next_state: ReqState,
     depth: int,
 ) -> tuple[bool, dict[str, Any]]:
-    """跑 handler；按 retry.policy 决策 retry 原地 / escalate（emit SESSION_FAILED）。
-
-    retry_enabled=False 时保留老行为：抛到第一次 fail 就 record + 返回 error。
+    """跑 handler；异常一律链式 emit SESSION_FAILED 进 escalate（M14c：verifier 接管 fail 决策）。
 
     返回 (ok, payload)：
         ok=True, payload = handler 的 result dict（上层继续做 emit chain）
         ok=False, payload = escalate 汇总字典（error / escalated / chained 等），
                             上层应直接返回不再处理
     """
-    meta = ACTION_META.get(action_name, {"idempotent": False})
-    idempotent = bool(meta.get("idempotent"))
-    # round = 已重试轮次（0-based；首次 handler 调用 round=0）
-    round_ = 0
     issue_id = getattr(body, "issueId", None)
-
-    while True:
-        started = time.monotonic()
-        try:
-            result = await handler(body=body, req_id=req_id, tags=tags, ctx=ctx)
-        except Exception as e:
-            duration_ms = int((time.monotonic() - started) * 1000)
-
-            if not settings.retry_enabled:
-                # 老行为：不自动重试，直接记 + 返回 error
-                log.exception("engine.action_failed", action=action_name, error=str(e))
-                await obs.record_event(
-                    "action.failed",
-                    req_id=req_id, issue_id=issue_id, tags=tags,
-                    router_action=action_name,
-                    duration_ms=duration_ms, error_msg=str(e)[:500],
-                )
-                return False, {"action": "error", "reason": str(e)}
-
-            decision = retry_policy.decide_action_fail(
-                action_name, exc=e, round=round_,
-                idempotent=idempotent,
-                max_rounds=settings.retry_action_max_rounds,
-            )
-            log.warning(
-                "engine.action_fail_decide",
-                req_id=req_id, action=action_name,
-                error=str(e)[:200], round=round_,
-                decision=decision.action, reason=decision.reason,
-                idempotent=idempotent,
-            )
-            await obs.record_event(
-                "action.failed",
-                req_id=req_id, issue_id=issue_id, tags=tags,
-                router_action=action_name,
-                duration_ms=duration_ms, error_msg=str(e)[:500],
-                extras={
-                    "retry_round": round_,
-                    "retry_decision": decision.action,
-                    "retry_reason": decision.reason,
-                    "idempotent": idempotent,
-                },
-            )
-
-            if decision.action == "retry":
-                await req_state.bump_action_retry(pool, req_id, action_name)
-                await asyncio.sleep(decision.backoff_sec)
-                round_ += 1
-                continue
-
-            # escalate：链式 emit SESSION_FAILED，让状态机走 ESCALATED + escalate action
-            log.error(
-                "engine.action_escalate",
-                req_id=req_id, action=action_name,
-                error=str(e)[:200], reason=decision.reason,
-            )
-            chained = await _emit_escalate(
-                pool, body=body, req_id=req_id, project_id=project_id,
-                tags=tags, fallback_state=next_state, depth=depth,
-                error_reason=decision.reason,
-            )
-            return False, {
-                "action": "error",
-                "reason": str(e),
-                "escalated": True,
-                "retry_round": round_,
-                "chained": chained,
-            }
-
-        # 成功：清 round 计数，观测 executed
-        if round_ > 0:
-            await req_state.reset_action_retry(pool, req_id, action_name)
-            log.info(
-                "engine.action_retry_succeeded",
-                req_id=req_id, action=action_name, rounds=round_,
-            )
+    started = time.monotonic()
+    try:
+        result = await handler(body=body, req_id=req_id, tags=tags, ctx=ctx)
+    except Exception as e:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        log.exception("engine.action_failed", action=action_name, error=str(e))
         await obs.record_event(
-            "action.executed",
+            "action.failed",
             req_id=req_id, issue_id=issue_id, tags=tags,
             router_action=action_name,
-            duration_ms=int((time.monotonic() - started) * 1000),
-            extras=result if isinstance(result, dict) else None,
+            duration_ms=duration_ms, error_msg=str(e)[:500],
         )
-        return True, (result if isinstance(result, dict) else {})
+        chained = await _emit_escalate(
+            pool, body=body, req_id=req_id, project_id=project_id,
+            tags=tags, fallback_state=next_state, depth=depth,
+            error_reason=str(e)[:200],
+        )
+        return False, {
+            "action": "error",
+            "reason": str(e),
+            "escalated": True,
+            "chained": chained,
+        }
+
+    await obs.record_event(
+        "action.executed",
+        req_id=req_id, issue_id=issue_id, tags=tags,
+        router_action=action_name,
+        duration_ms=int((time.monotonic() - started) * 1000),
+        extras=result if isinstance(result, dict) else None,
+    )
+    return True, (result if isinstance(result, dict) else {})
 
 
 async def _emit_escalate(
