@@ -16,16 +16,16 @@ EXPECTED = [
     (ReqState.DEV_RUNNING,          Event.DEV_DONE,            ReqState.DEV_RUNNING,          "mark_dev_reviewed_and_check"),
     (ReqState.DEV_RUNNING,          Event.DEV_ALL_PASSED,      ReqState.STAGING_TEST_RUNNING, "create_staging_test"),
     (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_PASS,   ReqState.PR_CI_RUNNING,       "create_pr_ci_watch"),
-    # M14c：fail 全部走 verifier
-    (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_FAIL,   ReqState.REVIEW_RUNNING,      "invoke_verifier_for_fail"),
+    # M14c：fail 全部走 verifier（B2：3 个专门 action 替代旧统一路由）
+    (ReqState.STAGING_TEST_RUNNING, Event.STAGING_TEST_FAIL,   ReqState.REVIEW_RUNNING,      "invoke_verifier_for_staging_test_fail"),
     (ReqState.PR_CI_RUNNING,        Event.PR_CI_PASS,          ReqState.ACCEPT_RUNNING,      "create_accept"),
-    (ReqState.PR_CI_RUNNING,        Event.PR_CI_FAIL,          ReqState.REVIEW_RUNNING,      "invoke_verifier_for_fail"),
+    (ReqState.PR_CI_RUNNING,        Event.PR_CI_FAIL,          ReqState.REVIEW_RUNNING,      "invoke_verifier_for_pr_ci_fail"),
     (ReqState.PR_CI_RUNNING,        Event.PR_CI_TIMEOUT,       ReqState.ESCALATED,           "escalate"),
     (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_ENV_UP_FAIL,  ReqState.ESCALATED,           "escalate"),
     (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_PASS,         ReqState.ACCEPT_TEARING_DOWN, "teardown_accept_env"),
     (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_FAIL,         ReqState.ACCEPT_TEARING_DOWN, "teardown_accept_env"),
     (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_PASS,  ReqState.ARCHIVING,           "done_archive"),
-    (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_FAIL,  ReqState.REVIEW_RUNNING,      "invoke_verifier_for_fail"),
+    (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_FAIL,  ReqState.REVIEW_RUNNING,      "invoke_verifier_for_accept_fail"),
     (ReqState.ARCHIVING,            Event.ARCHIVE_DONE,        ReqState.DONE,                None),
     # M14b verifier 子链
     (ReqState.REVIEW_RUNNING,       Event.VERIFY_PASS,         ReqState.REVIEW_RUNNING,      "apply_verify_pass"),

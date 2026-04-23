@@ -14,7 +14,10 @@ webhook.py 解析 decision JSON，映射成 Event 推状态机。
    + 链 emit "restart" 事件触发 checker 重跑
 - `start_fixer`：decision=fix → 起 fixer agent（dev / spec）
 - `invoke_verifier_after_fix`：fixer 完 → 再调 verifier 复查
-- `invoke_verifier_for_fail`：M14c — staging-test / pr-ci / accept fail 全部入口
+- `invoke_verifier_for_staging_test_fail` / `_pr_ci_fail` / `_accept_fail`：
+   机械 checker / accept fail 的 3 个专门入口。stage 由 transition table 写死，
+   不再从 webhook tags sniff（机械 checker 没 issue，tags 来自上游 dev issue，
+   以前按 tag 推会把 staging-test fail 误路成 dev）。
 
 M14c：verifier_enabled 默认 True，旧 fail_kind / bugfix 子链已砍。
 """
@@ -61,17 +64,6 @@ _RETRY_TARGET_STATE: dict[str, ReqState] = {
     "staging_test": ReqState.STAGING_TEST_RUNNING,
     "pr_ci":        ReqState.PR_CI_RUNNING,
     "accept":       ReqState.ACCEPT_RUNNING,
-}
-
-# M14c：fail event tag → verifier stage（invoke_verifier_for_fail 用）
-# tag 来自 BKD webhook 的 issue tags（agent role）。teardown 是内部 emit，
-# 复用上游 accept tag。
-# M15：加 "dev" tag → dev stage（dev issue 失败时）
-_FAIL_TAG_TO_STAGE: dict[str, str] = {
-    "dev":          "dev",
-    "staging-test": "staging_test",
-    "pr-ci":        "pr_ci",
-    "accept":       "accept",
 }
 
 
@@ -298,43 +290,43 @@ async def invoke_verifier_after_fix(*, body, req_id, tags, ctx):
     return result
 
 
-def _infer_fail_stage(tags: list[str] | None, ctx: dict | None) -> str | None:
-    """M14c：从 webhook tags / ctx 推 verifier 用的 stage 名。
-
-    顺序：
-    1. ctx.verifier_stage（fix 二次回流时上一次写的）
-    2. tags 里的 agent role 标签（staging-test / pr-ci / accept）
-    3. None（上层按 escalate 走）
-    """
-    if ctx and ctx.get("verifier_stage") in _STAGES:
-        return ctx["verifier_stage"]
-    for t in tags or []:
-        stage = _FAIL_TAG_TO_STAGE.get(t)
-        if stage:
-            return stage
-    return None
-
-
-@register("invoke_verifier_for_fail", idempotent=False)
-async def invoke_verifier_for_fail(*, body, req_id, tags, ctx):
-    """M14c：staging-test / pr-ci / accept fail → 起 verifier-agent (trigger=fail)。
-
-    替代旧 open_gh_and_bugfix 路径。stage 从 webhook tags 或 ctx 推断；
-    推不到时 emit VERIFY_ESCALATE 让状态机走人工兜底。
-    """
-    stage = _infer_fail_stage(tags, ctx)
-    if stage is None:
-        log.error("invoke_verifier_for_fail.unknown_stage",
-                  req_id=req_id, tags=tags)
-        return {"emit": Event.VERIFY_ESCALATE.value,
-                "reason": f"cannot infer verifier stage from tags={tags}"}
-
+async def _invoke_verifier_fail(*, stage: str, body, req_id, ctx):
+    """统一跑 invoke_verifier(trigger=fail)。stage 由调用方写死。"""
     return await invoke_verifier(
         stage=stage,
         trigger="fail",
         req_id=req_id,
         project_id=body.projectId,
         ctx=ctx,
+    )
+
+
+@register("invoke_verifier_for_staging_test_fail", idempotent=False)
+async def invoke_verifier_for_staging_test_fail(*, body, req_id, tags, ctx):
+    """STAGING_TEST_FAIL → 起 verifier-agent(stage=staging_test, trigger=fail)。
+
+    stage 来自 transition table，不从 tags 推。
+    （机械 checker 没自己的 BKD issue，webhook tags 来自上游 dev issue，
+    以前 sniff tag 会把 staging-test fail 误路成 dev。）
+    """
+    return await _invoke_verifier_fail(
+        stage="staging_test", body=body, req_id=req_id, ctx=ctx,
+    )
+
+
+@register("invoke_verifier_for_pr_ci_fail", idempotent=False)
+async def invoke_verifier_for_pr_ci_fail(*, body, req_id, tags, ctx):
+    """PR_CI_FAIL → 起 verifier-agent(stage=pr_ci, trigger=fail)。"""
+    return await _invoke_verifier_fail(
+        stage="pr_ci", body=body, req_id=req_id, ctx=ctx,
+    )
+
+
+@register("invoke_verifier_for_accept_fail", idempotent=False)
+async def invoke_verifier_for_accept_fail(*, body, req_id, tags, ctx):
+    """TEARDOWN_DONE_FAIL → 起 verifier-agent(stage=accept, trigger=fail)。"""
+    return await _invoke_verifier_fail(
+        stage="accept", body=body, req_id=req_id, ctx=ctx,
     )
 
 
