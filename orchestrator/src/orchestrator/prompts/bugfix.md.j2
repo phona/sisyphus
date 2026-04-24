@@ -36,6 +36,26 @@ BRANCH={{ branch }}
 
 ## 步骤
 
+### ⚠️ Step 0 — 环境短路检测（必跑，3 个 tool call 内完成）
+
+跑代码诊断前先快速摸 runner 环境健康度。**任一症状 → 立即停手不绕路**，按 ENV BUG
+路径走（tag `diagnosis:env-bug` + move review 给运维）：
+
+| 症状 | 检测 | 触发条件 |
+|---|---|---|
+| 1. kubectl exec 401 / Pod 不存在 | `kubectl -n sisyphus-runners exec runner-{{ req_id \| lower }} -- echo ok` | 非 0 退码 / `Unauthorized` / `not found` |
+| 2. git clone 401 / 404 | runner 内 `git ls-remote https://github.com/<org>/<repo>.git HEAD` | `Authentication failed` / `repository not found` / 403/404 |
+| 3. 工具链缺 | runner 内 `go version && make --version && which kubectl` | `command not found` |
+| 4. 磁盘满 / OOM | runner 内 `df -h /workspace \| awk 'NR==2{print $5}'` 或上轮 SOURCE_ISSUE 退码=137 | usage > 90% 或 OOMKilled |
+
+任一红 → 不再 tool_use，直接：
+1. BKD chat 一句：`🚫 env-bug: <症状>。runner 环境不对，escalate 给运维。`
+2. `update-issue` tags 加 `diagnosis:env-bug`
+3. `update-issue` statusId=review
+
+**禁止**：自装 Go / 自配 git token / kubectl cp 代码绕过 / 超过 3 个 tool_use 死磕环境。
+环境是 sisyphus 自己的事，绕过会掩盖运维问题；CODE / SPEC bug 才走 Step 1+。
+
 Step 1 进 runner pod，切到 feat 分支:
 ```bash
 kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
