@@ -5,13 +5,13 @@ webhook 级别的 dedup 测试用 monkeypatch 替换 dedup 模块函数。
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from datetime import UTC, datetime
+from typing import ClassVar
+from unittest.mock import AsyncMock
 
 import pytest
 
 from orchestrator.store import dedup
-
 
 # ─── FakePool ───────────────────────────────────────────────────────────────
 
@@ -49,7 +49,7 @@ async def test_dedup_check_and_record_skip_processed():
     """event 已存在且 processed_at IS NOT NULL → 'skip'。"""
     pool = FakePool(fetchrow_seq=[
         None,  # INSERT ON CONFLICT DO NOTHING → no row returned
-        {"processed_at": datetime.now(timezone.utc)},  # SELECT
+        {"processed_at": datetime.now(UTC)},  # SELECT
     ])
     result = await dedup.check_and_record(pool, "evt-2")
     assert result == "skip"
@@ -97,7 +97,7 @@ async def test_webhook_dedup_skip_after_processed(monkeypatch):
 
     # 构造一个最简 Request mock
     class MockReq:
-        headers = {"authorization": "Bearer test-webhook-token"}
+        headers: ClassVar = {"authorization": "Bearer test-webhook-token"}
         async def json(self):
             return {
                 "event": "session.completed",
@@ -123,11 +123,12 @@ async def test_webhook_dedup_skip_after_processed(monkeypatch):
 @pytest.mark.asyncio
 async def test_webhook_dedup_retry_after_crash(monkeypatch):
     """check_and_record 返 'retry'（上次崩溃）→ handler 继续跑 + mark_processed 调用。"""
-    from orchestrator import webhook, engine
-    from orchestrator.store import db, req_state as req_state_mod
+    import orchestrator.observability as obs
+    from orchestrator import engine, webhook
     from orchestrator import router as router_lib
     from orchestrator.state import Event, ReqState
-    import orchestrator.observability as obs
+    from orchestrator.store import db
+    from orchestrator.store import req_state as req_state_mod
 
     mark_called = []
 
@@ -143,7 +144,7 @@ async def test_webhook_dedup_retry_after_crash(monkeypatch):
         async def __aexit__(self, *a): return False
         async def get_issue(self, *a, **kw):
             class R:
-                tags = ["REQ-1", "analyze"]
+                tags: ClassVar = ["REQ-1", "analyze"]
             return R()
         async def update_issue(self, *a, **kw): pass
 
@@ -156,7 +157,7 @@ async def test_webhook_dedup_retry_after_crash(monkeypatch):
     # req_state
     class FakeRow:
         state = ReqState.INIT
-        context = {}
+        context: ClassVar = {}
 
     monkeypatch.setattr(req_state_mod, "get", AsyncMock(return_value=FakeRow()))
     monkeypatch.setattr(req_state_mod, "insert_init", AsyncMock())
@@ -166,7 +167,7 @@ async def test_webhook_dedup_retry_after_crash(monkeypatch):
     monkeypatch.setattr(engine, "step", AsyncMock(return_value={"action": "start_analyze"}))
 
     class MockReq:
-        headers = {"authorization": "Bearer test-webhook-token"}
+        headers: ClassVar = {"authorization": "Bearer test-webhook-token"}
         async def json(self):
             return {
                 "event": "session.completed",
@@ -186,11 +187,12 @@ async def test_webhook_dedup_retry_after_crash(monkeypatch):
 @pytest.mark.asyncio
 async def test_webhook_dedup_no_mark_on_crash(monkeypatch):
     """engine.step 抛异常 → mark_processed 不调（下次 BKD 重发走 retry 路径）。"""
-    from orchestrator import webhook, engine
-    from orchestrator.store import db, req_state as req_state_mod
+    import orchestrator.observability as obs
+    from orchestrator import engine, webhook
     from orchestrator import router as router_lib
     from orchestrator.state import Event, ReqState
-    import orchestrator.observability as obs
+    from orchestrator.store import db
+    from orchestrator.store import req_state as req_state_mod
 
     mark_called = []
 
@@ -205,7 +207,7 @@ async def test_webhook_dedup_no_mark_on_crash(monkeypatch):
         async def __aexit__(self, *a): return False
         async def get_issue(self, *a, **kw):
             class R:
-                tags = ["REQ-1", "analyze"]
+                tags: ClassVar = ["REQ-1", "analyze"]
             return R()
         async def update_issue(self, *a, **kw): pass
 
@@ -215,7 +217,7 @@ async def test_webhook_dedup_no_mark_on_crash(monkeypatch):
 
     class FakeRow:
         state = ReqState.INIT
-        context = {}
+        context: ClassVar = {}
 
     monkeypatch.setattr(req_state_mod, "get", AsyncMock(return_value=FakeRow()))
     monkeypatch.setattr(req_state_mod, "insert_init", AsyncMock())
@@ -225,7 +227,7 @@ async def test_webhook_dedup_no_mark_on_crash(monkeypatch):
     monkeypatch.setattr(engine, "step", AsyncMock(side_effect=RuntimeError("handler crash")))
 
     class MockReq:
-        headers = {"authorization": "Bearer test-webhook-token"}
+        headers: ClassVar = {"authorization": "Bearer test-webhook-token"}
         async def json(self):
             return {
                 "event": "session.completed",

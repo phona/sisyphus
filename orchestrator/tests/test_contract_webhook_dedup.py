@@ -13,11 +13,11 @@ Scenarios covered:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import ClassVar
 from unittest.mock import AsyncMock
 
 import pytest
-
 
 # ─── 测试用 FakePool（独立重建，不依赖 unit test 实现）──────────────────────
 
@@ -65,7 +65,7 @@ async def test_s2_processed_event_returns_skip():
     """
     from orchestrator.store import dedup
 
-    processed_ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    processed_ts = datetime(2024, 1, 1, tzinfo=UTC)
     pool = _FakePool(fetchrow_returns=[
         None,                              # INSERT ON CONFLICT → no row (conflict)
         {"processed_at": processed_ts},    # SELECT → processed_at non-null
@@ -128,13 +128,12 @@ async def test_s5_mark_processed_not_called_on_crash(monkeypatch):
     - 不调用 mark_processed（让 processed_at 保持 NULL）
     - 将异常向上传播（不吞掉）
     """
-    from orchestrator import webhook
-    from orchestrator.store import dedup, db
+    import orchestrator.observability as obs
+    from orchestrator import engine, webhook
     from orchestrator import router as router_lib
     from orchestrator.state import Event, ReqState
+    from orchestrator.store import db, dedup
     from orchestrator.store import req_state as rs_mod
-    from orchestrator import engine
-    import orchestrator.observability as obs
 
     mark_calls: list = []
     monkeypatch.setattr(dedup, "check_and_record", AsyncMock(return_value="new"))
@@ -148,7 +147,7 @@ async def test_s5_mark_processed_not_called_on_crash(monkeypatch):
         async def __aexit__(self, *a): return False
         async def get_issue(self, *a, **kw):
             class R:
-                tags = ["REQ-s5", "analyze"]
+                tags: ClassVar = ["REQ-s5", "analyze"]
             return R()
         async def update_issue(self, *a, **kw): pass
 
@@ -158,7 +157,7 @@ async def test_s5_mark_processed_not_called_on_crash(monkeypatch):
 
     class _Row:
         state = ReqState.INIT
-        context = {}
+        context: ClassVar = {}
 
     monkeypatch.setattr(rs_mod, "get", AsyncMock(return_value=_Row()))
     monkeypatch.setattr(rs_mod, "insert_init", AsyncMock())
@@ -166,7 +165,7 @@ async def test_s5_mark_processed_not_called_on_crash(monkeypatch):
     monkeypatch.setattr(engine, "step", AsyncMock(side_effect=RuntimeError("simulated crash")))
 
     class _Req:
-        headers = {"authorization": "Bearer test-webhook-token"}
+        headers: ClassVar = {"authorization": "Bearer test-webhook-token"}
         async def json(self):
             return {
                 "event": "session.completed",
@@ -194,13 +193,12 @@ async def test_s6_retry_path_cas_idempotent(monkeypatch):
     engine.step 的 CAS 失败必须使 webhook 优雅结束（不双触发 action）。
     不应创建重复的 BKD issue 或状态机 transition。
     """
-    from orchestrator import webhook
-    from orchestrator.store import dedup, db
+    import orchestrator.observability as obs
+    from orchestrator import engine, webhook
     from orchestrator import router as router_lib
     from orchestrator.state import Event, ReqState
+    from orchestrator.store import db, dedup
     from orchestrator.store import req_state as rs_mod
-    from orchestrator import engine
-    import orchestrator.observability as obs
 
     mark_calls: list = []
     engine_calls: list = []
@@ -216,7 +214,7 @@ async def test_s6_retry_path_cas_idempotent(monkeypatch):
         async def __aexit__(self, *a): return False
         async def get_issue(self, *a, **kw):
             class R:
-                tags = ["REQ-s6", "analyze"]
+                tags: ClassVar = ["REQ-s6", "analyze"]
             return R()
         async def update_issue(self, *a, **kw): pass
 
@@ -226,7 +224,7 @@ async def test_s6_retry_path_cas_idempotent(monkeypatch):
 
     class _Row:
         state = ReqState.ANALYZING  # 状态已推进（不是 INIT）
-        context = {}
+        context: ClassVar = {}
 
     monkeypatch.setattr(rs_mod, "get", AsyncMock(return_value=_Row()))
     monkeypatch.setattr(rs_mod, "insert_init", AsyncMock())
@@ -239,7 +237,7 @@ async def test_s6_retry_path_cas_idempotent(monkeypatch):
     ))
 
     class _Req:
-        headers = {"authorization": "Bearer test-webhook-token"}
+        headers: ClassVar = {"authorization": "Bearer test-webhook-token"}
         async def json(self):
             return {
                 "event": "session.completed",
@@ -250,7 +248,7 @@ async def test_s6_retry_path_cas_idempotent(monkeypatch):
             }
 
     # 不应抛异常（CAS skip 是正常路径）
-    result = await webhook.webhook(_Req())
+    await webhook.webhook(_Req())
 
     # 规约 1：不应抛异常（CAS skip 是正常完成路径，不是错误）
     # （函数已正常 return，说明没有 uncaught exception）
