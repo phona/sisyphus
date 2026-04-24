@@ -112,10 +112,12 @@ def test_state_intake_transitions():
     assert t.action == "escalate"
 
 
-def test_intaking_session_failed_escalates():
+def test_intaking_session_failed_routes_to_escalate_action():
+    """新行为：transition self-loop + escalate action 自决是否真 ESCALATED（auto-resume 兼容）"""
     t = decide(ReqState.INTAKING, Event.SESSION_FAILED)
     assert t is not None
-    assert t.next_state == ReqState.ESCALATED
+    assert t.action == "escalate"
+    assert t.next_state == ReqState.INTAKING  # self-loop, action 内部决定
 
 
 def test_intaking_state_in_enum():

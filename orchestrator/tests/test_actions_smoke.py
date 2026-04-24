@@ -141,17 +141,72 @@ def test_short_title_strips_leading_brackets():
 
 # ─── escalate ────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
-async def test_escalate(monkeypatch):
+async def test_escalate_auto_resume_first_attempt(monkeypatch):
+    """transient session.failed + retry_count=0 → auto-resume (follow-up "continue")"""
     from orchestrator.actions import escalate as mod
     fake = make_fake_bkd()
     patch_bkd(monkeypatch, "escalate", fake)
     patch_db(monkeypatch, "escalate")
     body = make_body(issue_id="rvw-1", event="session.failed")
-    out = await mod.escalate(body=body, req_id="REQ-9", tags=["reviewer"], ctx={"intent_issue_id": "intent-1"})
-    assert out == {"escalated": True, "reason": "session-failed"}
+    out = await mod.escalate(
+        body=body, req_id="REQ-9", tags=["reviewer"],
+        ctx={"intent_issue_id": "intent-1"},  # auto_retry_count default 0
+    )
+    assert out["auto_resumed"] is True
+    assert out["retry"] == 1
+    assert out["reason"] == "session-failed"
+    fake.follow_up_issue.assert_awaited_once()
+    fake.merge_tags_and_update.assert_not_awaited()  # 没真 escalate
+
+
+@pytest.mark.asyncio
+async def test_escalate_real_after_retries_exhausted(monkeypatch):
+    """transient session.failed + retry_count=2 → 真 escalate (final reason: session-failed-after-2-retries)"""
+    from orchestrator.actions import escalate as mod
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, "escalate", fake)
+    patch_db(monkeypatch, "escalate")
+    # mock req_state.get + cas_transition + k8s_runner cleanup
+    from orchestrator.store import req_state as rs
+    from orchestrator import k8s_runner as krunner
+    from unittest.mock import AsyncMock
+
+    class FakeRow:
+        state = type("S", (), {"value": "executing"})()  # any non-ESCALATED
+    monkeypatch.setattr(rs, "get", AsyncMock(return_value=FakeRow()))
+    monkeypatch.setattr(rs, "cas_transition", AsyncMock(return_value=True))
+    monkeypatch.setattr(krunner, "get_controller", lambda: type("C", (), {"cleanup_runner": AsyncMock()})())
+
+    body = make_body(issue_id="rvw-1", event="session.failed")
+    out = await mod.escalate(
+        body=body, req_id="REQ-9", tags=["reviewer"],
+        ctx={"intent_issue_id": "intent-1", "auto_retry_count": 2},
+    )
+    assert out["escalated"] is True
+    assert out["reason"] == "session-failed-after-2-retries"
     fake.merge_tags_and_update.assert_awaited_once()
-    args, _ = fake.merge_tags_and_update.call_args
-    assert "intent-1" in args  # 标在 intent issue 上
+    fake.follow_up_issue.assert_not_awaited()  # 没 retry，直接真 escalate
+
+
+@pytest.mark.asyncio
+async def test_escalate_non_transient_immediate(monkeypatch):
+    """verifier-decision-escalate (非 session.failed) → 直接真 escalate，不 retry"""
+    from orchestrator.actions import escalate as mod
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, "escalate", fake)
+    patch_db(monkeypatch, "escalate")
+    body = make_body(issue_id="rvw-1", event="verify.escalate")
+    out = await mod.escalate(
+        body=body, req_id="REQ-9", tags=["verifier"],
+        ctx={
+            "intent_issue_id": "intent-1",
+            "escalated_reason": "verifier-decision-escalate",
+        },
+    )
+    assert out["escalated"] is True
+    assert out["reason"] == "verifier-decision-escalate"
+    fake.follow_up_issue.assert_not_awaited()
+    fake.merge_tags_and_update.assert_awaited_once()
 
 
 # ─── done_archive ─────────────────────────────────────────────────────────
