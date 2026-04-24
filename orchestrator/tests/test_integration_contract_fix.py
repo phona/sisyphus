@@ -98,8 +98,13 @@ def test_sisp_s2_section_42_no_kubectl_commands():
 def test_sisp_s2_note_runner_no_kubectl():
     """docs must note that sisyphus runner pods have no kubectl/helm."""
     text = _text()
+    # Allow for markdown bold markers and varying whitespace:
+    #   "**没有** kubectl"  (line 165)
+    #   "无 kubectl"        (line 148 heading)
+    #   "no kubectl"
     has_note = bool(
-        re.search(r"(没有|no|without)\s*(kubectl|helm)", text, re.IGNORECASE)
+        re.search(r"(没有|无).{0,30}(kubectl|helm)", text) or
+        re.search(r"(no|without)\s+(kubectl|helm)", text, re.IGNORECASE)
     )
     assert has_note, \
         "integration-contracts.md must note that runner pods have no kubectl/helm"
