@@ -136,6 +136,34 @@ class BKDRestClient:
                     return c
         return None
 
+    async def get_all_assistant_messages_concat(
+        self,
+        project_id: str,
+        issue_id: str,
+    ) -> str | None:
+        """拼所有 assistant-messages 文本，给 extractor 在大字符串里找 JSON 用。
+
+        intake-agent 不像 verifier 那样严格："finalized JSON 必须放最后一条"。
+        它常先贴 JSON 再发短消息（"PATCH 加 result:pass"）再 PATCH 触发 webhook，
+        此刻 last assistant-message 没 JSON。get_last_assistant_message 漏掉。
+        """
+        try:
+            data = await self._get(
+                f"/projects/{project_id}/issues/{issue_id}/logs?limit=200"
+            )
+        except Exception as e:
+            log.warning("bkd.get_logs_failed", issue_id=issue_id, error=str(e))
+            return None
+        if not isinstance(data, dict):
+            return None
+        logs = data.get("logs") or []
+        msgs = [
+            e.get("content") for e in logs
+            if e.get("entryType") == "assistant-message"
+            and isinstance(e.get("content"), str)
+        ]
+        return "\n\n---\n\n".join(msgs) if msgs else None
+
     async def merge_tags_and_update(
         self,
         project_id: str,

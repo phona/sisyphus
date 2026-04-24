@@ -332,10 +332,11 @@ async def _emit_escalate(
     new_row = await req_state.get(pool, req_id)
     cur_state = new_row.state if new_row else fallback_state
     cur_ctx = new_row.context if new_row else {}
-    # 把失败原因暴露给 escalate action（ctx + body.event）— escalate 读 body.event 打 tag
-    # 这里不改 body.event（signature 限制）；仅保留 ctx 里的诊断信息
+    # 把失败原因暴露给 escalate action 当 reason —— key 必须是 escalated_reason
+    # （原来写 action_escalate_reason，escalate.py 读 escalated_reason，永远读不到，
+    # fallback 到 body.event 拿到 "issue.updated" 之类无意义值）。
     await req_state.update_context(pool, req_id, {
-        "action_escalate_reason": error_reason[:200],
+        "escalated_reason": f"action-error:{error_reason[:160]}",
     })
     return await step(
         pool,
