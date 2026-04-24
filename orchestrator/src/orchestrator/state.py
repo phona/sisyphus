@@ -24,6 +24,7 @@ from enum import StrEnum
 
 class ReqState(StrEnum):
     INIT = "init"                               # 还没 analyze / 待初始化
+    INTAKING = "intaking"                       # intake-agent 在跑（多轮 BKD chat 澄清 + 写 finalized intent）
     ANALYZING = "analyzing"                     # analyze-agent 在跑
     SPEC_LINT_RUNNING = "spec-lint-running"     # openspec validate 检查（sisyphus 下发 runner 任务）
     CHALLENGER_RUNNING = "challenger-running"   # M18：challenger-agent 读 spec 写 contract test（黑盒，不看 dev 代码）
@@ -42,6 +43,9 @@ class ReqState(StrEnum):
 
 
 class Event(StrEnum):
+    INTENT_INTAKE = "intent.intake"                 # 人在 BKD 打 intent:intake tag → 起 intake-agent 澄清需求
+    INTAKE_PASS = "intake.pass"                     # intake-agent 完 + finalized intent JSON ok
+    INTAKE_FAIL = "intake.fail"                     # intake-agent 异常 / 用户放弃
     INTENT_ANALYZE = "intent.analyze"               # 人在 BKD 打 intent:analyze tag（旧入口，现支持 init:STATE）
     ANALYZE_DONE = "analyze.done"                   # analyze-agent 完成
     SPEC_LINT_PASS = "spec-lint.pass"               # openspec validate 通过
@@ -82,6 +86,18 @@ class Transition:
 # 没列出的组合 = 非法 transition（webhook 收到时 skip + log）
 TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     # ─── 主链 happy path ─────────────────────────────────────────────────
+    # intake → analyze 两阶段物理隔离：intent:intake tag 走 INTAKING，跳过直接用 intent:analyze
+    (ReqState.INIT, Event.INTENT_INTAKE):
+        Transition(ReqState.INTAKING, "start_intake",
+                   "intent:intake → 启动澄清 agent，brainstorm + finalize intent"),
+
+    (ReqState.INTAKING, Event.INTAKE_PASS):
+        Transition(ReqState.ANALYZING, "start_analyze_with_finalized_intent",
+                   "intake done → analyze 接力（新 BKD issue，嵌入 finalized intent）"),
+
+    (ReqState.INTAKING, Event.INTAKE_FAIL):
+        Transition(ReqState.ESCALATED, "escalate", "intake failed / 用户放弃"),
+
     (ReqState.INIT, Event.INTENT_ANALYZE):
         Transition(ReqState.ANALYZING, "start_analyze", "kick off"),
 
@@ -193,7 +209,7 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     **{
         (st, Event.SESSION_FAILED): Transition(ReqState.ESCALATED, "escalate", "agent session crashed")
         for st in [
-            ReqState.ANALYZING, ReqState.SPEC_LINT_RUNNING, ReqState.CHALLENGER_RUNNING,
+            ReqState.INTAKING, ReqState.ANALYZING, ReqState.SPEC_LINT_RUNNING, ReqState.CHALLENGER_RUNNING,
             ReqState.DEV_CROSS_CHECK_RUNNING,
             ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
             ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,

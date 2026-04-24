@@ -179,6 +179,26 @@ async def webhook(request: Request) -> JSONResponse:
                  issue_id=body.issueId, verifier_event=event.value,
                  decision=decision_payload, reason=why)
 
+    # INTAKE_PASS：从 intake-agent 最后一条 message 解 finalized intent JSON
+    # 解不到 → 降级为 INTAKE_FAIL 触发 escalate
+    intake_finalized_intent: dict | None = None
+    if event == Event.INTAKE_PASS:
+        intake_text = None
+        try:
+            async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+                if hasattr(bkd, "get_last_assistant_message"):
+                    intake_text = await bkd.get_last_assistant_message(
+                        body.projectId, body.issueId,
+                    )
+        except Exception as e:
+            log.warning("webhook.intake.fetch_finalized_intent_failed",
+                        issue_id=body.issueId, error=str(e))
+        intake_finalized_intent = router_lib.extract_intake_finalized_intent(intake_text)
+        if intake_finalized_intent is None:
+            log.warning("webhook.intake.no_finalized_intent",
+                        issue_id=body.issueId)
+            event = Event.INTAKE_FAIL  # 降级：没有有效 finalized intent → escalate
+
     if event is None:
         log.debug("webhook.no_event_mapping", tags=tags, event_type=body.event)
         return {"action": "skip", "reason": "no event mapping"}
@@ -259,6 +279,15 @@ async def webhook(request: Request) -> JSONResponse:
         except Exception as e:
             log.warning("webhook.verifier_decisions.write_failed",
                         req_id=req_id, error=str(e))
+
+    # ─── 5.7 intake finalized intent 落 ctx（start_analyze_with_finalized_intent 读）──
+    if intake_finalized_intent is not None:
+        patch = {
+            "intake_finalized_intent": intake_finalized_intent,
+            "intake_issue_id": body.issueId,
+        }
+        await req_state.update_context(pool, req_id, patch)
+        ctx = {**ctx, **patch}
 
     # ─── 6. 推进状态机（engine 内部循环 emit）─────────────────────────────
     return await engine.step(

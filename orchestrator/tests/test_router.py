@@ -7,6 +7,10 @@ from orchestrator.router import derive_event, extract_req_id, get_parent_id, get
 from orchestrator.state import Event
 
 CASES: list[tuple[str, list[str], Event | None]] = [
+    # intent:intake → INTAKING（用户打 intent:intake tag，还没 intake 过）
+    ("issue.updated",     ["intent:intake"],                                 Event.INTENT_INTAKE),
+    # intent:intake 已被 intake 接管 → 不再发
+    ("issue.updated",     ["intent:intake", "intake", "REQ-1"],              None),
     # intent
     ("issue.updated",     ["intent:analyze"],                                Event.INTENT_ANALYZE),
     # intent 已被 analyze 接管 → 不再发
@@ -18,6 +22,12 @@ CASES: list[tuple[str, list[str], Event | None]] = [
 
     # session.failed
     ("session.failed",    ["dev", "REQ-1"],                                  Event.SESSION_FAILED),
+
+    # intake agent session.completed
+    ("session.completed", ["intake", "REQ-1", "result:pass"],                Event.INTAKE_PASS),
+    ("session.completed", ["intake", "REQ-1", "result:fail"],                Event.INTAKE_FAIL),
+    # 中间轮（仅 intake tag，无 result）→ None（不推进状态机）
+    ("session.completed", ["intake", "REQ-1"],                               None),
 
     # session.completed dispatch
     ("session.completed", ["analyze", "REQ-1"],                              Event.ANALYZE_DONE),

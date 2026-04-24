@@ -78,6 +78,8 @@ from . import (  # noqa: E402,F401
     done_archive,
     escalate,
     start_analyze,
+    start_analyze_with_finalized_intent,
     start_challenger,
+    start_intake,
     teardown_accept_env,
 )

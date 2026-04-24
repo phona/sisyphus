@@ -32,13 +32,17 @@
 | **verifier-agent** | BKD agent + 12 个 verifier/{stage}\_{trigger} 模板 | 主观决策：pass / fix / escalate（输出 decision JSON，3 路） |
 | **fixer-agent** | BKD agent + bugfix.md.j2（过渡） | 改一类东西：dev fixer 改业务码 / spec fixer 改 spec |
 
-## Stage 流（happy path 七段）
+## Stage 流（happy path 八段，含可选 INTAKING）
 
 ```
+[intent:intake → intake(多轮 BKD chat 澄清 + finalized intent JSON)]  ← 可选，物理隔离 brainstorm
+  ↓ intake.pass（新建 analyze issue）
 intent:analyze → analyze(写 proposal/design/tasks) → specs(×2 并行) → dev(1~N 并行, push feat/REQ-x + 真开 PR)
   → staging-test(机械: kubectl exec runner make ci-test) → pr-ci-watch(机械: GitHub REST 轮 check-runs)
   → accept(make accept-up + agent 跑 FEATURE-A* + make accept-down 必跑) → archive → DONE
 ```
+
+**入口选择**：`intent:intake` → INTAKING（推荐：不熟悉的仓）；`intent:analyze` → ANALYZING（跳过澄清）。
 
 任何 stage（含 staging-test / pr-ci / accept）失败入 `REVIEW_RUNNING`，verifier-agent 3 路决策：
 - `pass` → 推下一 stage

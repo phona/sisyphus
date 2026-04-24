@@ -8,6 +8,10 @@ from orchestrator.state import TRANSITIONS, Event, ReqState, decide, dump_transi
 # 反向声明：列出 happy path 全链 + 关键分支，验 next_state 和 action。
 EXPECTED = [
     # state, event, next_state, action
+    # INTAKING 路径：intent:intake → INTAKING → ANALYZING（新建 analyze issue）
+    (ReqState.INIT,                 Event.INTENT_INTAKE,       ReqState.INTAKING,            "start_intake"),
+    (ReqState.INTAKING,             Event.INTAKE_PASS,         ReqState.ANALYZING,           "start_analyze_with_finalized_intent"),
+    (ReqState.INTAKING,             Event.INTAKE_FAIL,         ReqState.ESCALATED,           "escalate"),
     (ReqState.INIT,                 Event.INTENT_ANALYZE,      ReqState.ANALYZING,           "start_analyze"),
     (ReqState.ANALYZING,            Event.ANALYZE_DONE,        ReqState.SPEC_LINT_RUNNING,   "create_spec_lint"),
     (ReqState.SPEC_LINT_RUNNING,    Event.SPEC_LINT_PASS,      ReqState.CHALLENGER_RUNNING,  "start_challenger"),
@@ -47,7 +51,7 @@ def test_transition(st, ev, next_st, action):
 
 def test_session_failed_escalates_all_running_states():
     running = [
-        ReqState.ANALYZING, ReqState.SPEC_LINT_RUNNING, ReqState.DEV_CROSS_CHECK_RUNNING,
+        ReqState.INTAKING, ReqState.ANALYZING, ReqState.SPEC_LINT_RUNNING, ReqState.DEV_CROSS_CHECK_RUNNING,
         ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
         ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
         # M14b：verifier / fixer running state 也必须 escalate
