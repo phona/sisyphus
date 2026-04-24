@@ -139,14 +139,24 @@ git push origin master
 - [ ] gh pr create
 ```
 
-### B.2 决定 solo 还是 fan out
+### B.2 决定 solo 还是 fan out（自决）
 
-> 拆点：**两个 task 之间没有强依赖**（A 不必等 B 完成就能开写）→ 拆出去。
+**没有阈值规则，你基于实际 REQ 形状自己拍**。
 
-- ✋ 不拆：单仓 + 总改动 < 100 LOC + 无明显并行边界 → solo 自己写完
-- ✂️ 拆：多仓 / 多 capability / 测试可并行写 / 串行总耗时 > 20 min →
-  自己用 BKD REST `POST /api/projects/{alias}/issues` 开 sub-issue
-  （BKD 0.0.65 没 MCP 端点，必须 Bash + curl，详见 tools_whitelist.md.j2）
+拆 sub-issue 的潜在收益:
+- 任务间无强依赖时 wall-clock 缩短
+- 多仓 / 多技术栈天然隔离工作区
+- 大 REQ 切片利于聚焦上下文
+
+拆的代价:
+- 每个 sub-issue 启动 + 重读 context 5-10s
+- 多 sub-agent 抢 BKD 进程 cap，超 cap 排队
+- sub-agent 间共享 git tree 有 race（feat 分支 push 顺序 / 同文件冲突）
+- 多 BKD session 并发期间 SIGKILL 误判概率上升
+
+拆的工具:
+- 自己 `curl POST /api/projects/{alias}/issues` 开 sub-issue
+- BKD 0.0.65 没 MCP 端点，全走 Bash + curl（详见 tools_whitelist.md.j2）
 
 #### 拆出去时的约定（轻）
 
