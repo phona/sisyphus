@@ -1,0 +1,31 @@
+capability: webhook-dedup
+version: "1.0"
+description: |
+  Webhook dedup at-least-once retry protocol.
+  event_seen.processed_at NULL = crashed, retry allowed.
+  event_seen.processed_at NOT NULL = done, skip.
+
+db_schema_changes:
+  - table: event_seen
+    migration: "0007_add_event_seen_processed_at"
+    added_columns:
+      - name: processed_at
+        type: TIMESTAMPTZ
+        nullable: true
+        comment: "handler 跑完成功时打。NULL 表示首次处理崩溃，允许 retry"
+
+functions:
+  check_and_record:
+    module: orchestrator.store.dedup
+    signature: "async (pool, event_id: str) -> Literal['new', 'retry', 'skip']"
+    semantics:
+      new: "INSERT success, event never seen"
+      retry: "INSERT conflict + processed_at IS NULL (previous crash)"
+      skip: "INSERT conflict + processed_at IS NOT NULL (already done)"
+
+  mark_processed:
+    module: orchestrator.store.dedup
+    signature: "async (pool, event_id: str) -> None"
+    semantics: "UPDATE event_seen SET processed_at = NOW() WHERE event_id = $1"
+    must_call: "on all webhook success paths"
+    must_not_call: "on exception/crash paths"
