@@ -22,4 +22,8 @@ test-go: ## 运行 Go 测试
 	@cd $(SCRIPT_DIR)/projects/ttpos-server-go && make ci
 
 ci-integration-test: ## Contract tests: verify integration-contracts.md correctness
-	cd orchestrator && python -m pytest tests/test_integration_contract_fix.py -v
+	docker run --rm \
+	  -v $(SCRIPT_DIR):/repo \
+	  -w /repo/orchestrator \
+	  python:3.12-slim \
+	  sh -c "pip install pytest -q && python -m pytest tests/test_integration_contract_fix.py -v"
