@@ -1,8 +1,12 @@
 """dev_cross_check：开发交叉验证（M1 checker，for-each-repo）。
 
 多仓重构后：每个 source repo 在 runner pod 里挂在 /workspace/source/<repo-name>/。
-checker 遍历 /workspace/source/*，含 Makefile 的仓逐一跑 `make dev-cross-check`；
-任一失败整体红。每仓失败时 echo `=== FAIL: $repo ===` 到 stderr。
+checker 遍历 /workspace/source/*，含 Makefile `ci-lint` target 的仓逐一跑
+`BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`；任一失败整体红。
+每仓失败时 echo `=== FAIL: $repo ===` 到 stderr。
+
+ci-lint 是 ttpos-ci 标准契约：仅 lint 变更文件 (BASE_REV 缺失则全量)。
+fetch + checkout feat/<REQ> 失败 → 该仓 not involved，跳过不算 fail。
 """
 from __future__ import annotations
 
@@ -20,9 +24,10 @@ _TAIL = 2048
 
 
 def _build_cmd(req_id: str) -> str:
-    """遍历 /workspace/source/*/，先切到 feat/<REQ>，对含 Makefile 的仓跑 make dev-cross-check。
+    """遍历 /workspace/source/*/，先切到 feat/<REQ>，对含 ci-lint target 的仓跑 make ci-lint。
 
-    fetch + checkout feat/<REQ> 失败 → 该仓 not involved，跳过不算 fail。
+    BASE_REV 计算：`git merge-base HEAD origin/main`，fallback `origin/develop`、
+    `origin/dev`，再失败传空字符串（ci-lint 退化为全量扫描）。
     """
     return (
         "set -o pipefail; "
@@ -33,14 +38,18 @@ def _build_cmd(req_id: str) -> str:
         '    echo "[skip] $name: no feat branch / not involved"; '
         "    continue; "
         "  fi; "
-        '  if [ -f "$repo/Makefile" ] && grep -q \'^dev-cross-check:\' "$repo/Makefile"; then '
-        '    echo "=== dev_cross_check: $name ==="; '
-        '    if ! (cd "$repo" && make dev-cross-check); then '
+        '  if [ -f "$repo/Makefile" ] && grep -q \'^ci-lint:\' "$repo/Makefile"; then '
+        '    base_rev=$(cd "$repo" && (git merge-base HEAD origin/main 2>/dev/null '
+        '              || git merge-base HEAD origin/develop 2>/dev/null '
+        '              || git merge-base HEAD origin/dev 2>/dev/null '
+        '              || echo "")); '
+        '    echo "=== dev_cross_check (ci-lint): $name (BASE_REV=$base_rev) ==="; '
+        '    if ! (cd "$repo" && BASE_REV="$base_rev" make ci-lint); then '
         '      echo "=== FAIL: $name ===" >&2; '
         "      fail=1; "
         "    fi; "
         "  else "
-        '    echo "[skip] $name: no make dev-cross-check target"; '
+        '    echo "[skip] $name: no make ci-lint target"; '
         "  fi; "
         "done; "
         "[ $fail -eq 0 ]"
@@ -52,7 +61,7 @@ async def run_dev_cross_check(
     *,
     timeout_sec: int = 300,
 ) -> CheckResult:
-    """kubectl exec runner -- <for-each-repo make dev-cross-check>。"""
+    """kubectl exec runner -- <for-each-repo make ci-lint>。"""
     rc = k8s_runner.get_controller()
     cmd = _build_cmd(req_id)
     log.info(
