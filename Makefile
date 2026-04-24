@@ -1,5 +1,5 @@
 # Sisyphus - 统一 Makefile
-.PHONY: help test-all test-flutter test-go
+.PHONY: help test-all test-flutter test-go ci-integration-test
 
 SCRIPT_DIR := $(shell pwd)
 
@@ -20,3 +20,6 @@ test-flutter: ## 运行 Flutter 测试
 test-go: ## 运行 Go 测试
 	@echo "测试 ttpos-server-go..."
 	@cd $(SCRIPT_DIR)/projects/ttpos-server-go && make ci
+
+ci-integration-test: ## Contract tests: verify integration-contracts.md correctness
+	cd orchestrator && python -m pytest tests/test_integration_contract_fix.py -v
