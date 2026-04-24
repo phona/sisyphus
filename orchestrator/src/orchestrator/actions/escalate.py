@@ -107,10 +107,14 @@ async def escalate(*, body, req_id, tags, ctx):
         "escalated_retry_count": retry_count,
     })
 
-    # SESSION_FAILED 路径下 transition 是 self-loop，需手动 CAS 推到 ESCALATED 并清 runner。
+    # SESSION_FAILED 类路径下 transition 是 self-loop（state 没动），需手动 CAS 推到
+    # ESCALATED 并清 runner。
+    # 触发源：BKD 真发的 session.failed webhook，或 watchdog 内部 emit Event.SESSION_FAILED
+    # （body.event="watchdog.stuck"）。
     # 其他事件路径（如 INTAKE_FAIL / PR_CI_TIMEOUT / VERIFY_ESCALATE）的 transition
-    # 已在 state.py 写死 next_state=ESCALATED，engine 已经做过 CAS + cleanup，这里只走 tag 更新。
-    if body.event == "session.failed":
+    # 已在 state.py 写死 next_state=ESCALATED，engine 已经做过 CAS + cleanup，这里跳过。
+    is_session_failed_path = body.event in ("session.failed", "watchdog.stuck")
+    if is_session_failed_path:
         row = await req_state.get(pool, req_id)
         if row and row.state != ReqState.ESCALATED:
             advanced = await req_state.cas_transition(
