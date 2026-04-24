@@ -75,12 +75,14 @@ schema（`router.validate_decision`）：
 
 ```json
 {
-  "action": "pass" | "fix" | "retry_checker" | "escalate",
+  "action": "pass" | "fix" | "escalate",
   "fixer": "dev" | "spec" | null,
   "confidence": "high" | "low",
   "reason": "≤ 500 字解释"
 }
 ```
+
+> retry_checker 已砍。基础设施 flaky / 外部抖动 → `escalate`，由人介入重新触发。
 
 约束：
 - `action=fix` 时 `fixer` 必须非 null

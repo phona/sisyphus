@@ -10,7 +10,7 @@
 
 - **薄编排，agent 决定** —— 路由 / 状态机 / checker 是 sisyphus；判 PR 内容、bug 该不该修是 agent。**永远不抢 AI 决定权**。
 - **机械层 ≠ agent 层** —— 跑测试 / 轮 GHA / 校 schema 不绕 agent，sisyphus 是唯一裁判（M1 staging-test / M2 pr-ci-watch / M3 admission）。
-- **失败先验，再试错** —— stage fail 不直接 bugfix，verifier-agent 主观判 pass / fix / retry / escalate（M14b/c）。
+- **失败先验，再试错** —— stage fail 不直接 bugfix，verifier-agent 主观判 pass / fix / escalate（M14b/c，3 路）。
 - **指标驱动改进** —— 每条决策入 `stage_runs` / `verifier_decisions`，13 张 Metabase 看板（M7 + M14e）回答"哪条 prompt 该改"。
 - **生产用最强模型** —— 不做"失败升级模型"自适应；haiku 只用于测试加速。
 
@@ -29,7 +29,7 @@
 | **orchestrator** | Python（K8s Deployment） | 状态机 + 路由 + watchdog + GC + 指标采集 |
 | **机械 checker** | Python（runner pod 内 exec / GitHub REST） | 客观事实：测试退码 / CI 绿不绿 |
 | **stage agent** | BKD agent + Jinja2 prompt | analyze / spec / dev / accept / done-archive |
-| **verifier-agent** | BKD agent + 12 个 verifier/{stage}\_{trigger} 模板 | 主观决策：pass / fix / retry_checker / escalate（输出 decision JSON） |
+| **verifier-agent** | BKD agent + 12 个 verifier/{stage}\_{trigger} 模板 | 主观决策：pass / fix / escalate（输出 decision JSON，3 路） |
 | **fixer-agent** | BKD agent + bugfix.md.j2（过渡） | 改一类东西：dev fixer 改业务码 / spec fixer 改 spec |
 
 ## Stage 流（happy path 七段）
@@ -40,11 +40,10 @@ intent:analyze → analyze(写 proposal/design/tasks) → specs(×2 并行) → 
   → accept(make accept-up + agent 跑 FEATURE-A* + make accept-down 必跑) → archive → DONE
 ```
 
-任何 stage（含 staging-test / pr-ci / accept）失败入 `REVIEW_RUNNING`，verifier-agent 决策：
+任何 stage（含 staging-test / pr-ci / accept）失败入 `REVIEW_RUNNING`，verifier-agent 3 路决策：
 - `pass` → 推下一 stage
 - `fix` + `fixer` → 起 dev / spec fixer，回 `REVIEW_RUNNING` 再判
-- `retry_checker` → 回 stage_running 重跑机械 checker
-- `escalate` → 终态 ESCALATED
+- `escalate` → 终态 ESCALATED（**包括所有 flaky / 基础设施抖动**：sisyphus 不再机制性兜 retry，由人重起）
 
 state 转移完整定义在 [orchestrator/src/orchestrator/state.py](orchestrator/src/orchestrator/state.py)（13 ReqState × 18 Event × 30+ transition）。
 

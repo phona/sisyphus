@@ -5,8 +5,7 @@
 2. decision 提取（tag base64 / description ```json```）
 3. derive_verifier_event 整合：合规 / 非法 / 缺失 → 正确事件
 4. invoke_verifier：prompt 渲染 + BKD issue 创建 + ctx 落字段
-5. action handler：apply_verify_pass / apply_verify_retry_checker / start_fixer /
-   invoke_verifier_after_fix 的行为
+5. action handler：apply_verify_pass / start_fixer / invoke_verifier_after_fix 的行为
 6. 12 个 stage_trigger prompt 模板都能渲染出来
 """
 from __future__ import annotations
@@ -34,7 +33,8 @@ from orchestrator.state import Event
     ({"action": "fix", "fixer": "spec", "scope": "openspec/changes/REQ-1/", "reason": "x", "confidence": "low"}, True),
     # M15: fixer=manifest 已删（manifest 抽象层砍掉），保留作 invalid case 验证
     ({"action": "fix", "fixer": "manifest", "scope": "manifest.pr.number", "reason": "y", "confidence": "high"}, False),
-    ({"action": "retry_checker", "fixer": None, "scope": None, "reason": "flaky", "confidence": "low"}, True),
+    # retry_checker 已砍 → 当 invalid action（unknown enum）
+    ({"action": "retry_checker", "fixer": None, "scope": None, "reason": "flaky", "confidence": "low"}, False),
     ({"action": "escalate", "fixer": None, "scope": None, "reason": "need human", "confidence": "high"}, True),
     # invalid action
     ({"action": "nope", "fixer": None, "scope": None, "reason": "", "confidence": "high"}, False),
@@ -58,7 +58,6 @@ def test_validate_decision(decision, ok):
 def test_decision_to_event_mapping():
     assert decision_to_event({"action": "pass"}) == Event.VERIFY_PASS
     assert decision_to_event({"action": "fix"}) == Event.VERIFY_FIX_NEEDED
-    assert decision_to_event({"action": "retry_checker"}) == Event.VERIFY_RETRY_CHECKER
     assert decision_to_event({"action": "escalate"}) == Event.VERIFY_ESCALATE
 
 
@@ -128,11 +127,13 @@ def test_derive_verifier_event_fix():
     assert got_decision == d
 
 
-def test_derive_verifier_event_retry_checker():
+def test_derive_verifier_event_legacy_retry_checker_now_escalates():
+    """retry_checker 已砍 → router 当 invalid action → escalate（避免老 prompt 卡死）。"""
     d = {"action": "retry_checker", "fixer": None, "scope": None, "reason": "flaky", "confidence": "low"}
     desc = f"```json\n{json.dumps(d)}\n```"
-    ev, _decision, _ = derive_verifier_event(desc, [])
-    assert ev == Event.VERIFY_RETRY_CHECKER
+    ev, _decision, why = derive_verifier_event(desc, [])
+    assert ev == Event.VERIFY_ESCALATE
+    assert "retry_checker" in why or "invalid" in why.lower()
 
 
 def test_derive_verifier_event_invalid_decision_escalates():
@@ -252,7 +253,9 @@ async def test_invoke_verifier_renders_template(monkeypatch):
     assert "TypeError: whoopsie" in prompt
     # decision schema 指示必须在
     assert '"action":' in prompt
-    assert "pass" in prompt and "fix" in prompt and "retry_checker" in prompt and "escalate" in prompt
+    assert "pass" in prompt and "fix" in prompt and "escalate" in prompt
+    # retry_checker 已砍：prompt 不应再提该选项
+    assert "retry_checker" not in prompt
 
 
 @pytest.mark.asyncio
@@ -362,31 +365,6 @@ async def test_apply_verify_pass_cas_fail_returns_skip(monkeypatch):
         ctx={"verifier_stage": "dev_cross_check"},
     )
     assert out == {"cas_failed": True}
-
-
-@pytest.mark.asyncio
-async def test_apply_verify_retry_checker(monkeypatch):
-    from orchestrator.actions import _verifier as v
-
-    cas_calls: list = []
-
-    async def fake_cas(pool, req_id, expected, nxt, event, action, context_patch=None):
-        cas_calls.append((expected.value, nxt.value, event))
-        return True
-
-    monkeypatch.setattr("orchestrator.actions._verifier.req_state.cas_transition", fake_cas)
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
-
-    out = await v.apply_verify_retry_checker(
-        body=make_body(), req_id="REQ-9", tags=[],
-        ctx={"verifier_stage": "pr_ci"},
-    )
-    # 新行为：CAS 到上游 stage_running（pr_ci 的上游是 staging-test-running），
-    # 链式 emit 上游 pass 事件（STAGING_TEST_PASS）以重新触发 create_pr_ci_watch
-    assert out["retry_checker"] is True
-    assert out["stage"] == "pr_ci"
-    assert out["emit"] == Event.STAGING_TEST_PASS.value
-    assert cas_calls == [("review-running", "staging-test-running", Event.VERIFY_RETRY_CHECKER)]
 
 
 @pytest.mark.asyncio

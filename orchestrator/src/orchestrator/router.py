@@ -26,7 +26,9 @@ SPEC_TAGS = {"spec"}
 # staging-test / pr-ci / accept 都走 result:* tag 判 pass/fail
 
 # ─── M14b verifier decision schema 校验 + 映射 ─────────────────────────────
-_VALID_ACTIONS = {"pass", "fix", "retry_checker", "escalate"}
+# 3 路决策：pass / fix / escalate。砍 retry_checker（基础设施 flaky 直接 escalate
+# 给人介入；sisyphus 不再机制性兜 retry —— "薄编排，不抢 AI 决定权" + 减少假阳性 retry 死循环风险）
+_VALID_ACTIONS = {"pass", "fix", "escalate"}
 _VALID_FIXERS = {"dev", "spec", None}
 _VALID_CONFIDENCE = {"high", "low"}
 
@@ -63,8 +65,6 @@ def decision_to_event(decision: dict) -> Event:
         return Event.VERIFY_PASS
     if action == "fix":
         return Event.VERIFY_FIX_NEEDED
-    if action == "retry_checker":
-        return Event.VERIFY_RETRY_CHECKER
     return Event.VERIFY_ESCALATE
 
 

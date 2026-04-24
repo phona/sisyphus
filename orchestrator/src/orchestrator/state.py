@@ -63,9 +63,9 @@ class Event(StrEnum):
     ARCHIVE_DONE = "archive.done"
     SESSION_FAILED = "session.failed"
     # verifier-agent 决策事件（webhook.py 从 verifier issue 的 decision JSON 派发）
+    # 3 路决策：pass / fix / escalate（retry_checker 已砍 —— flaky/外部抖动直接 escalate）
     VERIFY_PASS = "verify.pass"                     # decision.action = pass → 推下一 stage
     VERIFY_FIX_NEEDED = "verify.fix-needed"         # decision.action = fix → 起 fixer agent
-    VERIFY_RETRY_CHECKER = "verify.retry-checker"   # decision.action = retry_checker → 重跑当前 checker
     VERIFY_ESCALATE = "verify.escalate"             # decision.action = escalate
     FIXER_DONE = "fixer.done"                       # fixer agent 跑完 → 回对应 stage 重跑 checker
 
@@ -151,17 +151,15 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     # verifier-agent 完成 → webhook 解 decision JSON → emit 对应事件。
     # 注意：VERIFY_PASS 的目标 stage 由 ctx.verifier_stage 决定 —— transition 表无法静态表达
     # next_state 随 stage 变化，所以 apply_verify_pass action 内部手工 CAS 到对应 stage_running
-    # 再链式 emit 该 stage 的 done/pass 事件（走原主链 transition）。VERIFY_RETRY_CHECKER
-    # 类似。此处 next_state 声明为 REVIEW_RUNNING（self-loop），实际目标状态由 action 改。
+    # 再链式 emit 该 stage 的 done/pass 事件（走原主链 transition）。
+    # 3 路决策：pass / fix / escalate（retry_checker 已砍 —— 基础设施 flaky 由 verifier 自己判
+    # escalate 给人，sisyphus 不再机制性兜 retry，避免假阳性 retry 死循环）。
     (ReqState.REVIEW_RUNNING, Event.VERIFY_PASS):
         Transition(ReqState.REVIEW_RUNNING, "apply_verify_pass",
                    "decision=pass → action 读 stage 手动推进"),
     (ReqState.REVIEW_RUNNING, Event.VERIFY_FIX_NEEDED):
         Transition(ReqState.FIXER_RUNNING, "start_fixer",
                    "decision=fix → 起对应 fixer（dev/spec）"),
-    (ReqState.REVIEW_RUNNING, Event.VERIFY_RETRY_CHECKER):
-        Transition(ReqState.REVIEW_RUNNING, "apply_verify_retry_checker",
-                   "decision=retry_checker → 重跑当前 stage 的 checker"),
     (ReqState.REVIEW_RUNNING, Event.VERIFY_ESCALATE):
         Transition(ReqState.ESCALATED, "escalate",
                    "verifier decision=escalate 或 schema invalid"),

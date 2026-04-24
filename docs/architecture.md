@@ -78,8 +78,7 @@ flowchart TD
     NextStage[下一 stage]
     Fixer[FIXER_RUNNING<br/>start_fixer 起<br/>dev / spec fixer]
     Reverify[invoke_verifier_after_fix<br/>回 REVIEW_RUNNING]
-    Retry[apply_verify_retry_checker<br/>回 stage_RUNNING<br/>重跑机械 checker]
-    Escalated([ESCALATED])
+    Escalated([ESCALATED<br/>含 flaky / 基础设施抖动])
 
     Stage --> StageFail
     StageFail -->|pass| Verifier
@@ -87,8 +86,7 @@ flowchart TD
     Verifier --> Decision
     Decision -->|pass| NextStage
     Decision -->|fix + fixer={dev,spec}| Fixer --> Reverify --> Verifier
-    Decision -->|retry_checker| Retry --> Stage
-    Decision -->|escalate / schema invalid| Escalated
+    Decision -->|escalate / schema invalid / flaky| Escalated
 
     classDef verifier fill:#f3e5f5,stroke:#7b1fa2
     classDef terminal fill:#ffebee,stroke:#c62828
@@ -98,11 +96,11 @@ flowchart TD
 
 **为什么 success 也走 verifier**：M14b 让 verifier-agent 也对"机械 pass"做最后一道主观判（避免假阳性 / 偷工减料）。`trigger=success` 跟 `trigger=fail` 复用同一框架，prompt 模板分别在 `prompts/verifier/{stage}_success.md.j2` 和 `_fail.md.j2`。
 
-**verifier decision 协议**（router.py:33 `validate_decision`）：
+**verifier decision 协议**（router.py `validate_decision`，3 路：retry_checker 已砍）：
 
 ```json
 {
-  "action": "pass | fix | retry_checker | escalate",
+  "action": "pass | fix | escalate",
   "fixer": "dev | spec | null",
   "confidence": "high | low",
   "reason": "...",
@@ -112,6 +110,8 @@ flowchart TD
 
 注：
 - `action=fix` 时 `fixer` 必须非 null；其他 action `fixer` 必须 null。
+- 基础设施 flaky / 外部服务抖动（SonarQube 503、GHA 抢占、网络 blip）→ `escalate`，
+  sisyphus 不机制性兜 retry，由人介入重新触发。
 - `target_repo`（**M16 多仓**）可选，多仓 REQ 时建议填，告诉 fixer 哪仓修。
   老的不带 `target_repo` 的五字段 decision 仍合法。
 

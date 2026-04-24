@@ -26,10 +26,10 @@ fixer 不用全仓盲扫。
 ### 关注点
 - `openspec validate` 报 schema 结构错（字段类型 / enum / required 缺失）→ `fix` + `fixer=spec` + `target_repo=<挂的仓>`
 - `check-scenario-refs.sh` 报 scenario 引用不存在 → `fix` + `fixer=spec`，
-  仔细看是**该仓自己缺**还是**跨仓引用没用 `--specs-search-path` 找到** → 后者可能是
-  机械层 bug → `retry_checker`（让 checker 用对参数再跑）
+  仔细看是**该仓自己缺**还是**跨仓引用没用 `--specs-search-path` 找到** → 后者
+  机械层 bug → `escalate`（人去修 checker 调用参数）
 - acceptance Gherkin parse 错（语法 / 缺 step）→ `fix` + `fixer=spec`
-- sisyphus 自己的 ci 脚本抽风（路径 / 工具链不在 / `/workspace/source/*` 空）→ `retry_checker` 或 `escalate`
+- sisyphus 自己的 ci 脚本抽风（路径 / 工具链不在 / `/workspace/source/*` 空）→ `escalate`
 - 需求本身让 spec 写不出来 → `escalate`
 
 ### NOT 该做

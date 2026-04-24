@@ -16,11 +16,11 @@ staging-test checker 红了（exit_code != 0 或 timeout）。
 - 失败 assert 是不是对着**新实现**（那就 `fix` + `fixer=dev`）
 - 失败 assert 是不是对着**老逻辑**但被新 spec 重新定义了（那 `fix` + `fixer=spec` 或 dev 看情况）
 - 业务 repo 的 `make ci-test` target 本身有问题（没装依赖 / 命令不对）→ `escalate`（接入契约层 bug，不是 REQ-x bug）
-- stderr 是 network / docker-pull / kubectl race → `retry_checker`
+- stderr 是 network / docker-pull / kubectl race / 任何 flaky → `escalate`，reason 注明
 - 失败栈指向 sisyphus runner 本身（kubectl permission / PVC 挂载）→ `escalate`
 
 ### NOT 该做
-- 不 kubectl exec 重跑 test —— 让状态机触发 retry_checker
+- 不 kubectl exec 重跑 test —— flaky 直接 escalate 给人
 - 不改代码
 - 不 cancel dev issue
 
