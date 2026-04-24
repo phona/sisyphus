@@ -43,10 +43,10 @@ BRANCH={{ branch }}
 
 | 症状 | 检测 | 触发条件 |
 |---|---|---|
-| 1. kubectl exec 401 / Pod 不存在 | `kubectl -n sisyphus-runners exec runner-{{ req_id \| lower }} -- echo ok` | 非 0 退码 / `Unauthorized` / `not found` |
-| 2. git clone 401 / 404 | runner 内 `git ls-remote https://github.com/<org>/<repo>.git HEAD` | `Authentication failed` / `repository not found` / 403/404 |
-| 3. 工具链缺 | runner 内 `go version && make --version && which kubectl` | `command not found` |
-| 4. 磁盘满 / OOM | runner 内 `df -h /workspace \| awk 'NR==2{print $5}'` 或上轮 SOURCE_ISSUE 退码=137 | usage > 90% 或 OOMKilled |
+- **kubectl exec 401 / Pod 不存在**：`kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- echo ok` 非 0 退码 / `Unauthorized` / `not found`
+- **git clone 401 / 404**：runner 内 `git ls-remote https://github.com/<org>/<repo>.git HEAD` 出 `Authentication failed` / `repository not found` / 403 / 404
+- **工具链缺**：runner 内 `go version && make --version && which kubectl` 出 `command not found`
+- **磁盘满 / OOM**：runner 内 `df -h /workspace` usage > 90%，或上轮 SOURCE_ISSUE 退码=137 (OOMKilled)
 
 任一红 → 不再 tool_use，直接：
 1. BKD chat 一句：`🚫 env-bug: <症状>。runner 环境不对，escalate 给运维。`
