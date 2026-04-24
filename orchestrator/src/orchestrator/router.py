@@ -223,6 +223,37 @@ def derive_event(event_type: str, tags: Iterable[str], result_tags_only: bool = 
             return Event.INTENT_INTAKE
         if "intent:analyze" in tagset and "analyze" not in tagset:
             return Event.INTENT_ANALYZE
+        # ─── race fallback ────────────────────────────────────────────────
+        # BKD 实证：agent 有时在 session.completed 之后才 PATCH result tag，
+        # 那次 session.completed 的 tags 不含 result:* → router 漏 fire 主链事件。
+        # 兜底：issue.updated 看到 stage tag + result tag 的组合时也 fire 对应事件。
+        # CAS 天然抗重复：状态已过 N+1 时第二次 fire 会 cas_failed skip，无副作用。
+        if "intake" in tagset:
+            if "result:pass" in tagset:
+                return Event.INTAKE_PASS
+            if "result:fail" in tagset:
+                return Event.INTAKE_FAIL
+        if "challenger" in tagset:
+            if "result:pass" in tagset:
+                return Event.CHALLENGER_PASS
+            if "result:fail" in tagset:
+                return Event.CHALLENGER_FAIL
+        if "staging-test" in tagset:
+            if "result:pass" in tagset:
+                return Event.STAGING_TEST_PASS
+            if "result:fail" in tagset:
+                return Event.STAGING_TEST_FAIL
+        if "accept" in tagset:
+            if "result:pass" in tagset:
+                return Event.ACCEPT_PASS
+            if "result:fail" in tagset:
+                return Event.ACCEPT_FAIL
+        if "done-archive" in tagset and "result:pass" in tagset:
+            return Event.ARCHIVE_DONE
+        if "fixer" in tagset and (
+            "result:pass" in tagset or "result:fail" in tagset
+        ):
+            return Event.FIXER_DONE
         # 其他 issue.updated 一律忽略（避免自指 loop）
         return None
 
