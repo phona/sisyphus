@@ -205,9 +205,13 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
                    "用户续了但 verifier 还是判 escalate → 留原地等下一次 follow-up"),
 
     # ─── 通用错误 ───────────────────────────────────────────────────────
-    # session crash 在任何 running state 都直接 escalate
+    # session crash 在任何 running state 走 escalate action（self-loop, action 内部决定是否真 escalate）
+    # escalate action 现支持 auto-resume：
+    #   transient + retry < 2 → BKD follow-up "continue"，state 不动等 BKD wake agent 续
+    #   retry 用完 / non-transient → action 内部手 CAS 推到 ESCALATED
+    # next_state 写当前 state 是因为"action 自己决定是否真 escalate"，跟 apply_verify_pass 同模式
     **{
-        (st, Event.SESSION_FAILED): Transition(ReqState.ESCALATED, "escalate", "agent session crashed")
+        (st, Event.SESSION_FAILED): Transition(st, "escalate", "session crash → auto-resume or escalate")
         for st in [
             ReqState.INTAKING, ReqState.ANALYZING, ReqState.SPEC_LINT_RUNNING, ReqState.CHALLENGER_RUNNING,
             ReqState.DEV_CROSS_CHECK_RUNNING,

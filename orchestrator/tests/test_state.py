@@ -49,7 +49,13 @@ def test_transition(st, ev, next_st, action):
     assert t.action == action
 
 
-def test_session_failed_escalates_all_running_states():
+def test_session_failed_routes_to_escalate_action_all_running_states():
+    """SESSION_FAILED 在所有 running state 都触发 escalate action。
+
+    新行为（auto-resume 后）：transition 是 self-loop，escalate action 内部决定
+    auto-resume（state 不动）还是真 escalate（手动 CAS 推 ESCALATED）。
+    所以这里只验 action 名 + transition 存在，不再要求 next_state == ESCALATED。
+    """
     running = [
         ReqState.INTAKING, ReqState.ANALYZING, ReqState.SPEC_LINT_RUNNING, ReqState.DEV_CROSS_CHECK_RUNNING,
         ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
@@ -60,7 +66,9 @@ def test_session_failed_escalates_all_running_states():
     ]
     for st in running:
         t = decide(st, Event.SESSION_FAILED)
-        assert t is not None and t.next_state == ReqState.ESCALATED, st
+        assert t is not None and t.action == "escalate", st
+        # transition 是 self-loop（escalate action 自决是否真 ESCALATED）
+        assert t.next_state == st, f"{st} should self-loop, got {t.next_state}"
 
 
 def test_m14b_verifier_states_present():
