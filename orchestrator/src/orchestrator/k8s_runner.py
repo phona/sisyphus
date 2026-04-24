@@ -231,7 +231,7 @@ class RunnerController:
             # privileged: DinD 必须；fuse-overlayfs 要 /dev/fuse + CAP_SYS_ADMIN
             security_context=client.V1SecurityContext(privileged=True),
             resources=client.V1ResourceRequirements(
-                requests={"cpu": "500m", "memory": "1Gi"},
+                requests={"cpu": "500m", "memory": "512Mi"},
                 limits={"cpu": "4", "memory": "8Gi"},
             ),
             env=env_vars,
