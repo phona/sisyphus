@@ -230,7 +230,11 @@ class RunnerController:
             # privileged: DinD 必须；fuse-overlayfs 要 /dev/fuse + CAP_SYS_ADMIN
             security_context=client.V1SecurityContext(privileged=True),
             resources=client.V1ResourceRequirements(
-                requests={"cpu": "500m", "memory": "1Gi"},
+                # 2026-04 实证：vm-node04 5991Mi 总内存，1Gi request 只能塞 1 个 runner，
+                # 多 REQ 并发时撞 FailedScheduling: Insufficient memory。
+                # 降到 512Mi/250m，能塞 2-3 个并发 runner。
+                # limit 保持 8Gi（runner 跑 docker build 高峰时需要）。
+                requests={"cpu": "250m", "memory": "512Mi"},
                 limits={"cpu": "4", "memory": "8Gi"},
             ),
             env=env_vars,
@@ -455,6 +459,28 @@ class RunnerController:
                 results.append(s)
         return results
 
+    async def node_disk_usage_ratio(self) -> float:
+        """节点磁盘使用率 0.0~1.0。用于 GC 判断磁盘压力。
+
+        通过节点 ephemeral-storage allocatable / capacity 推算（local-path PVC 占 ephemeral）。
+        失败时抛异常，让 caller fallback 到正常 retention 模式。
+        """
+        nodes = await asyncio.to_thread(self.core_v1.list_node)
+        # 取第一个 ready node（sisyphus 单节点 K3s 场景）
+        for node in nodes.items:
+            cap = node.status.capacity or {}
+            alloc = node.status.allocatable or {}
+            cap_eph = cap.get("ephemeral-storage")
+            alloc_eph = alloc.get("ephemeral-storage")
+            if cap_eph and alloc_eph:
+                # K8s 单位 like "50644856Ki"，统一转 KiB
+                cap_ki = _parse_k8s_quantity(cap_eph)
+                alloc_ki = _parse_k8s_quantity(alloc_eph)
+                if cap_ki > 0:
+                    used_ratio = 1.0 - (alloc_ki / cap_ki)
+                    return max(0.0, min(1.0, used_ratio))
+        raise RuntimeError("no node with ephemeral-storage info")
+
     async def gc_orphans(self, keep_req_ids: set[str]) -> list[str]:
         """删除 keep_req_ids 之外的所有 runner（pod + pvc）。
 
@@ -575,3 +601,32 @@ def _strip_exit_marker(stdout: str) -> str:
     while lines and lines[-1].strip().startswith(_EXIT_MARKER):
         lines.pop()
     return "".join(lines)
+
+
+_K8S_UNITS = {
+    "Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4,
+    "K": 1000, "M": 1000**2, "G": 1000**3, "T": 1000**4,
+    "k": 1000, "m": 0.001,
+}
+
+
+def _parse_k8s_quantity(q: str) -> int:
+    """K8s 资源数量字符串解析为 KiB。e.g. "50644856Ki" → 50644856；"5Gi" → 5*1024*1024。
+
+    简化版，只支持常见后缀。无后缀按字节算。失败返 0。
+    """
+    if not q:
+        return 0
+    q = q.strip()
+    for unit in sorted(_K8S_UNITS.keys(), key=len, reverse=True):
+        if q.endswith(unit):
+            try:
+                num = float(q[:-len(unit)])
+                bytes_val = num * _K8S_UNITS[unit]
+                return int(bytes_val / 1024)  # 统一返 KiB
+            except ValueError:
+                return 0
+    try:
+        return int(int(q) / 1024)
+    except ValueError:
+        return 0

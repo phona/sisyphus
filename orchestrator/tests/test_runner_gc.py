@@ -65,9 +65,27 @@ async def test_done_state_not_active(monkeypatch, mock_controller):
 
 
 @pytest.mark.asyncio
+async def test_escalated_within_retention_purged_on_disk_pressure(monkeypatch, mock_controller):
+    """disk > threshold → escalated 也强清（不留 retention）。"""
+    from unittest.mock import AsyncMock
+    recent = datetime.now(UTC) - timedelta(hours=2)
+    pool = _FakePool([
+        _row("REQ-1", "escalated", updated_at=recent),
+    ])
+    monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
+    # 模拟磁盘 90% 用了
+    mock_controller.node_disk_usage_ratio = AsyncMock(return_value=0.9)
+
+    result = await runner_gc.gc_once()
+    assert result["disk_pressure"] is True
+    called_with = mock_controller.gc_orphans.await_args.args[0]
+    assert called_with == set()  # 紧急模式，escalated 不再 keep
+
+
+@pytest.mark.asyncio
 async def test_escalated_within_retention_kept(monkeypatch, mock_controller):
-    """escalated 但还在保留期内（默认 7 天）→ 仍 active（PVC 留给人翻）。"""
-    recent = datetime.now(UTC) - timedelta(days=1)
+    """escalated 但还在保留期内（默认 1 天）→ 仍 active（PVC 留给人 PR #48 resume）。"""
+    recent = datetime.now(UTC) - timedelta(hours=2)  # < 1 day default retention
     pool = _FakePool([
         _row("REQ-1", "escalated", updated_at=recent),
     ])
