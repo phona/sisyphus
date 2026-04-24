@@ -1,5 +1,5 @@
 # Sisyphus - 统一 Makefile
-.PHONY: help test-all test-flutter test-go
+.PHONY: help test-all test-flutter test-go dev-cross-check ci-test
 
 SCRIPT_DIR := $(shell pwd)
 
@@ -8,6 +8,14 @@ help: ## 显示帮助信息
 	@echo "Sisyphus - 可用命令"
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+# ========== sisyphus orchestrator ==========
+
+dev-cross-check: ## 代码风格检查（ruff）
+	cd orchestrator && uv run ruff check src/ tests/
+
+ci-test: ## 运行 orchestrator 测试套件（pytest）
+	cd orchestrator && uv run pytest
 
 # ========== 测试 ==========
 

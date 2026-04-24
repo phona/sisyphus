@@ -137,6 +137,57 @@ def extract_decision_from_issue(
     return None
 
 
+_REQUIRED_INTAKE_FIELDS = frozenset({
+    "involved_repos", "business_behavior", "data_constraints",
+    "edge_cases", "do_not_touch", "acceptance",
+})
+
+
+def extract_intake_finalized_intent(text: str | None) -> dict | None:
+    """从 intake-agent 最后一条 message 提取 finalized intent JSON。
+
+    3 层 fallback：json codeblock / plain codeblock / bare braces with key field。
+    必须含 6 个 required 字段，否则返 None。
+    """
+    if not text:
+        return None
+
+    def _valid(data: object) -> bool:
+        return isinstance(data, dict) and _REQUIRED_INTAKE_FIELDS.issubset(data.keys())
+
+    # 1. ```json ... ``` 代码块（推荐，最稳）
+    blocks = re.findall(r"```json\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
+    for blk in reversed(blocks):
+        try:
+            data = json.loads(blk)
+            if _valid(data):
+                return data
+        except Exception:
+            continue
+
+    # 2. ``` ... ``` 无 lang 标代码块
+    blocks = re.findall(r"```\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
+    for blk in reversed(blocks):
+        try:
+            data = json.loads(blk)
+            if _valid(data):
+                return data
+        except Exception:
+            continue
+
+    # 3. bare braces 含 "involved_repos" 关键字
+    candidates = re.findall(r"\{[^{}]*\"involved_repos\"[^{}]*\}", text, flags=re.DOTALL)
+    for blk in reversed(candidates):
+        try:
+            data = json.loads(blk)
+            if _valid(data):
+                return data
+        except Exception:
+            continue
+
+    return None
+
+
 def derive_event(event_type: str, tags: Iterable[str], result_tags_only: bool = False) -> Event | None:
     """根据 (event_type, tags) 推 Event 枚举。
 
@@ -145,8 +196,10 @@ def derive_event(event_type: str, tags: Iterable[str], result_tags_only: bool = 
     """
     tagset = set(tags)
 
-    # ─── L0: intent:analyze 入口 ──────────────────────────────────────────
+    # ─── L0: intent 入口 ──────────────────────────────────────────────────
     if event_type == "issue.updated":
+        if "intent:intake" in tagset and "intake" not in tagset:
+            return Event.INTENT_INTAKE
         if "intent:analyze" in tagset and "analyze" not in tagset:
             return Event.INTENT_ANALYZE
         # 其他 issue.updated 一律忽略（避免自指 loop）
@@ -159,6 +212,14 @@ def derive_event(event_type: str, tags: Iterable[str], result_tags_only: bool = 
     # ─── session.completed: 按主 stage tag 分流 ───────────────────────────
     if event_type != "session.completed":
         return None  # 未知 event type
+
+    # intake-agent：result:pass / result:fail 派发；中间轮（仅 intake tag，无 result）→ None
+    if "intake" in tagset:
+        if "result:pass" in tagset:
+            return Event.INTAKE_PASS
+        if "result:fail" in tagset:
+            return Event.INTAKE_FAIL
+        return None
 
     # M14b verifier-agent：优先匹配。decision 解析需要 description，router.derive_event
     # 只能看 tag；真正解析走 webhook.py 那层的 extract_decision_from_issue。

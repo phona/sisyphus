@@ -38,11 +38,16 @@
 
 ## 2. 主流水线
 
-happy path 九段，从 `intent:analyze` tag 一路自动到 `done`。
+happy path（含 INTAKING）十段，入口可选 `intent:intake`（推荐）或 `intent:analyze`（跳过澄清）一路自动到 `done`。
+
+**入口选择**：
+- `intent:intake` → INTAKING（不熟悉的仓先澄清，brainstorm 和实现物理隔离）
+- `intent:analyze` → ANALYZING（跳过 intake，直接进 analyze，适合 trivial REQ）
 
 ```mermaid
 flowchart TD
-    Human[人在 BKD 打<br/>intent:analyze tag]
+    Human[人在 BKD 打<br/>intent:intake tag]
+    Intake[intake-agent<br/>多轮 BKD chat 澄清需求<br/>输出 finalized intent JSON]
     Analyze[analyze-agent<br/>写 proposal/design/tasks<br/>+ 决定多少 dev agent]
     SpecLint[spec-lint checker<br/>openspec validate<br/>+ check-scenario-refs.sh]
     DevCheck[dev-cross-check checker<br/>业务 repo 侧定制检查<br/>例:编译 / 开发框架检查]
@@ -54,7 +59,7 @@ flowchart TD
     Archive[done_archive<br/>合 PR + 关 issue]
     Done([done])
 
-    Human --> Analyze --> SpecLint --> DevCheck --> Staging --> PRCI --> EnvUp --> Accept --> Teardown --> Archive --> Done
+    Human --> Intake --> Analyze --> SpecLint --> DevCheck --> Staging --> PRCI --> EnvUp --> Accept --> Teardown --> Archive --> Done
 
     classDef agent fill:#e1f5ff,stroke:#0288d1
     classDef checker fill:#fff3e0,stroke:#f57c00
@@ -192,7 +197,8 @@ flowchart LR
 
 | # | Stage | 触发 | 产物 / 副作用 | 推进信号 |
 |---|---|---|---|---|
-| 1 | **analyze** | `intent:analyze` tag | `openspec/changes/REQ-x/{proposal,design,tasks}.md` 在**每个被改的 source repo** 各一份（没有主从）；高层文档放 spec home repo | session.completed + analyze tag |
+| 0 | **intake** (可选) | `intent:intake` tag | BKD chat 多轮澄清 + finalized intent JSON（6 字段）。不写代码，不开 PR | intake-agent PATCH `result:pass` + JSON 解析成功 → 新建 analyze issue |
+| 1 | **analyze** | `intent:analyze` tag（跳过 intake）或 intake.pass 后新建 issue | `openspec/changes/REQ-x/{proposal,design,tasks}.md` 在**每个被改的 source repo** 各一份（没有主从）；高层文档放 spec home repo | session.completed + analyze tag |
 | 2 | **spec-lint** (机械, for-each-repo) | analyze done | **遍历 `/workspace/source/*`**：每仓有 `openspec/changes/REQ-x/` 就跑 `openspec validate` + `check-scenario-refs.sh --specs-search-path`（跨仓引用）。任一仓红 → 整体红 | sisyphus 自己判，无 BKD agent |
 | 3 | **dev-cross-check** (机械, for-each-repo) | spec-lint pass | 遍历每仓 `BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`（ttpos-ci 标准，仅 lint 变更文件）；任一仓红 → 整体红 | sisyphus 自己判，无 BKD agent |
 | 4 | **dev (1~N 并行)** | dev-cross-check pass | 业务代码 + 各仓 push `feat/REQ-x` + 开 PR（多仓 REQ 通常每仓一个 dev agent） | 每个 dev session.completed → mark_dev_reviewed_and_check 聚合 → DEV_ALL_PASSED |

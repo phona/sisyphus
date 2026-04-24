@@ -3,7 +3,8 @@
 > 唯一真相源是 [orchestrator/src/orchestrator/state.py](../orchestrator/src/orchestrator/state.py)。
 > 本文档把 `ReqState`、`Event`、`TRANSITIONS` 三个枚举可视化，方便看代码前先建立心智模型。
 >
-> 状态机当前形态：M14c —— verifier-agent 接管所有 stage fail 路径，旧 BUGFIX/DIAGNOSE 子链已砍。
+> 状态机当前形态：M14c + INTAKING —— verifier-agent 接管所有 stage fail 路径，旧 BUGFIX/DIAGNOSE 子链已砍。
+> INTAKING 为物理隔离 brainstorm 阶段：intake-agent 只读代码 + 问问题，不能写实现。
 
 ## 1. 设计要点
 
@@ -16,11 +17,12 @@
   `staging-test-running` 三个 checker stage 内部从单仓变成 for-each-repo 遍历
   （任一仓红 → stage fail）。状态机层面无影响。
 
-## 2. ReqState 枚举（15 个）
+## 2. ReqState 枚举（16 个）
 
 | state | 含义 | 类型 |
 |---|---|---|
 | `init` | 还没 analyze（intent_analyze 之前） | start |
+| `intaking` | **INTAKING** intake-agent 在跑（多轮 BKD chat 澄清 + 写 finalized intent） | in-flight |
 | `analyzing` | analyze-agent 在跑 | in-flight |
 | `spec-lint-running` | **M15** 客观检查：**for-each-repo** openspec validate + check-scenario-refs.sh（遍历 `/workspace/source/*`） | in-flight |
 | `dev-cross-check-running` | **M15** 客观检查：**for-each-repo** `BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`（ttpos-ci 标准，仅 lint 变更文件） | in-flight |
@@ -35,11 +37,14 @@
 | **`done`** | REQ 完成 | **terminal** |
 | **`escalated`** | 熔断 / session-failed / 人工止损 | **terminal** |
 
-## 3. Event 枚举（22 个）
+## 3. Event 枚举（25 个）
 
 | event | 来源 | 触发什么 |
 |---|---|---|
-| `intent.analyze` | 人在 BKD 打 `intent:analyze` tag | start_analyze |
+| **`intent.intake`** | 人在 BKD 打 `intent:intake` tag | start_intake（物理隔离 brainstorm） |
+| **`intake.pass`** | intake-agent PATCH `result:pass` + finalized intent JSON 解析成功 | start_analyze_with_finalized_intent |
+| **`intake.fail`** | intake-agent PATCH `result:fail` / 或 finalized intent JSON 解析失败 | escalate |
+| `intent.analyze` | 人在 BKD 打 `intent:analyze` tag（跳过 intake 直接进 analyze） | start_analyze |
 | `analyze.done` | analyze-agent session.completed | create_spec_lint |
 | **`spec-lint.pass`** | **M15** spec-lint checker 退码 0 | create_dev_cross_check |
 | **`spec-lint.fail`** | **M15** spec-lint checker 退码非 0 | invoke_verifier_for_spec_lint_fail |
@@ -69,7 +74,10 @@
 stateDiagram-v2
     [*] --> init
 
-    init --> analyzing: intent.analyze
+    init --> intaking: intent.intake（物理隔离 brainstorm）
+    init --> analyzing: intent.analyze（跳过 intake）
+    intaking --> analyzing: intake.pass（新建 analyze issue）
+    intaking --> escalated: intake.fail
     analyzing --> spec_lint_running: analyze.done
     spec_lint_running --> dev_cross_check_running: spec-lint.pass
     spec_lint_running --> review_running: spec-lint.fail
@@ -148,7 +156,22 @@ start_fixer:
 - 上层 webhook handler 也 skip 重复回放
 - 这是 idempotency 的最后一道防线
 
-## 7. session.failed 兜底
+## 7. INTAKING 设计动机：两 agent 物理隔离
+
+**问题**：analyze-agent 在一个 session 内完成 brainstorm + spec + 代码 + PR。对不熟悉的仓，
+LLM 有强烈的行动 bias，即使 prompt 要求"先 brainstorm"也会绕过用户意见直接开干。
+
+**方案**：把 brainstorm 拆成独立 agent stage（INTAKING），物理上限制它**只能读代码 + 问问题**，
+不能写实现 / 开 PR / push。用户在 BKD chat 多轮对话直到满意，intake-agent 输出 finalized intent JSON 后 PATCH `result:pass`，sisyphus 才在新 BKD issue 起 analyze-agent 接力。
+
+**物理隔离的含义**：
+- intake issue 只有 `intake` tag → analyze 的 prompt 不会出现（agent 没有 "出口"）
+- analyze-agent 是在全新 issue 里起来的，不知道也不能访问 intake issue 的 session 工具
+- finalized intent JSON 经 sisyphus 解析验证（6 必填字段）后注入 analyze prompt
+
+**跳过 intake**：用 `intent:analyze` tag 而非 `intent:intake` → 直接进 ANALYZING（trivial REQ 不需要澄清）。两条路在状态机里是独立 transition，互不干扰。
+
+## 8. session.failed 兜底
 
 任何 in-flight state 收到 `session.failed`（agent 崩 / watchdog 判超时）→ 直接 ESCALATED。
 
@@ -157,7 +180,7 @@ watchdog (M8) 把"BKD session 卡 N 秒不动"翻译成 SESSION_FAILED 喂回状
 - 选 in-flight state + `updated_at > threshold`
 - 查关联 BKD issue 的 session 状态：不在 running → emit SESSION_FAILED
 
-## 8. 怎么在状态机加新 stage / event
+## 9. 怎么在状态机加新 stage / event
 
 1. 在 `state.py` 加 `ReqState` 枚举值
 2. 加对应 `Event` 枚举值
@@ -166,7 +189,7 @@ watchdog (M8) 把"BKD session 卡 N 秒不动"翻译成 SESSION_FAILED 喂回状
 5. router.py 加 tag → Event 翻译（如果是新 agent role）
 6. 不忘：观测系统 — `stage_runs` 表自动入；新 agent 类型加 `verifier/<stage>_*.md.j2` prompt（如果走 verifier 框架）
 
-## 9. 调试 tip
+## 10. 调试 tip
 
 ```python
 # REPL: 把当前 transition 表 dump 成 markdown，方便对照
