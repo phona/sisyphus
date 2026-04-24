@@ -225,8 +225,8 @@ async def test_terminal_escalated_triggers_cleanup_retain_pvc(
     async def escalate(*, body, req_id, tags, ctx):
         calls.append(("escalate", {"req_id": req_id}))
         # 模拟真 escalate 路径：手动 CAS + cleanup
-        from orchestrator.store import req_state
         from orchestrator import k8s_runner as krunner
+        from orchestrator.store import req_state
         await req_state.cas_transition(
             None, req_id, ReqState.STAGING_TEST_RUNNING, ReqState.ESCALATED,
             Event.SESSION_FAILED, "escalate",

@@ -167,9 +167,10 @@ async def test_escalate_real_after_retries_exhausted(monkeypatch):
     patch_bkd(monkeypatch, "escalate", fake)
     patch_db(monkeypatch, "escalate")
     # mock req_state.get + cas_transition + k8s_runner cleanup
-    from orchestrator.store import req_state as rs
-    from orchestrator import k8s_runner as krunner
     from unittest.mock import AsyncMock
+
+    from orchestrator import k8s_runner as krunner
+    from orchestrator.store import req_state as rs
 
     class FakeRow:
         state = type("S", (), {"value": "executing"})()  # any non-ESCALATED
