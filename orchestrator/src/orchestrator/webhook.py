@@ -266,6 +266,13 @@ async def webhook(request: Request) -> JSONResponse:
 
         # M14e：落 verifier_decisions（best-effort，失败只 log）
         try:
+            # 软验证 audit 字段（fixer-audit REQ）
+            audit_raw = decision_payload.get("audit") if isinstance(decision_payload.get("audit"), dict) else None
+            audit_warn = router_lib.validate_audit_soft(audit_raw)
+            if audit_warn:
+                log.warning("webhook.verifier_decisions.audit_invalid",
+                            req_id=req_id, reason=audit_warn)
+                audit_raw = None
             await verifier_decisions.insert_decision(
                 pool, req_id,
                 stage=ctx.get("verifier_stage") or "unknown",
@@ -275,6 +282,7 @@ async def webhook(request: Request) -> JSONResponse:
                 scope=decision_payload.get("scope"),
                 reason=decision_payload.get("reason"),
                 confidence=decision_payload.get("confidence"),
+                audit=audit_raw,
             )
         except Exception as e:
             log.warning("webhook.verifier_decisions.write_failed",

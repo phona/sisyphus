@@ -16,37 +16,54 @@ REQ={{ req_id }}
 ROUND={{ round_n }}
 KIND={{ kind }}                 # ci-integration-fail | accept-fail
 SOURCE_ISSUE={{ source_issue_id }}
-BRANCH_BASE={{ branch }}
-BRANCH_WORK=stage/bugfix-dev-{{ req_id }}-round-{{ round_n }}
+BRANCH={{ branch }}
 
-按"干活容器"段先 idempotent 拉起 sisyphus-runner-{{ req_id }}。
+按"干活容器"段先 idempotent 拉起 runner-{{ req_id | lower }}。
 
 ## 职责
-- 诊断 BUG 类型（CODE / TEST / SPEC / ENV）
-- 只能改业务代码（internal/ cmd/ main/），禁改 tests/, openspec/
-- 诊断到 TEST BUG: 加 tag `diagnosis:test-bug` 直接 move review（交 test-fix-agent）
+- 诊断 BUG 类型（CODE / SPEC / ENV）
+- 直接在 feat/{{ req_id }} 分支上改代码、commit、push
 - 诊断到 SPEC BUG: 加 tag `diagnosis:spec-bug` 直接 move review（→ Escalate）
 - 诊断到 **ENV BUG**: 加 tag `diagnosis:env-bug` 直接 move review（→ Escalate）
   - 例：runner 镜像缺工具/版本不对、调试机器磁盘满、网络断、外部依赖挂
-  - 凡是"代码/测试/spec 都没毛病，是 sisyphus 自身环境问题"就是 env-bug
+  - 凡是"代码没毛病，是 sisyphus 自身环境问题"就是 env-bug
   - AI 改不动 sisyphus 自身环境（runner Dockerfile 在 sisyphus repo），escalate 通知运维
-- CODE BUG: 从 $BRANCH_BASE 拉 $BRANCH_WORK 子分支，改代码 commit push，**不 merge 到 feat**
+- CODE BUG: 在 feat/{{ req_id }} 分支上改代码 commit push
+
+> ⚠️ **Audit 告知**：你的改动会被 verifier-after-fix 用 `gh pr diff` 审计。
+> **禁止**：删 assertion / 加 `t.Skip` / hardcode 期望值 / 注释掉业务逻辑来让测试绕过。
+> 每一行改动都要有实质性理由，测试覆盖需真实有效。
 
 ## 步骤
-Step 1 切到 work 分支:
-  kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c "git fetch origin && git checkout -B $BRANCH_WORK origin/$BRANCH_BASE"
 
-Step 2 读 SOURCE_ISSUE（mcp__bkd__get-issue）取 `## CI Result` 或 `## Accept Result`，
-       看 stderr_tail / failed_tests 推断 root cause。
+Step 1 进 runner pod，切到 feat 分支:
+```bash
+kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
+  "cd /workspace/source/sisyphus && git fetch origin && git checkout feat/{{ req_id }}"
+```
 
-Step 3 改代码（只改 internal/ cmd/ main/）→ kubectl exec 内 commit → push 到 $BRANCH_WORK。
+Step 2 读 SOURCE_ISSUE 拿 CI 失败日志。
+用 curl BKD REST 取 issue：
+```bash
+curl -sS http://localhost:3000/api/projects/{{ project_id }}/issues/{{ source_issue_id }}
+```
+看 `## CI Result` 或 `## Accept Result`，从 stderr_tail / failed_tests 推断 root cause。
+
+Step 3 改代码 → commit → push feat/{{ req_id }}:
+```bash
+kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
+  "cd /workspace/source/REPO && \
+   git add -p && \
+   git commit -m 'fix(REQ): <具体修了什么>' && \
+   git push origin feat/{{ req_id }}"
+```
 
 Step 4 写结果到**本 issue**：
-  A. follow-up-issue 追加 `## Bugfix Result`: diagnosis / branch / commit_sha
-  B. update-issue tags（保留 bugfix + $REQ + round-N + parent-id），追加 diagnosis:<code-bug|test-bug|spec-bug>
+  A. follow-up 追加 `## Bugfix Result`: diagnosis / commit_sha / 改了什么
+  B. update-issue tags（保留 fixer + {{ req_id }} + round-N + parent-id），追加 diagnosis:<code-bug|spec-bug|env-bug>
   C. update-issue statusId=review
 
 ## 硬规则
-- 禁 commit 到 $BRANCH_BASE（reviewer 才能 merge）
+- 直接 push 到 feat/{{ req_id }}，不建子分支
 - 禁加 result:* tag
-- pre-commit 会拦 tests/ 和 openspec/ 的改动
+- 所有 update-issue 的 issueId 必须是**本** issue

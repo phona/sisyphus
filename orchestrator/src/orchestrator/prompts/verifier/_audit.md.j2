@@ -1,0 +1,63 @@
+## Diff Audit（after-fix 专属 —— HISTORY 非空时才运行）
+
+你正在做 **after-fix 二次 verify**（HISTORY 非空）。除了常规的 pass/fix/escalate 判决外，
+你**必须**在 decision JSON 里额外追加一份 diff audit 报告。
+
+### 获取 PR diff
+
+```
+# Step 1：找 PR 号（在 runner pod 里跑）
+mcp__aissh-tao__exec_run(
+  server_id="5b25f0cd-4fef-4a1f-a4c0-14ecf1395d84",
+  command="kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c 'gh pr list --head feat/{{ req_id }} --json number,url 2>&1 | head -20'"
+)
+
+# Step 2：拿到 PR 号后获取 diff
+mcp__aissh-tao__exec_run(
+  server_id="5b25f0cd-4fef-4a1f-a4c0-14ecf1395d84",
+  command="kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c 'gh pr diff <PR_NUMBER> 2>&1 | head -500'"
+)
+```
+
+> 如果失败（runner pod 不存在 / 无 PR / GH_TOKEN 失效）：
+> - `red_flags` 里写 `"diff fetch failed: <reason>"`
+> - `verdict` 填 `"unclear"`
+> - action 照常判，**不因 diff 拿不到就 escalate**
+
+### Audit JSON（追加进 decision JSON 同一个 `{}` 里）
+
+audit 字段和 `action` / `fixer` 等字段并列，最终 JSON 结构示例：
+
+````json
+{
+  "action":            "pass",
+  "fixer":             null,
+  "scope":             null,
+  "reason":            "fix 合理，测试覆盖充足",
+  "confidence":        "high",
+  "diff_summary":      "src=+12/-3 tests=+8/-0",
+  "verdict":           "legitimate",
+  "red_flags":         [],
+  "files_by_category": { "src": 3, "tests": 2, "spec": 0, "config": 1 }
+}
+````
+
+**verdict 枚举（五选一）**：
+- `legitimate` —— 改动合理，src 变更 + 测试覆盖平衡
+- `test-hack` —— 测试被弱化（删 assert / 加 skip / hardcode 期望值）来让测试通过
+- `code-lobotomy` —— 业务代码被删 / 注释 / stub 化来绕过测试
+- `spec-drift` —— 改了 spec / openspec 来对齐错误实现，而非让实现对齐 spec
+- `unclear` —— diff 拿不到或内容看不懂
+
+**红旗重点（出现任意一条写进 red_flags）**：
+- 删 `assert` / `require` / `t.Error` / `t.Fatal` 调用
+- 加 `t.Skip(` / `//nolint` / `testing.Short()` 绕过用例
+- hardcode 期望值（`want = "hardcoded"` 而非读真实结果）
+- `tests/` 有改动但 `src/` 没有实质性对应改动
+- `openspec/` 被改来迎合现有实现（而非反过来）
+
+> ⚠️ audit 是**附加诊断**，不影响 pass/fix/escalate 三路决策框架。
+> 即使 verdict=test-hack，action 仍按真实测试结果判；
+> sisyphus Q15 看板会单独标出"通过但可疑"的 case，供人工复盘。
+
+─────────

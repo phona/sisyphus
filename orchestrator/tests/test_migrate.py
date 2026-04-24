@@ -38,3 +38,21 @@ def test_0001_forward_only_no_inline_rollback():
     rb = Path(_DEFAULT_MIGRATIONS_DIR) / "0001_init.rollback.sql"
     assert rb.is_file()
     assert "DROP TABLE" in rb.read_text()
+
+
+def test_0006_forward_adds_audit_column():
+    """0006 forward：ADD COLUMN audit 存在。"""
+    fwd = Path(_DEFAULT_MIGRATIONS_DIR) / "0006_add_verifier_audit.sql"
+    assert fwd.is_file(), "migration 0006 not found"
+    body = fwd.read_text()
+    assert "audit" in body.lower()
+    assert "ADD COLUMN" in body.upper()
+
+
+def test_0006_rollback_drops_audit_column():
+    """0006 rollback：DROP COLUMN audit 存在。"""
+    rb = Path(_DEFAULT_MIGRATIONS_DIR) / "0006_add_verifier_audit.rollback.sql"
+    assert rb.is_file(), "migration 0006 rollback not found"
+    body = rb.read_text()
+    assert "audit" in body.lower()
+    assert "DROP COLUMN" in body.upper()

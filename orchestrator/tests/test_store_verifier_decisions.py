@@ -45,10 +45,12 @@ async def test_insert_decision_full_fields_returns_id():
     sql, args = pool.fetchrow_calls[0]
     assert "INSERT INTO verifier_decisions" in sql
     assert "RETURNING id" in sql
+    # audit 列新增：最后一个参数为 None（调用时未传 audit）
     assert args == (
         "REQ-3", "verify", "check_fail",
         "fix", "coder", "file",
         "lint failure on foo.py", "high", made,
+        None,
     )
 
 
@@ -88,3 +90,53 @@ async def test_mark_correct_handles_false_outcome():
 
     _, args = pool.execute_calls[0]
     assert args == (7, "fail", False)
+
+
+# ─── audit 字段（fixer-audit REQ）─────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_insert_decision_with_audit_serializes_json():
+    """insert with audit：audit dict 被 json.dumps 序列化后传入 SQL 参数。"""
+    import json
+    pool = CapturePool(ret={"id": 99})
+    audit = {
+        "diff_summary": "src=+5/-2 tests=+3/-0",
+        "verdict": "legitimate",
+        "red_flags": [],
+        "files_by_category": {"src": 2, "tests": 1, "spec": 0, "config": 0},
+    }
+
+    dec_id = await vd.insert_decision(
+        pool,
+        "REQ-audit-1",
+        "staging_test",
+        "success",
+        action="pass",
+        fixer=None,
+        scope=None,
+        reason="fix looks good",
+        confidence="high",
+        audit=audit,
+    )
+
+    assert dec_id == 99
+    assert len(pool.fetchrow_calls) == 1
+    sql, args = pool.fetchrow_calls[0]
+    assert "audit" in sql
+    # audit 被序列化成 JSON 字符串（asyncpg JSONB 不注册 type codec，传 str）
+    audit_arg = args[-1]
+    assert audit_arg is not None
+    parsed = json.loads(audit_arg)
+    assert parsed["verdict"] == "legitimate"
+    assert parsed["files_by_category"]["src"] == 2
+
+
+@pytest.mark.asyncio
+async def test_insert_decision_without_audit_writes_null():
+    """insert without audit：audit 参数默认为 None，SQL 参数传 None（向后兼容）。"""
+    pool = CapturePool(ret={"id": 1})
+    await vd.insert_decision(pool, "REQ-1", "staging_test", "success")
+
+    _, args = pool.fetchrow_calls[0]
+    # 最后一个参数是 audit，应为 None
+    assert args[-1] is None

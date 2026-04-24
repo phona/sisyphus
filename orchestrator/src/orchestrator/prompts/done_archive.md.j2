@@ -10,13 +10,13 @@
 
 ─────────
 
-## 归档 (DONE ARCHIVE)  v0.2 / 多仓
+## 归档 (DONE ARCHIVE)  v0.3 / 多仓
 AGENT_ROLE=done-archive-agent
 REQ={{ req_id }}
 ACCEPT_ISSUE={{ accept_issue_id }}
 
 accept 通过。你现在要：
-1. 从 dev 阶段找出**所有仓的所有 PR**，按影响顺序 merge
+1. 从每个 source repo 找 PR，按影响顺序 merge
 2. **逐仓**归档 `openspec/changes/{{ req_id }}/` → `openspec/specs/`
 3. 写结果到本 issue
 
@@ -26,21 +26,22 @@ accept 通过。你现在要：
 
 ## 步骤
 
-### Step 1: 从 BKD issue 查出所有 dev task 的 PR
+### Step 1: 找出所有仓的 PR
 
-sisyphus fanout_dev 为本 REQ 创建了 N 个 `tag=dev+{{ req_id }}` 的 BKD issue
-（多仓 REQ 会更多——每仓至少 1 个）。查出这些 issue，从各自的 comment 里读
-dev-agent 填的 PR 链接（格式：`owner/repo#PR`）。
+对 `/workspace/source/*` 下每个 source repo，用 `gh pr list` 找本 REQ 的 PR：
 
 ```bash
-# 伪代码：查 parent issue 的 related issues（tag=dev+{{ req_id }}）
-bkd_issue={{ parent_issue_id }}
-gh issue view $bkd_issue --json body  # 确认本 REQ 的内容
-
-# 然后逐个找 tag=dev+{{ req_id }} 的 related issue，读他们的 PR 信息
-# dev-agent 会在 comment 里或 follow-up 写：
-#   "PR: owner/repo#123"
+# 在 runner pod 里（通过 mcp__aissh-tao__exec_run + kubectl exec）
+for repo_path in /workspace/source/*/; do
+  repo_name="${repo_path%/}"
+  repo_name="${repo_name##*/}"
+  echo "=== $repo_name ==="
+  cd "$repo_path"
+  gh pr list --head "feat/{{ req_id }}" --json number,url,title 2>&1
+done
 ```
+
+收集每仓的 PR 号。
 
 决定 merge 顺序：
 - 如果没有库间依赖，按任意顺序
@@ -48,10 +49,10 @@ gh issue view $bkd_issue --json body  # 确认本 REQ 的内容
 - 多仓部署到同一环境：先 merge 不会破环境的（library / additive change），
   后 merge breaking change
 
-### Step 2: Merge 每个 PR（在你自己 cwd，用自己的 GH_TOKEN 有写权限）
+### Step 2: Merge 每个 PR
 
 ```bash
-# 按上面决定的顺序
+# 按上面决定的顺序，在 runner pod 里
 for pr in "owner1/repo-a#123" "owner2/repo-b#456"; do
   gh pr merge "$pr" --squash --delete-branch --auto
 done
@@ -66,22 +67,14 @@ done
 合并到 `openspec/specs/` 下，然后删掉 changes/{{ req_id }}/。
 
 ```bash
-# 从 BKD intent issue description / dev-agent comment 列出涉及的所有仓
-repos="phona/repo-a phona/repo-b"  # 例
-
-for repo in $repos; do
-  name="${repo##*/}"
-  rm -rf "./$name-archive"
-  gh repo clone "$repo" "./$name-archive"
-  cd "./$name-archive"
-  git fetch origin && git checkout main && git pull
-  if [ -d openspec/changes/{{ req_id }} ]; then
+for repo_path in /workspace/source/*/; do
+  cd "$repo_path"
+  if [ -d "openspec/changes/{{ req_id }}" ]; then
     openspec apply {{ req_id }}
     git push origin main || echo "push 失败（分支保护？转 PR）"
   else
-    echo "$repo 无 openspec/changes/{{ req_id }}，跳过"
+    echo "$(basename $repo_path) 无 openspec/changes/{{ req_id }}，跳过"
   fi
-  cd -
 done
 ```
 
@@ -97,6 +90,11 @@ done
 - 多仓 REQ 没指明：往本 BKD issue 追加 follow-up 报"missing spec_home_repo"，
   贴 `archive-fail` tag + move review，让人介入
 
+用 curl 读 intent issue：
+```bash
+curl -sS http://localhost:3000/api/projects/{{ project_id }}/issues/{{ intent_issue_id }}
+```
+
 ### Step 4: 写结果到**本 issue**
 
 ```markdown
@@ -111,13 +109,25 @@ done
 - (optional) any skipped
 ```
 
-follow-up 追加。
+用 curl BKD REST 追加 follow-up：
+```bash
+curl -sS -X POST http://localhost:3000/api/projects/{{ project_id }}/issues/{{ accept_issue_id | default(MY_ISSUE_ID) }}/follow-up \
+  -H 'content-type: application/json' \
+  -d '{"prompt": "## Archive Result\n..."}'
+```
 
 ### Step 5: 贴 tag + status=done
 
-update-issue:
-- tags: `[done-archive, {{ req_id }}, result:pass]` + per-repo `pr-merged:<repo>`
-- statusId=**done**（不 review，归档直接 done）
+```bash
+# 先 GET 当前 tags
+curl -sS http://localhost:3000/api/projects/{{ project_id }}/issues/MY_ISSUE_ID
+# 再 PATCH（tags 替换语义，保留原有 tag）
+curl -sS -X PATCH http://localhost:3000/api/projects/{{ project_id }}/issues/MY_ISSUE_ID \
+  -H 'content-type: application/json' \
+  -d '{"tags": ["done-archive", "{{ req_id }}", "result:pass", ...], "statusId": "done"}'
+```
+
+statusId=**done**（不 review，归档直接 done）。
 
 ---
 
@@ -126,4 +136,5 @@ update-issue:
 1. **不要** `kubectl delete pod / pvc`：sisyphus 的 GC 会在 state=done 后清（保留 N 分钟给 admin 翻现场）
 2. merge 失败（比如 check 没过）→ 贴 `archive-fail` tag + move review，让人介入
 3. 任一仓 `openspec apply` 失败 → 同上 `archive-fail`，**不要硬强制 push**
-4. 所有 update-issue 的 issueId 必须是**本** issue（不是 ACCEPT_ISSUE）
+4. 多仓 REQ 任一仓 `gh pr list` 失败 → 贴 `archive-fail` + move review
+5. 所有 update-issue 的 issueId 必须是**本** issue（不是 ACCEPT_ISSUE）
