@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from orchestrator.router import extract_intake_finalized_intent
+from orchestrator.router import derive_event, extract_intake_finalized_intent
 from orchestrator.state import Event, ReqState, decide
 
 # ─── 1. extract_intake_finalized_intent ──────────────────────────────────────
@@ -78,8 +78,6 @@ def test_extract_none_on_empty():
 
 
 # ─── 2. router routing ───────────────────────────────────────────────────────
-
-from orchestrator.router import derive_event
 
 
 @pytest.mark.parametrize("event_type,tags,expected", [
