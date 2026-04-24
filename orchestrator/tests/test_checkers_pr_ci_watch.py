@@ -206,24 +206,104 @@ async def test_watch_pr_ci_empty_runs_times_out(httpx_mock, monkeypatch):
 # ── env / branch 不全 → 抛 ValueError ────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_watch_pr_ci_raises_when_env_missing(monkeypatch):
-    """SISYPHUS_BUSINESS_REPO 没设 → 直接 ValueError。"""
+async def test_watch_pr_ci_raises_when_no_repos(monkeypatch):
+    """没传 repos 参数 + SISYPHUS_BUSINESS_REPO 没设 → 直接 ValueError。"""
     monkeypatch.delenv("SISYPHUS_BUSINESS_REPO", raising=False)
-    with pytest.raises(ValueError, match="SISYPHUS_BUSINESS_REPO"):
+    with pytest.raises(ValueError, match="no repos provided"):
         await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9")
 
 
 @pytest.mark.asyncio
-async def test_watch_pr_ci_raises_when_no_pr(monkeypatch):
-    """_get_pr_info 找不到对应 PR → ValueError。"""
+async def test_watch_pr_ci_returns_fail_when_no_pr(monkeypatch):
+    """找不到对应 PR → 返 fail CheckResult（exit=1），不再抛 ValueError 让 caller 处理。"""
     monkeypatch.setenv("SISYPHUS_BUSINESS_REPO", "phona/ubox-crosser")
 
     async def fake_lookup_none(client, _repo: str, _branch: str) -> tuple[int, str]:
         raise ValueError("No open PR found for branch")
     monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup_none)
 
-    with pytest.raises(ValueError, match="No open PR found"):
-        await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9")
+    result = await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9")
+    assert result.passed is False
+    assert result.exit_code == 1
+    assert "No open PR found" in result.stderr_tail
+
+
+@pytest.mark.asyncio
+async def test_watch_pr_ci_per_req_repos_override_env(monkeypatch):
+    """传入 repos 参数应覆盖 SISYPHUS_BUSINESS_REPO env var（per-REQ 覆盖全局）。"""
+    monkeypatch.setenv("SISYPHUS_BUSINESS_REPO", "phona/wrong-repo")
+
+    looked_up: list[str] = []
+
+    async def fake_lookup(client, repo: str, _branch: str):
+        looked_up.append(repo)
+        return (101, "abc1234567890def")
+
+    async def fake_check_runs(client, _repo: str, _sha: str):
+        return [_run("CI", conclusion="success")]
+
+    monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup)
+    monkeypatch.setattr(pr_ci_watch, "_get_check_runs", fake_check_runs)
+
+    result = await pr_ci_watch.watch_pr_ci(
+        "REQ-9", "feat/REQ-9",
+        poll_interval_sec=0, timeout_sec=10,
+        repos=["ZonEaseTech/ttpos-server-go"],
+    )
+    assert result.passed
+    # env var 完全没被用到，只用 caller 给的 repo
+    assert looked_up == ["ZonEaseTech/ttpos-server-go"]
+
+
+@pytest.mark.asyncio
+async def test_watch_pr_ci_multi_repo_all_green(monkeypatch):
+    """多 repo REQ：所有 repo 都绿 → pass，cmd label 含全部 repo+sha。"""
+    looked_up: list[str] = []
+
+    async def fake_lookup(client, repo: str, _branch: str):
+        looked_up.append(repo)
+        return (1, f"sha-{repo[:4]}aaaa")
+
+    async def fake_check_runs(client, _repo: str, _sha: str):
+        return [_run("CI", conclusion="success")]
+
+    monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup)
+    monkeypatch.setattr(pr_ci_watch, "_get_check_runs", fake_check_runs)
+
+    result = await pr_ci_watch.watch_pr_ci(
+        "REQ-9", "feat/REQ-9",
+        poll_interval_sec=0, timeout_sec=10,
+        repos=["a/repo-x", "b/repo-y"],
+    )
+    assert result.passed
+    assert "a/repo-x" in result.cmd
+    assert "b/repo-y" in result.cmd
+
+
+@pytest.mark.asyncio
+async def test_watch_pr_ci_multi_repo_one_fails(monkeypatch):
+    """多 repo REQ：任一 repo CI 红 → 整体 fail，stdout 标出哪个 repo 红。"""
+    async def fake_lookup(client, repo: str, _branch: str):
+        return (1, f"sha-{repo[:4]}aaaa")
+
+    async def fake_check_runs(client, repo: str, _sha: str):
+        if repo == "b/repo-y":
+            return [_run("CI", conclusion="failure")]
+        return [_run("CI", conclusion="success")]
+
+    monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup)
+    monkeypatch.setattr(pr_ci_watch, "_get_check_runs", fake_check_runs)
+
+    result = await pr_ci_watch.watch_pr_ci(
+        "REQ-9", "feat/REQ-9",
+        poll_interval_sec=0, timeout_sec=10,
+        repos=["a/repo-x", "b/repo-y"],
+    )
+    assert not result.passed
+    assert result.exit_code == 1
+    # 只输出失败的 repo 摘要
+    assert "b/repo-y" in result.stdout_tail
+    assert "failure" in result.stdout_tail
 
 
 # ── _classify 单测 ───────────────────────────────────────────────────────

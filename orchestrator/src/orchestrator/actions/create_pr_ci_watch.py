@@ -41,12 +41,18 @@ async def _run_checker(*, req_id: str, ctx: dict) -> dict:
     log.info("create_pr_ci_watch.checker_path", req_id=req_id)
     branch = ctx.get("branch") or f"feat/{req_id}"
 
+    # per-REQ involved_repos 优先（intake-agent 写的 finalized intent 里有），
+    # checker fallback 到全局 SISYPHUS_BUSINESS_REPO 兼容老 REQ
+    finalized = ctx.get("intake_finalized_intent") or {}
+    repos = finalized.get("involved_repos") or ctx.get("involved_repos")
+
     try:
         result = await checker.watch_pr_ci(
             req_id,
             branch=branch,
             poll_interval_sec=settings.pr_ci_watch_poll_interval_sec,
             timeout_sec=settings.pr_ci_watch_timeout_sec,
+            repos=repos,
         )
     except ValueError as e:
         log.error("create_pr_ci_watch.config_error", req_id=req_id, error=str(e))
