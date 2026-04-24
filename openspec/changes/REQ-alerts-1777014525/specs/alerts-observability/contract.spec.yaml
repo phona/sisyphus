@@ -1,0 +1,132 @@
+capability: alerts-observability
+version: "1.0"
+description: |
+  三类静默失败可观测：alerts 表 + TG push + escalate reason 精化 +
+  watchdog 两阶段（5min warn / 30min escalate）+ PVC GC + fixer 循环检测。
+
+db_schema_changes:
+  - table: alerts
+    migration: "0008_create_alerts"
+    columns:
+      - name: id
+        type: BIGSERIAL
+        nullable: false
+        comment: "PK"
+      - name: severity
+        type: TEXT
+        nullable: false
+        constraint: "CHECK (severity IN ('info', 'warn', 'critical'))"
+      - name: req_id
+        type: TEXT
+        nullable: true
+      - name: stage
+        type: TEXT
+        nullable: true
+      - name: reason
+        type: TEXT
+        nullable: false
+      - name: hint
+        type: TEXT
+        nullable: true
+      - name: suggested_action
+        type: TEXT
+        nullable: true
+      - name: created_at
+        type: TIMESTAMPTZ
+        nullable: false
+        default: "NOW()"
+      - name: acknowledged_at
+        type: TIMESTAMPTZ
+        nullable: true
+      - name: sent_to_tg
+        type: BOOLEAN
+        nullable: false
+        default: "FALSE"
+    indexes:
+      - name: idx_alerts_unack
+        columns: ["created_at DESC"]
+        partial: "WHERE acknowledged_at IS NULL"
+        comment: "dashboard 查活跃告警用"
+
+functions:
+  store.alerts.insert_alert:
+    module: orchestrator.store.alerts
+    signature: "async (pool, *, severity: str, reason: str, hint: str | None = None, suggested_action: str | None = None, req_id: str | None = None, stage: str | None = None) -> int"
+    semantics: "INSERT INTO alerts ... RETURNING id"
+
+  store.alerts.mark_sent_to_tg:
+    module: orchestrator.store.alerts
+    signature: "async (pool, alert_id: int) -> None"
+    semantics: "UPDATE alerts SET sent_to_tg = TRUE WHERE id = $1"
+
+  alerts.insert:
+    module: orchestrator.alerts
+    signature: "async (*, severity, reason, hint=None, suggested_action=None, req_id=None, stage=None) -> int"
+    semantics: "convenience wrapper, auto-gets pool via db.get_pool()"
+
+  alerts.tg.send_critical:
+    module: orchestrator.alerts.tg
+    signature: "async (text: str) -> bool"
+    semantics: "POST to telegram Bot API; returns False silently if not configured or on error"
+    must_not_raise: true
+
+  k8s_runner.K8sRunnerController._diagnose_pod:
+    module: orchestrator.k8s_runner
+    signature: "async (pod_name: str) -> str"
+    semantics: "reads K8s events for pod, returns human-readable diagnosis"
+    must_not_raise: true
+
+  k8s_runner.K8sRunnerController.delete_pvc:
+    module: orchestrator.k8s_runner
+    signature: "async (req_id: str) -> bool"
+    semantics: "deletes PVC named runner-<req_id> in runners namespace"
+
+  runner_gc.gc_pvcs:
+    module: orchestrator.runner_gc
+    signature: "async () -> dict"
+    semantics: |
+      done → immediate delete_pvc;
+      escalated → retain _PVC_ESCALATED_RETAIN_H hours then delete;
+      disk>80% → force purge non-active PVCs;
+      active req_ids never deleted.
+    returns: "{'pvc_deleted': [str]}"
+
+  runner_gc._disk_pressure:
+    module: orchestrator.runner_gc
+    signature: "async () -> float"
+    semantics: "shutil.disk_usage('/') used/total, returns 0.0–1.0"
+
+constants:
+  _WARN_THRESHOLD_SEC: 300
+  _ESCALATE_THRESHOLD_SEC: 1800
+  _PVC_ESCALATED_RETAIN_H: 24
+
+ctx_fields_added:
+  - field: escalated_reason
+    set_by: [escalate, watchdog, _verifier, apply_verify_pass]
+    read_by: [escalate]
+    comment: "takes priority over body.event name in escalate action"
+  - field: escalated_hint
+    set_by: [apply_verify_pass, _verifier]
+    read_by: [escalate]
+  - field: warned_at_5min
+    set_by: [watchdog]
+    semantics: "True → skip duplicate 5min warn"
+  - field: verifier_history
+    set_by: [invoke_verifier_after_fix]
+    semantics: "list of {fixer, fixer_issue_id} per round; len > 3 → VERIFY_ESCALATE"
+
+config_settings_added:
+  - name: tg_bot_token
+    type: "str | None"
+    default: null
+    env: "TG_BOT_TOKEN"
+  - name: tg_chat_id
+    type: "str | None"
+    default: null
+    env: "TG_CHAT_ID"
+
+observability_queries:
+  Q18: "observability/queries/sisyphus/18-active-alerts.sql"
+  Q19: "observability/queries/sisyphus/19-alerts-trend.sql"
+  Q20: "observability/queries/sisyphus/20-escalate-reasons.sql"
