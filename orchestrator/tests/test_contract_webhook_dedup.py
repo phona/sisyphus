@@ -206,7 +206,7 @@ async def test_s6_retry_path_cas_idempotent(monkeypatch):
     engine_calls: list = []
 
     monkeypatch.setattr(dedup, "check_and_record", AsyncMock(return_value="retry"))
-    monkeypatch.setattr(dedup, "mark_processed", AsyncMock(side_effect=mark_calls.append))
+    monkeypatch.setattr(dedup, "mark_processed", AsyncMock(side_effect=lambda *a: mark_calls.append(a)))
     monkeypatch.setattr(db, "get_pool", lambda: _FakePool())
     monkeypatch.setattr(obs, "record_event", AsyncMock())
 
