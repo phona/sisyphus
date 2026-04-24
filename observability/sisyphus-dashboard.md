@@ -176,6 +176,35 @@ M7 原 5 条（Q1–Q5）基于 `artifact_checks`。M14e 追加 8 条（Q6–Q13
   - `test_changes > src_changes` 且 `test_changes ≥ 5` → fixer 改测试比改代码还多，可疑
   - `spec_changes` 持续增长 → fixer 在改 spec 迎合实现，spec-drift 告警
 
+### Q17. Dedup retry rate（重复事件比例）
+
+- **SQL**：[queries/sisyphus/17-dedup-retry-rate.sql](queries/sisyphus/17-dedup-retry-rate.sql)
+
+### Q18. Active alerts（未处理告警）
+
+- **SQL**：[queries/sisyphus/18-active-alerts.sql](queries/sisyphus/18-active-alerts.sql)
+- **Visualization**：Table（列顺序：`created_at, severity, req_id, stage, reason, hint, suggested_action`）
+- **说明**：实时看板，显示所有未 ack 的 alert。critical 行代表已 escalate 的 REQ（同时推过 TG）；warn 行代表 5min stuck 预警。
+- **人工介入阈值**：出现任意 critical 行即需人工介入；warn 行若持续超 30min 会自动升级为 critical。
+- **数据源**：`sisyphus` 主库 `alerts` 表（migration 0008）
+
+### Q19. Alerts trend（24h 告警趋势）
+
+- **SQL**：[queries/sisyphus/19-alerts-trend.sql](queries/sisyphus/19-alerts-trend.sql)
+- **Visualization**：Line chart，X = `hour`，Y = `n`，按 `severity` 分系列（critical=红 / warn=黄）
+- **说明**：观测 24h 内告警频率变化，帮助识别突发故障期。
+- **人工介入阈值**：单小时 critical ≥ 3 → 系统性问题，需立刻排查。
+
+### Q20. Escalate reason distribution（escalate 原因分布 30d）
+
+- **SQL**：[queries/sisyphus/20-escalate-reasons.sql](queries/sisyphus/20-escalate-reasons.sql)
+- **Visualization**：Table（列顺序：`day, reason, n`）或 Stacked bar chart
+- **说明**：按 reason 分桶统计 critical alert 数量，帮助识别哪类 reason 最频繁、哪块 prompt 该改。
+- **关键 reason 字面量**：`runner-pod-not-ready` / `fixer-loop-3rounds` / `watchdog-stuck-30min` / `session-failed` / `dedup-swallowed-event`
+- **人工介入阈值**：
+  - `fixer-loop-3rounds` 持续增长 → fixer prompt 老化，需专项优化
+  - `runner-pod-not-ready` 占比 > 30% → K8s 基础设施问题，检查 PVC / 节点资源
+
 ## 看板布局
 
 推荐两列布局（Metabase Dashboard，gridsize 18×? 自适应）：

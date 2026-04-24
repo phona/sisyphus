@@ -28,7 +28,7 @@ from typing import Literal
 
 import structlog
 
-from .. import k8s_runner
+from .. import alerts, k8s_runner
 from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
@@ -185,9 +185,21 @@ async def apply_verify_pass(*, body, req_id, tags, ctx):
     except RuntimeError:
         log.warning("apply_verify_pass.no_runner_controller", req_id=req_id)
     else:
-        pod = await rc.ensure_runner(req_id, wait_ready=True)
-        log.info("apply_verify_pass.runner_ready",
-                 req_id=req_id, stage=stage, pod=pod, src_state=src_state.value)
+        try:
+            pod = await rc.ensure_runner(req_id, wait_ready=True)
+            log.info("apply_verify_pass.runner_ready",
+                     req_id=req_id, stage=stage, pod=pod, src_state=src_state.value)
+        except TimeoutError:
+            pod_name = rc.pod_name(req_id)
+            hint = await rc._diagnose_pod(pod_name)
+            pool = db.get_pool()
+            await req_state.update_context(pool, req_id, {
+                "escalated_reason": "runner-pod-not-ready",
+                "escalated_stage": "runner-startup",
+                "escalated_hint": hint,
+                "escalated_action": "kubectl describe pvc + delete stale PVCs",
+            })
+            raise
 
     log.info("apply_verify_pass.done",
              req_id=req_id, stage=stage,
@@ -270,6 +282,8 @@ async def invoke_verifier_after_fix(*, body, req_id, tags, ctx):
     stage 必须从**当前 fixer issue 的 tags** 取（`parent-stage:<stage>`），不能依赖
     ctx.verifier_stage —— 多 verifier 并发时 ctx 是最新一个的 stage，老 fixer 完成时
     ctx 已被覆盖，会拿错 stage。fixer issue 自带 parent-stage tag 是无歧义的真相。
+
+    fixer loop detection：history 已有 3 条 → 直接 emit VERIFY_ESCALATE 不再跑 verifier。
     """
     ctx = ctx or {}
     stage = None
@@ -286,6 +300,30 @@ async def invoke_verifier_after_fix(*, body, req_id, tags, ctx):
             "fixer_issue_id": ctx.get("fixer_issue_id"),
         },
     ]
+
+    # fixer loop detection：超过 3 轮直接 escalate，不再起新 verifier
+    fixer_rounds = len(history)
+    if fixer_rounds > 3:
+        escalate_hint = "fixer 跑 3 轮无 net progress; 多半 fixer prompt 老化或 bug 不可修"
+        pool = db.get_pool()
+        await req_state.update_context(pool, req_id, {
+            "verifier_history": history,
+            "escalated_reason": "fixer-loop-3rounds",
+            "escalated_hint": escalate_hint,
+        })
+        try:
+            await alerts.insert(
+                severity="critical",
+                req_id=req_id,
+                stage=stage,
+                reason="fixer-loop-3rounds",
+                hint=escalate_hint,
+            )
+        except Exception as e:
+            log.warning("invoke_verifier_after_fix.alert_failed", req_id=req_id, error=str(e))
+        log.warning("invoke_verifier_after_fix.loop_detected",
+                    req_id=req_id, stage=stage, rounds=fixer_rounds)
+        return {"emit": Event.VERIFY_ESCALATE.value, "reason": "fixer loop"}
 
     result = await invoke_verifier(
         stage=stage,

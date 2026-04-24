@@ -56,3 +56,25 @@ def test_0006_rollback_drops_audit_column():
     body = rb.read_text()
     assert "audit" in body.lower()
     assert "DROP COLUMN" in body.upper()
+
+
+def test_0008_forward_creates_alerts_table():
+    """0008 forward：CREATE TABLE alerts + 关键列名。"""
+    fwd = Path(_DEFAULT_MIGRATIONS_DIR) / "0008_create_alerts.sql"
+    assert fwd.is_file(), "migration 0008 not found"
+    body = fwd.read_text()
+    assert "CREATE TABLE" in body.upper()
+    assert "alerts" in body.lower()
+    assert "severity" in body
+    assert "reason" in body
+    assert "sent_to_tg" in body
+    assert "acknowledged_at" in body
+
+
+def test_0008_rollback_drops_alerts():
+    """0008 rollback：DROP TABLE alerts。"""
+    rb = Path(_DEFAULT_MIGRATIONS_DIR) / "0008_create_alerts.rollback.sql"
+    assert rb.is_file(), "migration 0008 rollback not found"
+    body = rb.read_text()
+    assert "DROP TABLE" in body.upper()
+    assert "alerts" in body.lower()

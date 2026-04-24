@@ -114,6 +114,12 @@ class Settings(BaseSettings):
     # analyze fan out 的 sub-issue model 由 analyze prompt 自己控（见 analyze.md.j2）。
     agent_model: str | None = None
 
+    # ─── Telegram 告警推送 ────────────────────────────────────────────────
+    # critical severity 的 alert 推送到 TG。不配则跳过（不抛错）。
+    # 申请 bot token 步骤见用户文档；sisyphus 不管 bot 部署。
+    tg_bot_token: str | None = None
+    tg_chat_id: str | None = None
+
     # ─── aissh-tao MCP server id (vm-node04) ─────────────────────────────
     # BKD agent 跑在 Coder workspace 没装 kubectl，所有 vm-node04 上的 kubectl 命令
     # 必须经 aissh-tao MCP 跨 SSH 跑。prompt 模板里需要这个 server_id 告诉 agent。

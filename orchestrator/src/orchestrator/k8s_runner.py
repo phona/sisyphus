@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import structlog
 from kubernetes import client, config
@@ -482,6 +483,48 @@ class RunnerController:
         if cleaned:
             log.info("runner.gc.cleaned", count=len(cleaned), reqs=cleaned)
         return cleaned
+
+    # ── diagnostics ─────────────────────────────────────────────────────
+
+    async def _diagnose_pod(self, pod_name: str) -> str:
+        """从 K8s events 抠关键失败原因（用于 escalate hint）。"""
+        try:
+            event_list = await asyncio.to_thread(
+                self.core_v1.list_namespaced_event,
+                self.namespace,
+                field_selector=f"involvedObject.name={pod_name}",
+            )
+            events_text = " ".join(
+                f"{e.reason or ''}: {e.message or ''}"
+                for e in sorted(
+                    event_list.items or [],
+                    key=lambda e: (e.last_timestamp or datetime.min.replace(tzinfo=timezone.utc)),
+                )
+            )
+        except Exception:
+            return "diagnostic failed"
+
+        if "ImagePullBackOff" in events_text or "ErrImagePull" in events_text:
+            return "image pull failed"
+        if "WaitForFirstConsumer" in events_text or "WaitForPodScheduled" in events_text:
+            return "PVC pending (likely disk pressure or scheduler can't fit)"
+        if "Insufficient" in events_text:
+            return "node resource insufficient"
+        return f"unknown (events tail: {events_text[-200:]})"
+
+    async def delete_pvc(self, req_id: str) -> bool:
+        """直接删 PVC（不删 Pod）。幂等。"""
+        try:
+            await asyncio.to_thread(
+                self.core_v1.delete_namespaced_persistent_volume_claim,
+                self.pvc_name(req_id), self.namespace,
+            )
+            log.info("runner.pvc.deleted", req_id=req_id)
+            return True
+        except ApiException as e:
+            if e.status != 404:
+                raise
+            return False
 
     # ── exec ────────────────────────────────────────────────────────────
 

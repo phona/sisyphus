@@ -1,5 +1,8 @@
 """watchdog 单测：mock PG fetch + BKD get_issue + engine.step，
-验不同 stuck row 的分流（escalate / skip / session-running）。"""
+验不同 stuck row 的分流（escalate / skip / session-running）。
+
+v2：5-min warn + 30-min escalate 两阶段。
+"""
 from __future__ import annotations
 
 import json
@@ -11,6 +14,7 @@ import pytest
 
 from orchestrator import watchdog
 from orchestrator.state import Event, ReqState
+from orchestrator.watchdog import _WARN_THRESHOLD_SEC
 
 
 # ─── Fake pool（只实现 fetch + execute，watchdog 用到这两）──────────────────
@@ -98,6 +102,27 @@ def _patch_artifact(monkeypatch):
     return calls
 
 
+def _patch_alerts(monkeypatch):
+    calls: list = []
+
+    async def fake_insert(**kw):
+        calls.append(kw)
+        return 1
+
+    monkeypatch.setattr("orchestrator.watchdog.alerts.insert", fake_insert)
+    return calls
+
+
+def _patch_req_state_update(monkeypatch):
+    calls: list = []
+
+    async def fake_update(pool, req_id, patch):
+        calls.append({"req_id": req_id, "patch": patch})
+
+    monkeypatch.setattr("orchestrator.watchdog.req_state.update_context", fake_update)
+    return calls
+
+
 # ─── Case 1：session=failed → escalate（写 artifact + engine.step SESSION_FAILED）
 @pytest.mark.asyncio
 async def test_stuck_with_failed_session_escalates(monkeypatch):
@@ -109,10 +134,13 @@ async def test_stuck_with_failed_session_escalates(monkeypatch):
     _patch_bkd(monkeypatch, FakeIssue(session_status="failed", id="st-1"))
     step_calls = _patch_engine(monkeypatch)
     art_calls = _patch_artifact(monkeypatch)
+    _patch_req_state_update(monkeypatch)
 
     result = await watchdog._tick()
 
-    assert result == {"checked": 1, "escalated": 1}
+    assert result["checked"] == 1
+    assert result["escalated"] == 1
+    assert result["warned"] == 0
     # engine 被调且是 SESSION_FAILED
     assert len(step_calls) == 1
     assert step_calls[0]["event"] == Event.SESSION_FAILED
@@ -137,10 +165,12 @@ async def test_stuck_but_session_running_skips(monkeypatch):
     _patch_bkd(monkeypatch, FakeIssue(session_status="running", id="st-2"))
     step_calls = _patch_engine(monkeypatch)
     art_calls = _patch_artifact(monkeypatch)
+    _patch_req_state_update(monkeypatch)
 
     result = await watchdog._tick()
 
-    assert result == {"checked": 1, "escalated": 0}
+    assert result["checked"] == 1
+    assert result["escalated"] == 0
     assert step_calls == []
     assert art_calls == []
 
@@ -156,10 +186,11 @@ async def test_stuck_bkd_lookup_fails_escalates(monkeypatch):
     _patch_bkd(monkeypatch, None, side_effect=RuntimeError("404 not found"))
     step_calls = _patch_engine(monkeypatch)
     _patch_artifact(monkeypatch)
+    _patch_req_state_update(monkeypatch)
 
     result = await watchdog._tick()
 
-    assert result == {"checked": 1, "escalated": 1}
+    assert result["escalated"] == 1
     assert len(step_calls) == 1
     assert step_calls[0]["event"] == Event.SESSION_FAILED
 
@@ -176,10 +207,11 @@ async def test_spec_lint_escalates_without_bkd_lookup(monkeypatch):
     fake_bkd = _patch_bkd(monkeypatch, FakeIssue(session_status="running"))
     step_calls = _patch_engine(monkeypatch)
     _patch_artifact(monkeypatch)
+    _patch_req_state_update(monkeypatch)
 
     result = await watchdog._tick()
 
-    assert result == {"checked": 1, "escalated": 1}
+    assert result["escalated"] == 1
     # spec-lint 无 issue_key → 不查 BKD
     fake_bkd.get_issue.assert_not_called()
     assert len(step_calls) == 1
@@ -198,10 +230,11 @@ async def test_missing_issue_id_in_ctx_escalates(monkeypatch):
     fake_bkd = _patch_bkd(monkeypatch, FakeIssue(session_status="running"))
     step_calls = _patch_engine(monkeypatch)
     _patch_artifact(monkeypatch)
+    _patch_req_state_update(monkeypatch)
 
     result = await watchdog._tick()
 
-    assert result == {"checked": 1, "escalated": 1}
+    assert result["escalated"] == 1
     # 无 issue_id 不查
     fake_bkd.get_issue.assert_not_called()
     assert len(step_calls) == 1
@@ -215,17 +248,18 @@ async def test_no_stuck_rows_does_nothing(monkeypatch):
     _patch_bkd(monkeypatch, FakeIssue())
     step_calls = _patch_engine(monkeypatch)
     art_calls = _patch_artifact(monkeypatch)
+    _patch_req_state_update(monkeypatch)
 
     result = await watchdog._tick()
 
-    assert result == {"checked": 0, "escalated": 0}
+    assert result == {"checked": 0, "escalated": 0, "warned": 0}
     assert step_calls == []
     assert art_calls == []
 
 
-# ─── Case 7：SQL 参数正确下发（_SKIP_STATES 含终态 + init）────
+# ─── Case 7：SQL 参数正确下发（_SKIP_STATES 含终态 + init，阈值=_WARN_THRESHOLD_SEC）────
 @pytest.mark.asyncio
-async def test_tick_passes_skip_states_and_threshold_to_sql(monkeypatch):
+async def test_tick_passes_skip_states_and_warn_threshold_to_sql(monkeypatch):
     captured: dict = {}
 
     class _CapturingPool:
@@ -235,14 +269,12 @@ async def test_tick_passes_skip_states_and_threshold_to_sql(monkeypatch):
             return []
 
     _patch_pool(monkeypatch, _CapturingPool())
-    monkeypatch.setattr(
-        "orchestrator.watchdog.settings.watchdog_stuck_threshold_sec", 1800,
-    )
 
     await watchdog._tick()
 
     skip_arr, threshold = captured["args"]
-    assert threshold == 1800
+    # SQL 现在用 _WARN_THRESHOLD_SEC（300s）而非 escalate threshold（1800s）
+    assert threshold == _WARN_THRESHOLD_SEC
     assert "done" in skip_arr
     assert "escalated" in skip_arr
     assert "init" in skip_arr
@@ -263,12 +295,14 @@ async def test_loop_disabled_returns_immediately(monkeypatch):
 async def test_engine_step_failure_isolated(monkeypatch):
     """engine.step 对某行抛异常不阻塞后续行处理（fault isolation）。"""
     pool = FakePool(rows=[
-        _row("REQ-A", ReqState.STAGING_TEST_RUNNING.value, ctx={"staging_test_issue_id": "st-a"}),
-        _row("REQ-B", ReqState.STAGING_TEST_RUNNING.value, ctx={"staging_test_issue_id": "st-b"}),
+        _row("REQ-A", ReqState.STAGING_TEST_RUNNING.value, ctx={"staging_test_issue_id": "st-a"}, stuck_sec=2000),
+        _row("REQ-B", ReqState.STAGING_TEST_RUNNING.value, ctx={"staging_test_issue_id": "st-b"}, stuck_sec=2000),
     ])
     _patch_pool(monkeypatch, pool)
     _patch_bkd(monkeypatch, FakeIssue(session_status="failed"))
     _patch_artifact(monkeypatch)
+    _patch_alerts(monkeypatch)
+    _patch_req_state_update(monkeypatch)
 
     calls: list = []
 
@@ -282,7 +316,88 @@ async def test_engine_step_failure_isolated(monkeypatch):
 
     result = await watchdog._tick()
 
-    # 两行都被处理，但只有 REQ-B 成功 escalate（REQ-A engine.step 抛异常返 False）
+    # 两行都被处理，但只有 REQ-B 成功 escalate（REQ-A engine.step 抛异常返 skip）
     assert result["checked"] == 2
     assert result["escalated"] == 1
     assert calls == ["REQ-A", "REQ-B"]
+
+
+# ─── Case 10：5min warn → alert(warn) + ctx.warned_at_5min + 不 escalate ────
+@pytest.mark.asyncio
+async def test_watchdog_5min_warn(monkeypatch):
+    """stuck_sec=600（5-30min 区间）→ 插 alert(severity=warn)，不走 escalate。"""
+    pool = FakePool(rows=[
+        _row("REQ-W1", ReqState.STAGING_TEST_RUNNING.value,
+             ctx={"staging_test_issue_id": "st-w1"}, stuck_sec=600),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="failed", id="st-w1"))
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+    alert_calls = _patch_alerts(monkeypatch)
+    ctx_updates = _patch_req_state_update(monkeypatch)
+
+    result = await watchdog._tick()
+
+    # 告警了但没 escalate
+    assert result["escalated"] == 0
+    assert result["warned"] == 1
+    assert step_calls == []
+
+    # alert 写了 severity=warn
+    assert len(alert_calls) == 1
+    assert alert_calls[0]["severity"] == "warn"
+    assert alert_calls[0]["reason"] == "stuck-5min"
+    assert alert_calls[0]["req_id"] == "REQ-W1"
+
+    # ctx 写了 warned_at_5min=True
+    all_patches = {k: v for d in [u["patch"] for u in ctx_updates] for k, v in d.items()}
+    assert all_patches.get("warned_at_5min") is True
+
+
+@pytest.mark.asyncio
+async def test_watchdog_5min_warn_skips_if_already_warned(monkeypatch):
+    """warned_at_5min 已设 → 不重复告警。"""
+    pool = FakePool(rows=[
+        _row("REQ-W2", ReqState.STAGING_TEST_RUNNING.value,
+             ctx={"staging_test_issue_id": "st-w2", "warned_at_5min": True}, stuck_sec=700),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="failed"))
+    _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+    alert_calls = _patch_alerts(monkeypatch)
+    _patch_req_state_update(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result["warned"] == 0
+    assert result["escalated"] == 0
+    assert alert_calls == []
+
+
+# ─── Case 11：30min escalate → escalated_reason="watchdog-stuck-30min" ───────
+@pytest.mark.asyncio
+async def test_watchdog_30min_escalate_reason(monkeypatch):
+    """stuck_sec=2000 → emit escalate + ctx.escalated_reason=watchdog-stuck-30min。"""
+    pool = FakePool(rows=[
+        _row("REQ-E1", ReqState.STAGING_TEST_RUNNING.value,
+             ctx={"staging_test_issue_id": "st-e1"}, stuck_sec=2000),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="failed", id="st-e1"))
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+    _patch_alerts(monkeypatch)
+    ctx_updates = _patch_req_state_update(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result["escalated"] == 1
+    assert result["warned"] == 0
+    assert len(step_calls) == 1
+    assert step_calls[0]["event"] == Event.SESSION_FAILED
+
+    # ctx 写了 escalated_reason
+    all_patches = {k: v for d in [u["patch"] for u in ctx_updates] for k, v in d.items()}
+    assert all_patches.get("escalated_reason") == "watchdog-stuck-30min"
