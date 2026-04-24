@@ -40,10 +40,14 @@ class Settings(BaseSettings):
     # False = 本地调试，load_kube_config() 读 ~/.kube/config
     k8s_in_cluster: bool = True
 
-    # PVC 保留策略：escalated REQ 保留天数（过期 GC 自动清）
-    pvc_retain_on_escalate_days: int = 7
-    # GC 扫描周期
-    runner_gc_interval_sec: int = 3600   # 1h
+    # PVC 保留策略：escalated REQ 保留时长（过期 GC 自动清，给 PR #48 resume 时间窗）
+    # 默认 1 天：足够人当天 follow-up 续；超 1 天没人理就清掉
+    # （之前 7 天太宽，一次实证时 30 个 PVC 堆满磁盘；2026-04-24）
+    pvc_retain_on_escalate_days: int = 1
+    # GC 扫描周期 15 min（之前 1h 太松，REQ 频繁时 PVC 堆得快）
+    runner_gc_interval_sec: int = 900    # 15min
+    # 磁盘压力阈值：超过此比例 GC 强清所有非 active PVC（不论 retention）
+    runner_gc_disk_pressure_threshold: float = 0.8
 
     # GitHub token（烘进 runner Pod env，给 agent 用 gh CLI / docker login ghcr.io）
     # scope: repo + read:packages
