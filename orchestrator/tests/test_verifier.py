@@ -374,25 +374,19 @@ async def test_apply_verify_retry_checker(monkeypatch):
         cas_calls.append((expected.value, nxt.value, event))
         return True
 
-    update_patches: list = []
-
-    async def fake_update(pool, req_id, patch):
-        update_patches.append(patch)
-
     monkeypatch.setattr("orchestrator.actions._verifier.req_state.cas_transition", fake_cas)
-    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
     monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
 
     out = await v.apply_verify_retry_checker(
         body=make_body(), req_id="REQ-9", tags=[],
         ctx={"verifier_stage": "pr_ci"},
     )
+    # 新行为：CAS 到上游 stage_running（pr_ci 的上游是 staging-test-running），
+    # 链式 emit 上游 pass 事件（STAGING_TEST_PASS）以重新触发 create_pr_ci_watch
     assert out["retry_checker"] is True
     assert out["stage"] == "pr_ci"
-    # CAS 回 pr-ci-running
-    assert cas_calls == [("review-running", "pr-ci-running", Event.VERIFY_RETRY_CHECKER)]
-    # ctx 标 retry_checker_pending
-    assert update_patches[0]["retry_checker_pending"] is True
+    assert out["emit"] == Event.STAGING_TEST_PASS.value
+    assert cas_calls == [("review-running", "staging-test-running", Event.VERIFY_RETRY_CHECKER)]
 
 
 @pytest.mark.asyncio

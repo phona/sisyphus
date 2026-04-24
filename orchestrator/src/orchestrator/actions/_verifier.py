@@ -57,15 +57,18 @@ _PASS_ROUTING: dict[str, tuple[ReqState, Event]] = {
     "accept":            (ReqState.ACCEPT_RUNNING,           Event.ACCEPT_PASS),
 }
 
-# stage → retry_checker 时回推的 state（checker 类 stage 才真有意义）
-_RETRY_TARGET_STATE: dict[str, ReqState] = {
-    "analyze":          ReqState.ANALYZING,
-    "spec_lint":        ReqState.SPEC_LINT_RUNNING,
-    "challenger":       ReqState.CHALLENGER_RUNNING,
-    "dev_cross_check":  ReqState.DEV_CROSS_CHECK_RUNNING,
-    "staging_test":     ReqState.STAGING_TEST_RUNNING,
-    "pr_ci":            ReqState.PR_CI_RUNNING,
-    "accept":           ReqState.ACCEPT_RUNNING,
+# stage → retry_checker 时回放的 (上游 stage_running, 上游 pass_event)
+# 复用主链 transition (prev_state, prev_pass_event) → create_<this_stage> action 重跑 checker。
+# 例：retry pr_ci → 把 state 设回 STAGING_TEST_RUNNING + 链 emit STAGING_TEST_PASS
+#      → 命中 (STAGING_TEST_RUNNING, STAGING_TEST_PASS) → create_pr_ci_watch 再跑一次。
+# 不支持 analyze（agent 类，retry 没意义；该走 fix / escalate）。
+_RETRY_REPLAY: dict[str, tuple[ReqState, Event]] = {
+    "spec_lint":        (ReqState.ANALYZING,                Event.ANALYZE_DONE),
+    "challenger":       (ReqState.SPEC_LINT_RUNNING,        Event.SPEC_LINT_PASS),
+    "dev_cross_check":  (ReqState.CHALLENGER_RUNNING,       Event.CHALLENGER_PASS),
+    "staging_test":     (ReqState.DEV_CROSS_CHECK_RUNNING,  Event.DEV_CROSS_CHECK_PASS),
+    "pr_ci":            (ReqState.STAGING_TEST_RUNNING,     Event.STAGING_TEST_PASS),
+    "accept":           (ReqState.PR_CI_RUNNING,            Event.PR_CI_PASS),
 }
 
 
@@ -191,21 +194,27 @@ async def apply_verify_pass(*, body, req_id, tags, ctx):
 
 @register("apply_verify_retry_checker", idempotent=True)
 async def apply_verify_retry_checker(*, body, req_id, tags, ctx):
-    """decision=retry_checker：回到 stage_running 状态。PR3 之后由 stage action
-    自己处理"当前在 stage_running 再触发一次 checker" 的语义（或通过 ctx flag）。
-    本期先只把 state 回滚并落 ctx 标记，等真正接入时再完善。
+    """decision=retry_checker：CAS REVIEW_RUNNING → 上游 stage_running，链式 emit
+    上游 pass 事件 —— 命中主链 transition 重新触发 create_<stage> 跑一次 checker。
+
+    例：pr_ci 失败 verifier 判 retry → 回 STAGING_TEST_RUNNING + emit STAGING_TEST_PASS
+    → (STAGING_TEST_RUNNING, STAGING_TEST_PASS) → create_pr_ci_watch 重跑。
+
+    用 emit chain 的好处：retry 路径完全复用主链 action，不存在"状态对了但 checker
+    没跑"的死状态（之前的 bug：CAS 到 PR_CI_RUNNING 但没 emit，REQ 卡到 watchdog escalate）。
     """
     stage = _stage_from_tags_or_ctx(tags, ctx)
-    target = _RETRY_TARGET_STATE.get(stage) if stage else None
-    if target is None:
+    replay = _RETRY_REPLAY.get(stage) if stage else None
+    if replay is None:
         log.error("apply_verify_retry_checker.unknown_stage",
                   req_id=req_id, stage=stage)
         return {"emit": Event.VERIFY_ESCALATE.value,
                 "reason": f"unknown verifier_stage: {stage!r}"}
 
+    upstream_state, upstream_pass_event = replay
     pool = db.get_pool()
     advanced = await req_state.cas_transition(
-        pool, req_id, ReqState.REVIEW_RUNNING, target,
+        pool, req_id, ReqState.REVIEW_RUNNING, upstream_state,
         Event.VERIFY_RETRY_CHECKER, "apply_verify_retry_checker",
     )
     if not advanced:
@@ -213,13 +222,11 @@ async def apply_verify_retry_checker(*, body, req_id, tags, ctx):
                     req_id=req_id, stage=stage)
         return {"cas_failed": True}
 
-    await req_state.update_context(pool, req_id, {
-        "retry_checker_pending": True,
-        "retry_checker_stage": stage,
-    })
-    log.info("apply_verify_retry_checker.done",
-             req_id=req_id, stage=stage, target_state=target.value)
-    return {"retry_checker": True, "stage": stage}
+    log.info("apply_verify_retry_checker.replay",
+             req_id=req_id, stage=stage,
+             upstream_state=upstream_state.value,
+             emit=upstream_pass_event.value)
+    return {"emit": upstream_pass_event.value, "stage": stage, "retry_checker": True}
 
 
 @register("start_fixer", idempotent=False)
