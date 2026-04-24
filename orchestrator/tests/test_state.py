@@ -106,11 +106,24 @@ def test_new_checker_events_and_states():
     assert t.action == "create_staging_test"
 
 
-def test_terminal_states_have_no_outgoing():
-    """DONE / ESCALATED 不应再被任何 event 推动。"""
-    for st in (ReqState.DONE, ReqState.ESCALATED):
-        for ev in Event:
-            assert decide(st, ev) is None, f"terminal {st.value} should not move on {ev.value}"
+def test_done_terminal_has_no_outgoing():
+    """DONE 是死终态。"""
+    for ev in Event:
+        assert decide(ReqState.DONE, ev) is None, f"DONE should not move on {ev.value}"
+
+
+def test_escalated_resumable_via_verifier_followup():
+    """ESCALATED 不是死终态：用户续 verifier issue → BKD 新 decision → 走原 verifier 同链。
+
+    其他 event（非 verifier 类）仍然没出口 —— escalated 只通过"人续 verifier issue"复活。
+    """
+    resumable = {Event.VERIFY_PASS, Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE}
+    for ev in Event:
+        t = decide(ReqState.ESCALATED, ev)
+        if ev in resumable:
+            assert t is not None, f"{ev.value} should be resumable from ESCALATED"
+        else:
+            assert t is None, f"{ev.value} should NOT move ESCALATED (non-resume path)"
 
 
 def test_m5_dropped_test_fix_reviewer_states():

@@ -122,6 +122,23 @@ def test_short_title_helper():
     assert len(out) < 30
 
 
+def test_short_title_strips_leading_brackets():
+    """[REQ-x] [E2E FOO] /buildinfo → /buildinfo（剥前缀避免 verifier title 双倍 [REQ-x]）"""
+    from orchestrator.actions import short_title
+    # 单层
+    assert short_title({"intent_title": "[REQ-x] hello"}) == " — hello"
+    # 双层 (REQ + E2E label)
+    assert short_title(
+        {"intent_title": "[REQ-final15-1776989948] [E2E FINAL15] /buildinfo (post-#45)"}
+    ) == " — /buildinfo (post-#45)"
+    # 不闭合的 [ —— 无法解析，原样保留（不破坏数据）
+    assert short_title({"intent_title": "[unclosed bracket"}) == " — [unclosed bracket"
+    # 全是括号无内容
+    assert short_title({"intent_title": "[A] [B] [C]"}) == ""
+    # 嵌套不剥（只剥前缀）
+    assert short_title({"intent_title": "code [in middle]"}) == " — code [in middle]"
+
+
 # ─── escalate ────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_escalate(monkeypatch):

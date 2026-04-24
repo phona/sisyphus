@@ -176,8 +176,12 @@ async def step(
         cur_state=cur_state, next_state=transition.next_state, event=event,
     )
 
-    # M10：转 terminal state 时立即清 runner（fire-and-forget）
-    if transition.next_state in _TERMINAL_STATES:
+    # M10：转 terminal state 时立即清 runner（fire-and-forget）。
+    # 但跳过 terminal self-loop（cur 已是 terminal）—— 出现在 ESCALATED 接 verifier 续 follow-up
+    # 的场景：engine 表面 self-loop，apply_verify_pass 内部把 state CAS 推到下游 stage_running
+    # 并 ensure_runner；这时再清 pod 会误删 resume 路径刚拉起的 pod。
+    if (transition.next_state in _TERMINAL_STATES
+            and cur_state not in _TERMINAL_STATES):
         task = asyncio.create_task(
             _cleanup_runner_on_terminal(req_id, transition.next_state)
         )

@@ -28,6 +28,7 @@ from typing import Literal
 
 import structlog
 
+from .. import k8s_runner
 from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
@@ -163,18 +164,35 @@ async def apply_verify_pass(*, body, req_id, tags, ctx):
 
     target_state, next_event = route
     pool = db.get_pool()
-    advanced = await req_state.cas_transition(
-        pool, req_id, ReqState.REVIEW_RUNNING, target_state,
-        Event.VERIFY_PASS, "apply_verify_pass",
-    )
-    if not advanced:
-        # 状态已被并发事件改动 → 让上层 skip，不重复 emit
+    # CAS 接 REVIEW_RUNNING（正常 verifier 完成）+ ESCALATED（人续 escalate 的 verifier）
+    src_state = None
+    for src in (ReqState.REVIEW_RUNNING, ReqState.ESCALATED):
+        if await req_state.cas_transition(
+            pool, req_id, src, target_state,
+            Event.VERIFY_PASS, "apply_verify_pass",
+        ):
+            src_state = src
+            break
+    if src_state is None:
         log.warning("apply_verify_pass.cas_failed", req_id=req_id, stage=stage)
         return {"cas_failed": True}
 
+    # 推下一 stage 前 ensure_runner（idempotent，pod 在则秒返）。
+    # 关键场景：从 ESCALATED 续 → escalate 时 runner pod 被删了；fixer 跑完续也可能没 pod。
+    # PVC 因 #40 retain，workspace 状态不丢。
+    try:
+        rc = k8s_runner.get_controller()
+    except RuntimeError:
+        log.warning("apply_verify_pass.no_runner_controller", req_id=req_id)
+    else:
+        pod = await rc.ensure_runner(req_id, wait_ready=True)
+        log.info("apply_verify_pass.runner_ready",
+                 req_id=req_id, stage=stage, pod=pod, src_state=src_state.value)
+
     log.info("apply_verify_pass.done",
              req_id=req_id, stage=stage,
-             target_state=target_state.value, emit=next_event.value)
+             src_state=src_state.value, target_state=target_state.value,
+             emit=next_event.value)
     return {"emit": next_event.value, "stage": stage}
 
 
