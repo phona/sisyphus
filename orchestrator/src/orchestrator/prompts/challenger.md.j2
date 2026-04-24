@@ -44,7 +44,7 @@ kubectl exec runner-{{ req_id | lower }} -- ls /workspace/source/<spec_home_repo
 - `openspec/changes/{{ req_id }}/specs/<capability>/contract.spec.yaml`
 - `openspec/changes/{{ req_id }}/specs/<capability>/spec.md`（scenarios）
 - 仓里**已有的** `tests/integration/` 现存模式（学约定）
-- 仓里 `Makefile` 看 ci-test 入口
+- 仓里 `Makefile` 看 ci-integration-test 入口
 - 仓里 `tests/docker-compose.yml` 看 stack 入口
 
 **禁止读**：

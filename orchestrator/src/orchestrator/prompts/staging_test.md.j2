@@ -19,8 +19,8 @@ PARENT_ISSUE_ID={{ source_issue_id }}
 > `checkers/staging_test.py`，**不会**起这个 BKD agent issue。仅在 flag=False
 > 兜底路径下用本 prompt（保持老行为不破）。
 
-你的职责：在 runner Pod 的 `/workspace/source/<repo>/` **逐仓**执行 `make ci-test`，
-验收 dev 推上来的代码。
+你的职责：在 runner Pod 的 `/workspace/source/<repo>/` **逐仓**执行
+`make ci-unit-test && make ci-integration-test`（ttpos-ci 标准），验收 dev 推上来的代码。
 
 这是**机械自检**：无需分析根因，**任一仓**失败就报，bugfix 由另一个 agent 做。
 
@@ -59,7 +59,7 @@ for repo in /workspace/source/*; do
   name=$(basename "$repo")
   [ -f "$repo/Makefile" ] || { echo "=== SKIP: $name (no Makefile) ==="; continue; }
   echo "=== START: $name ==="
-  if (cd "$repo" && make ci-test); then
+  if (cd "$repo" && make ci-unit-test && make ci-integration-test); then
     echo "=== PASS: $name ==="
   else
     rc=$?

@@ -36,7 +36,7 @@
 
 ```
 intent:analyze → analyze(写 proposal/design/tasks) → specs(×2 并行) → dev(1~N 并行, push feat/REQ-x + 真开 PR)
-  → staging-test(机械: kubectl exec runner make ci-test) → pr-ci-watch(机械: GitHub REST 轮 check-runs)
+  → staging-test(机械: kubectl exec runner make ci-unit-test && make ci-integration-test) → pr-ci-watch(机械: GitHub REST 轮 check-runs)
   → accept(make accept-up + agent 跑 FEATURE-A* + make accept-down 必跑) → archive → DONE
 ```
 
