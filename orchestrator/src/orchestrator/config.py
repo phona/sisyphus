@@ -122,8 +122,9 @@ class Settings(BaseSettings):
 
     # ─── M14b/M14c：verifier-agent 框架 ─────────────────────────────────
     # 每个 stage transition（成功 or 失败）先起一个 verifier-agent 做主观判断
-    # （pass / fix / retry_checker / escalate），再由 webhook 路由推进状态机。
+    # —— 3 路决策：pass / fix / escalate，再由 webhook 路由推进状态机。
     # M14c 砍掉 M4 fail_kind 分类 + M5 bugfix/diagnose 子链，verifier 单独接管 fail 路径。
+    # 砍 retry_checker：基础设施 flaky 由 verifier 判 escalate 给人，sisyphus 不机制性兜 retry。
     verifier_enabled: bool = True
 
     # ─── M8：watchdog 兜底卡死 stage ────────────────────────────────────

@@ -63,7 +63,6 @@ _EVENT_TO_OUTCOME: dict[Event, str] = {
     Event.SESSION_FAILED:       "fail",
     Event.VERIFY_PASS:          "pass",
     Event.VERIFY_FIX_NEEDED:    "fix",
-    Event.VERIFY_RETRY_CHECKER: "retry",
     Event.VERIFY_ESCALATE:      "escalate",
     Event.FIXER_DONE:           "pass",
 }

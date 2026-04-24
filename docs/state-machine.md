@@ -60,8 +60,7 @@
 | `session.failed` | 任意 stage agent session 崩 / watchdog 超时 | escalate |
 | **`verify.pass`** | M14b verifier decision=pass | apply_verify_pass（手工 CAS 推进下一 stage） |
 | **`verify.fix-needed`** | M14b verifier decision=fix | start_fixer |
-| **`verify.retry-checker`** | M14b verifier decision=retry_checker | apply_verify_retry_checker |
-| **`verify.escalate`** | M14b decision=escalate / schema invalid | escalate |
+| **`verify.escalate`** | M14b decision=escalate / schema invalid（含基础设施 flaky）| escalate |
 | **`fixer.done`** | fixer agent session.completed | invoke_verifier_after_fix |
 
 ## 4. 完整状态转移图
@@ -95,8 +94,7 @@ stateDiagram-v2
 
     review_running --> review_running: verify.pass\n(action 手工 CAS 推进)
     review_running --> fixer_running: verify.fix-needed
-    review_running --> review_running: verify.retry-checker\n(action 手工 CAS 回 stage)
-    review_running --> escalated: verify.escalate
+    review_running --> escalated: verify.escalate\n(含 flaky / 基础设施抖动)
 
     fixer_running --> review_running: fixer.done\n(invoke_verifier_after_fix)
 
@@ -111,7 +109,12 @@ stateDiagram-v2
 
 ## 5. verifier 子链特殊性（M14b/c）
 
-`VERIFY_PASS` / `VERIFY_RETRY_CHECKER` 在 transition 表里看起来是 self-loop（next_state 还是 `review-running`），但 **action 内部手工 CAS 推到目标 stage_running 再链式 emit 该 stage 的 done/pass 事件**。这是因为目标 stage 由 `ctx.verifier_stage` 决定，transition 表静态表达不了。
+3 路决策：**pass / fix / escalate**（retry_checker 已砍 —— 基础设施 flaky 由 verifier 判
+escalate 给人，sisyphus 不机制性兜 retry，避免假阳性 retry 死循环）。
+
+`VERIFY_PASS` 在 transition 表里看起来是 self-loop（next_state 还是 `review-running`），
+但 **action 内部手工 CAS 推到目标 stage_running 再链式 emit 该 stage 的 done/pass 事件**。
+这是因为目标 stage 由 verifier issue 的 `verify:<stage>` tag 决定，transition 表静态表达不了。
 
 具体见 [actions/_verifier.py](../orchestrator/src/orchestrator/actions/_verifier.py)：
 
@@ -121,10 +124,9 @@ apply_verify_pass:
   emit {stage}.done / .pass
   → 走原主链 transition 推下一 stage
 
-apply_verify_retry_checker:
-  REVIEW_RUNNING --CAS--> {stage}_RUNNING
-  set ctx.retry_checker_pending=True
-  → 后续 stage action 自己处理"再触发一次 checker"
+start_fixer:
+  REVIEW_RUNNING --CAS--> FIXER_RUNNING
+  起 BKD fixer issue（dev / spec），异步等 session.completed → invoke_verifier_after_fix
 ```
 
 ## 6. CAS 失败如何处理

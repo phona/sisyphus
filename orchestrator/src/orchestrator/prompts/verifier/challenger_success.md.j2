@@ -20,12 +20,12 @@ sisyphus M18：challenger-agent 设 `result:pass`，已 push contract test 到 f
 
 ### 关注点（不应做的）
 - challenger 改了业务代码 / unit test（违反路径白名单）→ `fix` + `fixer=spec` + scope 指被违规改的文件
-- challenger 跳过 push（feat 分支没新 commit）→ `retry_checker`
+- challenger 跳过 push（feat 分支没新 commit）→ `escalate`（人手起一次）
 
 ### 通常路径
 - contract test 完整 + 黑盒 + 覆盖每条 scenario → `pass`，dev_cross_check 接手
 - 漏 / 错 / 越界 → `fix` + `fixer=spec`
-- 完全跑偏（比如只写了一个空文件）→ `escalate` 或 `retry_checker`
+- 完全跑偏（比如只写了一个空文件）→ `escalate`
 
 ─────────
 

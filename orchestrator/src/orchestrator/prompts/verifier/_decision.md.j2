@@ -14,7 +14,7 @@ JSON decision。sisyphus 通过 BKD `/logs` API 取你最后一条 assistant mes
 
 ````json
 {
-  "action":      "pass" | "fix" | "retry_checker" | "escalate",
+  "action":      "pass" | "fix" | "escalate",
   "fixer":       "dev" | "spec" | null,
   "scope":       "src/" | "openspec/changes/REQ-x/" | null,
   "reason":      "一句话人话：为什么做这个决定",
@@ -23,13 +23,18 @@ JSON decision。sisyphus 通过 BKD `/logs` API 取你最后一条 assistant mes
 }
 ````
 
-语义：
+语义（3 路决策 —— 仅 pass / fix / escalate 三选项，不存在第 4 个）：
 - `pass`：产物可以推进到下一阶段。sisyphus 会把 REQ 主链继续往下走。
 - `fix`：需要起 fixer agent 改代码/spec。必须同时给 `fixer` 和 `scope`。
   - `dev`：改 src/ 下业务代码 / 实现
   - `spec`：改 openspec/changes/REQ-*/ 下的需求 / acceptance 描述
-- `retry_checker`：代码没问题、纯 flaky / 环境抖动 / 刚才 checker 用错参数，重跑 checker 即可。
-- `escalate`：超出 AI 自理范围（人类决策 / 安全边界 / 不明故障）。
+- `escalate`：超出 AI 自理范围 —— **包括所有基础设施 flaky / 外部服务抖动 / 环境
+  问题**（SonarQube 503、GHA runner 抢占、docker pull ratelimit、网络 blip、
+  unknown 故障）。sisyphus 不机制性兜重跑，由人来重新触发 / 修基础设施。
+
+> ⚠️ action 字段**只能**取 `"pass"` / `"fix"` / `"escalate"`，其它字面量（包括老
+> 版本曾用过的"重跑"枚举）都会被 router 当 invalid → 默认 escalate。flaky / 抖动
+> 场景写 `"action": "escalate"` + `reason` 注明"infra flaky: <哪个>"。
 
 规则：
 - `action=fix` 时 `fixer` 不能是 null；其它 action 时 `fixer` 必须是 null。

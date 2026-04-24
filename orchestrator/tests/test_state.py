@@ -29,10 +29,9 @@ EXPECTED = [
     (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_PASS,  ReqState.ARCHIVING,           "done_archive"),
     (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_FAIL,  ReqState.REVIEW_RUNNING,      "invoke_verifier_for_accept_fail"),
     (ReqState.ARCHIVING,            Event.ARCHIVE_DONE,        ReqState.DONE,                None),
-    # M14b verifier 子链
+    # M14b verifier 子链（3 路：pass / fix / escalate）
     (ReqState.REVIEW_RUNNING,       Event.VERIFY_PASS,         ReqState.REVIEW_RUNNING,      "apply_verify_pass"),
     (ReqState.REVIEW_RUNNING,       Event.VERIFY_FIX_NEEDED,   ReqState.FIXER_RUNNING,       "start_fixer"),
-    (ReqState.REVIEW_RUNNING,       Event.VERIFY_RETRY_CHECKER, ReqState.REVIEW_RUNNING,     "apply_verify_retry_checker"),
     (ReqState.REVIEW_RUNNING,       Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
     (ReqState.FIXER_RUNNING,        Event.FIXER_DONE,          ReqState.REVIEW_RUNNING,      "invoke_verifier_after_fix"),
 ]
@@ -68,13 +67,13 @@ def test_m14b_verifier_states_present():
 
 
 def test_m14b_verifier_events_present():
-    """M14b：新 events 全部定义。"""
+    """M14b：3 路决策事件定义齐全（retry_checker 已砍）。"""
     values = {e.value for e in Event}
     for ev in [
-        "verify.pass", "verify.fix-needed", "verify.retry-checker",
-        "verify.escalate", "fixer.done",
+        "verify.pass", "verify.fix-needed", "verify.escalate", "fixer.done",
     ]:
         assert ev in values, f"M14b 缺 event: {ev}"
+    assert "verify.retry-checker" not in values, "retry_checker 已砍，event 不应再存在"
 
 
 def test_new_checker_events_and_states():

@@ -1,7 +1,7 @@
 """M14b/M14c：verifier-agent 框架
 
 每个 stage transition（success / fail）调 `invoke_verifier` 起一个 BKD verifier-agent
-issue，让它做主观判断（pass / fix / retry_checker / escalate）。verifier 完成后
+issue，让它做主观判断 —— 3 路决策：**pass / fix / escalate**。verifier 完成后
 webhook.py 解析 decision JSON，映射成 Event 推状态机。
 
 本模块只管"起 issue + 挂 prompt"：同步返回 verifier_issue_id，不等决策
@@ -10,14 +10,15 @@ webhook.py 解析 decision JSON，映射成 Event 推状态机。
 同时提供 action handler：
 - `apply_verify_pass`：decision=pass → 手工 CAS 回 stage_running + 链式 emit
    对应 stage 的 done/pass 事件（走原主链 transition）
-- `apply_verify_retry_checker`：decision=retry_checker → 同手法，回 stage_running
-   + 链 emit "restart" 事件触发 checker 重跑
 - `start_fixer`：decision=fix → 起 fixer agent（dev / spec）
 - `invoke_verifier_after_fix`：fixer 完 → 再调 verifier 复查
 - `invoke_verifier_for_staging_test_fail` / `_pr_ci_fail` / `_accept_fail`：
    机械 checker / accept fail 的 3 个专门入口。stage 由 transition table 写死，
    不再从 webhook tags sniff（机械 checker 没 issue，tags 来自上游 dev issue，
    以前按 tag 推会把 staging-test fail 误路成 dev）。
+
+砍掉 retry_checker：基础设施 flaky / 抖动直接 escalate 给人介入，sisyphus 不再机制性
+兜 retry —— 避免假阳性 retry 死循环 + 跟"薄编排，不抢 AI 决定权"哲学一致。
 
 M14c：verifier_enabled 默认 True，旧 fail_kind / bugfix 子链已砍。
 """
@@ -56,21 +57,6 @@ _PASS_ROUTING: dict[str, tuple[ReqState, Event]] = {
     "pr_ci":             (ReqState.PR_CI_RUNNING,            Event.PR_CI_PASS),
     "accept":            (ReqState.ACCEPT_RUNNING,           Event.ACCEPT_PASS),
 }
-
-# stage → retry_checker 时回放的 (上游 stage_running, 上游 pass_event)
-# 复用主链 transition (prev_state, prev_pass_event) → create_<this_stage> action 重跑 checker。
-# 例：retry pr_ci → 把 state 设回 STAGING_TEST_RUNNING + 链 emit STAGING_TEST_PASS
-#      → 命中 (STAGING_TEST_RUNNING, STAGING_TEST_PASS) → create_pr_ci_watch 再跑一次。
-# 不支持 analyze（agent 类，retry 没意义；该走 fix / escalate）。
-_RETRY_REPLAY: dict[str, tuple[ReqState, Event]] = {
-    "spec_lint":        (ReqState.ANALYZING,                Event.ANALYZE_DONE),
-    "challenger":       (ReqState.SPEC_LINT_RUNNING,        Event.SPEC_LINT_PASS),
-    "dev_cross_check":  (ReqState.CHALLENGER_RUNNING,       Event.CHALLENGER_PASS),
-    "staging_test":     (ReqState.DEV_CROSS_CHECK_RUNNING,  Event.DEV_CROSS_CHECK_PASS),
-    "pr_ci":            (ReqState.STAGING_TEST_RUNNING,     Event.STAGING_TEST_PASS),
-    "accept":           (ReqState.PR_CI_RUNNING,            Event.PR_CI_PASS),
-}
-
 
 # ─── invoke_verifier：起 BKD verifier issue ──────────────────────────────
 
@@ -190,43 +176,6 @@ async def apply_verify_pass(*, body, req_id, tags, ctx):
              req_id=req_id, stage=stage,
              target_state=target_state.value, emit=next_event.value)
     return {"emit": next_event.value, "stage": stage}
-
-
-@register("apply_verify_retry_checker", idempotent=True)
-async def apply_verify_retry_checker(*, body, req_id, tags, ctx):
-    """decision=retry_checker：CAS REVIEW_RUNNING → 上游 stage_running，链式 emit
-    上游 pass 事件 —— 命中主链 transition 重新触发 create_<stage> 跑一次 checker。
-
-    例：pr_ci 失败 verifier 判 retry → 回 STAGING_TEST_RUNNING + emit STAGING_TEST_PASS
-    → (STAGING_TEST_RUNNING, STAGING_TEST_PASS) → create_pr_ci_watch 重跑。
-
-    用 emit chain 的好处：retry 路径完全复用主链 action，不存在"状态对了但 checker
-    没跑"的死状态（之前的 bug：CAS 到 PR_CI_RUNNING 但没 emit，REQ 卡到 watchdog escalate）。
-    """
-    stage = _stage_from_tags_or_ctx(tags, ctx)
-    replay = _RETRY_REPLAY.get(stage) if stage else None
-    if replay is None:
-        log.error("apply_verify_retry_checker.unknown_stage",
-                  req_id=req_id, stage=stage)
-        return {"emit": Event.VERIFY_ESCALATE.value,
-                "reason": f"unknown verifier_stage: {stage!r}"}
-
-    upstream_state, upstream_pass_event = replay
-    pool = db.get_pool()
-    advanced = await req_state.cas_transition(
-        pool, req_id, ReqState.REVIEW_RUNNING, upstream_state,
-        Event.VERIFY_RETRY_CHECKER, "apply_verify_retry_checker",
-    )
-    if not advanced:
-        log.warning("apply_verify_retry_checker.cas_failed",
-                    req_id=req_id, stage=stage)
-        return {"cas_failed": True}
-
-    log.info("apply_verify_retry_checker.replay",
-             req_id=req_id, stage=stage,
-             upstream_state=upstream_state.value,
-             emit=upstream_pass_event.value)
-    return {"emit": upstream_pass_event.value, "stage": stage, "retry_checker": True}
 
 
 @register("start_fixer", idempotent=False)
