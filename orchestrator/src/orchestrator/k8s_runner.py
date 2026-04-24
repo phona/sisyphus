@@ -155,6 +155,17 @@ class RunnerController:
         env_vars = [
             client.V1EnvVar(name="SISYPHUS_REQ_ID", value=req_id),
             client.V1EnvVar(name="SISYPHUS_RUNNER", value="1"),
+            # 全局压住 runner pod 内 go 进程内存峰值（pod limit 8 GiB），
+            # 业务 Makefile 无感:
+            # - GOMEMLIMIT 触发 GC 而非 OOM,硬卡死单进程堆上限
+            # - GOGC 更激进 GC,RSS -20-30%,trade CPU 换内存
+            # - GOFLAGS 让 go test/build 默认 -p=2,限制并行包数
+            # 注意: 仅对 runner pod 内直接执行的 go 进程生效;
+            # DinD 子容器内 go (docker compose --build / 容器内 go test) 不受控,
+            # 靠 pod cgroup 8 GiB 兜底
+            client.V1EnvVar(name="GOMEMLIMIT", value="2GiB"),
+            client.V1EnvVar(name="GOGC", value="50"),
+            client.V1EnvVar(name="GOFLAGS", value="-p=2"),
         ]
         # 从 runner-secrets 注入 GitHub 凭证（optional，secret 缺了 pod 还能起）
         for env_name, secret_key in (

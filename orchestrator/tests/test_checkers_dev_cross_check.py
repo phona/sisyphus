@@ -1,8 +1,8 @@
-"""checkers/staging_test.py 单测：mock RunnerController，验 CheckResult 字段。
+"""checkers/dev_cross_check.py 单测：mock RunnerController，验 CheckResult 字段。
 
-多仓重构后 + ttpos-ci 契约统一：cmd 遍历 /workspace/source/*，**repo 之间并行**
-对每个含 `ci-unit-test` + `ci-integration-test` target 的仓跑
-`make ci-unit-test && make ci-integration-test`（**单 repo 内串行**）。
+ttpos-ci 契约统一后：cmd 遍历 /workspace/source/*，串行对每个含 `ci-lint` target 的仓
+跑 `BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`。
+BASE_REV 缺失（fetch 不到 origin/main / develop / dev）则传空，ci-lint 退化为全量扫描。
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import asyncio
 import pytest
 
 from orchestrator.checkers._types import CheckResult
-from orchestrator.checkers.staging_test import run_staging_test
+from orchestrator.checkers.dev_cross_check import run_dev_cross_check
 from orchestrator.k8s_runner import ExecResult
 
 
@@ -25,76 +25,75 @@ def make_fake_controller(exit_code: int, stdout: str = "", stderr: str = "", dur
 
 
 def _assert_for_each_repo_cmd(cmd: str) -> None:
-    """验证 cmd 是 for-each-repo 并行 shell 模板（关键标记即可，别拘束全文）。
-
-    ttpos-ci 契约统一后：单 repo 内 unit→integration 串行（&&），repo 之间并行（&）。
-    """
+    """验证 cmd 是 for-each-repo 串行 shell 模板，跑 ci-lint + BASE_REV。"""
     assert "/workspace/source/*/" in cmd
-    # ttpos-ci 标准 target（ci-test 已废）
-    assert "make ci-unit-test" in cmd
-    assert "make ci-integration-test" in cmd
-    assert "ci-unit-test:" in cmd  # grep Makefile target 过滤
-    assert "ci-integration-test:" in cmd
-    # 单 repo 内串行（&&），repo 间并行（&）
-    assert "&&" in cmd
-    assert " & " in cmd  # 后台并行（每仓子 shell）
-    assert "wait $pid" in cmd
+    assert "make ci-lint" in cmd
+    assert "ci-lint:" in cmd  # grep Makefile target 过滤
+    # BASE_REV 计算 + 注入
+    assert "BASE_REV=" in cmd
+    assert "git merge-base HEAD origin/main" in cmd
+    assert "git merge-base HEAD origin/develop" in cmd  # fallback
+    assert "git merge-base HEAD origin/dev" in cmd  # fallback
+    # 累加 fail 标志
+    assert "fail=0" in cmd
+    assert "fail=1" in cmd
     assert "[ $fail -eq 0 ]" in cmd  # 不能用 `exit $fail`：orch 包装的 exit-marker echo 不再跑
-    # log 文件名 split unit / int
-    assert "$name-unit.log" in cmd
-    assert "$name-int.log" in cmd
 
 
-# ── pass：验 cmd 是 for-each-repo 并行版 ─────────────────────────────────────
+# ── pass ──────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
-async def test_run_staging_test_pass(monkeypatch):
-    FakeRC = make_fake_controller(exit_code=0, stdout="ok\n", stderr="", duration=3.5)
+async def test_run_dev_cross_check_pass(monkeypatch):
+    FakeRC = make_fake_controller(exit_code=0, stdout="ok\n", stderr="", duration=1.5)
     monkeypatch.setattr(
-        "orchestrator.checkers.staging_test.k8s_runner.get_controller",
+        "orchestrator.checkers.dev_cross_check.k8s_runner.get_controller",
         lambda: FakeRC(),
     )
-    result = await run_staging_test("REQ-1")
+    result = await run_dev_cross_check("REQ-1")
 
     assert isinstance(result, CheckResult)
     assert result.passed is True
     assert result.exit_code == 0
     assert result.stdout_tail == "ok\n"
     assert result.stderr_tail == ""
-    assert result.duration_sec == 3.5
     _assert_for_each_repo_cmd(result.cmd)
     assert FakeRC.last_cmd == result.cmd
 
 
 # ── fail ──────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
-async def test_run_staging_test_fail(monkeypatch):
-    FakeRC = make_fake_controller(exit_code=1, stdout="FAIL\n", stderr="panic: nil ptr\n", duration=2.0)
+async def test_run_dev_cross_check_fail(monkeypatch):
+    FakeRC = make_fake_controller(
+        exit_code=1, stdout="lint warnings...\n",
+        stderr="=== FAIL: ttpos-server-go ===\n", duration=8.2,
+    )
     monkeypatch.setattr(
-        "orchestrator.checkers.staging_test.k8s_runner.get_controller",
+        "orchestrator.checkers.dev_cross_check.k8s_runner.get_controller",
         lambda: FakeRC(),
     )
-    result = await run_staging_test("REQ-2")
+    result = await run_dev_cross_check("REQ-2")
 
     assert result.passed is False
     assert result.exit_code == 1
-    assert result.stdout_tail == "FAIL\n"
-    assert result.stderr_tail == "panic: nil ptr\n"
+    assert "FAIL" in result.stderr_tail
 
 
 # ── stdout/stderr tail 截尾 ───────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
-async def test_run_staging_test_truncates_tails(monkeypatch):
+async def test_run_dev_cross_check_truncates_tails(monkeypatch):
     big_out = "x" * 5000
     big_err = "e" * 4000
     FakeRC = make_fake_controller(exit_code=0, stdout=big_out, stderr=big_err)
     monkeypatch.setattr(
-        "orchestrator.checkers.staging_test.k8s_runner.get_controller",
+        "orchestrator.checkers.dev_cross_check.k8s_runner.get_controller",
         lambda: FakeRC(),
     )
-    result = await run_staging_test("REQ-3")
+    result = await run_dev_cross_check("REQ-3")
 
     assert len(result.stdout_tail) == 2048
     assert len(result.stderr_tail) == 2048
@@ -104,15 +103,16 @@ async def test_run_staging_test_truncates_tails(monkeypatch):
 
 # ── timeout ───────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
-async def test_run_staging_test_timeout(monkeypatch):
+async def test_run_dev_cross_check_timeout(monkeypatch):
     class SlowRC:
         async def exec_in_runner(self, req_id, command, **kw):
             await asyncio.sleep(9999)
             return ExecResult(exit_code=0, stdout="", stderr="", duration_sec=0)
 
     monkeypatch.setattr(
-        "orchestrator.checkers.staging_test.k8s_runner.get_controller",
+        "orchestrator.checkers.dev_cross_check.k8s_runner.get_controller",
         lambda: SlowRC(),
     )
 
@@ -124,7 +124,10 @@ async def test_run_staging_test_timeout(monkeypatch):
         except asyncio.CancelledError:
             raise TimeoutError() from None
 
-    monkeypatch.setattr("orchestrator.checkers.staging_test.asyncio.wait_for", fast_wait_for)
+    monkeypatch.setattr("orchestrator.checkers.dev_cross_check.asyncio.wait_for", fast_wait_for)
 
-    with pytest.raises(TimeoutError):
-        await run_staging_test("REQ-4")
+    # timeout 走 internal CheckResult 返回（不抛异常）
+    result = await run_dev_cross_check("REQ-4", timeout_sec=1)
+    assert result.passed is False
+    assert result.exit_code == -1
+    assert "超时" in result.stderr_tail

@@ -12,7 +12,7 @@
 | **source repo** | `phona/ttpos-server-go`、`phona/ubox-crosser` | dev-agent 改的代码所在；**多仓 REQ 平等列表，无主从** |
 | **integration repo** | `phona/ttpos-arch-lab` | 提供 ephemeral lab env 的 helm chart / 部署脚本 |
 
-source repo 提供 **测试 / 自检 target**（`ci-test` / `dev-cross-check`），
+source repo 提供 **ttpos-ci 标准 target**（`ci-lint` / `ci-unit-test` / `ci-integration-test`），
 integration repo 提供 **环境 target**（`accept-up` / `accept-down`）。
 
 > M15 砍 manifest：sisyphus 不再有"集中式 IDL 描述本 REQ 涉及哪些 repo"。
@@ -49,16 +49,34 @@ helper 行为：clone 到约定路径、用 `$GH_TOKEN` 做 auth、idempotent
 
 ### 2.1 source repo 必须有
 
+> 这套契约对齐 **`ttpos-ci`** 标准（`ci-env` / `ci-setup` / `ci-lint` / `ci-unit-test` / `ci-integration-test` / `ci-build`），
+> 业务 repo 一份 Makefile 同时供 GitHub Actions 和 sisyphus 调用，**不维护两套 target**。
+
 | target | 谁调 | 在哪跑 | 期望 |
 |---|---|---|---|
-| `make ci-test` | staging-test checker（M1） | runner pod，**for-each-repo** `cd /workspace/source/<repo-basename> && make ci-test` | 退码 0 = pass，非 0 = fail；checker 并行起所有仓 |
-| `make dev-cross-check` | dev-cross-check checker（M15） | runner pod，**for-each-repo** `cd /workspace/source/<repo-basename> && make dev-cross-check` | 业务自定义编译 / 框架约束；退码 0 = pass |
+| `make ci-lint` | dev-cross-check checker（M15） | runner pod，**for-each-repo** `cd /workspace/source/<repo> && BASE_REV=$(git merge-base HEAD origin/main) make ci-lint` | go vet + golangci-lint，仅 lint 变更文件（BASE_REV 缺失则全量）；退码 0 = pass |
+| `make ci-unit-test` | staging-test checker（M1） | runner pod，**for-each-repo** `cd /workspace/source/<repo> && make ci-unit-test` | 单元测试（业务聚合 main + bmp 等）；退码 0 = pass |
+| `make ci-integration-test` | staging-test checker（M1） | 同上 | 集成测试（docker compose 起 stack）；退码 0 = pass |
 
-`make ci-test` 该跑啥（unit / integration / lint / 任何组合）由业务 repo 自己决定。
-`make dev-cross-check` 一般跑 dev-time 静态检查（编译 / 框架规则 / contract 自检），
-失败一般是改 src 能修。sisyphus 硬编码只跑这两条命令，业务方在 Makefile 里聚合。
+staging-test checker 单 repo 内 **`ci-unit-test && ci-integration-test` 串行**（避免内存峰值叠加撑爆 pod 8 GiB cgroup），repo 之间并行起。
 
-### 2.2 integration repo 必须有（accept 阶段需要时）
+### 2.2 BASE_REV 约定
+
+dev-cross-check checker 在 runner pod 内每仓计算：
+
+```bash
+base_rev=$(git merge-base HEAD origin/main 2>/dev/null \
+        || git merge-base HEAD origin/develop 2>/dev/null \
+        || git merge-base HEAD origin/dev 2>/dev/null \
+        || echo "")
+BASE_REV="$base_rev" make ci-lint
+```
+
+业务 `ci-lint` 必须接受 `BASE_REV` env 变量（空字符串 = 全量扫描）。golangci-lint
+推荐写法：`golangci-lint run ${BASE_REV:+--new-from-rev=$BASE_REV}`，空值时
+shell 不展开 flag，等价全量。
+
+### 2.3 integration repo 必须有（accept 阶段需要时）
 
 | target | 谁调 | 在哪跑 | 期望 |
 |---|---|---|---|
@@ -99,19 +117,31 @@ accept-up:
 
 ## 4. 最小可行 Makefile 模板
 
-### 4.1 source repo (Go 例)
+### 4.1 source repo (Go 例，对齐 ttpos-ci 标准)
 
 ```makefile
-.PHONY: ci-test ci-lint ci-build
+.PHONY: ci-env ci-setup ci-lint ci-unit-test ci-integration-test ci-build
 
-# sisyphus 只调 ci-test；想跑啥业务自己聚合
-ci-test: ci-lint
-	go test -race -count=1 ./...
-	go test -tags=integration -race -count=1 -timeout=10m ./...
+ci-env:
+	@echo "GO_VERSION=1.23"
+	@echo "NEEDS_DOCKER=true"
 
+ci-setup:
+	go mod download
+	@which golangci-lint >/dev/null 2>&1 \
+	  || curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+	     | sh -s -- -b $$(go env GOPATH)/bin v1.62.2
+
+# BASE_REV 由 sisyphus 注入；空字符串等价全量
 ci-lint:
 	go vet ./...
-	@which golangci-lint >/dev/null && golangci-lint run ./... || echo "golangci-lint 未装，跳过"
+	golangci-lint run $${BASE_REV:+--new-from-rev=$$BASE_REV}
+
+ci-unit-test:
+	go test -short -race -count=1 ./...
+
+ci-integration-test:
+	docker compose -f tests/docker-compose.yml up --build --exit-code-from test-runner
 
 ci-build:
 	CGO_ENABLED=0 go build -o bin/$(notdir $(CURDIR)) ./cmd/...
@@ -187,7 +217,7 @@ router.py 完全靠 tag 做路由 —— **issue title 不用作判断**。
 
 接入卡住时按这个顺序看：
 
-1. **staging-test 总是 fail** → `kubectl exec runner-<REQ> -- bash -c "cd /workspace/source/<repo> && make ci-test"` 手跑一遍
+1. **staging-test 总是 fail** → `kubectl exec runner-<REQ> -- bash -c "cd /workspace/source/<repo> && make ci-unit-test && make ci-integration-test"` 手跑一遍
 2. **spec-lint 总是 fail** → `kubectl exec runner-<REQ> -- bash -c "for r in /workspace/source/*; do [ -d \$r/openspec/changes/<REQ> ] && (cd \$r && openspec validate openspec/changes/<REQ>); done"` 手跑
 3. **pr-ci 永远 timeout** → 查 `feat/REQ-x` 分支真有没有 PR、GHA 在 PR 上确实跑了
 4. **accept-up 失败** → 看 stdout 是不是缺最后一行 JSON、`SISYPHUS_NAMESPACE` 是不是被 Makefile 用了

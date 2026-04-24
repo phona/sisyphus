@@ -1,10 +1,11 @@
 """create_dev_cross_check：spec lint 通过 → 开发交叉验证。
 
-M1 checker 框架：sisyphus 在 runner pod 执行 make dev-cross-check，
+M1 checker 框架：sisyphus 在 runner pod 执行
+`BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`（ttpos-ci 标准），
 根据退出码 emit DEV_CROSS_CHECK_PASS / DEV_CROSS_CHECK_FAIL。
 
-多仓重构后：checker 自行遍历 /workspace/source/*，含 Makefile 的仓逐一跑
-`make dev-cross-check`，任一失败整体红。
+多仓重构 + ttpos-ci 契约统一后：checker 自行遍历 /workspace/source/*，含 Makefile
+`ci-lint` target 的仓逐一跑（仅 lint 变更文件），任一失败整体红。
 """
 from __future__ import annotations
 

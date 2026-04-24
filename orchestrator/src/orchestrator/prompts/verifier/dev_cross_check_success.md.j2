@@ -2,10 +2,11 @@
 
 ## 职责（dev_cross_check / success）
 sisyphus 的机械 dev_cross_check checker 全绿——它**遍历所有 source repo**
-跑 `make dev-cross-check`（业务自定义编译 / 框架约束），全部通过。
+跑 `BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`
+（ttpos-ci 标准：仅 lint 变更文件；BASE_REV 缺失则全量），全部通过。
 机械层确认：
-- 每仓的代码能编译
-- 每仓自己的 dev-time 约束（lint 子集 / contract 自检 / 框架规则）通过
+- 每仓变更文件的 lint（go vet + golangci-lint）干净
+- 每仓的代码能编译（lint 隐含 typecheck）
 - staging-test 还没开始
 
 你要判：dev **实现质量**对得起后面跑 staging test 吗？

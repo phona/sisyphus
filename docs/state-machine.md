@@ -23,8 +23,8 @@
 | `init` | 还没 analyze（intent_analyze 之前） | start |
 | `analyzing` | analyze-agent 在跑 | in-flight |
 | `spec-lint-running` | **M15** 客观检查：**for-each-repo** openspec validate + check-scenario-refs.sh（遍历 `/workspace/source/*`） | in-flight |
-| `dev-cross-check-running` | **M15** 客观检查：**for-each-repo** 业务 repo 自定义检查（make dev-cross-check） | in-flight |
-| `staging-test-running` | **for-each-repo 并行** 跑 make ci-test（机械） | in-flight |
+| `dev-cross-check-running` | **M15** 客观检查：**for-each-repo** `BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`（ttpos-ci 标准，仅 lint 变更文件） | in-flight |
+| `staging-test-running` | **for-each-repo 并行** 跑 `make ci-unit-test && make ci-integration-test`（**单 repo 内串行**，避免内存峰值叠加） | in-flight |
 | `pr-ci-running` | PR 已开，等 GHA 全套绿（机械） | in-flight |
 | `accept-running` | env-up 完，accept-agent 跑 FEATURE-A* | in-flight |
 | `accept-tearing-down` | env-down 清 lab（无论 accept pass/fail 都跑） | in-flight |

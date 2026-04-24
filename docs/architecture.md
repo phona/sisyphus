@@ -46,7 +46,7 @@ flowchart TD
     Analyze[analyze-agent<br/>写 proposal/design/tasks<br/>+ 决定多少 dev agent]
     SpecLint[spec-lint checker<br/>openspec validate<br/>+ check-scenario-refs.sh]
     DevCheck[dev-cross-check checker<br/>业务 repo 侧定制检查<br/>例:编译 / 开发框架检查]
-    Staging[staging-test checker<br/>kubectl exec runner<br/>for repo in /workspace/source/*<br/>并行 make ci-test]
+    Staging[staging-test checker<br/>kubectl exec runner<br/>for repo in /workspace/source/*<br/>并行 make ci-unit-test 串行 ci-integration-test]
     PRCI[pr-ci-watch checker<br/>GitHub REST 轮 check-runs<br/>按 feat/REQ-x 查 PR]
     EnvUp[sisyphus pre-accept:<br/>make accept-up]
     Accept[accept-agent<br/>跑 FEATURE-A* scenarios]
@@ -140,7 +140,7 @@ flowchart LR
     end
 
     subgraph mechanical["机械层 checker (Python in sisyphus)"]
-        Staging[staging_test<br/>kubectl exec 跑 make ci-test]
+        Staging[staging_test<br/>kubectl exec 跑 ci-unit-test && ci-integration-test]
         PRCI[pr_ci_watch<br/>GitHub REST]
     end
 
@@ -194,9 +194,9 @@ flowchart LR
 |---|---|---|---|---|
 | 1 | **analyze** | `intent:analyze` tag | `openspec/changes/REQ-x/{proposal,design,tasks}.md` 在**每个被改的 source repo** 各一份（没有主从）；高层文档放 spec home repo | session.completed + analyze tag |
 | 2 | **spec-lint** (机械, for-each-repo) | analyze done | **遍历 `/workspace/source/*`**：每仓有 `openspec/changes/REQ-x/` 就跑 `openspec validate` + `check-scenario-refs.sh --specs-search-path`（跨仓引用）。任一仓红 → 整体红 | sisyphus 自己判，无 BKD agent |
-| 3 | **dev-cross-check** (机械, for-each-repo) | spec-lint pass | 遍历每仓 `make dev-cross-check`（业务自定义编译 / 框架约束）；任一仓红 → 整体红 | sisyphus 自己判，无 BKD agent |
+| 3 | **dev-cross-check** (机械, for-each-repo) | spec-lint pass | 遍历每仓 `BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`（ttpos-ci 标准，仅 lint 变更文件）；任一仓红 → 整体红 | sisyphus 自己判，无 BKD agent |
 | 4 | **dev (1~N 并行)** | dev-cross-check pass | 业务代码 + 各仓 push `feat/REQ-x` + 开 PR（多仓 REQ 通常每仓一个 dev agent） | 每个 dev session.completed → mark_dev_reviewed_and_check 聚合 → DEV_ALL_PASSED |
-| 5 | **staging-test** (机械, for-each-repo **并行**) | DEV_ALL_PASSED | 遍历每仓 `make ci-test`，**并行起所有仓**（per-repo 30 min × N 串行会超 timeout）；任一仓退非 0 → 整体红 | sisyphus 自己判，无 BKD agent |
+| 5 | **staging-test** (机械, for-each-repo **并行**) | DEV_ALL_PASSED | 遍历每仓 `make ci-unit-test && make ci-integration-test`（**单 repo 内串行**，避免内存峰值叠加），**repo 之间并行**起所有仓；任一仓退非 0 → 整体红 | sisyphus 自己判，无 BKD agent |
 | 6 | **pr-ci-watch** (机械) | staging-test pass | GitHub REST 轮 PR check-runs（按 `feat/REQ-x` branch 查 PR）直至全绿 / 任一红 / 1800s 超时 | sisyphus 自己判 |
 | 7a | **accept env-up** (机械) | pr-ci pass | runner pod 跑 `make accept-up`，stdout 尾行 JSON 取 `endpoint` | env-up 失败 → ESCALATED |
 | 7b | **accept** | env-up 完 | 跑 FEATURE-A* scenarios → result:pass / fail tag | session.completed + accept tag |
@@ -215,8 +215,8 @@ M15 起 sisyphus 不再维护 `manifest.yaml` 这种集中式 IDL。stage 间靠
 | **路径约定 `/workspace/source/<basename>/`** | sisyphus + `sisyphus-clone-repos.sh` | 所有 checker / agent | source repo clone 必须落到这个路径，checker 按它遍历 |
 | **`openspec/changes/REQ-x/tasks.md`** | analyze | sisyphus fanout_dev、dev | 每仓自带一份；拆几个并行 dev 任务、每个任务 scope（含 target repo） |
 | **git branch `feat/REQ-x`** | dev | pr-ci-watch、accept、staging-test | **每仓独立分支**；pr-ci 按 branch 在每仓找 PR |
-| **`make ci-test` target** | 业务 repo（一次性接入时定） | staging-test checker | 每仓自己实现；checker for-each-repo 调一次 |
-| **`make dev-cross-check` target**（M15+） | 业务 repo | dev-cross-check checker | 每仓自定义编译 / 框架约束 |
+| **`make ci-unit-test` + `ci-integration-test` target** | 业务 repo（一次性接入时定，对齐 ttpos-ci 标准） | staging-test checker | 每仓自己实现；checker for-each-repo `&&` 串行调 |
+| **`make ci-lint` target**（M15+，对齐 ttpos-ci 标准） | 业务 repo | dev-cross-check checker | 每仓 go vet + golangci-lint，仅 lint 变更文件（BASE_REV env） |
 | **`make accept-up` / `accept-down`** | integration repo | sisyphus accept stage | 起 / 拆 lab |
 | **BKD issue tags** | 各 agent | router.py | stage 完成信号、result:pass/fail、verifier decision（含可选 `target_repo`） |
 
@@ -249,28 +249,37 @@ done
 
 **dev-cross-check**（spec-lint 完 → staging-test 前）
 
-目的：业务 repo 定制检查（编译、框架约束等）。
+目的：业务 repo lint（go vet + golangci-lint），仅扫变更文件。对齐 ttpos-ci 标准 `ci-lint` target。
 
 ```bash
 for repo in /workspace/source/*; do
-  [ -f "$repo/Makefile" ] || continue
-  (cd "$repo" && make dev-cross-check) || fail=1
+  [ -f "$repo/Makefile" ] && grep -q '^ci-lint:' "$repo/Makefile" || continue
+  base_rev=$(cd "$repo" && (git merge-base HEAD origin/main 2>/dev/null \
+                       || git merge-base HEAD origin/develop 2>/dev/null \
+                       || git merge-base HEAD origin/dev 2>/dev/null \
+                       || echo ""))
+  (cd "$repo" && BASE_REV="$base_rev" make ci-lint) || fail=1
 done
 ```
 
 - 任一仓非 0 → 整体 fail → verifier-agent 决策
+- BASE_REV 为空时 ci-lint 退化为全量扫描（接入约定：业务 Makefile 用 `${BASE_REV:+--new-from-rev=$BASE_REV}`）
 
 **staging-test**（dev 完 → pr-ci 前）
 
+对齐 ttpos-ci 标准 `ci-unit-test` + `ci-integration-test` target。
+
 ```bash
-# 并行起所有仓（per-repo 30 min × N 串行会超 timeout）
+# repo 之间并行（per-repo 30 min × N 串行会超 timeout）
+# 单 repo 内 unit → integration 串行（避免内存峰值叠加撑爆 pod 8 GiB cgroup）
 parallel for repo in /workspace/source/*; do
-  (cd "$repo" && make ci-test) || fail=1
+  (cd "$repo" && make ci-unit-test && make ci-integration-test) || fail=1
 done
 wait
 ```
 
 - 任一仓非 0 → 整体 fail → verifier-agent 决策
+- 单 repo 内串行只多 ~2-5min，但单 pod 内存峰值减半，节点能并发跑更多 req
 
 ## 8. Runner（K8s Pod + PVC，per-REQ）
 

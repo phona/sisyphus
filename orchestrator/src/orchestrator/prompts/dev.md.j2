@@ -99,7 +99,9 @@ sisyphus 会：
 - `openspec/specs/**`
 
 ### M15 原则
-- **不跑 lint / unit / integration test**：交给 staging-test 阶段（`make ci-test` 固定命令）
+- **不跑 lint / unit / integration test**：交给后续两个机械阶段
+  - dev-cross-check 跑 `make ci-lint`（ttpos-ci 标准，仅 lint 变更文件）
+  - staging-test 跑 `make ci-unit-test && make ci-integration-test`
 - **不 build image**：PR CI 会自动跑
 - 所有代码工作在自己 cwd（GH_TOKEN 权限清晰）
 

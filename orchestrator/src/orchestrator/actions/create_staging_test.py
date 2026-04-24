@@ -1,11 +1,13 @@
-"""create_staging_test（v0.2 + M1 checker + M15）：
+"""create_staging_test（v0.2 + M1 checker + M15 + ttpos-ci 契约统一）：
 dev.done 后验 staging 测试。
 
 feature flag checker_staging_test_enabled:
   False（默认）: 创建 BKD agent issue（老路，保证老行为不破）
-  True: sisyphus 自己在 runner pod 执行 make ci-test，根据退出码 emit STAGING_TEST_PASS/FAIL
+  True: sisyphus 自己在 runner pod 对每个 source repo 并行跑
+        `make ci-unit-test && make ci-integration-test`（单 repo 内串行避免内存叠加），
+        根据退出码 emit STAGING_TEST_PASS/FAIL
 
-M15：不再读 manifest；checker 硬编码执行 make ci-test。
+M15：不再读 manifest；checker 硬编码 ttpos-ci 标准 target。
 """
 from __future__ import annotations
 
