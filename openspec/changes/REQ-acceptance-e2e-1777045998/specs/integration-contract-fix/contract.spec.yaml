@@ -1,0 +1,23 @@
+openspec: "1.0"
+id: integration-contract-fix
+title: Fix integration-contracts.md accept target names and template
+producer: phona/sisyphus
+
+documents:
+  - path: docs/integration-contracts.md
+    changes:
+      - type: rename
+        from: accept-up
+        to: ci-accept-env-up
+        scope: "all normative occurrences (§2.3 table, §3 heading, §4.2 template, §8 troubleshooting)"
+      - type: rename
+        from: accept-down
+        to: ci-accept-env-down
+        scope: "all normative occurrences"
+      - type: replace_section
+        section: "§4.2 integration repo template"
+        old: "helm-based example with kubectl"
+        new: "Docker Compose example with bash scripts"
+      - type: add_note
+        location: "§4.2"
+        content: "runner pods have Docker DinD but NO kubectl/helm"
