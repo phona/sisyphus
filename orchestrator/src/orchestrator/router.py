@@ -31,6 +31,7 @@ SPEC_TAGS = {"spec"}
 _VALID_ACTIONS = {"pass", "fix", "escalate"}
 _VALID_FIXERS = {"dev", "spec", None}
 _VALID_CONFIDENCE = {"high", "low"}
+_VALID_VERDICTS = {"legitimate", "test-hack", "code-lobotomy", "spec-drift", "unclear"}
 
 
 def validate_decision(decision: object) -> tuple[bool, str]:
@@ -56,6 +57,26 @@ def validate_decision(decision: object) -> tuple[bool, str]:
     if not isinstance(decision.get("reason", ""), str):
         return False, "reason must be string"
     return True, ""
+
+
+def validate_audit_soft(audit: dict | None) -> str | None:
+    """软验证 audit 字段（M-fixer-audit）。
+
+    返回 None 表示 OK；否则返回 warning message。
+    只 log.warning，不影响 action 决策，不改 validate_decision 本体。
+    """
+    if audit is None:
+        return None
+    if not isinstance(audit, dict):
+        return "audit must be dict"
+    verdict = audit.get("verdict")
+    if verdict not in _VALID_VERDICTS:
+        return f"invalid audit verdict: {verdict!r}"
+    if not isinstance(audit.get("red_flags", []), list):
+        return "audit.red_flags must be list"
+    if not isinstance(audit.get("files_by_category", {}), dict):
+        return "audit.files_by_category must be dict"
+    return None
 
 
 def decision_to_event(decision: dict) -> Event:

@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import asyncpg
@@ -25,14 +26,15 @@ async def insert_decision(
     reason: str | None = None,
     confidence: str | None = None,
     made_at: datetime | None = None,
+    audit: dict | None = None,
 ) -> int:
     row = await pool.fetchrow(
         """
         INSERT INTO verifier_decisions
             (req_id, stage, trigger,
              decision_action, decision_fixer, decision_scope,
-             decision_reason, decision_confidence, made_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             decision_reason, decision_confidence, made_at, audit)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING id
         """,
         req_id,
@@ -44,6 +46,7 @@ async def insert_decision(
         reason,
         confidence,
         made_at or datetime.now(UTC),
+        json.dumps(audit) if audit is not None else None,
     )
     return int(row["id"])
 

@@ -117,9 +117,25 @@ orchestrator 每条决策都写一行：
 
 每次 stage 调用的起止 + agent + 模型 + token + 结果。supports Q3/Q6/Q7/Q10/Q11 看板。
 
-### verifier_decisions（M14e）
+### verifier_decisions（M14e + fixer-audit）
 
 每条 verifier-agent 决策记录：`req_id / stage / trigger / decision_action / fixer / confidence / reason / actual_outcome`。`actual_outcome` 后续回填，让 Q8 算 verifier 准确率。
+
+**audit 字段（migration 0006）**：after-fix 二次 verify 时，verifier 附带一份 `audit JSONB`，包含：
+- `diff_summary`（str）：PR diff 统计摘要，格式 `"src=+12/-3 tests=+8/-0"`
+- `verdict`（enum）：`legitimate` / `test-hack` / `code-lobotomy` / `spec-drift` / `unclear`
+- `red_flags`（list[str]）：检测到的可疑行为（如删 assert、加 t.Skip、hardcode 期望值）
+- `files_by_category`（dict）：按 src / tests / spec / config 分类的改动文件数
+
+first-time verify（非 after-fix）`audit = NULL`，向后兼容老数据。Q14/Q15/Q16 看板均有 `WHERE audit IS NOT NULL` 过滤。
+
+**红旗 patterns（verifier 审计要点）**：
+- 删 `assert` / `require` / `t.Error` / `t.Fatal` 调用 → `test-hack` 信号
+- 加 `t.Skip(` / `//nolint` / `testing.Short()` 绕过用例 → `test-hack` 信号
+- hardcode 期望值（`want = "hardcoded"` 而非读真实结果）→ `test-hack` 信号
+- `tests/` 有改动但 `src/` 没有实质性对应改动 → `test-hack` 信号
+- `openspec/` 被改来迎合现有实现 → `spec-drift` 信号
+- 业务代码被删/注释/stub 化 → `code-lobotomy` 信号
 
 ### bkd_snapshot（覆盖式）
 
@@ -167,7 +183,7 @@ Metabase 看板直接读这张表就能看"改进成绩单"。
 
 完整 SQL + Metabase Question 配置见 [observability/sisyphus-dashboard.md](../observability/sisyphus-dashboard.md)。
 
-**13 个看板**（[observability/queries/sisyphus/](../observability/queries/sisyphus/)）：
+**16 个看板**（[observability/queries/sisyphus/](../observability/queries/sisyphus/)）：
 
 - Q1-Q5（M7，基于 `artifact_checks`）：钻牛角尖 / 慢异常 / stage 通过率 / 失败分桶 / 在飞 REQ
 - Q6-Q13（M14e，基于 `stage_runs` + `verifier_decisions`）：
@@ -179,6 +195,10 @@ Metabase 看板直接读这张表就能看"改进成绩单"。
   - Q11 dev 并行加速比（M14d 后启用）
   - Q12 bugfix loop 异常
   - Q13 watchdog escalate 频率
+- Q14-Q16（fixer-audit，基于 `verifier_decisions.audit` JSONB）：
+  - Q14 fixer audit verdict 趋势（按天，回答"fixer 是否在 hack 测试"）
+  - Q15 可疑 pass 决策（audit verdict != legitimate 但 action=pass）
+  - Q16 fixer 改动文件分类分布（src/tests/spec/config 周度占比）
 
 **4 条 Alert**（[observability/queries/](../observability/queries/)）：
 
