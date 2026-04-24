@@ -368,6 +368,32 @@ async def test_apply_verify_pass_cas_fail_returns_skip(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_apply_verify_pass_resumes_from_escalated(monkeypatch):
+    """resume 路径：用户 follow-up escalate 的 verifier issue → 新 decision=pass →
+    apply_verify_pass 第一次 CAS REVIEW_RUNNING 失败（state 是 ESCALATED），
+    第二次 CAS ESCALATED → STAGE_RUNNING 成功 + chain emit 上游 pass event。"""
+    from orchestrator.actions import _verifier as v
+
+    cas_calls: list = []
+
+    async def fake_cas(pool, req_id, expected, nxt, event, action, context_patch=None):
+        cas_calls.append(expected.value)
+        # 模拟"REQ 当前在 ESCALATED"——CAS REVIEW_RUNNING 失败，CAS ESCALATED 成功
+        return expected.value == "escalated"
+
+    monkeypatch.setattr("orchestrator.actions._verifier.req_state.cas_transition", fake_cas)
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+
+    out = await v.apply_verify_pass(
+        body=make_body(), req_id="REQ-9", tags=[],
+        ctx={"verifier_stage": "pr_ci"},
+    )
+    assert cas_calls == ["review-running", "escalated"]
+    assert out["emit"] == Event.PR_CI_PASS.value
+    assert out["stage"] == "pr_ci"
+
+
+@pytest.mark.asyncio
 async def test_start_fixer_creates_issue_with_fixer_tags(monkeypatch):
     from orchestrator.actions import _verifier as v
     fake = make_fake_bkd()

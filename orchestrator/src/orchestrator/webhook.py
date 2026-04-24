@@ -19,7 +19,7 @@ from . import observability as obs
 from . import router as router_lib
 from .bkd import BKDClient
 from .config import settings
-from .state import ReqState
+from .state import Event, ReqState
 from .store import db, dedup, req_state, verifier_decisions
 
 log = structlog.get_logger(__name__)
@@ -60,19 +60,24 @@ class WebhookBody(BaseModel):
     changes: dict[str, Any] | None = None  # issue.updated 携带
 
 
-async def _push_upstream_done(project_id: str, issue_id: str) -> None:
-    """把刚收到 session.completed 的 BKD issue 状态推到 done。
+async def _push_upstream_status(project_id: str, issue_id: str, status_id: str) -> None:
+    """把刚收到 session.completed 的 BKD issue 状态推到目标 statusId。
 
-    幂等（重推 done 是 no-op）。失败只记 warning，不阻塞状态机。
+    statusId 取值：
+    - "done" —— 默认收尾，issue 进 BKD 看板"完成"列
+    - "review" —— verifier 判 escalate 时用，issue 进"待审查"列让用户能定位 follow-up
+      （resume 路径：用户在该 issue chat 续聊 → BKD wake agent → 新 decision → 主链继续）
+
+    幂等。失败只记 warning，不阻塞状态机。
     """
     try:
         async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
             await bkd.update_issue(
-                project_id=project_id, issue_id=issue_id, status_id="done",
+                project_id=project_id, issue_id=issue_id, status_id=status_id,
             )
     except Exception as e:
-        log.warning("webhook.upstream_done_failed",
-                    issue_id=issue_id, error=str(e))
+        log.warning("webhook.upstream_status_failed",
+                    issue_id=issue_id, status_id=status_id, error=str(e))
 
 
 @api.get("/bkd-events")
@@ -178,13 +183,19 @@ async def webhook(request: Request) -> JSONResponse:
         log.debug("webhook.no_event_mapping", tags=tags, event_type=body.event)
         return {"action": "skip", "reason": "no event mapping"}
 
-    # ─── 3.5 把上游 BKD issue 推 done（webhook 已识别为有效完工信号）──────
-    # 不修的话 dev/ci-unit/ci-int/accept/done-archive 等 issue 永远卡 review，
-    # BKD UI 一片乱，agent_quality.review_count 也失真。
-    # fanout_specs / mark_spec_reviewed_and_check 也会推自己负责的 issue done，
-    # 重推幂等不冲突。session.failed 不推（保留人工排查）。
+    # ─── 3.5 把上游 BKD issue 推目标 statusId（webhook 已识别为有效完工信号）──────
+    # 默认 "done"。**verifier 判 escalate 例外** → "review"，让 BKD 看板"待审查"列只剩
+    # 用户可 follow-up 续作业的 issue（resume 路径）。其他 (analyze/challenger/fixer/checker
+    # 完成) 全推 done，UI 干净。session.failed 不推（保留人工排查）。
     if body.event == "session.completed":
-        await _push_upstream_done(body.projectId, body.issueId)
+        is_verifier_escalate = (
+            "verifier" in (tags or [])
+            and event == Event.VERIFY_ESCALATE
+        )
+        await _push_upstream_status(
+            body.projectId, body.issueId,
+            "review" if is_verifier_escalate else "done",
+        )
 
     # ─── 4. resolve req_id ─────────────────────────────────────────────────
     req_id = router_lib.extract_req_id(tags, body.issueNumber)

@@ -96,6 +96,11 @@ stateDiagram-v2
     review_running --> fixer_running: verify.fix-needed
     review_running --> escalated: verify.escalate\n(含 flaky / 基础设施抖动)
 
+    %% escalated 不是死终态：用户 follow-up 那个 escalate 的 verifier issue → 走原 verifier 同链
+    escalated --> escalated: verify.pass\n(apply_verify_pass 内部 CAS 推下一 stage)
+    escalated --> fixer_running: verify.fix-needed
+    escalated --> escalated: verify.escalate\n(verifier 又判 escalate, 留原地)
+
     fixer_running --> review_running: fixer.done\n(invoke_verifier_after_fix)
 
     state "session.failed (any in-flight)" as anyfail
@@ -111,6 +116,12 @@ stateDiagram-v2
 
 3 路决策：**pass / fix / escalate**（retry_checker 已砍 —— 基础设施 flaky 由 verifier 判
 escalate 给人，sisyphus 不机制性兜 retry，避免假阳性 retry 死循环）。
+
+**ESCALATED 可恢复**：用户在 BKD UI follow-up 那条 escalate 的 verifier issue（webhook
+统一推 statusId="review" 让"待审查"列只剩它）→ BKD wake agent → 写新 decision → 走原
+verifier session.completed 同一套 webhook 链路，直接命中 `(ESCALATED, VERIFY_*)` transition。
+零新概念 / 零新 tag / 零新 endpoint。**注意**只可 follow-up verifier issue 续；analyze
+issue 续会重起整个 analyze 等于新 REQ，文档不推荐。
 
 `VERIFY_PASS` 在 transition 表里看起来是 self-loop（next_state 还是 `review-running`），
 但 **action 内部手工 CAS 推到目标 stage_running 再链式 emit 该 stage 的 done/pass 事件**。

@@ -172,6 +172,22 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     (ReqState.ARCHIVING, Event.ARCHIVE_DONE):
         Transition(ReqState.DONE, None, "REQ complete"),
 
+    # ─── 人工恢复（escalate ≠ 死终态）─────────────────────────────────────
+    # 用户在 BKD UI follow-up 那个 escalate 的 verifier issue → BKD wake agent →
+    # 写新 decision JSON → session.completed 走原来 verifier 同一套链路 → 命中下面 3 条。
+    # 复用 apply_verify_pass / start_fixer，它们的 CAS source 同时接 REVIEW_RUNNING + ESCALATED。
+    # 配套：webhook.py 把 verifier-decision=escalate 的 issue PATCH 到 BKD statusId="review"
+    # （而非 done），用户在 BKD 看板"待审查"列就能定位到该 follow-up 哪条。
+    (ReqState.ESCALATED, Event.VERIFY_PASS):
+        Transition(ReqState.ESCALATED, "apply_verify_pass",
+                   "用户续 escalate 的 verifier issue → 新 decision=pass → action 推下一 stage"),
+    (ReqState.ESCALATED, Event.VERIFY_FIX_NEEDED):
+        Transition(ReqState.FIXER_RUNNING, "start_fixer",
+                   "用户续 escalate 的 verifier issue → 新 decision=fix → 起 fixer"),
+    (ReqState.ESCALATED, Event.VERIFY_ESCALATE):
+        Transition(ReqState.ESCALATED, None,
+                   "用户续了但 verifier 还是判 escalate → 留原地等下一次 follow-up"),
+
     # ─── 通用错误 ───────────────────────────────────────────────────────
     # session crash 在任何 running state 都直接 escalate
     **{

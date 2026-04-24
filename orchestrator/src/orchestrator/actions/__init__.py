@@ -29,11 +29,21 @@ ACTION_META: dict[str, ActionMeta] = {}
 def short_title(ctx: dict | None, max_len: int = 50) -> str:
     """从 ctx.intent_title 取需求标题做成短后缀（` — <title>`）方便 BKD 看板辨识。
 
+    剥掉前缀的 `[...]` 括号（如 `[REQ-x]`、`[ANALYZE]`、`[E2E FOO]`）—— 上层
+    title 模板已经在外面再加 `[REQ-x] [STAGE]` 前缀，不剥的话 BKD UI 显示双倍
+    `[REQ-x] [VERIFY pr_ci] fail — [REQ-x] [E2E FOO] /buildinfo` 长得读不下去。
+
     没设 / 太长截断。返空字符串则上层不该 append。
     """
     if not ctx:
         return ""
     t = (ctx.get("intent_title") or "").strip()
+    # 反复剥前缀的 `[...]`（每次去掉一对括号 + 后续空格）
+    while t.startswith("["):
+        end = t.find("]")
+        if end == -1:
+            break
+        t = t[end + 1:].lstrip()
     if not t:
         return ""
     if len(t) > max_len:
