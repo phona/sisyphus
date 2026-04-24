@@ -118,10 +118,14 @@ async def webhook(request: Request) -> JSONResponse:
         if body.executionId:
             eid_parts.append(body.executionId)
         eid = "|".join(eid_parts)
-    if not await dedup.check_and_record(pool, eid):
-        log.debug("webhook.dedup.skip", event_id=eid)
+    _dedup_status = await dedup.check_and_record(pool, eid)
+    if _dedup_status == "skip":
+        log.debug("webhook.dedup.skip", event_id=eid, processed=True)
         await obs.record_event("dedup.hit", issue_id=body.issueId, extras={"event_id": eid})
-        return {"action": "skip", "reason": "duplicate event", "event_id": eid}
+        return {"action": "skip", "reason": "duplicate event already processed", "event_id": eid}
+    if _dedup_status == "retry":
+        log.warning("webhook.dedup.retry", event_id=eid,
+                    reason="previous attempt crashed mid-flight")
 
     # ─── 2. Resolve tags（session events 可能没带，从 BKD 拉）──────────────
     tags = body.tags or []
@@ -139,6 +143,7 @@ async def webhook(request: Request) -> JSONResponse:
         and not router_lib.extract_req_id(tags)
     ):
         log.debug("webhook.skip_no_req_tag", issue_id=body.issueId, tags=tags)
+        await dedup.mark_processed(pool, eid)
         return {"action": "skip", "reason": "session event without REQ tag"}
     await obs.record_event(
         "webhook.received",
@@ -201,6 +206,7 @@ async def webhook(request: Request) -> JSONResponse:
 
     if event is None:
         log.debug("webhook.no_event_mapping", tags=tags, event_type=body.event)
+        await dedup.mark_processed(pool, eid)
         return {"action": "skip", "reason": "no event mapping"}
 
     # ─── 3.5 把上游 BKD issue 推目标 statusId（webhook 已识别为有效完工信号）──────
@@ -221,6 +227,7 @@ async def webhook(request: Request) -> JSONResponse:
     req_id = router_lib.extract_req_id(tags, body.issueNumber)
     if req_id is None:
         log.warning("webhook.no_req_id", tags=tags)
+        await dedup.mark_processed(pool, eid)
         return {"action": "skip", "reason": "no req_id resolvable"}
 
     # ─── 5. fetch / init REQ state（支持任意 state init via init:STATE tag）────────────────
@@ -298,7 +305,7 @@ async def webhook(request: Request) -> JSONResponse:
         ctx = {**ctx, **patch}
 
     # ─── 6. 推进状态机（engine 内部循环 emit）─────────────────────────────
-    return await engine.step(
+    result = await engine.step(
         pool,
         body=body,
         req_id=req_id,
@@ -308,3 +315,6 @@ async def webhook(request: Request) -> JSONResponse:
         ctx=ctx,
         event=event,
     )
+    # handler 跑完，标 processed_at。engine.step 抛异常时不到这里，BKD 重发会走 retry 路径。
+    await dedup.mark_processed(pool, eid)
+    return result
