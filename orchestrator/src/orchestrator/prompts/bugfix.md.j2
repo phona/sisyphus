@@ -74,12 +74,37 @@ Step 3 改代码 → commit → push feat/{{ req_id }}:
 kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
   "cd /workspace/source/REPO && \
    git add -p && \
-   git commit -m 'fix(REQ): <具体修了什么>' && \
-   git push origin feat/{{ req_id }}"
+   git commit -m 'fix(REQ): <具体修了什么>'"
 ```
 
-Step 4 写结果到**本 issue**：
-  A. follow-up 追加 `## Bugfix Result`: diagnosis / commit_sha / 改了什么
+### Step 3.5 — push 前 `make ci-lint` 自检（**必跑，按 ttpos-ci 契约**）
+
+防 trivial 回归把球踢回 verifier 多走一轮（本来 fixer 就是来修问题的，又引入新的 lint 错就是浪费 round）。
+
+对你这轮**修过的每个 source repo** 跑：
+```bash
+kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
+  "cd /workspace/source/REPO && \
+   BASE_REV=\$(git merge-base HEAD origin/main) make ci-lint"
+```
+
+`BASE_REV` 让 lint 只校变更文件，不卷历史包袱（契约见 docs/integration-contracts.md §2）。
+
+退码处理：
+- **0** → 走 Step 4 push
+- **非 0 且报错来自你这轮 commit 改的文件** → 修，amend commit，再跑一次。**最多 2 次内修完**；超 2 次说明你判断不准，停手按原样 push 让 verifier 再看
+- **非 0 且报错来自历史包袱**（你没动的文件）→ 不修；follow-up 写一句"pre-existing lint debt: <文件>:<行>，未触碰"然后照常 push
+
+如果业务 repo 没 `ci-lint` target → `make: *** No rule to make target 'ci-lint'` → 直接跳过 Step 3.5（contract 要求，但老 repo 可能没接，不阻塞 fix），照常 push。
+
+### Step 4 — push:
+```bash
+kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
+  "cd /workspace/source/REPO && git push origin feat/{{ req_id }}"
+```
+
+Step 5 写结果到**本 issue**：
+  A. follow-up 追加 `## Bugfix Result`: diagnosis / commit_sha / 改了什么 / lint-pre-push (pass/skipped/pre-existing-debt)
   B. update-issue tags（保留 fixer + {{ req_id }} + round-N + parent-id），追加 diagnosis:<code-bug|spec-bug|env-bug>
   C. update-issue statusId=review
 
