@@ -1,0 +1,60 @@
+capability: router-noise-filter
+version: "1.0"
+description: |
+  Early webhook noise filter that drops BKD `issue.updated` events unrelated to
+  any sisyphus REQ workflow. Without this filter, BKD's project-wide broadcast
+  of `issue.updated` (from random user activity on unrelated issues) flows
+  through obs.record_event + derive_event + dedup writes, polluting the event
+  log and burning Postgres write quota for no operational value.
+
+  An `issue.updated` event is treated as relevant when it carries either:
+    - a REQ-* tag (relates to an existing tracked workflow), OR
+    - an `intent:intake` / `intent:analyze` tag (entry point for a new REQ).
+  Otherwise, the handler short-circuits to skip.
+
+  This filter coexists with the existing `session.completed`-without-REQ-tag
+  filter; together they form the early-noise branch in webhook.py.
+
+webhook:
+  module: orchestrator.webhook
+  entry: webhook(request)
+  noise_filter_position: |
+    Runs AFTER tag resolution (line ~130-135 in webhook.py: tags = body.tags
+    or fetched via BKDClient.get_issue when missing) and AFTER dedup
+    check_and_record, but BEFORE obs.record_event("webhook.received") and
+    BEFORE router.derive_event.
+
+  preconditions_for_skip:
+    issue_updated_branch:
+      - "body.event == 'issue.updated'"
+      - "router.extract_req_id(tags) is None"
+      - "'intent:intake' not in tags"
+      - "'intent:analyze' not in tags"
+    session_completed_branch:
+      - "body.event == 'session.completed'"
+      - "router.extract_req_id(tags) is None"
+
+  skip_postconditions:
+    - "dedup.mark_processed(pool, eid) is called exactly once"
+    - "Returns {'action': 'skip', 'reason': '<branch-specific>'}"
+    - "obs.record_event('webhook.received', ...) is NOT called"
+    - "router.derive_event is NOT called"
+    - "engine.step is NOT called"
+
+  skip_reasons:
+    issue_updated: "issue.updated without REQ or intent tag"
+    session_completed: "session event without REQ tag"
+
+intent_entry_tags:
+  - "intent:intake"
+  - "intent:analyze"
+  semantics: |
+    These two tags are the legitimate entry points for new REQ creation via
+    issue.updated. The handler MUST allow them through the noise filter even
+    when no REQ-* tag is present (REQ-* is assigned later by extract_req_id's
+    issueNumber fallback at line ~232).
+
+non_goals:
+  - "Filter session.failed: out of scope; rare event, useful for forensic logs."
+  - "Add settings/env knob to disable the filter: not configurable; the rule
+     is deterministic and there is no operational use case for bypassing it."
