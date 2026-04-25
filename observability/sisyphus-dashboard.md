@@ -176,6 +176,30 @@ M7 原 5 条（Q1–Q5）基于 `artifact_checks`。M14e 追加 8 条（Q6–Q13
   - `test_changes > src_changes` 且 `test_changes ≥ 5` → fixer 改测试比改代码还多，可疑
   - `spec_changes` 持续增长 → fixer 在改 spec 迎合实现，spec-drift 告警
 
+## 机械 checker silent-pass（Q18）
+
+`spec_lint` / `dev_cross_check` / `staging_test` / `pr_ci_watch` 各自源代码里都有
+`refusing to silent-pass` guard（empty source / `ran=0` / `no-gha-checks-ran`），
+设计上"零信号即 fail"。Q18 是**事后兜底**：从 `artifact_checks` 已落表的样本里
+反查"通过了但其实没干活"的记录，万一 guard 失效或脚本被改坏可以从指标层捞回来。
+
+跟 Q14–Q16 的 fixer audit（agent 主观作弊）正交：那套针对 agent 的修复是否合规；
+本节针对**机械层**自身的"假阳性 pass"，互不重叠。
+
+### Q18. Silent-pass detector（机械 checker 沉默通过）
+
+- **SQL**：[queries/sisyphus/18-silent-pass-detector.sql](queries/sisyphus/18-silent-pass-detector.sql)
+- **Visualization**：Table（列顺序：`req_id, stage, silent_pass_kind, duration_sec, p50_sec, ratio, evidence, cmd, checked_at`），按 `silent_pass_kind` 升序 + `checked_at` 降序排
+  - 条件格式：`silent_pass_kind ∈ ('guard-leak', 'no-gha-pass')` 整行标红
+- **三类信号**：
+  - `guard-leak` —— stdout/stderr 命中 `refusing to silent-pass` 但 `passed=true`：checker 内部 guard 触发了告警 line 但 exit code 还是 0，**checker 实现 bug**
+  - `no-gha-pass` —— pr_ci_watch 留了 `no-gha-checks-ran` 但 `passed=true`：`_classify` 返回 `no-gha` 时本应 fail，出现说明分类逻辑被改坏
+  - `too-fast` —— `duration_sec < 0.2 × 同 stage 7d P50（passed=true 样本）`：跑得比中位数快 5×，多半是脚本短路（`for ... in /workspace/source/*` 循环没进 body），和 Q2（慢异常）对称
+- **人工介入阈值**：
+  - 任意 `guard-leak` 或 `no-gha-pass` 行 → 立即介入，检查 checker 源码
+  - `too-fast` 单日 ≥ 3 条同 stage → 重算 P50 基线 / 查脚本短路（per-repo for 循环 / git fetch 静默失败）
+- **基线说明**：P50 用同 stage 7d `passed=true` 样本，`HAVING COUNT(*) ≥ 20` 跳过样本不足的 stage（避免 too-fast 误报）。`guard-leak` / `no-gha-pass` 不依赖基线，无样本要求。
+
 ## 看板布局
 
 推荐两列布局（Metabase Dashboard，gridsize 18×? 自适应）：
@@ -226,6 +250,15 @@ Q12/Q13 是"此刻在出事吗"，放最上；Q6/Q8 是周度趋势；Q9/Q11 是
 └─────────────────────────────────────────────────────────────┘
 ```
 
+**机械 checker silent-pass 看板（建议挂 M7 看板底部，跟 Q1 同一界面方便对照）**：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Q18. Silent-pass detector（机械 checker 沉默通过）           │
+│  (table 全宽，guard-leak / no-gha-pass 行标红)                │
+└─────────────────────────────────────────────────────────────┘
+```
+
 ## 刷新频率
 
 M7 看板：
@@ -238,7 +271,10 @@ M14e 质量看板：
 - Q6 / Q8 / Q9 / Q11：每 1 小时（趋势类，不频繁）
 - Q7 / Q10：每 1 小时
 
-Metabase Question 设置 `Results cache TTL`：Q5/Q1 设 30s，Q2/Q3/Q4/Q12/Q13 设 120s，其余设 1800s。
+机械 checker silent-pass 看板：
+- Q18：每 5 分钟（和 Q2 同一节奏；guard-leak / no-gha-pass 出现等于"checker 实现有 bug"，越早发现越好）
+
+Metabase Question 设置 `Results cache TTL`：Q5/Q1 设 30s，Q2/Q3/Q4/Q12/Q13/Q18 设 120s，其余设 1800s。
 
 ## 告警（后续 issue，不在 M7 范围）
 
@@ -247,6 +283,7 @@ Metabase Question 设置 `Results cache TTL`：Q5/Q1 设 30s，Q2/Q3/Q4/Q12/Q13 
 - Q1：`row count > 0 AND max(fail_count) ≥ 5` → Lark
 - Q5：`row count > 0` WHERE `stuck_min > 30 AND last_passed = false` → Lark
 - Q3：新建 Question "任何 stage pass_rate_pct < 50%" → Lark
+- Q18：`row count > 0` WHERE `silent_pass_kind IN ('guard-leak','no-gha-pass')` → Lark（这两类是 checker 实现 bug，应当永远没行）
 
 阈值都可在 Metabase UI 里直接改，不用动 SQL。
 
