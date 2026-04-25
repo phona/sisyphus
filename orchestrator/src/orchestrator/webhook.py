@@ -136,15 +136,27 @@ async def webhook(request: Request) -> JSONResponse:
     log.info("webhook.received", evt=body.event, issue_id=body.issueId, tags=tags)
 
     # ─── 2.5 早期 noise filter ─────────────────────────────────────────────
-    # BKD 推整 project 所有 session.completed，包括跟当前 REQ 无关的旧 issue。
-    # 没 REQ-N tag 也不是 intent.analyze 入口的，直接 skip 不浪费 derive/CAS。
-    if (
-        body.event == "session.completed"
-        and not router_lib.extract_req_id(tags)
-    ):
+    # BKD 推整 project 所有 webhook 事件，包括跟当前 REQ 无关的旧 issue / 别人手动改的卡。
+    #   session.completed: 没 REQ tag → 别的工作流的孤儿 session，skip
+    #   issue.updated:     没 REQ tag 也没 intent 入口 tag → 跟任何 sisyphus REQ 都没关系
+    #                      （唯一合法触发：REQ workflow 内 issue 的 tag/result 变化，或
+    #                       用户在 intent issue 上打 intent:intake/analyze 触发新 REQ）
+    # 早 skip 避免后续 obs.record_event / derive_event / engine.step 白跑 + 污染 event log。
+    has_req_tag = bool(router_lib.extract_req_id(tags))
+    if body.event == "session.completed" and not has_req_tag:
         log.debug("webhook.skip_no_req_tag", issue_id=body.issueId, tags=tags)
         await dedup.mark_processed(pool, eid)
         return {"action": "skip", "reason": "session event without REQ tag"}
+    if (
+        body.event == "issue.updated"
+        and not has_req_tag
+        and "intent:intake" not in tags
+        and "intent:analyze" not in tags
+    ):
+        log.debug("webhook.skip_no_req_or_intent_tag",
+                  issue_id=body.issueId, tags=tags)
+        await dedup.mark_processed(pool, eid)
+        return {"action": "skip", "reason": "issue.updated without REQ or intent tag"}
     await obs.record_event(
         "webhook.received",
         issue_id=body.issueId, tags=tags,
