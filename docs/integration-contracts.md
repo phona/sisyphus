@@ -156,6 +156,11 @@ ci-build:
 
 ### 4.2 integration repo (helm-based 例)
 
+> 想看完整的 **「mobile App + 后端 stack」端到端 lab** 食谱（helm 部 backend + emulator
+> 到 K3s + 编 APK + 装到 emulator + 多键 endpoint JSON + boot-wait），
+> 看 [`docs/cookbook/ttpos-arch-lab-accept-env.md`](cookbook/ttpos-arch-lab-accept-env.md)。
+> 这里的 §4.2 只是纯后端 stack 的最小骨架。
+
 ```makefile
 .PHONY: accept-env-up accept-env-down
 
@@ -183,10 +188,11 @@ accept-env-down:
 按下面这份模板抄。约定跟 helm 那份一样：`accept-env-up` 起 stack 并在 stdout
 **最后一行**吐 endpoint JSON；`accept-env-down` 幂等清理。
 
-> 想看完整的 **「mobile App + 后端 stack」端到端 lab** 食谱（compose 起 backend +
-> headless Android emulator + 编 APK + 装到 emulator + 多键 endpoint JSON），
-> 看 [`docs/cookbook/ttpos-arch-lab-accept-env.md`](cookbook/ttpos-arch-lab-accept-env.md)。
-> 这里的 §4.2.2 只是纯后端 stack 的最小骨架。
+> 想看完整的 **「mobile App + 后端 stack」docker-compose 路径** 食谱（compose 起 backend +
+> headless Android emulator + 编 APK），
+> 看 [`docs/cookbook/ttpos-arch-lab-accept-env.md`](cookbook/ttpos-arch-lab-accept-env.md) §9 说明。
+> **推荐改用 helm 路径**（见 §4.2 和 cookbook 正文）—— namespace 天然隔离，无 host port 碰撞风险。
+> 这里的 §4.2.2 只是纯后端 stack 的最小骨架，适用于不在 K3s 上的 lab 环境。
 
 ```makefile
 .PHONY: accept-env-up accept-env-down
