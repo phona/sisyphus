@@ -184,14 +184,19 @@ async def webhook(request: Request) -> JSONResponse:
                  issue_id=body.issueId, verifier_event=event.value,
                  decision=decision_payload, reason=why)
 
-    # INTAKE_PASS：从 intake-agent 最后一条 message 解 finalized intent JSON
+    # INTAKE_PASS：扫所有 assistant-messages 找 finalized intent JSON
+    # （不像 verifier 严要求 "JSON 必须放最后一条"，intake-agent 常先贴 JSON 再发短消息）
     # 解不到 → 降级为 INTAKE_FAIL 触发 escalate
     intake_finalized_intent: dict | None = None
     if event == Event.INTAKE_PASS:
         intake_text = None
         try:
             async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
-                if hasattr(bkd, "get_last_assistant_message"):
+                if hasattr(bkd, "get_all_assistant_messages_concat"):
+                    intake_text = await bkd.get_all_assistant_messages_concat(
+                        body.projectId, body.issueId,
+                    )
+                elif hasattr(bkd, "get_last_assistant_message"):
                     intake_text = await bkd.get_last_assistant_message(
                         body.projectId, body.issueId,
                     )

@@ -164,6 +164,89 @@ async def test_cancel_issue_posts_to_cancel_endpoint():
     assert out["status"] == "cancelled"
 
 
+@pytest.mark.asyncio
+async def test_get_all_assistant_messages_concat_finds_json_in_earlier_message():
+    """Race bug 回归：intake-agent 把 finalized JSON 放早期 assistant-message，
+    后面又发短消息 → 旧 get_last_assistant_message 漏；新 helper 拼全部找得到。
+    """
+    captured_url = {}
+
+    class FakeHttp:
+        async def get(self, url, headers=None):
+            captured_url["url"] = url
+            payload = {
+                "success": True,
+                "data": {
+                    "logs": [
+                        {"entryType": "user-message", "content": "hi"},
+                        {"entryType": "assistant-message",
+                         "content": '完整 finalized intent:\n```json\n{"involved_repos":["x"],"business_behavior":"b","data_constraints":"c","edge_cases":"e","do_not_touch":"d","acceptance":"a"}\n```'},
+                        {"entryType": "tool-use", "content": "curl GET ..."},
+                        {"entryType": "tool-result", "content": "{...}"},
+                        {"entryType": "assistant-message",
+                         "content": "现在 PATCH 加 result:pass"},
+                        {"entryType": "tool-use", "content": "curl PATCH ..."},
+                    ]
+                },
+            }
+            return httpx.Response(200, text=json.dumps(payload))
+
+        async def aclose(self):
+            pass
+
+    client = BKDRestClient("https://bkd.example/api", "tok")
+    client._http = FakeHttp()  # type: ignore[assignment]
+
+    text = await client.get_all_assistant_messages_concat("p", "issue-1")
+    assert text is not None
+    # JSON 必须出现在拼接结果里（race bug 触发场景）
+    assert "involved_repos" in text
+    assert "business_behavior" in text
+    # 同时尾部短消息也要在
+    assert "PATCH 加 result:pass" in text
+    # URL 用了 logs?limit=200
+    assert "/projects/p/issues/issue-1/logs?limit=200" in captured_url["url"]
+
+
+@pytest.mark.asyncio
+async def test_get_all_assistant_messages_concat_returns_none_when_empty():
+    class FakeHttp:
+        async def get(self, url, headers=None):
+            return httpx.Response(200, text='{"success":true,"data":{"logs":[]}}')
+
+        async def aclose(self):
+            pass
+
+    client = BKDRestClient("https://bkd.example/api", "tok")
+    client._http = FakeHttp()  # type: ignore[assignment]
+    assert await client.get_all_assistant_messages_concat("p", "i") is None
+
+
+@pytest.mark.asyncio
+async def test_get_last_assistant_message_unchanged_only_returns_last():
+    """旧 helper 行为不变（verifier 路径还在用 it）—— regression"""
+    class FakeHttp:
+        async def get(self, url, headers=None):
+            payload = {
+                "success": True,
+                "data": {
+                    "logs": [
+                        {"entryType": "assistant-message", "content": "first"},
+                        {"entryType": "tool-use", "content": "..."},
+                        {"entryType": "assistant-message", "content": "last"},
+                    ]
+                },
+            }
+            return httpx.Response(200, text=json.dumps(payload))
+
+        async def aclose(self):
+            pass
+
+    client = BKDRestClient("https://bkd.example/api", "tok")
+    client._http = FakeHttp()  # type: ignore[assignment]
+    assert await client.get_last_assistant_message("p", "i") == "last"
+
+
 def test_factory_picks_rest_by_default(monkeypatch):
     """BKDClient(...) 默认应返回 REST 实例（settings.bkd_transport 默认 'rest'）。"""
     from orchestrator.bkd import BKDClient

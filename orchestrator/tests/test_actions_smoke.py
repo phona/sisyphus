@@ -210,6 +210,53 @@ async def test_escalate_non_transient_immediate(monkeypatch):
     fake.merge_tags_and_update.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_escalate_canonical_signal_overrides_stale_ctx(monkeypatch):
+    """body.event=watchdog.stuck 应覆盖前一轮残留的 ctx.escalated_reason，
+    避免 ctx 毒化（实证 sis #27：第一次 escalate 写了垃圾 reason，第二次
+    watchdog 读 ctx 仍拿垃圾 → 不 transient → 永远不 auto-resume）。
+    """
+    from orchestrator.actions import escalate as mod
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, "escalate", fake)
+    patch_db(monkeypatch, "escalate")
+    body = make_body(issue_id="src-1", event="watchdog.stuck")
+    out = await mod.escalate(
+        body=body, req_id="REQ-9", tags=["watchdog:intaking"],
+        ctx={
+            "intent_issue_id": "intent-1",
+            "escalated_reason": "issue-updated",  # ← 上一轮写的垃圾值
+        },
+    )
+    # body.event canonical 优先 → reason=watchdog-stuck → transient → auto-resume
+    assert out["auto_resumed"] is True
+    assert out["reason"] == "watchdog-stuck"
+    fake.follow_up_issue.assert_awaited_once()
+    fake.merge_tags_and_update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_escalate_action_error_is_transient(monkeypatch):
+    """engine _emit_escalate 注的 ctx.escalated_reason='action-error:...' 应被识别为
+    transient（基础设施 flaky）→ auto-resume 一次，给环境恢复机会。
+    """
+    from orchestrator.actions import escalate as mod
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, "escalate", fake)
+    patch_db(monkeypatch, "escalate")
+    body = make_body(issue_id="src-1", event="issue.updated")
+    out = await mod.escalate(
+        body=body, req_id="REQ-9", tags=["intent:intake"],
+        ctx={
+            "intent_issue_id": "intent-1",
+            "escalated_reason": "action-error:RuntimeError: pod not ready in 120s after 3 attempts",
+        },
+    )
+    assert out["auto_resumed"] is True
+    assert "action-error" in out["reason"]
+    fake.follow_up_issue.assert_awaited_once()
+
+
 # ─── done_archive ─────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_done_archive(monkeypatch):

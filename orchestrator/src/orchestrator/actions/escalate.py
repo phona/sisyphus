@@ -42,9 +42,19 @@ def _is_transient(body_event: str | None, reason: str) -> bool:
         return False  # verifier 主观判，不重试
     if body_event == "session.failed":
         return True
+    if body_event == "watchdog.stuck":
+        return True  # watchdog 兜底永远值得续一次（BKD 漏发 webhook / process 卡住等）
     if reason in _TRANSIENT_REASONS:
         return True
+    if reason.startswith("action-error:"):
+        # engine _emit_escalate 注的：action handler 抛异常多半是基础设施 flaky
+        # （pod 没起、K3s 慢、BKD 临时 5xx）。续一次合理；真 bug 第二次还会同样异常
+        # 走 retry 用完 → 真 escalate。
+        return True
     return False
+
+
+_CANONICAL_SIGNALS = {"session.failed", "watchdog.stuck"}
 
 
 @register("escalate", idempotent=True)
@@ -52,10 +62,17 @@ async def escalate(*, body, req_id, tags, ctx):
     proj = body.projectId
     intent_issue_id = (ctx or {}).get("intent_issue_id") or body.issueId
     failed_issue_id = body.issueId  # 这次崩的具体 BKD issue
-    # ctx.escalated_reason 优先（caller 已细分），fallback 到 event 名
-    reason = (ctx or {}).get("escalated_reason") or (
-        (body.event or "unknown").replace(".", "-")[:40]
-    )
+    # reason 优先级：
+    #   1. body.event 是 canonical 失败信号（session.failed / watchdog.stuck）
+    #      → 用 body.event（最新一手信号；避免被前轮 ctx.escalated_reason 毒化）
+    #   2. ctx.escalated_reason 已被 caller 细分（engine action-error 等）
+    #   3. fallback：body.event 转 slug
+    if body.event in _CANONICAL_SIGNALS:
+        reason = body.event.replace(".", "-")[:40]
+    else:
+        reason = (ctx or {}).get("escalated_reason") or (
+            (body.event or "unknown").replace(".", "-")[:40]
+        )
     retry_count = (ctx or {}).get("auto_retry_count", 0)
 
     # ─── 1. transient + retry < 2 → auto-resume ────────────────────────────
