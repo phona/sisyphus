@@ -26,14 +26,24 @@ from .bkd import BKDClient
 from .checkers._types import CheckResult
 from .config import settings
 from .state import Event, ReqState
-from .store import artifact_checks, db
+from .store import artifact_checks, db, req_state
 
 log = structlog.get_logger(__name__)
+
+
+# intake-agent 标记终态结果的 BKD tags（缺一不可：缺 → router 不 fire 主链事件）
+_INTAKE_RESULT_TAGS: frozenset[str] = frozenset({"result:pass", "result:fail"})
+
+# 专属 body.event：让 escalate.py 区分这条路径，绕开 watchdog.stuck 的 canonical
+# 反向覆盖（保留 ctx.escalated_reason="intake-no-result-tag"）+ 跳过 auto-resume
+_INTAKE_NO_RESULT_EVENT: str = "watchdog.intake_no_result_tag"
+_INTAKE_NO_RESULT_REASON: str = "intake-no-result-tag"
 
 
 # state → ctx 里追踪该 stage 当前 agent issue 的 key
 # None 表示没 issue 可查（直接 escalate）
 _STATE_ISSUE_KEY: dict[ReqState, str | None] = {
+    ReqState.INTAKING: "intent_issue_id",        # intake-agent 复用 intent issue
     ReqState.ANALYZING: "intent_issue_id",
     ReqState.SPEC_LINT_RUNNING: None,            # M15: 客观 checker，由 orchestrator 下发不绑 issue
     ReqState.DEV_CROSS_CHECK_RUNNING: None,      # M15: 客观 checker，由 orchestrator 下发不绑 issue
@@ -61,6 +71,21 @@ class _SyntheticBody:
     projectId: str
     issueId: str
     event: str = "watchdog.stuck"
+
+
+def _is_intake_no_result_tag(state: ReqState, issue) -> bool:
+    """state=INTAKING + session 已结束（非 running）+ tags 缺 result:* → 卡死信号。
+
+    intake-agent session.completed 后必须 PATCH `result:pass` / `result:fail` tag
+    让 router 派 INTAKE_PASS/FAIL；忘了打 tag 会导致 webhook 永不 fire 主链事件，
+    REQ 永远卡在 INTAKING。识别此条件就 escalate（不 retry —— session 已 done，
+    auto-resume 也唤不醒已结束的 agent）。
+    """
+    if state != ReqState.INTAKING or issue is None:
+        return False
+    if issue.session_status == "running":
+        return False
+    return not (set(issue.tags or []) & _INTAKE_RESULT_TAGS)
 
 
 async def _tick() -> dict:
@@ -107,13 +132,13 @@ async def _check_and_escalate(row) -> bool:
         issue_id = ctx.get(issue_key)
 
     # 1. 查 BKD session 状态（有 issue_id 才查）
+    issue = None
     still_running = False
     if issue_id:
         try:
             async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
                 issue = await bkd.get_issue(project_id, issue_id)
-            session_status = issue.session_status
-            if session_status == "running":
+            if issue.session_status == "running":
                 still_running = True
                 log.debug(
                     "watchdog.still_running",
@@ -130,33 +155,65 @@ async def _check_and_escalate(row) -> bool:
     if still_running:
         return False
 
-    # 2. 写 artifact_checks 记一笔，给 dashboard M7 04-fail-kind-distribution 抓
+    # 2. 区分细分 stuck reason：
+    #    - INTAKING + session 已结束 + 无 result tag → intake-no-result-tag
+    #    - 其他 → 通用 watchdog_stuck
     pool = db.get_pool()
+    intake_no_result = _is_intake_no_result_tag(state, issue)
+    if intake_no_result:
+        reason = _INTAKE_NO_RESULT_REASON
+        body_event = _INTAKE_NO_RESULT_EVENT
+        stage_label = "watchdog:intake-no-result-tag"
+        stderr_tail = (
+            f"intake session ended (status={issue.session_status}) "
+            f"without result:pass/result:fail tag; stuck for {stuck_sec}s"
+        )
+    else:
+        reason = "watchdog_stuck"
+        body_event = "watchdog.stuck"
+        stage_label = f"watchdog:{state_str}"
+        stderr_tail = f"stuck for {stuck_sec}s in state {state_str}"
+
+    # 3. 写 artifact_checks 记一笔，给 dashboard M7 04-fail-kind-distribution 抓
     check = CheckResult(
         passed=False,
         exit_code=-1,
-        cmd=f"watchdog:{state_str}",
+        cmd=stage_label,
         stdout_tail="",
-        stderr_tail=f"stuck for {stuck_sec}s in state {state_str}",
+        stderr_tail=stderr_tail,
         duration_sec=0.0,
-        reason="watchdog_stuck",
+        reason=reason,
     )
     try:
-        await artifact_checks.insert_check(
-            pool, req_id, f"watchdog:{state_str}", check,
-        )
+        await artifact_checks.insert_check(pool, req_id, stage_label, check)
     except Exception as e:
         log.warning("watchdog.artifact_insert_failed", req_id=req_id, error=str(e))
 
-    # 3. 通过 engine.step 发 SESSION_FAILED → 走 escalate transition
+    # 4. intake-no-result-tag：把 reason 提前落 ctx，escalate.py 经
+    #    "非 canonical body.event → ctx.escalated_reason 优先" 通路读到，
+    #    最终 BKD tag = `reason:intake-no-result-tag`（而非 `reason:watchdog-stuck`）。
+    if intake_no_result:
+        try:
+            await req_state.update_context(
+                pool, req_id, {"escalated_reason": reason},
+            )
+        except Exception as e:
+            log.warning(
+                "watchdog.ctx_update_failed", req_id=req_id, error=str(e),
+            )
+        ctx = {**ctx, "escalated_reason": reason}
+
+    # 5. 通过 engine.step 发 SESSION_FAILED → 走 escalate transition
     body = _SyntheticBody(
         projectId=project_id,
         issueId=issue_id or ctx.get("intent_issue_id") or "",
+        event=body_event,
     )
     log.warning(
         "watchdog.escalating",
         req_id=req_id, state=state_str,
         issue_id=issue_id, stuck_sec=stuck_sec,
+        reason=reason,
     )
     try:
         await engine.step(
@@ -164,7 +221,7 @@ async def _check_and_escalate(row) -> bool:
             body=body,
             req_id=req_id,
             project_id=project_id,
-            tags=[req_id, f"watchdog:{state_str}"],
+            tags=[req_id, stage_label],
             cur_state=state,
             ctx=ctx,
             event=Event.SESSION_FAILED,
