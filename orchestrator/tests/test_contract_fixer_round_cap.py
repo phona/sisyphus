@@ -34,7 +34,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -94,7 +93,7 @@ class TestStateMachineTransitionFRCS5:
         FRC-S5: decide(FIXER_RUNNING, VERIFY_ESCALATE) must return a non-None
         Transition with next_state=ESCALATED and action='escalate'.
         """
-        from orchestrator.state import ReqState, Event, decide
+        from orchestrator.state import Event, ReqState, decide
 
         result = decide(ReqState.FIXER_RUNNING, Event.VERIFY_ESCALATE)
 
@@ -114,7 +113,7 @@ class TestStateMachineTransitionFRCS5:
         Spec coexistence: existing (REVIEW_RUNNING, VERIFY_ESCALATE) → ESCALATED
         must not be broken by adding the new FIXER_RUNNING transition.
         """
-        from orchestrator.state import ReqState, Event, decide
+        from orchestrator.state import Event, ReqState, decide
 
         result = decide(ReqState.REVIEW_RUNNING, Event.VERIFY_ESCALATE)
 
