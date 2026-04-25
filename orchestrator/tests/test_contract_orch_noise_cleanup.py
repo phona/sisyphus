@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 
+import structlog.testing
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -45,9 +47,11 @@ class _FakePool:
 class _FakeSettings:
     """Minimal settings stub for snapshot/runner_gc contract tests."""
 
-    def __init__(self, exclude=(), runner_gc_disk_threshold=0.8, **kw):
+    def __init__(self, exclude=(), runner_gc_disk_pressure_threshold=0.8,
+                 pvc_retain_on_escalate_days=1, **kw):
         self.snapshot_exclude_project_ids = list(exclude)
-        self.runner_gc_disk_threshold = runner_gc_disk_threshold
+        self.runner_gc_disk_pressure_threshold = runner_gc_disk_pressure_threshold
+        self.pvc_retain_on_escalate_days = pvc_retain_on_escalate_days
         self.bkd_base_url = "https://bkd.example.test/api"
         self.bkd_token = "test-token"
         self.snapshot_interval_sec = 300
@@ -79,6 +83,7 @@ async def test_orchn_s1_excluded_project_not_called(monkeypatch):
 
     pool = _FakePool(project_ids=["alive-1", "77k9z58j"])
     monkeypatch.setattr(db, "get_pool", lambda: pool)
+    monkeypatch.setattr(db, "get_obs_pool", lambda: _FakePool())
     monkeypatch.setattr(snapshot, "BKDClient", _FakeBKD)
     monkeypatch.setattr(snapshot, "settings", _FakeSettings(exclude=["77k9z58j"]))
 
@@ -117,6 +122,7 @@ async def test_orchn_s2_empty_exclude_calls_all_projects(monkeypatch):
 
     pool = _FakePool(project_ids=["alive-1", "alive-2"])
     monkeypatch.setattr(db, "get_pool", lambda: pool)
+    monkeypatch.setattr(db, "get_obs_pool", lambda: _FakePool())
     monkeypatch.setattr(snapshot, "BKDClient", _FakeBKD)
     monkeypatch.setattr(snapshot, "settings", _FakeSettings(exclude=[]))
 
@@ -157,6 +163,7 @@ async def test_orchn_s3_all_excluded_returns_zero(monkeypatch):
 
     pool = _FakePool(project_ids=["only-proj"])
     monkeypatch.setattr(db, "get_pool", lambda: pool)
+    monkeypatch.setattr(db, "get_obs_pool", lambda: _FakePool())
     monkeypatch.setattr(snapshot, "BKDClient", _FakeBKD)
     monkeypatch.setattr(snapshot, "settings", _FakeSettings(exclude=["only-proj"]))
 
@@ -174,7 +181,7 @@ async def test_orchn_s3_all_excluded_returns_zero(monkeypatch):
 # ─── ORCHN-S4: 首次 403 时 warn 一次并禁用后续 disk-check ────────────────────
 
 
-async def test_orchn_s4_first_403_warns_and_disables(monkeypatch, caplog):
+async def test_orchn_s4_first_403_warns_and_disables(monkeypatch):
     """
     ORCHN-S4: gc_once 在 node_disk_usage_ratio 抛出 ApiException(status=403) 时：
     - 必须发出一条包含 'runner_gc.disk_check_rbac_denied' 的 WARNING 日志
@@ -187,15 +194,17 @@ async def test_orchn_s4_first_403_warns_and_disables(monkeypatch, caplog):
 
     monkeypatch.setattr(gc_mod, "_DISK_CHECK_DISABLED", False)
 
-    def _raise_403(*a, **kw):
-        raise ApiException(status=403)
+    class _FakeController:
+        async def node_disk_usage_ratio(self):
+            raise ApiException(status=403)
+        async def gc_orphans(self, keep):
+            return []
 
-    monkeypatch.setattr(gc_mod, "node_disk_usage_ratio", _raise_403)
+    monkeypatch.setattr(gc_mod.k8s_runner, "get_controller", lambda: _FakeController())
+    monkeypatch.setattr(gc_mod.db, "get_pool", lambda: _FakePool())
 
-    pool = _FakePool()
-
-    with caplog.at_level(logging.WARNING):
-        result = await gc_mod.gc_once(pool)
+    with structlog.testing.capture_logs() as log_records:
+        result = await gc_mod.gc_once()
 
     # flag must be set
     assert gc_mod._DISK_CHECK_DISABLED is True, (
@@ -203,12 +212,10 @@ async def test_orchn_s4_first_403_warns_and_disables(monkeypatch, caplog):
     )
 
     # exactly one warning with the required key
-    warning_msgs = [
-        r.message for r in caplog.records if r.levelno == logging.WARNING
-    ]
-    assert any("runner_gc.disk_check_rbac_denied" in str(m) for m in warning_msgs), (
+    warning_events = [r["event"] for r in log_records if r.get("log_level") == "warning"]
+    assert any("runner_gc.disk_check_rbac_denied" in e for e in warning_events), (
         f"ORCHN-S4: must log warning 'runner_gc.disk_check_rbac_denied'; "
-        f"actual warnings: {warning_msgs}"
+        f"actual warnings: {warning_events}"
     )
 
     # disk_pressure must be False
@@ -221,7 +228,7 @@ async def test_orchn_s4_first_403_warns_and_disables(monkeypatch, caplog):
 # ─── ORCHN-S5: disk-check 已禁用后 gc_once 不再调 list_node ─────────────────
 
 
-async def test_orchn_s5_disabled_skips_node_api(monkeypatch, caplog):
+async def test_orchn_s5_disabled_skips_node_api(monkeypatch):
     """
     ORCHN-S5: _DISK_CHECK_DISABLED=True 时，gc_once 必须：
     - 不调用 node_disk_usage_ratio（不消耗 K8s API 配额）
@@ -234,16 +241,18 @@ async def test_orchn_s5_disabled_skips_node_api(monkeypatch, caplog):
 
     ratio_calls: list = []
 
-    def _should_not_be_called(*a, **kw):
-        ratio_calls.append(a)
-        return 0.0
+    class _FakeController:
+        async def node_disk_usage_ratio(self):
+            ratio_calls.append(True)
+            return 0.0
+        async def gc_orphans(self, keep):
+            return []
 
-    monkeypatch.setattr(gc_mod, "node_disk_usage_ratio", _should_not_be_called)
+    monkeypatch.setattr(gc_mod.k8s_runner, "get_controller", lambda: _FakeController())
+    monkeypatch.setattr(gc_mod.db, "get_pool", lambda: _FakePool())
 
-    pool = _FakePool()
-
-    with caplog.at_level(logging.DEBUG):
-        result = await gc_mod.gc_once(pool)
+    with structlog.testing.capture_logs() as log_records:
+        result = await gc_mod.gc_once()
 
     # node_disk_usage_ratio must NOT be called
     assert ratio_calls == [], (
@@ -252,12 +261,10 @@ async def test_orchn_s5_disabled_skips_node_api(monkeypatch, caplog):
     )
 
     # no disk_check_* logs
-    disk_check_logs = [
-        r for r in caplog.records if "runner_gc.disk_check" in str(r.message)
-    ]
-    assert disk_check_logs == [], (
+    disk_check_events = [r for r in log_records if "runner_gc.disk_check" in r.get("event", "")]
+    assert disk_check_events == [], (
         f"ORCHN-S5: no runner_gc.disk_check_* log must be emitted when disabled; "
-        f"got: {[r.message for r in disk_check_logs]}"
+        f"got: {[r['event'] for r in disk_check_events]}"
     )
 
     # disk_pressure must be False
@@ -270,7 +277,7 @@ async def test_orchn_s5_disabled_skips_node_api(monkeypatch, caplog):
 # ─── ORCHN-S6: 非 403 异常仍走 debug 不禁用 ─────────────────────────────────
 
 
-async def test_orchn_s6_non_403_debug_no_disable(monkeypatch, caplog):
+async def test_orchn_s6_non_403_debug_no_disable(monkeypatch):
     """
     ORCHN-S6: node_disk_usage_ratio 抛出 ApiException(status=500) 时：
     - 必须记录 DEBUG 日志 'runner_gc.disk_check_failed'
@@ -283,15 +290,17 @@ async def test_orchn_s6_non_403_debug_no_disable(monkeypatch, caplog):
 
     monkeypatch.setattr(gc_mod, "_DISK_CHECK_DISABLED", False)
 
-    def _raise_500(*a, **kw):
-        raise ApiException(status=500)
+    class _FakeController:
+        async def node_disk_usage_ratio(self):
+            raise ApiException(status=500)
+        async def gc_orphans(self, keep):
+            return []
 
-    monkeypatch.setattr(gc_mod, "node_disk_usage_ratio", _raise_500)
+    monkeypatch.setattr(gc_mod.k8s_runner, "get_controller", lambda: _FakeController())
+    monkeypatch.setattr(gc_mod.db, "get_pool", lambda: _FakePool())
 
-    pool = _FakePool()
-
-    with caplog.at_level(logging.DEBUG):
-        await gc_mod.gc_once(pool)
+    with structlog.testing.capture_logs() as log_records:
+        await gc_mod.gc_once()
 
     # flag must remain False
     assert gc_mod._DISK_CHECK_DISABLED is False, (
@@ -299,28 +308,24 @@ async def test_orchn_s6_non_403_debug_no_disable(monkeypatch, caplog):
     )
 
     # must log debug with 'runner_gc.disk_check_failed'
-    debug_msgs = [
-        r.message for r in caplog.records if r.levelno == logging.DEBUG
-    ]
-    assert any("runner_gc.disk_check_failed" in str(m) for m in debug_msgs), (
+    debug_events = [r["event"] for r in log_records if r.get("log_level") == "debug"]
+    assert any("runner_gc.disk_check_failed" in e for e in debug_events), (
         f"ORCHN-S6: must log debug 'runner_gc.disk_check_failed' for non-403 exception; "
-        f"debug messages: {debug_msgs}"
+        f"debug events: {debug_events}"
     )
 
     # must NOT emit rbac_denied warning
-    warning_msgs = [
-        r.message for r in caplog.records if r.levelno == logging.WARNING
-    ]
-    assert not any("runner_gc.disk_check_rbac_denied" in str(m) for m in warning_msgs), (
+    warning_events = [r["event"] for r in log_records if r.get("log_level") == "warning"]
+    assert not any("runner_gc.disk_check_rbac_denied" in e for e in warning_events), (
         f"ORCHN-S6: must NOT log rbac_denied warning for non-403 exception; "
-        f"warnings: {warning_msgs}"
+        f"warning events: {warning_events}"
     )
 
 
 # ─── ORCHN-S7: 正常 ratio > threshold 触发 disk_pressure=True ───────────────
 
 
-async def test_orchn_s7_high_ratio_triggers_disk_pressure(monkeypatch, caplog):
+async def test_orchn_s7_high_ratio_triggers_disk_pressure(monkeypatch):
     """
     ORCHN-S7: node_disk_usage_ratio 返回 0.9（> threshold 0.8）时：
     - 必须记录 'runner_gc.disk_pressure' WARNING
@@ -329,23 +334,27 @@ async def test_orchn_s7_high_ratio_triggers_disk_pressure(monkeypatch, caplog):
     import orchestrator.runner_gc as gc_mod
 
     monkeypatch.setattr(gc_mod, "_DISK_CHECK_DISABLED", False)
-    monkeypatch.setattr(gc_mod, "node_disk_usage_ratio", lambda *a, **kw: 0.9)
 
-    fake_settings = _FakeSettings(runner_gc_disk_threshold=0.8)
+    class _FakeController:
+        async def node_disk_usage_ratio(self):
+            return 0.9
+        async def gc_orphans(self, keep):
+            return []
+
+    monkeypatch.setattr(gc_mod.k8s_runner, "get_controller", lambda: _FakeController())
+    monkeypatch.setattr(gc_mod.db, "get_pool", lambda: _FakePool())
+
+    fake_settings = _FakeSettings(runner_gc_disk_pressure_threshold=0.8)
     monkeypatch.setattr(gc_mod, "settings", fake_settings)
 
-    pool = _FakePool()
-
-    with caplog.at_level(logging.WARNING):
-        result = await gc_mod.gc_once(pool)
+    with structlog.testing.capture_logs() as log_records:
+        result = await gc_mod.gc_once()
 
     # must log disk_pressure warning
-    warning_msgs = [
-        r.message for r in caplog.records if r.levelno == logging.WARNING
-    ]
-    assert any("runner_gc.disk_pressure" in str(m) for m in warning_msgs), (
+    warning_events = [r["event"] for r in log_records if r.get("log_level") == "warning"]
+    assert any("runner_gc.disk_pressure" in e for e in warning_events), (
         f"ORCHN-S7: must log 'runner_gc.disk_pressure' warning when ratio=0.9 > 0.8; "
-        f"warnings: {warning_msgs}"
+        f"warning events: {warning_events}"
     )
 
     # disk_pressure must be True
