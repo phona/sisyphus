@@ -83,11 +83,13 @@ async def gc_once() -> dict:
         except ApiException as e:
             if e.status == 403:
                 # RBAC 没给 nodes:list（orchestrator Role 是 ns-scoped），
-                # 永久降级：之后不再探测，留 retention-only 路径
+                # 永久降级：之后不再探测，留 retention-only 路径。
+                # INFO 不是 WARNING：namespace-scoped Role 是预期部署形态，
+                # 这条 log 不应每次 pod 重启就污染 warning 流。
                 _DISK_CHECK_DISABLED = True
-                log.warning("runner_gc.disk_check_rbac_denied",
-                            hint="ServiceAccount lacks cluster-scoped nodes:list; "
-                                 "disk-pressure emergency purge disabled until restart")
+                log.info("runner_gc.disk_check_rbac_denied",
+                         hint="ServiceAccount lacks cluster-scoped nodes:list; "
+                              "disk-pressure emergency purge disabled until restart")
             else:
                 log.debug("runner_gc.disk_check_failed", error=str(e), status=e.status)
         except Exception as e:

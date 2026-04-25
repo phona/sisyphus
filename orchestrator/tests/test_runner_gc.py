@@ -128,8 +128,8 @@ async def test_skips_when_no_controller(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_disk_check_403_disables_after_first_warn(monkeypatch, mock_controller, capsys):
-    """ApiException(403) → 进程级 flag 置 True；warn 一次，disk_pressure=False。"""
+async def test_disk_check_403_disables_after_first_log(monkeypatch, mock_controller, capsys):
+    """ApiException(403) → 进程级 flag 置 True；INFO log 一次，disk_pressure=False。"""
     pool = _FakePool([_row("REQ-1", "analyzing")])
     monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
     mock_controller.node_disk_usage_ratio = AsyncMock(
