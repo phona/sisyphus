@@ -23,9 +23,10 @@ Store contract (orchestrator.store.stage_runs):
 """
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 import structlog.testing
-from unittest.mock import AsyncMock
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -168,7 +169,6 @@ async def test_vsc_s2_close_error_logged_not_raised(monkeypatch):
                 f"raised {type(exc).__name__}: {exc}"
             )
 
-    all_events = [r.get("event", "") for r in log_records]
     logged_levels = [(r.get("event", ""), r.get("log_level", "")) for r in log_records]
 
     warning_or_error_events = [
