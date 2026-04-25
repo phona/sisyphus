@@ -1,0 +1,58 @@
+capability: verifier-stagerun-close
+version: "1.0"
+description: |
+  Engine MUST close the verifier stage_run when the verifier returns
+  decision=pass, even though the (REVIEW_RUNNING, VERIFY_PASS) transition is
+  declared as a self-loop in the state machine.
+
+  Without this fix, every PASS-decision verifier leaves an orphan stage_runs
+  row (ended_at IS NULL) for stage='verifier', which (a) hides the verifier's
+  PASS outcome from Metabase dashboards that join on ended_at and (b) makes
+  the orphan-stage-run health metric falsely report stuck verifier runs.
+
+modules:
+  engine:
+    module: orchestrator.engine
+    function: _record_stage_transitions
+    invariants:
+      - "MUST close stage_runs row for stage='verifier' with outcome='pass' when (cur_state == REVIEW_RUNNING) AND (event == Event.VERIFY_PASS), regardless of whether next_state == cur_state"
+      - "MUST be best-effort: any error during the close is logged via 'engine.stage_runs.write_failed' and MUST NOT raise out of _record_stage_transitions"
+      - "MUST preserve the existing behavior for other (REVIEW_RUNNING, *) self-loop events: only VERIFY_PASS triggers the explicit close"
+
+  store:
+    module: orchestrator.store.stage_runs
+    function: close_latest_stage_run
+    semantics: "Returns id of the closed row, or None if no open verifier row exists for the REQ. Either outcome is acceptable here — None means the verifier stage_run was already closed (e.g., a stray VERIFY_PASS replay), which is harmless."
+
+state_machine_context:
+  transitions_in_scope:
+    - from: REVIEW_RUNNING
+      event: VERIFY_PASS
+      to: REVIEW_RUNNING   # self-loop in transition table
+      action: apply_verify_pass
+      note: "apply_verify_pass internally CAS's REVIEW_RUNNING → target stage_running based on ctx.verifier_stage; this internal CAS bypasses _record_stage_transitions"
+
+  transitions_out_of_scope:
+    - from: REVIEW_RUNNING
+      event: VERIFY_FIX_NEEDED
+      to: FIXER_RUNNING
+      note: "different states → existing close+open path already closes verifier with outcome='fix'"
+    - from: REVIEW_RUNNING
+      event: VERIFY_ESCALATE
+      to: ESCALATED
+      note: "different states → existing path closes verifier with outcome='escalate'"
+    - from: ESCALATED
+      event: VERIFY_PASS
+      to: ESCALATED
+      note: "user follow-up on escalated verifier; verifier stage_run was already closed when REVIEW_RUNNING → ESCALATED happened earlier"
+
+stage_runs_outcomes:
+  verifier_pass:
+    stage: verifier
+    outcome: pass
+    fail_reason: null
+    written_by: "engine._record_stage_transitions on (REVIEW_RUNNING, VERIFY_PASS)"
+
+dashboard_impact:
+  - "Q12 verifier-decision throughput: PASS rows now have ended_at set → counted in time-bucketed aggregates"
+  - "Q13 verifier average duration: PASS-decision durations now reflect in averages (previously NULL → excluded by AVG(duration_sec))"
