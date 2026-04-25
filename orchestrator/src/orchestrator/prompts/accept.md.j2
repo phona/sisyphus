@@ -48,13 +48,14 @@ fi
 
 ### Step 2: 读 Acceptance Scenario
 
-从 runner 的 /workspace 业务 repo 读 openspec：
+从 runner 的 /workspace/source/<repo>/openspec 读各仓 spec（M16 多仓布局）：
 
 ```bash
-kubectl -n $NS exec $POD -- cat /workspace/openspec/changes/{{ req_id }}/specs/*/spec.md
+kubectl -n $NS exec $POD -- bash -c \
+  "cat /workspace/source/*/openspec/changes/{{ req_id }}/specs/*/spec.md"
 ```
 
-找出所有 `### Scenario: FEATURE-A*` block（Given / When / Then）。
+找出所有 `#### Scenario: FEATURE-A*` block（Given / When / Then）。
 
 ### Step 3: 跑每个 scenario
 
