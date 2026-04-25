@@ -1,0 +1,79 @@
+capability: makefile-ci-targets
+version: "1.0"
+description: |
+  Self-dogfood: the sisyphus repo MUST itself satisfy the ttpos-ci source-repo
+  Makefile contract defined in docs/integration-contracts.md §2.1, so that
+  sisyphus's own dev_cross_check + staging_test checkers can run against the
+  sisyphus repo when it appears as one of `/workspace/source/*` in a future REQ.
+
+  Three targets MUST exist at the repo-root Makefile and exit 0 on a clean
+  tree:
+    - make ci-lint                 (honors BASE_REV env)
+    - make ci-unit-test
+    - make ci-integration-test
+
+targets:
+  ci-lint:
+    invoked_by: dev_cross_check checker (orchestrator/checkers/dev_cross_check.py)
+    invocation: |
+      In the runner pod, the checker per-repo runs
+        BASE_REV=$(git merge-base HEAD origin/main) make ci-lint
+      The Makefile MUST honor BASE_REV: when non-empty, lint only Python files
+      changed between BASE_REV..HEAD that fall under orchestrator/src or
+      orchestrator/tests; when empty (or when no .py file changed in scope),
+      fall back to full ruff over orchestrator/src + orchestrator/tests.
+    semantics: |
+      - implementation: `cd orchestrator && uv run ruff check <files>`
+      - exit_code 0 = pass, non-zero = fail (per ttpos-ci convention)
+      - SHALL NOT touch files outside orchestrator/{src,tests}
+
+  ci-unit-test:
+    invoked_by: staging_test checker (orchestrator/checkers/staging_test.py)
+    invocation: |
+      Runner pod, per-repo: `cd /workspace/source/sisyphus && make ci-unit-test`
+    semantics: |
+      - implementation: `cd orchestrator && uv run pytest -m "not integration"`
+      - exit_code 0 = pass
+      - excludes any test marked @pytest.mark.integration so unit and
+        integration suites don't double-run
+
+  ci-integration-test:
+    invoked_by: staging_test checker (orchestrator/checkers/staging_test.py)
+    invocation: |
+      Runner pod, per-repo, AFTER ci-unit-test (single repo serial):
+        `cd /workspace/source/sisyphus && make ci-integration-test`
+    semantics: |
+      - implementation: `cd orchestrator && uv run pytest -m integration`
+      - exit_code 0 = pass; exit_code 5 (pytest "no tests collected") MUST also
+        be treated as pass — placeholder semantics for the bootstrap state where
+        sisyphus has zero tests carrying @pytest.mark.integration today
+      - any other non-zero exit code MUST surface as fail
+
+removed_targets:
+  - dev-cross-check  # superseded by ci-lint; zero external callers
+  - ci-test          # superseded by ci-unit-test; zero external callers
+
+pyproject_marker_registration:
+  file: orchestrator/pyproject.toml
+  section: "[tool.pytest.ini_options]"
+  added_field: |
+    markers = [
+      "integration: integration tests (selected by ci-integration-test target; excluded by ci-unit-test)",
+    ]
+  rationale: |
+    Without registration, pytest emits PytestUnknownMarkWarning for any
+    @pytest.mark.integration test. Registering the marker also future-proofs
+    ci-integration-test for when real integration tests are added.
+
+base_rev_scoping_algorithm:
+  description: |
+    The ci-lint target inside the Makefile resolves `BASE_REV` semantically:
+  steps:
+    - "If BASE_REV env empty → run `cd orchestrator && uv run ruff check src/ tests/`"
+    - "If BASE_REV non-empty:"
+    - "  files = git diff --name-only --diff-filter=ACMR $BASE_REV...HEAD -- 'orchestrator/src/**.py' 'orchestrator/tests/**.py'"
+    - "  if files empty → echo 'ci-lint: no Python files changed in scope' && exit 0"
+    - "  else → cd orchestrator && uv run ruff check <relative-files>"
+  edge_cases:
+    - "BASE_REV resolves to a SHA that's not in local history (shallow clone) → git diff fails → fall back to full lint"
+    - "feat branch with only docs / Makefile / .yaml changes → no .py files, exit 0 (faithful to ttpos-ci 'lint changed files only')"

@@ -118,6 +118,10 @@ kubectl logs -n sisyphus deploy/sisyphus-orchestrator -f
 > 这套契约对齐 `ttpos-ci`（`ci-env` / `ci-setup` / `ci-lint` / `ci-unit-test` / `ci-integration-test` / `ci-build`），
 > 业务 repo 一份 `Makefile` 同时供 GitHub Actions 和 sisyphus 用。
 
+**sisyphus 自己也是 source repo（self-dogfood）** —— 顶层 `Makefile` 也实现了
+`ci-lint` / `ci-unit-test` / `ci-integration-test`（基于 `ruff` + `pytest`），
+任何改 sisyphus 的 REQ 都能被自家 dev_cross_check / staging_test checker 跑通。
+
 ## 文档索引
 
 | 文档 | 内容 |

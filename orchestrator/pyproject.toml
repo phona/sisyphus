@@ -39,6 +39,9 @@ packages = ["src/orchestrator"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: integration tests (selected by `make ci-integration-test`; excluded by `make ci-unit-test`)",
+]
 
 [tool.ruff]
 line-length = 100
