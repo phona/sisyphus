@@ -1,0 +1,87 @@
+id: flutter-makefile-contract
+version: "1.0"
+description: >
+  ttpos-ci Makefile target contract for Flutter source repos (melos workspace).
+  Defines the required targets and their expected behavior for sisyphus
+  staging-test / dev_cross_check integration.
+
+targets:
+  - name: ci-env
+    required: true
+    outputs:
+      - key: FLUTTER_VERSION
+        type: string
+        description: Flutter SDK version (e.g. "stable" or "3.22.0")
+      - key: NEEDS_DOCKER
+        type: boolean
+        description: Whether docker is required for CI
+      - key: NEEDS_SUBMODULES
+        type: boolean
+        description: Whether git submodules need to be initialized
+
+  - name: ci-setup
+    required: true
+    description: >
+      Installs Flutter pub dependencies and bootstraps melos workspace.
+      Must be idempotent.
+
+  - name: ci-lint
+    required: true
+    env:
+      BASE_REV:
+        type: string
+        required: false
+        description: >
+          Git merge-base SHA. Flutter repos accept this variable but perform
+          full scan regardless (flutter analyze has no --new-from-rev).
+          Empty string = full scan (same behavior).
+    description: >
+      Runs flutter analyze --no-pub and dart format --set-exit-if-changed.
+      Exit 0 = no lint errors. Exit non-zero = lint failure.
+
+  - name: ci-unit-test
+    required: true
+    description: >
+      Runs unit and widget tests without requiring a connected device or emulator.
+      Uses melos run test:unit (or flutter test test/ --no-pub).
+      Must exit 0 on all tests passing.
+
+  - name: ci-integration-test
+    required: true
+    description: >
+      Default implementation exits 0 (no integration tests = pass).
+      Advanced: docker compose based backend integration tests.
+      Must NOT require Android emulator (emulator is in accept stage only).
+
+  - name: ci-build
+    required: false
+    description: >
+      Builds release APK via flutter build apk --release.
+      Not called by sisyphus staging-test; called by phona/ttpos-ci build.yml.
+      arch-lab integration repo builds APK independently from /workspace/source/.
+
+accept_env_contract:
+  flutter_source_repo_role: source
+  provides_accept_env: false
+  note: >
+    Flutter source repos are source repos, not integration repos.
+    accept-env-up / accept-env-down are provided by the arch-lab integration repo.
+    The arch-lab's apk/build.sh reads Flutter source from
+    /workspace/source/<basename>/ (sisyphus convention path).
+
+scenarios:
+  - id: FMC-S1
+    description: ci-lint runs flutter analyze regardless of BASE_REV value
+    spec_ref: specs/flutter-makefile-contract/spec.md
+  - id: FMC-S2
+    description: ci-unit-test succeeds without device or emulator
+    spec_ref: specs/flutter-makefile-contract/spec.md
+  - id: FMC-S3
+    description: ci-integration-test exits 0 when not configured
+    spec_ref: specs/flutter-makefile-contract/spec.md
+  - id: FMC-S4
+    description: Flutter source repo is cloned to convention path for accept stage
+    spec_ref: specs/flutter-makefile-contract/spec.md
+  - id: FMC-S5
+    description: cookbook cross-references arch-lab cookbook for accept stage
+    spec_ref: specs/flutter-makefile-contract/spec.md
