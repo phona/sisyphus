@@ -191,7 +191,7 @@ async def test_escalate_real_after_retries_exhausted(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_escalate_non_transient_immediate(monkeypatch):
-    """verifier-decision-escalate (非 session.failed) → 直接真 escalate，不 retry"""
+    """verifier-decision (非 session.failed) → 直接真 escalate，不 retry"""
     from orchestrator.actions import escalate as mod
     fake = make_fake_bkd()
     patch_bkd(monkeypatch, "escalate", fake)
@@ -201,11 +201,11 @@ async def test_escalate_non_transient_immediate(monkeypatch):
         body=body, req_id="REQ-9", tags=["verifier"],
         ctx={
             "intent_issue_id": "intent-1",
-            "escalated_reason": "verifier-decision-escalate",
+            "escalated_reason": "verifier-decision",
         },
     )
     assert out["escalated"] is True
-    assert out["reason"] == "verifier-decision-escalate"
+    assert out["reason"] == "verifier-decision"
     fake.follow_up_issue.assert_not_awaited()
     fake.merge_tags_and_update.assert_awaited_once()
 

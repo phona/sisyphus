@@ -38,7 +38,7 @@ _TRANSIENT_REASONS = {
 
 def _is_transient(body_event: str | None, reason: str) -> bool:
     """判断是不是 transient 失败：值得 auto-resume continue 一次"""
-    if reason == "verifier-decision-escalate":
+    if reason == "verifier-decision":
         return False  # verifier 主观判，不重试
     if body_event == "session.failed":
         return True
