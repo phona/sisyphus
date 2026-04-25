@@ -109,9 +109,10 @@ async def gc_once() -> dict:
             elif e.status == 403:
                 _NS_RBAC_DISABLED = True
                 log.info(
-                    "accept_env_gc.delete_rbac_denied",
+                    "accept_env_gc.rbac_denied",
                     namespace=ns_name,
-                    hint="ServiceAccount lacks namespace delete permission",
+                    hint="ServiceAccount lacks namespace delete permission; "
+                         "accept_env_gc disabled until restart",
                 )
                 break
             else:
