@@ -16,9 +16,6 @@ from __future__ import annotations
 
 import logging
 
-import pytest
-
-
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -184,8 +181,9 @@ async def test_orchn_s4_first_403_warns_and_disables(monkeypatch, caplog):
     - 必须把进程级 _DISK_CHECK_DISABLED flag 置为 True
     - 返回结果 disk_pressure=False
     """
-    import orchestrator.runner_gc as gc_mod
     from kubernetes.client.exceptions import ApiException
+
+    import orchestrator.runner_gc as gc_mod
 
     monkeypatch.setattr(gc_mod, "_DISK_CHECK_DISABLED", False)
 
@@ -279,8 +277,9 @@ async def test_orchn_s6_non_403_debug_no_disable(monkeypatch, caplog):
     - _DISK_CHECK_DISABLED 必须保持 False（下一轮仍会重试）
     - 不得发出 WARNING
     """
-    import orchestrator.runner_gc as gc_mod
     from kubernetes.client.exceptions import ApiException
+
+    import orchestrator.runner_gc as gc_mod
 
     monkeypatch.setattr(gc_mod, "_DISK_CHECK_DISABLED", False)
 
