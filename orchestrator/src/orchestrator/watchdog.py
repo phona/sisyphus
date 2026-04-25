@@ -26,7 +26,7 @@ from .bkd import BKDClient
 from .checkers._types import CheckResult
 from .config import settings
 from .state import Event, ReqState
-from .store import artifact_checks, db
+from .store import artifact_checks, db, req_state
 
 log = structlog.get_logger(__name__)
 
@@ -132,6 +132,27 @@ async def _check_and_escalate(row) -> bool:
 
     # 2. 写 artifact_checks 记一笔，给 dashboard M7 04-fail-kind-distribution 抓
     pool = db.get_pool()
+
+    # 防 verifier↔fixer 死循环兜底：FIXER_RUNNING 卡住且 fixer_round 已达 cap →
+    # 显式标 escalated_reason=fixer-round-cap，escalate.py 会识别为 hard reason
+    # 直接终止（不 auto-resume）+ tag intent issue reason:fixer-round-cap。
+    # 正常路径下 start_fixer 自检 cap 已早一步 escalate；本 hook 兜 start_fixer
+    # 写 ctx 后 emit 失败 / 中途崩溃留下的孤儿 FIXER_RUNNING。
+    fx_round = int(ctx.get("fixer_round") or 0)
+    cap = settings.fixer_round_cap
+    if state == ReqState.FIXER_RUNNING and fx_round >= cap:
+        try:
+            await req_state.update_context(pool, req_id, {
+                "escalated_reason": "fixer-round-cap",
+                "fixer_round_cap_hit": cap,
+            })
+            ctx["escalated_reason"] = "fixer-round-cap"
+            log.warning("watchdog.fixer_round_cap_hit",
+                        req_id=req_id, fixer_round=fx_round, cap=cap)
+        except Exception as e:
+            log.warning("watchdog.fixer_round_cap_tag_failed",
+                        req_id=req_id, error=str(e))
+
     check = CheckResult(
         passed=False,
         exit_code=-1,

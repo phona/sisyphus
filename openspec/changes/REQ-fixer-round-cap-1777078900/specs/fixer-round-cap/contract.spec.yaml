@@ -1,0 +1,94 @@
+capability: fixer-round-cap
+version: "1.0"
+description: |
+  Hard cap on the number of verifier→fixer rounds per REQ.
+  Default cap = 5. Each successful start_fixer counts as one round.
+  Round (cap+1) triggers escalate with reason "fixer-round-cap" instead of
+  spawning a new fixer agent.
+
+  This bounds the verifier↔fixer subloop so spec-self-contradiction or
+  fixer-can't-resolve scenarios stop burning BKD session quota and human
+  attention.
+
+settings:
+  fixer_round_cap:
+    module: orchestrator.config
+    type: int
+    default: 5
+    env: SISYPHUS_FIXER_ROUND_CAP
+    semantics: |
+      Maximum number of fixer rounds per REQ. The (cap+1)-th invocation of
+      start_fixer escalates instead of creating a fixer issue.
+
+context_fields:
+  fixer_round:
+    type: int
+    initial: 0
+    increment: |
+      start_fixer: ctx.fixer_round = current + 1, written to req_state.context
+      via req_state.update_context AFTER the fixer issue is created.
+    semantics: "Number of fixer issues already started for this REQ."
+
+  escalated_reason:
+    type: string
+    written_by:
+      - "start_fixer when next_round > cap → 'fixer-round-cap'"
+      - "watchdog._check_and_escalate when state=FIXER_RUNNING + fixer_round >= cap → 'fixer-round-cap'"
+    consumed_by: "actions/escalate.py — _HARD_REASONS check"
+
+  fixer_round_cap_hit:
+    type: int
+    written_by:
+      - "start_fixer when escalating due to cap"
+      - "watchdog defense-in-depth"
+    semantics: "Records the cap value that was tripped (for diagnostics)."
+
+state_machine_changes:
+  added_transitions:
+    - from: FIXER_RUNNING
+      event: VERIFY_ESCALATE
+      to: ESCALATED
+      action: escalate
+      reason: "fixer round 触顶 / start_fixer 自判 escalate"
+
+actions:
+  start_fixer:
+    module: orchestrator.actions._verifier
+    cap_check_semantics: |
+      1. current_round = int(ctx.get("fixer_round") or 0)
+      2. next_round = current_round + 1
+      3. IF next_round > settings.fixer_round_cap:
+           a. update_context(escalated_reason="fixer-round-cap",
+                            fixer_round_cap_hit=cap)
+           b. RETURN {"emit": "verify.escalate", "reason": "fixer-round-cap",
+                      "fixer_round": current_round, "cap": cap}
+           c. NO fixer issue is created (BKDClient.create_issue NOT called)
+      4. ELSE: create fixer issue with tag "round:N", render bugfix prompt with
+         round_n=next_round, then update_context(fixer_round=next_round, ...)
+
+  escalate:
+    module: orchestrator.actions.escalate
+    hard_reasons:
+      - "fixer-round-cap"
+    reason_resolution_priority:
+      - "ctx.escalated_reason if ∈ _HARD_REASONS"
+      - "body.event slug if ∈ _CANONICAL_SIGNALS"
+      - "ctx.escalated_reason if set"
+      - "body.event slug fallback"
+    is_transient_invariant:
+      - "reason ∈ _HARD_REASONS → False (no auto-resume)"
+
+  watchdog:
+    module: orchestrator.watchdog
+    function: _check_and_escalate
+    cap_defense_semantics: |
+      IF state == FIXER_RUNNING AND ctx.fixer_round >= settings.fixer_round_cap:
+        update_context(escalated_reason="fixer-round-cap",
+                       fixer_round_cap_hit=cap)
+        log "watchdog.fixer_round_cap_hit"
+      THEN proceed with normal SESSION_FAILED emission. escalate.py picks up
+      the hard reason and skips auto-resume.
+
+intent_issue_tags_added_on_cap_escalate:
+  - "escalated"
+  - "reason:fixer-round-cap"

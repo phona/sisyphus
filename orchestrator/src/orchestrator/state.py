@@ -184,6 +184,13 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
         Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_after_fix",
                    "fixer 完 → 再跑 verifier 复查"),
 
+    # start_fixer 自检 fixer_round 超 cap → 走主链 escalate（不跑新 fixer）。
+    # 复用 escalate action 把 reason / tag / runner 清理收口，避免 start_fixer 内
+    # 自己开第二条 escalate 实现。
+    (ReqState.FIXER_RUNNING, Event.VERIFY_ESCALATE):
+        Transition(ReqState.ESCALATED, "escalate",
+                   "fixer round 触顶 / start_fixer 自判 escalate"),
+
     # ─── 终态 ───────────────────────────────────────────────────────────
     (ReqState.ARCHIVING, Event.ARCHIVE_DONE):
         Transition(ReqState.DONE, None, "REQ complete"),

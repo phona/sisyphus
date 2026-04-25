@@ -452,6 +452,125 @@ async def test_start_fixer_defaults_to_dev(monkeypatch):
     assert out["fixer"] == "dev"
 
 
+# ─── 7. fixer round cap ────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_start_fixer_persists_round_counter(monkeypatch):
+    """每次 start_fixer 都把下一轮号写进 ctx.fixer_round。
+
+    第一次：ctx.fixer_round 不存在 → 写 1。第 N 次：写 N。
+    bugfix prompt 的 round_n 同时升到 next_round（上一版恒为 1，看不出轮次）。
+    """
+    from orchestrator.actions import _verifier as v
+    fake = make_fake_bkd()
+    fake.create_issue.return_value = FakeIssue(id="fix-3")
+    patch_bkd(monkeypatch, fake)
+
+    patches: list = []
+
+    async def fake_update(pool, req_id, patch):
+        patches.append(patch)
+    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+
+    out = await v.start_fixer(
+        body=make_body(), req_id="REQ-9", tags=[],
+        ctx={"verifier_stage": "dev_cross_check", "fixer_round": 2},
+    )
+    assert out["fixer_round"] == 3
+    # ctx 写了 fixer_round=3
+    rounds = [p for p in patches if "fixer_round" in p]
+    assert rounds and rounds[-1]["fixer_round"] == 3
+    # 创 issue 时带 round:3 tag
+    _, kwargs = fake.create_issue.await_args
+    assert "round:3" in kwargs["tags"]
+    # bugfix prompt 渲染里出现 ROUND=3
+    _, fu = fake.follow_up_issue.await_args
+    assert "ROUND=3" in fu["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_start_fixer_caps_at_default_5(monkeypatch):
+    """ctx.fixer_round=5（已起 5 轮）+ 第 6 次调 start_fixer → escalate（不开 fixer）。"""
+    from orchestrator.actions import _verifier as v
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, fake)
+
+    patches: list = []
+
+    async def fake_update(pool, req_id, patch):
+        patches.append(patch)
+    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+
+    out = await v.start_fixer(
+        body=make_body(), req_id="REQ-9", tags=["verify:dev_cross_check"],
+        ctx={"verifier_stage": "dev_cross_check", "fixer_round": 5},
+    )
+    # 不创 fixer issue
+    fake.create_issue.assert_not_called()
+    fake.follow_up_issue.assert_not_called()
+    # emit verify.escalate
+    assert out["emit"] == Event.VERIFY_ESCALATE.value
+    assert out["reason"] == "fixer-round-cap"
+    # ctx 标了 escalated_reason
+    reasons = [p for p in patches if "escalated_reason" in p]
+    assert reasons
+    assert reasons[-1]["escalated_reason"] == "fixer-round-cap"
+    assert reasons[-1]["fixer_round_cap_hit"] == 5
+
+
+@pytest.mark.asyncio
+async def test_start_fixer_cap_respects_setting_override(monkeypatch):
+    """settings.fixer_round_cap 可被运维覆盖。设 cap=2 + 已跑 2 轮 → 第 3 次 escalate。"""
+    from orchestrator.actions import _verifier as v
+    fake = make_fake_bkd()
+    fake.create_issue.return_value = FakeIssue(id="fix-cap")
+    patch_bkd(monkeypatch, fake)
+
+    async def fake_update(pool, req_id, patch):
+        pass
+    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+    monkeypatch.setattr("orchestrator.actions._verifier.settings.fixer_round_cap", 2)
+
+    # 跑第 2 轮（next=2，恰好等于 cap，allowed）
+    out = await v.start_fixer(
+        body=make_body(), req_id="REQ-9", tags=[],
+        ctx={"verifier_stage": "dev_cross_check", "fixer_round": 1},
+    )
+    assert out["fixer_round"] == 2
+
+    # 跑第 3 轮（next=3 > cap=2 → escalate）
+    out2 = await v.start_fixer(
+        body=make_body(), req_id="REQ-9", tags=[],
+        ctx={"verifier_stage": "dev_cross_check", "fixer_round": 2},
+    )
+    assert out2["emit"] == Event.VERIFY_ESCALATE.value
+    assert out2["reason"] == "fixer-round-cap"
+
+
+@pytest.mark.asyncio
+async def test_start_fixer_first_round_with_no_ctx_field(monkeypatch):
+    """ctx 里完全没 fixer_round 字段 → 视为 0，next_round=1，正常起 fixer。"""
+    from orchestrator.actions import _verifier as v
+    fake = make_fake_bkd()
+    fake.create_issue.return_value = FakeIssue(id="fix-first")
+    patch_bkd(monkeypatch, fake)
+
+    async def fake_update(pool, req_id, patch):
+        pass
+    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+
+    out = await v.start_fixer(
+        body=make_body(), req_id="REQ-9", tags=[],
+        ctx={"verifier_stage": "dev_cross_check"},
+    )
+    assert out["fixer_round"] == 1
+    fake.create_issue.assert_called_once()
+
+
 @pytest.mark.asyncio
 async def test_invoke_verifier_for_staging_test_fail(monkeypatch):
     """B2：专门 handler 写死 stage=staging_test，不再从 tags sniff。
