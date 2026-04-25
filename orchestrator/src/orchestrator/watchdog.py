@@ -46,6 +46,15 @@ _STATE_ISSUE_KEY: dict[ReqState, str | None] = {
     ReqState.ARCHIVING: "archive_issue_id",
 }
 
+# state → 兜底失败时贴在 _SyntheticBody.event 上的字符串。
+# escalate.py 把这串当 canonical signal，slug 化成 reason tag
+# （如 "archive.failed" → "archive-failed"），让 dashboards 能区分
+# done-archive 阶段崩溃 vs 通用 watchdog 卡死。
+# 未列出的 state 默认用 "watchdog.stuck"（→ reason "watchdog-stuck"）。
+_STATE_FAILURE_EVENT: dict[ReqState, str] = {
+    ReqState.ARCHIVING: "archive.failed",
+}
+
 # 排除：终态 + 等人态 + 未入链
 _SKIP_STATES = {
     ReqState.DONE.value,
@@ -152,6 +161,7 @@ async def _check_and_escalate(row) -> bool:
     body = _SyntheticBody(
         projectId=project_id,
         issueId=issue_id or ctx.get("intent_issue_id") or "",
+        event=_STATE_FAILURE_EVENT.get(state, "watchdog.stuck"),
     )
     log.warning(
         "watchdog.escalating",

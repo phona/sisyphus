@@ -79,6 +79,7 @@ def _patch_engine(monkeypatch):
             "event": event,
             "body_issue": getattr(body, "issueId", None),
             "body_proj": getattr(body, "projectId", None),
+            "body_event": getattr(body, "event", None),
         })
         return {"action": "escalate", "next_state": "escalated"}
 
@@ -256,6 +257,51 @@ async def test_loop_disabled_returns_immediately(monkeypatch):
     monkeypatch.setattr("orchestrator.watchdog.settings.watchdog_enabled", False)
     # 无需 mock _tick / asyncio.sleep — 直接 return 不进 while
     await watchdog.run_loop()   # 不应 hang
+
+
+# ─── Case ARCHIVING：state==ARCHIVING + session=failed → body.event="archive.failed" ─
+@pytest.mark.asyncio
+async def test_archiving_stuck_uses_archive_failed_synthetic_event(monkeypatch):
+    """REQ-archive-failure-watchdog: ARCHIVING 卡死时 watchdog 贴 body.event='archive.failed'，
+    让 escalate 把 reason 标成 'archive-failed' 而不是通用 'watchdog-stuck'，
+    M7 04-fail-kind-distribution dashboard 才能区分 done-archive 阶段崩溃 vs 通用卡死。"""
+    pool = FakePool(rows=[
+        _row("REQ-arch-1", ReqState.ARCHIVING.value,
+             ctx={"archive_issue_id": "arch-1", "intent_issue_id": "intent-1"}),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="failed", id="arch-1"))
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 1}
+    assert len(step_calls) == 1
+    assert step_calls[0]["cur_state"] == ReqState.ARCHIVING
+    assert step_calls[0]["event"] == Event.SESSION_FAILED
+    # 关键：贴的是 archive 专属 synthetic event（不是通用 watchdog.stuck）
+    assert step_calls[0]["body_event"] == "archive.failed"
+    assert step_calls[0]["body_issue"] == "arch-1"
+
+
+# ─── Case 非 ARCHIVING 仍用通用 watchdog.stuck（确保我们没误改其他 state）─────
+@pytest.mark.asyncio
+async def test_non_archiving_keeps_generic_watchdog_stuck_event(monkeypatch):
+    """STAGING_TEST_RUNNING 等非 ARCHIVING state 仍贴 body.event='watchdog.stuck'。
+    确保 archive 细分逻辑没污染其他 state。"""
+    pool = FakePool(rows=[
+        _row("REQ-st-1", ReqState.STAGING_TEST_RUNNING.value,
+             ctx={"staging_test_issue_id": "st-1"}),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="failed", id="st-1"))
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    await watchdog._tick()
+
+    assert step_calls[0]["body_event"] == "watchdog.stuck"
 
 
 # ─── Case 9：engine.step 抛异常不阻塞后续 row ─────────────────────────────
