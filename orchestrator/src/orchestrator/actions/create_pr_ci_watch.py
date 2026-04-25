@@ -6,10 +6,16 @@ feature flag checker_pr_ci_watch_enabled:
   True: sisyphus 自己调 GitHub REST API 轮询 check-runs，emit PR_CI_PASS/FAIL/TIMEOUT
 
 repo 列表来源（M15 哲学：runner 是真理，不维护额外 metadata）：
-  1. runner pod `/workspace/source/*/` discovery（analyze-agent 已 clone 好，跟其它
-     checker 走同一条契约 —— staging_test / dev_cross_check 都遍历这个目录）
-  2. ctx.intake_finalized_intent.involved_repos（intake 阶段 runner 还没起来时的预声明）
-  3. SISYPHUS_BUSINESS_REPO env（M15 manifest 残骸，老单仓 REQ 兼容，建议下线）
+  1. runner pod `/workspace/source/*/` discovery（start_analyze 已 server-side
+     clone 好，跟其它 checker 走同一条契约 —— staging_test / dev_cross_check
+     都遍历这个目录）
+  2. ctx.intake_finalized_intent.involved_repos / ctx.involved_repos
+     （intake 阶段已知 / 直接 analyze 路径透传）
+
+REQ-clone-and-pr-ci-fallback-1777115925 把第三档 process-global env fallback
+删了 —— stale 全局值在多 REQ / 多仓场景下注定指错仓。两个 source 都空时
+_run_checker 把 repos=None 透传给 watch_pr_ci，由 checker 抛 ValueError，本
+action 翻译成 PR_CI_TIMEOUT（直接 ESCALATED 不进 verifier）。
 """
 from __future__ import annotations
 
@@ -74,7 +80,8 @@ async def _run_checker(*, req_id: str, ctx: dict) -> dict:
     log.info("create_pr_ci_watch.checker_path", req_id=req_id)
     branch = ctx.get("branch") or f"feat/{req_id}"
 
-    # repo 来源优先级：runner 文件系统（M15 真理）> intake finalized > env fallback
+    # repo 来源优先级：runner 文件系统（M15 真理）> ctx involved_repos
+    # （process-global env fallback 已删，REQ-clone-and-pr-ci-fallback-1777115925）
     repos = await _discover_repos_from_runner(req_id)
     if not repos:
         finalized = ctx.get("intake_finalized_intent") or {}

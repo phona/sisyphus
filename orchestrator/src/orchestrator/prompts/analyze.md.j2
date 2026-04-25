@@ -85,7 +85,18 @@ session 结束 + move review 时，每个被改的 source repo 的 `feat/{{ req_
 - spec_lint / dev_cross_check / staging_test 会**遍历 `/workspace/source/*`** 跑工具
 - **没有 leader / feature 主从**
 
-### A.3 clone 到约定结构（**调 sisyphus helper**）
+### A.3 clone 到约定结构（多数情况 **sisyphus 已替你跑**）
+
+REQ-clone-and-pr-ci-fallback-1777115925 起，`start_analyze` 在 dispatch
+你之前会 server-side 调 `/opt/sisyphus/scripts/sisyphus-clone-repos.sh`，
+把 ctx 里 `intake_finalized_intent.involved_repos` / `involved_repos`
+列的所有仓 clone 进 `/workspace/source/<basename>/`。
+{% if cloned_repos %}
+本次 sisyphus 已经预 clone 过：{{ cloned_repos | join(", ") }}。
+你直接进 spec / dev 即可，不用再跑 helper。
+{% else %}
+本次 ctx 没声明 involved_repos（直接 analyze 路径，无 intake），
+sisyphus 没替你 clone。**你必须自己跑 helper**：
 
 ```bash
 POD=runner-{{ req_id | lower }}
@@ -96,6 +107,8 @@ kubectl -n $NS exec $POD -- /opt/sisyphus/scripts/sisyphus-clone-repos.sh \
 ```
 
 helper 把每个仓 clone 到 `/workspace/source/<basename>/`，搞定 token、shallow、refspec。
+**今后建议在 BKD intake 阶段 finalize involved_repos**，下回 sisyphus 自己接管。
+{% endif %}
 
 ### A.4 检查 + 初始化 openspec project（每个 source repo）
 

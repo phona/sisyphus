@@ -72,7 +72,9 @@ async def test_start_analyze(monkeypatch):
     patch_bkd(monkeypatch, "start_analyze", fake)
     body = make_body(issue_id="intent-1", title="加个登录")
     out = await mod.start_analyze(body=body, req_id="REQ-9", tags=["intent:analyze"], ctx={})
-    assert out == {"issue_id": "intent-1", "req_id": "REQ-9"}
+    # cloned_repos=None: 直接 analyze 路径无 involved_repos，跳过 server-side clone
+    # （REQ-clone-and-pr-ci-fallback-1777115925）
+    assert out == {"issue_id": "intent-1", "req_id": "REQ-9", "cloned_repos": None}
     # 改 title + tags + 发 prompt + 推 working
     assert fake.update_issue.await_count == 2  # title/tags + working
     assert fake.follow_up_issue.await_count == 1
