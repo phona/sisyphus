@@ -29,7 +29,7 @@ class _FakePool:
         self.executed.append((sql, args))
 
 
-def _make_request(event: str, tags: list[str], issue_id: str = "issue-rnf") -> object:
+def _make_request(event: str, tags: list[str], issue_id: str = "issue-rnf", issue_number: int | None = None) -> object:
     class _Req:
         headers: ClassVar = {"authorization": "Bearer test-webhook-token"}
 
@@ -37,6 +37,7 @@ def _make_request(event: str, tags: list[str], issue_id: str = "issue-rnf") -> o
             return {
                 "event": event,
                 "issueId": issue_id,
+                "issueNumber": issue_number,
                 "projectId": "proj-rnf",
                 "executionId": "exec-rnf",
                 "tags": tags,
@@ -123,7 +124,11 @@ def _setup_for_passthrough(monkeypatch, *, req_id: str | None, derive_event_val)
     monkeypatch.setattr(dedup, "mark_processed", AsyncMock())
     monkeypatch.setattr(db, "get_pool", lambda: _FakePool())
     monkeypatch.setattr(obs, "record_event", AsyncMock(side_effect=lambda *a, **kw: obs_calls.append(a)))
-    monkeypatch.setattr(router_lib, "extract_req_id", lambda tags, num=None: req_id)
+    monkeypatch.setattr(
+        router_lib,
+        "extract_req_id",
+        lambda tags, num=None: req_id if req_id is not None else (f"REQ-{num}" if num is not None else None),
+    )
     monkeypatch.setattr(router_lib, "derive_event", lambda evt, tags: derive_event_val)
 
     class _Row:
@@ -240,7 +245,6 @@ async def test_rnf_s3_issue_updated_intent_intake_proceeds(monkeypatch):
     noise filter 不命中（intent 入口必须放行），handler 继续走下游，
     engine.step 至少被调用一次。
     """
-    from orchestrator import router as router_lib
     from orchestrator.state import Event
 
     tracking = _setup_for_passthrough(
@@ -248,10 +252,8 @@ async def test_rnf_s3_issue_updated_intent_intake_proceeds(monkeypatch):
         req_id=None,
         derive_event_val=Event.INTENT_INTAKE,
     )
-    # No REQ tag in intent:intake event — extract_req_id returns None
-    monkeypatch.setattr(router_lib, "extract_req_id", lambda tags, num=None: None)
-
-    req = _make_request("issue.updated", ["intent:intake"], issue_id="issue-rnf-s3")
+    # No REQ-* tag; issueNumber fallback provides req_id (real BKD always sends issueNumber)
+    req = _make_request("issue.updated", ["intent:intake"], issue_id="issue-rnf-s3", issue_number=3)
     await tracking["webhook"].webhook(req)
 
     assert len(tracking["step_calls"]) >= 1, (
@@ -268,7 +270,6 @@ async def test_rnf_s4_issue_updated_intent_analyze_proceeds(monkeypatch):
     RNF-S4: webhook 收到 issue.updated，tags 含 intent:analyze（无 REQ-* tag）时，
     noise filter 不命中，handler 继续走下游，engine.step 至少被调用一次。
     """
-    from orchestrator import router as router_lib
     from orchestrator.state import Event
 
     tracking = _setup_for_passthrough(
@@ -276,9 +277,8 @@ async def test_rnf_s4_issue_updated_intent_analyze_proceeds(monkeypatch):
         req_id=None,
         derive_event_val=Event.INTENT_ANALYZE,
     )
-    monkeypatch.setattr(router_lib, "extract_req_id", lambda tags, num=None: None)
-
-    req = _make_request("issue.updated", ["intent:analyze"], issue_id="issue-rnf-s4")
+    # No REQ-* tag; issueNumber fallback provides req_id (real BKD always sends issueNumber)
+    req = _make_request("issue.updated", ["intent:analyze"], issue_id="issue-rnf-s4", issue_number=4)
     await tracking["webhook"].webhook(req)
 
     assert len(tracking["step_calls"]) >= 1, (
