@@ -152,7 +152,7 @@ class Settings(BaseSettings):
     # 失败不发 webhook 的场景（M4 retry policy 假设"失败事件总会到"被打破）。
     watchdog_enabled: bool = True             # 默认开（兜底必须开）
     watchdog_interval_sec: int = 60           # 每 60s 扫一次
-    watchdog_stuck_threshold_sec: int = 1800  # 30 min 无 transition 视为卡死
+    watchdog_stuck_threshold_sec: int = 3600  # 60 min — sonnet analyze long tail 经常 25-35min；30 min 阈值会 false-escalate 大量 dogfood REQ；60 min 仍能兜真死
 
     # ─── 防 verifier↔fixer 死循环：硬封顶 fixer round 数 ─────────────────
     # 每次 verifier decision=fix 都会 start_fixer 起新一轮 fixer agent，跑完回 verifier
