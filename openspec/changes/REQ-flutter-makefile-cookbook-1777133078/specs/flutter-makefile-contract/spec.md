@@ -2,10 +2,10 @@
 
 ### Requirement: Flutter source repo MUST expose ttpos-ci standard Makefile targets
 
-A Flutter source repo (such as `ZonEaseTech/ttpos-flutter`) that uses melos or
-dart scripts internally MUST expose a root `Makefile` providing all six ttpos-ci
-standard targets: `ci-env`, `ci-setup`, `ci-lint`, `ci-unit-test`,
-`ci-integration-test`, and `ci-build`. The Makefile SHALL wrap existing melos /
+A Flutter source repo (such as `ZonEaseTech/ttpos-flutter`) MUST expose a root
+`Makefile` providing all six ttpos-ci standard targets: `ci-env`, `ci-setup`,
+`ci-lint`, `ci-unit-test`, `ci-integration-test`, and `ci-build`, even when it
+uses melos or dart scripts internally. The Makefile SHALL wrap existing melos /
 dart CLI commands without duplicating internal build logic. Each target MUST exit
 with code 0 on success and non-zero on failure, consistent with
 `docs/integration-contracts.md §2.1`.
