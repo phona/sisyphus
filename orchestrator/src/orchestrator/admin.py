@@ -5,6 +5,7 @@
 基础（已有）：
   POST /admin/req/{req_id}/emit       body: {"event": "..."}
   POST /admin/req/{req_id}/escalate
+  POST /admin/req/{req_id}/complete   body: {"reason": "..."} (optional)
   GET  /admin/metrics
   GET  /admin/req/{req_id}
 
@@ -15,6 +16,10 @@ v0.2 runner 运维（新）：
   GET  /admin/runners                  → 列所有 runner pod / pvc 状态
 """
 from __future__ import annotations
+
+import asyncio
+import json
+from datetime import UTC, datetime
 
 import structlog
 from fastapi import APIRouter, Header, HTTPException
@@ -106,6 +111,112 @@ async def force_escalate(
     )
     log.warning("admin.force_escalate", req_id=req_id, from_state=row.state.value)
     return {"action": "force_escalated", "from_state": row.state.value}
+
+
+class CompleteBody(BaseModel):
+    """complete 接受可选的 reason 字段。"""
+    reason: str | None = None
+
+
+# 持引用防 fire-and-forget cleanup task 被 GC（done_callback 自清）。
+# 跟 engine._cleanup_tasks 同模式但隔离作用域，便于测试 introspect 仅本 endpoint 起的 task。
+_complete_cleanup_tasks: set[asyncio.Task] = set()
+
+
+@admin.post("/req/{req_id}/complete")
+async def complete_req(
+    req_id: str,
+    body: CompleteBody | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """把 stale escalated REQ 直接标 done + 立即触发 runner cleanup（PVC 不留）。
+
+    跟 force_escalate 配对：force_escalate 是"踢死信队列"，complete 是"清死信队列"。
+
+    前置条件：
+      - state == DONE: 200 noop（幂等）
+      - state == ESCALATED: 改 done + cleanup
+      - 其它 state: 409（防误把 in-flight stage 截断）
+    """
+    _verify_token(authorization)
+    params = body or CompleteBody()
+
+    pool = db.get_pool()
+    row = await req_state.get(pool, req_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"req {req_id} not found")
+
+    if row.state == ReqState.DONE:
+        return {"action": "noop", "state": "already done"}
+
+    if row.state != ReqState.ESCALATED:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"req {req_id} is in state {row.state.value}; expected escalated. "
+                f"Hint: POST /admin/req/{req_id}/escalate first if you want to "
+                f"abort an in-flight REQ."
+            ),
+        )
+
+    history_entry: dict = {
+        "ts": datetime.now(UTC).isoformat(),
+        "from": ReqState.ESCALATED.value,
+        "to": ReqState.DONE.value,
+        "event": "admin.complete",
+        "action": None,
+    }
+    ctx_patch: dict = {
+        "completed_reason": "admin",
+        "completed_from_state": ReqState.ESCALATED.value,
+    }
+    if params.reason:
+        ctx_patch["completed_reason_detail"] = params.reason
+
+    # 直接 SQL UPDATE（mirror force_escalate）；WHERE state='escalated' 防并发竞争。
+    result = await pool.execute(
+        "UPDATE req_state SET state='done', "
+        "history = history || $2::jsonb, "
+        "context = context || $3::jsonb, "
+        "updated_at = now() "
+        "WHERE req_id = $1 AND state = $4",
+        req_id,
+        json.dumps([history_entry]),
+        json.dumps(ctx_patch),
+        ReqState.ESCALATED.value,
+    )
+    # asyncpg 返 "UPDATE N" 字符串；N=0 表示并发已被另一 caller 改了
+    if not result.endswith(" 1"):
+        log.warning("admin.complete.cas_lost", req_id=req_id, result=result)
+        # 重读一次，按当前 state 决定回什么
+        row2 = await req_state.get(pool, req_id)
+        if row2 and row2.state == ReqState.DONE:
+            return {"action": "noop", "state": "already done"}
+        raise HTTPException(
+            status_code=409,
+            detail=f"req {req_id} state changed concurrently; retry",
+        )
+
+    # 立即触发 runner cleanup（不等 runner_gc 下一轮）；fire-and-forget。
+    # engine._cleanup_runner_on_terminal 是 cross-module import：admin override
+    # 复用同一套 cleanup 逻辑（log + try/except + retain_pvc 旗标），不复制。
+    task = asyncio.create_task(
+        engine._cleanup_runner_on_terminal(req_id, ReqState.DONE)
+    )
+    _complete_cleanup_tasks.add(task)
+    task.add_done_callback(_complete_cleanup_tasks.discard)
+
+    log.warning(
+        "admin.complete",
+        req_id=req_id,
+        from_state=ReqState.ESCALATED.value,
+        reason=params.reason,
+    )
+    return {
+        "action": "completed",
+        "from_state": ReqState.ESCALATED.value,
+        "reason": params.reason,
+    }
 
 
 @admin.get("/metrics")

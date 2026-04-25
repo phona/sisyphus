@@ -1,0 +1,133 @@
+capability: admin-complete-endpoint
+version: "1.0"
+description: |
+  Admin endpoint POST /admin/req/{req_id}/complete: 把"已 escalated 但确认不会续"
+  的 stale REQ 一键改 done + 立即触发 runner cleanup（PVC 不留），不绕 BKD、不绕
+  审计、不污染 transition table。
+
+  跟 force_escalate 配对：force_escalate 是"踢死信队列"，complete 是"清死信队列里
+  确认作废的"。两条独立的 admin override，通过状态前置条件互不交叉。
+
+http:
+  method: POST
+  path: /admin/req/{req_id}/complete
+  auth: Bearer <webhook_token>   # 同 webhook._verify_token；同所有其它 /admin/* endpoint
+  request_body:
+    content_type: application/json
+    schema:
+      type: object
+      properties:
+        reason:
+          type: string
+          description: |
+            Optional human-written reason. Persisted to
+            req_state.context.completed_reason_detail when provided.
+      additionalProperties: false
+    optional: true   # 整个 body 可缺，等价于 {}
+  responses:
+    "200_completed":
+      condition: state was escalated, transition to done succeeded
+      body:
+        action: completed
+        from_state: escalated
+        reason: "<echoed reason or null>"
+    "200_noop":
+      condition: state already done (idempotent retry)
+      body:
+        action: noop
+        state: "already done"
+    "404":
+      condition: no req_state row with req_id
+      body:
+        detail: "req <id> not found"
+    "409":
+      condition: state ∉ {escalated, done}
+      body:
+        detail: "req <id> is in state <X>; expected escalated. Hint: POST /admin/req/<id>/escalate first if you want to abort an in-flight REQ."
+    "401_or_403":
+      condition: missing / invalid Authorization header
+      handler: webhook._verify_token raises HTTPException
+
+precondition_chain:
+  description: |
+    检查顺序固定（验证 → 取数 → 状态判断），保证 401 ≠ 404 ≠ 409 不互相覆盖。
+  sequence:
+    - "1. _verify_token(authorization)  # 401/403 if invalid"
+    - "2. row = await req_state.get(pool, req_id)"
+    - "3. if row is None: raise HTTPException(404)"
+    - "4. if row.state == ReqState.DONE: return noop  # 200 idempotent"
+    - "5. if row.state != ReqState.ESCALATED: raise HTTPException(409)"
+    - "6. SQL UPDATE state=done + history append + context patch"
+    - "7. asyncio.create_task(_cleanup_runner_on_terminal(req_id, ReqState.DONE))"
+    - "8. return {action: completed, from_state: escalated, ...}"
+
+state_change:
+  before: "req_state.state = 'escalated'"
+  after: "req_state.state = 'done'"
+  context_patch:
+    completed_reason: admin               # always set
+    completed_reason_detail: "<body.reason or absent>"
+    completed_from_state: escalated
+  history_append:
+    ts: "<now ISO8601>"
+    from: escalated
+    to: done
+    event: admin.complete
+    action: null
+
+runner_cleanup:
+  trigger_path: |
+    asyncio.create_task(engine._cleanup_runner_on_terminal(req_id, ReqState.DONE))
+  retain_pvc: false                        # done 不留 PVC，立即释放
+  fire_and_forget: true                    # endpoint 返回时 cleanup 还在跑；runner_gc 兜底失败
+  rationale: |
+    runner_gc 周期 = settings.runner_gc_interval_sec（默认 60s）。等下一轮
+    GC 才清等于 endpoint 没省资源。fire-and-forget 配合 runner_gc 兜底是
+    sisyphus 既有模式（engine.step 处理 terminal transition 也是这套）。
+
+invariants:
+  no_state_machine_pollution:
+    - "不在 state.py 加 admin.complete event"
+    - "不在 TRANSITIONS 加 (ESCALATED, ?) → DONE"
+    - "admin override 是状态机外的工具，不进 transition 表（保 transition 表只描述自动流转）"
+
+  no_short_circuit_inflight:
+    - "拒绝 non-ESCALATED state 是为了防止把跑中的 stage 截断"
+    - "操作员要先 escalate（终止当前 stage，runner Pod 已删，PVC 留 retention），
+       再 complete（确认作废，PVC 也删）"
+    - "两步走的设计意图：每一步操作意图明确，不能一个 endpoint 把任意 in-flight 推到 done"
+
+  history_audit:
+    - "history 行 event=admin.complete 是 marker，可被 metrics 查询识别"
+    - "context.completed_reason='admin' 跟 context.escalated_reason='admin'
+       同形（都是 admin override 的标识）"
+    - "BKD intent issue 状态由 admin 自己在 BKD UI 改；sisyphus 不代写"
+
+interaction_with_runner_gc:
+  description: |
+    DB 层 state=done 后，runner_gc 下一轮也会发现该 REQ 不在 active set，
+    会顺手再扫一次 → 即使 fire-and-forget cleanup 任务挂了，gc 兜底也能清。
+  redundancy: by design
+
+interaction_with_force_escalate:
+  description: |
+    force_escalate 是 in-flight → escalated 的"踢入死信队列"。
+    complete 是 escalated → done 的"清死信队列"。
+    两个 endpoint 独立，但常见使用是"先 force_escalate 再 complete"（两步操作
+    意图明确）。
+  example_sequence:
+    - "POST /admin/req/REQ-X/escalate     # state: analyzing → escalated, PVC 留"
+    - "POST /admin/req/REQ-X/complete     # state: escalated → done, PVC 删"
+
+failure_modes:
+  cleanup_task_exception:
+    cause: "K8s API 不通 / runner controller 挂了"
+    handler: "_cleanup_runner_on_terminal 内部 try/except，记 warning，runner_gc 兜底"
+    state_outcome: "DB state 仍是 done，下一轮 runner_gc 会扫到并重试清"
+    user_impact: "API 调用方仍拿 200（DB 已改），实际 PVC 释放可能延迟一个 GC 周期"
+
+  concurrent_complete:
+    cause: "两个 admin 同时 POST /complete 同一 REQ"
+    handler: "SQL UPDATE WHERE state='escalated' 自身有原子性；第二次 UPDATE 影响 0 行"
+    state_outcome: "第二个 endpoint 看到 state='done' 走 200 noop 路径"
+    detection: "history 行只追加一次（第一次 UPDATE 写的），不会有两条 admin.complete"
