@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # sisyphus-accept-down-compose.sh — sisyphus self-dogfood accept env-down（幂等）
 #
-# 由顶层 Makefile ci-accept-env-down target 调。always exit 0 — best-effort cleanup
+# 由顶层 Makefile accept-env-down target 调。always exit 0 — best-effort cleanup
 # 不阻塞状态机（teardown_accept_env.py 也是 best-effort 语义）。
 #
 # 环境变量：

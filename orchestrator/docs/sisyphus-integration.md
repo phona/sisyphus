@@ -78,10 +78,10 @@ sisyphus 在各阶段通过 `kubectl exec` 调 Makefile：
 | `ci-unit-test` | staging-test | 单测（各 source repo 分别跑）| fail → bug:pre-release |
 | `ci-integration-test` | staging-test | docker-compose 起 stack 跑 contract test | fail → bug:pre-release |
 | `ci-build` | PR CI（在 GHA 里跑，不在 sisyphus）| build + push image | fail → bug:ci |
-| `ci-accept-env-up` | accept 前（在 integration repo 根目录跑）| helm install lab 到 accept-<REQ> ns，stdout 尾行输出 JSON `{"endpoint":"..."}` | fail → escalate（lab 起不来）|
-| `ci-accept-env-down` | accept 后（teardown，必跑）| helm uninstall lab，idempotent | fail 只 warning，不阻塞 |
+| `accept-env-up` | accept 前（在 integration repo 根目录跑）| helm install lab 到 accept-<REQ> ns，stdout 尾行输出 JSON `{"endpoint":"..."}` | fail → escalate（lab 起不来）|
+| `accept-env-down` | accept 后（teardown，必跑）| helm uninstall lab，idempotent | fail 只 warning，不阻塞 |
 
-**注意**：`ci-accept-*` 只在 `integration/` 下的 integration repo 需要。纯 source repo 不用配。
+**注意**：`accept-env-*` 只在 `integration/` 下的 integration repo 需要。纯 source repo 不用配。
 
 ---
 
@@ -181,7 +181,7 @@ my-repo/
 └── tests/docker-compose.yml        # 最简单的 echo service 就行
 ```
 
-Makefile 最小实现（`ci-accept-env-*` 没 lab 就省）：
+Makefile 最小实现（`accept-env-*` 没 lab 就省）：
 
 ```makefile
 ci-lint:

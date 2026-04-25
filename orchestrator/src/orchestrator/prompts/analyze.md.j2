@@ -223,7 +223,7 @@ sisyphus 之后做（**纯机械，不再起 agent**）：
 2. **dev_cross_check** —— 遍历所有仓跑 `BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`（ttpos-ci 标准，仅 lint 变更文件）
 3. **staging_test** —— 遍历所有仓**并行**跑 `make ci-unit-test && make ci-integration-test`（**单仓内串行**，避免内存峰值叠加）
 4. **pr_ci_watch** —— 轮 GitHub REST 等所有 PR check-runs 全绿
-5. **accept-agent** —— 起 lab（`make ci-accept-env-up`） + 跑 acceptance scenarios
+5. **accept-agent** —— 起 lab（`make accept-env-up`） + 跑 acceptance scenarios
 6. **done_archive agent** —— 合所有 PR + 各仓 `openspec apply` 归档 specs
 
 任一 stage 红 → verifier-agent 主观判 pass / fix / retry / escalate。fix 起 fixer-agent

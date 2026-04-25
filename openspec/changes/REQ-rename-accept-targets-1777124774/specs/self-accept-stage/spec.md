@@ -1,8 +1,12 @@
-# self-accept-stage Specification
+# self-accept-stage delta — REQ-rename-accept-targets-1777124774
 
-## Purpose
-TBD - created by archiving change REQ-self-accept-stage-1777121797. Update Purpose after archive.
-## Requirements
+## RENAMED Requirements
+
+- FROM: `### Requirement: 顶层 Makefile MUST 提供 ci-accept-env-up / ci-accept-env-down target（self-dogfood）`
+- TO: `### Requirement: 顶层 Makefile MUST 提供 accept-env-up / accept-env-down target（self-dogfood）`
+
+## MODIFIED Requirements
+
 ### Requirement: 顶层 Makefile MUST 提供 accept-env-up / accept-env-down target（self-dogfood）
 
 The repo-root `Makefile` SHALL define two targets, `accept-env-up` and
@@ -34,27 +38,6 @@ or `.PHONY` entries in the repo-root Makefile.
 - **WHEN** `cd /workspace/source/sisyphus && SISYPHUS_NAMESPACE=accept-test make accept-env-down`
 - **THEN** the recipe runs `docker compose -p accept-test -f deploy/accept-compose.yml down -v`,
   exit code is 0, and no error propagates upward
-
-### Requirement: deploy/accept-compose.yml MUST define postgres + orchestrator services
-
-The compose file `deploy/accept-compose.yml` SHALL define exactly two services
-needed for a sisyphus smoke lab: a `postgres` service (postgres:16-alpine) with
-a `sisyphus` user/database and an emptied volume on each up, and an
-`orchestrator` service built from the local `./orchestrator/` Dockerfile that
-MUST publish container port 8000 to host port 18000 (override via
-`SISYPHUS_ACCEPT_PORT` env). The orchestrator service MUST set dummy
-`SISYPHUS_BKD_TOKEN` / `SISYPHUS_WEBHOOK_TOKEN` values, point
-`SISYPHUS_PG_DSN` at the local postgres service, and disable in-cluster K8s
-mode (`SISYPHUS_K8S_IN_CLUSTER=false`) so startup does not try to load a
-kubeconfig.
-
-#### Scenario: SDA-S3 compose stack starts and orchestrator answers /healthz
-
-- **GIVEN** docker compose with `deploy/accept-compose.yml`
-- **WHEN** `docker compose -p smoke -f deploy/accept-compose.yml up -d` runs
-- **THEN** within 60 seconds `curl -sf http://localhost:18000/healthz`
-  returns 200 with body `{"status":"ok"}` (orchestrator startup completed
-  schema migration against the postgres service)
 
 ### Requirement: create_accept SHALL fall back to /workspace/source for single-source-repo self-host
 
@@ -104,38 +87,3 @@ the renamed Makefile recipe header.
 - **WHEN** `_resolve_integration_dir()` is called
 - **THEN** it returns `None` (refuses to silently pick one); `create_accept`
   emits `accept-env-up.fail` with reason mentioning multiple candidates
-
-### Requirement: skip_accept default MUST be false in deploy/my-values.yaml
-
-The deployment values file `orchestrator/deploy/my-values.yaml` SHALL set
-`env.skip_accept: false` so that REQs targeting the sisyphus repo run the
-real accept stage end-to-end (env-up via compose, accept-agent against
-endpoint, env-down on completion). The accompanying inline comment MUST point
-to the self-host fallback rather than the historical "ttpos-arch-lab not yet
-connected" placeholder.
-
-#### Scenario: SDA-S8 skip_accept defaults to false in production deploy
-
-- **GIVEN** `orchestrator/deploy/my-values.yaml` is the source of truth for
-  `helm upgrade` on vm-node04
-- **WHEN** the file is parsed
-- **THEN** `env.skip_accept` is `false` and the comment references
-  `deploy/accept-compose.yml` as the active accept env
-
-### Requirement: accept-agent prompt MUST read spec.md from per-repo source path
-
-`orchestrator/src/orchestrator/prompts/accept.md.j2` SHALL instruct the
-accept-agent to read acceptance scenarios from
-`/workspace/source/*/openspec/changes/<REQ>/specs/*/spec.md` (M16 multi-repo
-layout), not the legacy `/workspace/openspec/...` path. The template MUST
-work uniformly for single-repo (sisyphus self-host) and multi-repo REQs since
-the glob iterates over all source repos.
-
-#### Scenario: SDA-S9 accept prompt instructs glob over /workspace/source/*
-
-- **GIVEN** the rendered accept agent prompt
-- **WHEN** the agent follows Step 2 to load scenarios
-- **THEN** the kubectl exec command reads
-  `/workspace/source/*/openspec/changes/<REQ>/specs/*/spec.md` (the M16-correct
-  per-repo layout)
-

@@ -230,7 +230,7 @@ async def test_create_accept_self_host_fallback(monkeypatch):
     # Verify the env-up call used the fallback source dir
     env_up_calls = [c for c in rc.calls if c["env"] and c["env"].get("SISYPHUS_STAGE") == "accept-env-up"]
     assert len(env_up_calls) == 1
-    assert "cd /workspace/source/sisyphus && make ci-accept-env-up" in env_up_calls[0]["command"]
+    assert "cd /workspace/source/sisyphus && make accept-env-up" in env_up_calls[0]["command"]
 
 
 @pytest.mark.asyncio
@@ -323,7 +323,7 @@ async def test_teardown_uses_resolved_dir(monkeypatch):
     # Verify teardown ran in the resolved source dir
     down_calls = [c for c in rc.calls if c["env"] and c["env"].get("SISYPHUS_STAGE") == "accept-teardown"]
     assert len(down_calls) == 1
-    assert "cd /workspace/source/sisyphus && make ci-accept-env-down" in down_calls[0]["command"]
+    assert "cd /workspace/source/sisyphus && make accept-env-down" in down_calls[0]["command"]
 
 
 @pytest.mark.asyncio
