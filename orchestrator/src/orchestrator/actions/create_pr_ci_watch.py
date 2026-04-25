@@ -55,9 +55,10 @@ async def _run_checker(*, req_id: str, ctx: dict) -> dict:
             repos=repos,
         )
     except ValueError as e:
+        # Config error → ESCALATED directly (PR_CI_TIMEOUT), not verifier (PR_CI_FAIL).
         log.error("create_pr_ci_watch.config_error", req_id=req_id, error=str(e))
         return {
-            "emit": Event.PR_CI_FAIL.value,
+            "emit": Event.PR_CI_TIMEOUT.value,
             "reason": f"config error: {e}"[:200],
             "exit_code": -1,
         }
