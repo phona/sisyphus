@@ -3,11 +3,18 @@
 v0.2 变化：agent 跑前先 ensure_runner 拉起 K8s Pod + PVC，保证 analyze-agent
 kubectl exec 进去能立刻用。Pod 生命周期绑本 REQ 直到 done/escalate。
 
+REQ-clone-and-pr-ci-fallback-1777115925：在 ensure_runner 之后、follow-up
+prompt 之前，把 ctx 里的 involved_repos 替 agent server-side clone 进
+/workspace/source/<basename>/。clone 失败 → 直接 emit VERIFY_ESCALATE，不
+让 agent 进空 PVC 干活。直接 analyze 路径（无 intake，ctx 没 involved_repos）
+保留 fallback：跳过 server-side clone，agent 按 prompt Part A.3 自己跑 helper。
+
 行为：
 1. ensure_runner（K8s：建 PVC + Pod，等 Ready）
-2. update-issue 把 intent issue 改名 [REQ-xxx] [ANALYZE] — <title> + tags=[analyze, REQ-xxx]
-3. follow-up-issue 发 analyze prompt
-4. update-issue statusId=working 触发 agent
+2. server-side clone involved_repos（如果 ctx 有；失败 → VERIFY_ESCALATE）
+3. update-issue 把 intent issue 改名 [REQ-xxx] [ANALYZE] — <title> + tags=[analyze, REQ-xxx]
+4. follow-up-issue 发 analyze prompt
+5. update-issue statusId=working 触发 agent
 """
 from __future__ import annotations
 
@@ -19,6 +26,7 @@ from ..config import settings
 from ..prompts import render
 from ..state import Event
 from . import register, short_title
+from ._clone import clone_involved_repos_into_runner
 from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
@@ -41,7 +49,16 @@ async def start_analyze(*, body, req_id, tags, ctx):
         pod_name = await rc.ensure_runner(req_id, wait_ready=True)
         log.info("start_analyze.runner_ready", req_id=req_id, pod=pod_name)
 
-    # 2-4. BKD 调度 analyze-agent
+    # 2. server-side clone（ctx 有 involved_repos 时；直接 analyze 路径无声跳过）
+    cloned_repos, clone_rc = await clone_involved_repos_into_runner(req_id, ctx)
+    if clone_rc is not None:
+        # helper 跑过但失败 → 不 dispatch agent，直接 escalate
+        return {
+            "emit": Event.VERIFY_ESCALATE.value,
+            "reason": f"clone failed (rc={clone_rc}) for repos={cloned_repos}"[:200],
+        }
+
+    # 3-5. BKD 调度 analyze-agent
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         await bkd.update_issue(
             project_id=proj,
@@ -56,9 +73,11 @@ async def start_analyze(*, body, req_id, tags, ctx):
             project_id=proj,
             project_alias=proj,   # BKD REST 接 id 也接 alias，二者等价
             issue_id=issue_id,
+            cloned_repos=cloned_repos,
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue_id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue_id, status_id="working")
 
-    log.info("start_analyze.done", req_id=req_id, issue_id=issue_id)
-    return {"issue_id": issue_id, "req_id": req_id}
+    log.info("start_analyze.done", req_id=req_id, issue_id=issue_id,
+             cloned_repos=cloned_repos)
+    return {"issue_id": issue_id, "req_id": req_id, "cloned_repos": cloned_repos}

@@ -1,8 +1,10 @@
 """pr-ci-watch 自检（M2）：sisyphus 直接调 GitHub REST API 轮询 PR check-runs。
 
 M15：repo / pr_number 用 gh api 实时查，不读 manifest。
-repos 列表优先来自 caller（per-REQ involved_repos），fallback 到全局环境变量
-SISYPHUS_BUSINESS_REPO（兼容旧单仓 REQ）。
+REQ-clone-and-pr-ci-fallback-1777115925：repos 列表**只**来自 caller
+（per-REQ involved_repos / runner discovery）。空 → ValueError，**不**fallback
+到任何全局环境变量 —— stale env 在多 REQ / 多仓场景下注定指错仓，silent-pass
+或 false-fail，跟 sisyphus "无信号即失败" 哲学冲突。
 
 dev agent 只需 push branch + 创 PR，不用回写任何东西。
 
@@ -34,7 +36,6 @@ GH API:
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from dataclasses import dataclass
 
@@ -81,14 +82,15 @@ async def watch_pr_ci(
 
     每 tick 重新拉 head SHA：force-push 自动切新 SHA；超过 _MAX_SHA_FLIPS 次翻转 → fail。
     merged → pass；closed without merge → fail；refetch 失败 → retry 到 deadline。
-    repos 优先于 SISYPHUS_BUSINESS_REPO 环境变量（per-REQ involved_repos 优先于全局）。
+    repos 必须由 caller 显式传入（per-REQ involved_repos）；空 / None 直接
+    ValueError —— 没 fallback 到任何 process-global env，跟 sisyphus "无信号
+    即失败" 哲学一致。
     """
-    repo_list = repos or ([os.getenv("SISYPHUS_BUSINESS_REPO")] if os.getenv("SISYPHUS_BUSINESS_REPO") else [])
-    repo_list = [r for r in repo_list if r]
+    repo_list = [r for r in (repos or []) if r]
     if not repo_list:
         raise ValueError(
-            "no repos provided to watch_pr_ci (caller didn't pass repos and "
-            "SISYPHUS_BUSINESS_REPO env var not set)"
+            "no repos provided to watch_pr_ci (caller must pass per-REQ "
+            "involved_repos; no global env fallback)"
         )
 
     headers = {
