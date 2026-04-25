@@ -1,0 +1,57 @@
+capability: archive-failure
+version: "1.0"
+description: |
+  done-archive 阶段失败的细分 reason 标签。
+  watchdog 用 archive.failed synthetic event；escalate 用 ctx.archive_issue_id
+  做二次 override 覆盖 BKD session.failed webhook 路径。
+  最终 reason 标 "archive-failed" / "archive-failed-after-2-retries"
+  让 dashboard M7 04-fail-kind-distribution 能独立统计 archive 阶段崩溃。
+
+constants:
+  archive_failed_event: "archive.failed"
+  archive_failed_reason: "archive-failed"
+  archive_failed_after_retries_reason: "archive-failed-after-2-retries"
+
+modules:
+  watchdog:
+    file: orchestrator/src/orchestrator/watchdog.py
+    additions:
+      - name: _STATE_FAILURE_EVENT
+        kind: dict
+        signature: "dict[ReqState, str]"
+        semantics: |
+          state → SyntheticBody.event override.
+          ARCHIVING → "archive.failed". 未列出 state 默认 "watchdog.stuck".
+    behavior:
+      - "_check_and_escalate 构造 _SyntheticBody 时按 state 取 _STATE_FAILURE_EVENT，缺省 watchdog.stuck"
+
+  escalate:
+    file: orchestrator/src/orchestrator/actions/escalate.py
+    additions:
+      - name: archive.failed in _CANONICAL_SIGNALS
+      - name: archive-failed in _TRANSIENT_REASONS
+      - name: archive-failed-after-2-retries in _TRANSIENT_REASONS
+      - name: _is_transient(body_event="archive.failed") = True
+    behavior:
+      - id: webhook_path_override
+        when: 'body.event == "session.failed" AND body.issueId == ctx.archive_issue_id'
+        then: 'reason 强制 = "archive-failed"'
+      - id: final_reason_bumping
+        when: 'reason == "archive-failed" AND retry_count >= _MAX_AUTO_RETRY'
+        then: 'final_reason = "archive-failed-after-2-retries"'
+      - id: cas_to_escalated
+        when: 'body.event in _CANONICAL_SIGNALS (now includes archive.failed)'
+        then: '手 CAS state → ESCALATED + cleanup runner（与 session.failed/watchdog.stuck 同路径）'
+
+state_machine:
+  unchanged: true
+  rationale: |
+    复用 Event.SESSION_FAILED + (ARCHIVING, SESSION_FAILED) self-loop transition。
+    reason 细分纯走 escalate action 内部，不动 transition table 减少爆炸半径。
+
+dashboards:
+  affected:
+    - observability/queries/sisyphus/04-fail-kind-distribution.sql
+  change: |
+    无需改 SQL —— 已按 reason:* tag value group by。
+    新出现的 archive-failed / archive-failed-after-2-retries 自动多两条柱子。
