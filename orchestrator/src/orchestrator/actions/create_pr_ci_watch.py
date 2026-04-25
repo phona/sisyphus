@@ -5,13 +5,19 @@ feature flag checker_pr_ci_watch_enabled:
   False（默认）: 创建 BKD agent issue（老路，agent 用 gh CLI 轮询，报 tag）
   True: sisyphus 自己调 GitHub REST API 轮询 check-runs，emit PR_CI_PASS/FAIL/TIMEOUT
 
-M15：repo 从环境变量 SISYPHUS_BUSINESS_REPO 拿，branch 从 ctx 或默认 feat/{req_id}。
-不再读 manifest。
+repo 列表来源（M15 哲学：runner 是真理，不维护额外 metadata）：
+  1. runner pod `/workspace/source/*/` discovery（analyze-agent 已 clone 好，跟其它
+     checker 走同一条契约 —— staging_test / dev_cross_check 都遍历这个目录）
+  2. ctx.intake_finalized_intent.involved_repos（intake 阶段 runner 还没起来时的预声明）
+  3. SISYPHUS_BUSINESS_REPO env（M15 manifest 残骸，老单仓 REQ 兼容，建议下线）
 """
 from __future__ import annotations
 
+import re
+
 import structlog
 
+from .. import k8s_runner
 from ..bkd import BKDClient
 from ..checkers import pr_ci_watch as checker
 from ..config import settings
@@ -22,6 +28,9 @@ from . import register, short_title
 from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
+
+# git@github.com:owner/repo(.git) 或 https://github.com/owner/repo(.git)
+_REMOTE_RE = re.compile(r"github\.com[:/]([^/]+/[^/.]+?)(?:\.git)?$")
 
 
 @register("create_pr_ci_watch", idempotent=False)
@@ -37,14 +46,39 @@ async def create_pr_ci_watch(*, body, req_id, tags, ctx):
 
 # ── 新路：sisyphus 自检 ────────────────────────────────────────────────────
 
+async def _discover_repos_from_runner(req_id: str) -> list[str]:
+    """ls /workspace/source/*/ + git remote → ['owner/repo', ...]，失败返 []。"""
+    cmd = (
+        "for d in /workspace/source/*/; do "
+        "  [ -d \"$d/.git\" ] && git -C \"$d\" remote get-url origin 2>/dev/null; "
+        "done"
+    )
+    try:
+        rc = k8s_runner.get_controller()
+        result = await rc.exec_in_runner(req_id, cmd, timeout_sec=30)
+    except Exception as e:
+        log.warning("create_pr_ci_watch.runner_discovery_failed",
+                    req_id=req_id, error=str(e))
+        return []
+
+    repos: list[str] = []
+    for line in result.stdout.splitlines():
+        m = _REMOTE_RE.search(line.strip())
+        if m:
+            repos.append(m.group(1))
+    log.info("create_pr_ci_watch.runner_discovered", req_id=req_id, repos=repos)
+    return repos
+
+
 async def _run_checker(*, req_id: str, ctx: dict) -> dict:
     log.info("create_pr_ci_watch.checker_path", req_id=req_id)
     branch = ctx.get("branch") or f"feat/{req_id}"
 
-    # per-REQ involved_repos 优先（intake-agent 写的 finalized intent 里有），
-    # checker fallback 到全局 SISYPHUS_BUSINESS_REPO 兼容老 REQ
-    finalized = ctx.get("intake_finalized_intent") or {}
-    repos = finalized.get("involved_repos") or ctx.get("involved_repos")
+    # repo 来源优先级：runner 文件系统（M15 真理）> intake finalized > env fallback
+    repos = await _discover_repos_from_runner(req_id)
+    if not repos:
+        finalized = ctx.get("intake_finalized_intent") or {}
+        repos = finalized.get("involved_repos") or ctx.get("involved_repos")
 
     try:
         result = await checker.watch_pr_ci(
