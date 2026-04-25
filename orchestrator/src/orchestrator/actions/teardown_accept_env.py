@@ -2,7 +2,7 @@
 
 设计要点：
 - 纯 infra，不经 BKD agent（直接 sisyphus k8s_runner.exec_in_runner 调 Makefile）
-- 幂等：make ci-accept-env-down 自己要是幂等的（repo 契约）
+- 幂等：make accept-env-down 自己要是幂等的（repo 契约）
 - 失败只 warning，不阻塞状态机（防泄漏资源属于重要，但挂一个 helm uninstall 不该拖垮整个 REQ）
 - 按 ctx.accept_result 分流 emit：TEARDOWN_DONE_PASS / TEARDOWN_DONE_FAIL
 - 工作目录由 _integration_resolver 决策，与 create_accept 保持同源（self-host 回退）
@@ -23,7 +23,7 @@ log = structlog.get_logger(__name__)
 
 @register("teardown_accept_env", idempotent=True)
 async def teardown_accept_env(*, body, req_id, tags, ctx):
-    """跑 ci-accept-env-down 清 lab，然后按 accept_result emit 下一步事件。"""
+    """跑 accept-env-down 清 lab，然后按 accept_result emit 下一步事件。"""
     # accept 被 skip 时（skip_accept=true，ttpos-arch-lab 没接前的常态），
     # teardown 也跳：没真 env 可拆，也没 result:pass tag 可读 — 强行读会默认 fail
     # 误推 bugfix 链。复用 skip_accept flag，emit TEARDOWN_DONE_PASS（accept 既然跳过被
@@ -57,7 +57,7 @@ async def teardown_accept_env(*, body, req_id, tags, ctx):
             try:
                 result = await rc.exec_in_runner(
                     req_id,
-                    command=f"cd {resolved.dir} && make ci-accept-env-down",
+                    command=f"cd {resolved.dir} && make accept-env-down",
                     env={
                         "SISYPHUS_REQ_ID": req_id,
                         "SISYPHUS_STAGE": "accept-teardown",

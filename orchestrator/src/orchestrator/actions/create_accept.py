@@ -1,7 +1,7 @@
 """create_accept (v0.2): PR CI 通过后拉 lab + 派 accept-agent。
 
 v0.2 三段：
-1. env-up：sisyphus 直调 k8s_runner.exec_in_runner 跑 `make ci-accept-env-up`，
+1. env-up：sisyphus 直调 k8s_runner.exec_in_runner 跑 `make accept-env-up`，
    工作目录由 `_integration_resolver.resolve_integration_dir` 决策（优先
    /workspace/integration/<name>，回退到 /workspace/source/<name> 单仓 self-host），
    拿 stdout 尾行 JSON 的 endpoint
@@ -68,7 +68,7 @@ async def create_accept(*, body, req_id, tags, ctx):
     try:
         result = await rc.exec_in_runner(
             req_id,
-            command=f"cd {integration_dir} && make ci-accept-env-up",
+            command=f"cd {integration_dir} && make accept-env-up",
             env=exec_env,
             timeout_sec=600,   # 10 min 应该够 helm install + wait ready
         )

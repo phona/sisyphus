@@ -40,7 +40,7 @@ env:
   skip_dev: false
   skip_staging_test: false
   skip_pr_ci: false
-  skip_accept: false             # self-dogfood 接通：deploy/accept-compose.yml + Makefile ci-accept-env-up（REQ-self-accept-stage-1777121797）
+  skip_accept: false             # self-dogfood 接通：deploy/accept-compose.yml + Makefile accept-env-up（REQ-self-accept-stage-1777121797）
   skip_reviewer: false
   skip_archive: false
   test_mode: false

@@ -13,7 +13,7 @@
 | **integration repo** | `phona/ttpos-arch-lab` | 提供 ephemeral lab env 的 helm chart / 部署脚本 |
 
 source repo 提供 **ttpos-ci 标准 target**（`ci-lint` / `ci-unit-test` / `ci-integration-test`），
-integration repo 提供 **环境 target**（`ci-accept-env-up` / `ci-accept-env-down`）。
+integration repo 提供 **环境 target**（`accept-env-up` / `accept-env-down`）。
 
 > M15 砍 manifest：sisyphus 不再有"集中式 IDL 描述本 REQ 涉及哪些 repo"。
 > 涉及的 repo 信息直接写在 BKD intent issue description 里（人或 analyze-agent 负责），
@@ -80,18 +80,21 @@ shell 不展开 flag，等价全量。
 
 | target | 谁调 | 在哪跑 | 期望 |
 |---|---|---|---|
-| `make ci-accept-env-up` | sisyphus pre-accept（`actions/create_accept.py`） | runner pod，`cd /workspace/integration/<repo-name> && make ci-accept-env-up` | 1) 退码 0 = lab 起来；2) **stdout 最后一行**是 endpoint JSON（见 §3） |
-| `make ci-accept-env-down` | `actions/teardown_accept_env.py` | 同上 | best-effort，幂等；失败只 warning 不阻塞状态机 |
+| `make accept-env-up` | sisyphus pre-accept（`actions/create_accept.py`） | runner pod，`cd /workspace/integration/<repo-name> && make accept-env-up` | 1) 退码 0 = lab 起来；2) **stdout 最后一行**是 endpoint JSON（见 §3） |
+| `make accept-env-down` | `actions/teardown_accept_env.py` | 同上 | best-effort，幂等；失败只 warning 不阻塞状态机 |
 
-**幂等性硬要求**：ci-accept-env-up / ci-accept-env-down 必须可重复调（重试或 watchdog 路径会再 cleanup 一次）。
+**幂等性硬要求**：accept-env-up / accept-env-down 必须可重复调（重试或 watchdog 路径会再 cleanup 一次）。
 
-> **历史命名**：早期契约用 `accept-up` / `accept-down`，已统一为 ttpos-ci 风格的 `ci-` 前缀。
-> 老 integration repo 接入时记得改 target 名 —— sisyphus 代码（`create_accept.py` /
-> `teardown_accept_env.py`）只调 `ci-accept-env-up` / `ci-accept-env-down`，旧名不再触发。
+> **历史命名**：早期契约依次叫过 `accept-up` / `accept-down`（M14 之前）和
+> `ci-accept-env-up` / `ci-accept-env-down`（REQ-accept-contract-docs-1777121224）。
+> 当前唯一支持名为 `accept-env-up` / `accept-env-down`（REQ-rename-accept-targets-1777124774，
+> 去掉了误导性的 `ci-` 前缀 —— accept env 不在 PR-CI 热路径上）。
+> 老 integration repo 接入时改 target 名到这套就行 —— sisyphus 代码（`create_accept.py` /
+> `teardown_accept_env.py`）只调 `accept-env-up` / `accept-env-down`，前两代旧名不再触发。
 
-## 3. ci-accept-env-up 的 stdout JSON 契约
+## 3. accept-env-up 的 stdout JSON 契约
 
-`make ci-accept-env-up` 完成后，**stdout 最后一行**必须是：
+`make accept-env-up` 完成后，**stdout 最后一行**必须是：
 
 ```json
 {"endpoint": "http://accept-req-29.svc.cluster.local:8080", "namespace": "accept-req-29"}
@@ -108,7 +111,7 @@ shell 不展开 flag，等价全量。
 实现建议（让 Makefile 容易满足）：
 
 ```makefile
-ci-accept-env-up:
+accept-env-up:
 	@helm upgrade --install lab charts/accept-lab \
 	    --namespace $(SISYPHUS_NAMESPACE) --create-namespace \
 	    --wait --timeout 5m
@@ -154,12 +157,12 @@ ci-build:
 ### 4.2 integration repo (helm-based 例)
 
 ```makefile
-.PHONY: ci-accept-env-up ci-accept-env-down
+.PHONY: accept-env-up accept-env-down
 
 # 必须由 sisyphus 注入 SISYPHUS_NAMESPACE；防御性兜底
 SISYPHUS_NAMESPACE ?= accept-default
 
-ci-accept-env-up:
+accept-env-up:
 	helm upgrade --install lab charts/accept-lab \
 	    --namespace $(SISYPHUS_NAMESPACE) --create-namespace \
 	    --wait --timeout 5m
@@ -167,37 +170,37 @@ ci-accept-env-up:
 	@printf '{"endpoint": "http://lab.%s.svc.cluster.local:8080", "namespace": "%s"}\n' \
 	    "$(SISYPHUS_NAMESPACE)" "$(SISYPHUS_NAMESPACE)"
 
-ci-accept-env-down:
+accept-env-down:
 	-helm uninstall lab --namespace $(SISYPHUS_NAMESPACE) || true
 	-kubectl delete namespace $(SISYPHUS_NAMESPACE) --ignore-not-found
 ```
 
-注意 ci-accept-env-down 用 `-` 前缀让 make 忽略错误（best-effort 语义）；删 namespace 也带 `--ignore-not-found`。
+注意 accept-env-down 用 `-` 前缀让 make 忽略错误（best-effort 语义）；删 namespace 也带 `--ignore-not-found`。
 
 ### 4.2.2 integration repo (docker-compose 例)
 
 不所有团队都在 K3s 部 lab —— 用 docker compose stack 跑端到端的 integration repo
-按下面这份模板抄。约定跟 helm 那份一样：`ci-accept-env-up` 起 stack 并在 stdout
-**最后一行**吐 endpoint JSON；`ci-accept-env-down` 幂等清理。
+按下面这份模板抄。约定跟 helm 那份一样：`accept-env-up` 起 stack 并在 stdout
+**最后一行**吐 endpoint JSON；`accept-env-down` 幂等清理。
 
 ```makefile
-.PHONY: ci-accept-env-up ci-accept-env-down
+.PHONY: accept-env-up accept-env-down
 
 # 必须由 sisyphus 注入 SISYPHUS_NAMESPACE；防御性兜底
 SISYPHUS_NAMESPACE ?= accept-default
 COMPOSE_PROJECT_NAME := $(SISYPHUS_NAMESPACE)
 COMPOSE_FILE ?= docker-compose.accept.yml
 
-ci-accept-env-up:
+accept-env-up:
 	docker compose -p $(COMPOSE_PROJECT_NAME) -f $(COMPOSE_FILE) up -d --wait
 	@port=$$(docker compose -p $(COMPOSE_PROJECT_NAME) -f $(COMPOSE_FILE) port lab 8080 | awk -F: 'END{print $$NF}'); \
 	if [ -z "$$port" ]; then \
-	    echo >&2 "ci-accept-env-up: cannot resolve published port for service 'lab' :8080 in compose project $(COMPOSE_PROJECT_NAME)"; \
+	    echo >&2 "accept-env-up: cannot resolve published port for service 'lab' :8080 in compose project $(COMPOSE_PROJECT_NAME)"; \
 	    exit 1; \
 	fi; \
 	printf '{"endpoint": "http://localhost:%s", "namespace": "%s"}\n' "$$port" "$(SISYPHUS_NAMESPACE)"
 
-ci-accept-env-down:
+accept-env-down:
 	-docker compose -p $(COMPOSE_PROJECT_NAME) -f $(COMPOSE_FILE) down --volumes --remove-orphans || true
 ```
 
@@ -210,7 +213,7 @@ ci-accept-env-down:
   转 healthy（compose v2.20+），等价 helm `--wait`。service 必须在 compose 文件里
   声明 `healthcheck`，否则 `--wait` 仅等容器 running，跟 lab 真就绪是两回事。
 - **`down --volumes`**：拆环境时一并清 named volumes，**避免 REQ 间 stale 数据库
-  影响下一次 `ci-accept-env-up`**。如有真要保留的卷（trace 数据 / debug 镜像），改为
+  影响下一次 `accept-env-up`**。如有真要保留的卷（trace 数据 / debug 镜像），改为
   `--remove-orphans` 不带 `--volumes`，自己另收。
 - **service 名硬约定 `lab`**：`docker compose port lab 8080` 假设业务 stack 里有
   名为 `lab` 的 service 暴露 8080。如果业务用别的名字，在模板里相应改。
@@ -238,7 +241,7 @@ orchestrator 在 `kubectl exec` 进 runner pod 跑命令时注入：
 | env | 何时有 | 含义 / 用法 |
 |---|---|---|
 | `SISYPHUS_REQ_ID` | 所有 stage | 形如 `REQ-29`，业务 Makefile 拼 namespace / 标签 |
-| `SISYPHUS_STAGE` | ci-accept-env-up / ci-accept-env-down | `accept-env-up` / `accept-teardown`，给 Makefile 区分阶段 |
+| `SISYPHUS_STAGE` | accept-env-up / accept-env-down | `accept-env-up` / `accept-teardown`，给 Makefile 区分阶段 |
 | `SISYPHUS_NAMESPACE` | accept 阶段 | `accept-<req-id-lowercase>`，专给 helm `-n` 用 |
 | `SISYPHUS_RUNNER=1` | runner 镜像内置 | 让脚本能判"我在 sisyphus runner 里" |
 
@@ -281,7 +284,7 @@ router.py 完全靠 tag 做路由 —— **issue title 不用作判断**。
 1. **staging-test 总是 fail** → `kubectl exec runner-<REQ> -- bash -c "cd /workspace/source/<repo> && make ci-unit-test && make ci-integration-test"` 手跑一遍
 2. **spec-lint 总是 fail** → `kubectl exec runner-<REQ> -- bash -c "for r in /workspace/source/*; do [ -d \$r/openspec/changes/<REQ> ] && (cd \$r && openspec validate openspec/changes/<REQ>); done"` 手跑
 3. **pr-ci 永远 timeout** → 查 `feat/REQ-x` 分支真有没有 PR、GHA 在 PR 上确实跑了
-4. **ci-accept-env-up 失败** → 看 stdout 是不是缺最后一行 JSON、`SISYPHUS_NAMESPACE` 是不是被 Makefile 用了
+4. **accept-env-up 失败** → 看 stdout 是不是缺最后一行 JSON、`SISYPHUS_NAMESPACE` 是不是被 Makefile 用了
 5. **agent 写 tag 没被路由** → 查 `router.derive_event` 对你的 tag 组合返不返事件
 6. **多仓 checker 抱怨某仓没找到** → 看 `/workspace/source/<basename>/` 目录在不在；
    `sisyphus-clone-repos.sh` 调过吗；basename 跟 BKD intent description 列的是否一致

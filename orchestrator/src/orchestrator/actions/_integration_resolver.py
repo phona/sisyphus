@@ -1,19 +1,19 @@
-"""Resolve where `make ci-accept-env-{up,down}` should run inside the runner pod.
+"""Resolve where `make accept-env-{up,down}` should run inside the runner pod.
 
 Background (REQ-self-accept-stage-1777121797): the historical accept stage assumed
 a separate integration repo cloned into `/workspace/integration/<basename>` (the
 `phona/ttpos-arch-lab` model). Sisyphus self-dogfood — and any single-repo
 deployment — has no such standalone integration repo: the source repo IS the
-integration repo (top-level Makefile carries `ci-accept-env-up:`).
+integration repo (top-level Makefile carries `accept-env-up:`).
 
 This helper centralizes resolution so create_accept and teardown_accept_env stay
 in sync:
 
-    1. If any /workspace/integration/<name>/Makefile carries `ci-accept-env-up:`
+    1. If any /workspace/integration/<name>/Makefile carries `accept-env-up:`
        → use it (multi-repo / external-integration-repo path; preserves prior
        behavior).
     2. Else if EXACTLY ONE /workspace/source/<name>/Makefile carries
-       `ci-accept-env-up:` → use it (self-host fallback).
+       `accept-env-up:` → use it (self-host fallback).
     3. Else → return ResolveResult(dir=None, reason=...) so the caller can
        emit a friendly accept-env-up.fail (no shell glob explosion on empty
        /workspace/integration/*).
@@ -32,20 +32,20 @@ log = structlog.get_logger(__name__)
 
 
 # 单 shell 调用扫两个 root，每个候选 dir 一行，前缀 I:/S: 标识来源。
-# grep -E '^ci-accept-env-up:' 严格匹配开头（避免 doc 注释里出现的字符串误匹配）。
+# grep -E '^accept-env-up:' 严格匹配开头（避免 doc 注释里出现的字符串误匹配）。
 _SCAN_SCRIPT = r"""
 set +e
 for d in /workspace/integration/*/; do
   [ -d "$d" ] || continue
   [ -f "${d}Makefile" ] || continue
-  if grep -qE '^ci-accept-env-up:' "${d}Makefile" 2>/dev/null; then
+  if grep -qE '^accept-env-up:' "${d}Makefile" 2>/dev/null; then
     printf 'I:%s\n' "${d%/}"
   fi
 done
 for d in /workspace/source/*/; do
   [ -d "$d" ] || continue
   [ -f "${d}Makefile" ] || continue
-  if grep -qE '^ci-accept-env-up:' "${d}Makefile" 2>/dev/null; then
+  if grep -qE '^accept-env-up:' "${d}Makefile" 2>/dev/null; then
     printf 'S:%s\n' "${d%/}"
   fi
 done
@@ -57,7 +57,7 @@ exit 0
 class ResolveResult:
     """Result of resolving the integration directory.
 
-    `dir` is the absolute runner-pod path to cd into for `make ci-accept-env-*`,
+    `dir` is the absolute runner-pod path to cd into for `make accept-env-*`,
     or None if no suitable directory could be picked. When None, `reason` carries
     a human-readable description for the caller to log + propagate.
     """
@@ -89,20 +89,20 @@ def _decide(integ: list[str], src: list[str]) -> ResolveResult:
         return ResolveResult(
             dir=None,
             reason="no integration dir resolvable: /workspace/integration/* and "
-            "/workspace/source/*/Makefile both lack ci-accept-env-up target",
+            "/workspace/source/*/Makefile both lack accept-env-up target",
         )
     return ResolveResult(
         dir=None,
         reason=(
             f"no integration dir resolvable: multiple source candidates carry "
-            f"ci-accept-env-up target ({', '.join(src)}); refuse to pick one — "
+            f"accept-env-up target ({', '.join(src)}); refuse to pick one — "
             "stage an explicit integration repo under /workspace/integration/"
         ),
     )
 
 
 async def resolve_integration_dir(rc, req_id: str) -> ResolveResult:
-    """Discover where to run `make ci-accept-env-{up,down}` for this REQ.
+    """Discover where to run `make accept-env-{up,down}` for this REQ.
 
     `rc` is a k8s_runner.RunnerController (or test double exposing
     `exec_in_runner`). The function performs one `kubectl exec` round-trip —

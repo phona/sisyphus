@@ -4,8 +4,8 @@
 # 跑 accept 阶段用。docker-compose 跑在 runner pod 的 DinD 里。
 #
 # 用法：
-#   ../scripts/sisyphus-accept-up-compose.sh    # 由 Makefile ci-accept-env-up 调
-#   ../scripts/sisyphus-accept-down-compose.sh  # 由 Makefile ci-accept-env-down 调
+#   ../scripts/sisyphus-accept-up-compose.sh    # 由 Makefile accept-env-up 调
+#   ../scripts/sisyphus-accept-down-compose.sh  # 由 Makefile accept-env-down 调
 #
 # 环境变量：
 #   SISYPHUS_NAMESPACE   - compose project name (默认 accept-default)

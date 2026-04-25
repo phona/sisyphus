@@ -4,7 +4,7 @@
 # 在 runner pod 的 DinD 里跑：build orchestrator image + compose up postgres + orchestrator，
 # 等 /healthz 返 200，然后 stdout **末行** emit endpoint JSON 给 create_accept.py 解析。
 #
-# 必须从 sisyphus 仓 root 调（`cd /workspace/source/sisyphus && make ci-accept-env-up`）
+# 必须从 sisyphus 仓 root 调（`cd /workspace/source/sisyphus && make accept-env-up`）
 # 因为 deploy/accept-compose.yml 的 build context 是相对路径 `../orchestrator`。
 #
 # 环境变量：
