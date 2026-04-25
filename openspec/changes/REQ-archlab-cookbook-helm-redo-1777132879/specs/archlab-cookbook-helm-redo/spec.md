@@ -4,9 +4,7 @@
 
 ### Requirement: cookbook MUST 改用 helm chart 路径描述 accept-env-up 五步 recipe
 
-The sisyphus repo's cookbook document at `docs/cookbook/ttpos-arch-lab-accept-env.md`
-SHALL be rewritten so that the five-step `accept-env-up` recipe uses the helm chart
-path: (1) `helm upgrade --install` for the backend chart with `--wait --timeout 5m`;
+The sisyphus repo's cookbook document at `docs/cookbook/ttpos-arch-lab-accept-env.md` SHALL be rewritten so that the five-step `accept-env-up` recipe uses the helm chart path: (1) `helm upgrade --install` for the backend chart with `--wait --timeout 5m`;
 (2) `helm upgrade --install` for the emulator chart followed by `kubectl exec`-based
 `boot_completed` polling; (3) `flutter build apk --release` with
 `--dart-define=API_BASE_URL` set to the cluster-internal DNS form
