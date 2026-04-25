@@ -115,6 +115,13 @@ class Settings(BaseSettings):
     # 默认 3 × 120s = 6min，覆盖 K3s 节点偶发慢启动；生产可调更高。
     runner_ready_attempts: int = 3
 
+    # ─── accept env GC ────────────────────────────────────────────────────
+    # 周期清理孤儿 accept-* namespace（teardown_accept_env best-effort 失败时的补位）。
+    # 不调 helm uninstall（需要 ClusterRole），直接 delete namespace cascade 清资源。
+    # RBAC 403 时进程级禁用，同 runner_gc 磁盘检测处理方式。
+    # interval 0 = 不启动（dev / 无 K8s 环境）。
+    accept_env_gc_interval_sec: int = 900    # 15 min，同 runner_gc_interval_sec 默认
+
     # ─── agent model 控制 ─────────────────────────────────────────────────
     # sisyphus 起的 agent 用哪个模型（verifier / fixer / accept / pr_ci_watch /
     # done_archive / staging_test）。None = 用 BKD per-engine 默认（opus）。

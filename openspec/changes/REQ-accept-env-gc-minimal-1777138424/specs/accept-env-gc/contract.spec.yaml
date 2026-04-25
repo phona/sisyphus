@@ -1,0 +1,78 @@
+capability: accept-env-gc
+version: "1.0"
+description: |
+  Background GC task that cleans up orphaned Kubernetes namespaces created by
+  accept-env-up (via make accept-env-up in integration/source repos).
+
+  teardown_accept_env runs make accept-env-down best-effort; failures are only
+  WARNING and do not block the state machine. This GC compensates by periodically
+  listing accept-req-* namespaces and deleting those belonging to terminal REQs.
+
+  "No helm RBAC": deletion is done via kubernetes CoreV1Api.delete_namespace
+  (cascades all resources inside), not helm uninstall. Requires only namespace
+  delete permission, not cluster-scoped helm list.
+
+settings:
+  accept_env_gc_interval_sec:
+    module: orchestrator.config
+    type: int
+    default: 900
+    env: SISYPHUS_ACCEPT_ENV_GC_INTERVAL_SEC
+    semantics: |
+      GC scan interval in seconds. 0 = disabled (dev/test environments without K8s).
+      Default 900 matches runner_gc_interval_sec default.
+
+  pvc_retain_on_escalate_days:
+    reused: true
+    semantics: |
+      Same retention window used by runner_gc for escalated REQs.
+      done → immediate GC; escalated → wait retention before GC.
+
+state_invariants:
+  ns_rbac_disabled_flag:
+    name: _NS_RBAC_DISABLED
+    module: orchestrator.accept_env_gc
+    type: bool
+    initial: false
+    transitions:
+      - "false → true on first ApiException(status=403) raised by list_namespace or delete_namespace"
+    persistence: "in-memory only; reset on process restart (intended)"
+    rationale: |
+      Mirrors runner_gc._DISK_CHECK_DISABLED pattern. ServiceAccount may lack
+      cluster-scoped namespaces:list. Permanent disablement avoids repeated
+      403 noise; single INFO log preserves operator grep-ability.
+
+namespace_pattern:
+  prefix: "accept-req-"
+  derivation: "accept-{req_id.lower()} where req_id starts with REQ-"
+  example: "accept-req-accept-env-gc-minimal-1777138424"
+  extraction: |
+    ns_name.startswith("accept-") AND ns_name[len("accept-"):].startswith("req-")
+    → req_lower = ns_name[len("accept-"):]
+    → match against {r.req_id.lower() for r in stale_rows}
+
+retention_policy:
+  done: "immediate GC (same as runner_gc)"
+  escalated: "GC only after pvc_retain_on_escalate_days elapsed since updated_at"
+  inflight: "never GC"
+
+log_events:
+  accept_env_gc_rbac_denied:
+    level: info
+    when: "ApiException(status=403) from list_namespace or delete_namespace"
+    emitted_at_most: "once per process lifetime (_NS_RBAC_DISABLED flag)"
+
+  accept_env_gc_ns_deleted:
+    level: info
+    when: "namespace successfully deleted"
+    fields: [namespace, req_lower]
+
+  accept_env_gc_swept:
+    level: info
+    when: "at least one namespace cleaned in a gc_once pass"
+    fields: [count, namespaces]
+
+  accept_env_gc_delete_failed:
+    level: warning
+    when: "delete_namespace raises non-404/403 ApiException"
+    fields: [namespace, error, status]
