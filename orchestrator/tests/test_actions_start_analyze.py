@@ -261,3 +261,214 @@ async def test_clone_helper_filters_non_string_repos(monkeypatch):
     repos, rc = await _clone.clone_involved_repos_into_runner("REQ-X", ctx)
     assert repos == ["phona/repo-a", "phona/repo-b"]
     assert rc is None
+
+
+# ── REQ-clone-fallback-direct-analyze-1777119520: multi-layer fallback ────
+
+@pytest.mark.asyncio
+async def test_clone_helper_uses_repo_tags_when_ctx_empty(monkeypatch):
+    """ctx 没 involved_repos，但 BKD tags 含 `repo:<org>/<name>` → 解析后 clone。"""
+    exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
+
+    class FakeRC:
+        exec_in_runner = exec_fn
+
+    monkeypatch.setattr(_clone.k8s_runner, "get_controller", lambda: FakeRC())
+
+    repos, rc = await _clone.clone_involved_repos_into_runner(
+        "REQ-X",
+        ctx={"intent_title": "direct analyze entry"},
+        tags=["analyze", "REQ-X", "repo:phona/foo", "repo:ZonEaseTech/bar"],
+    )
+    assert repos == ["phona/foo", "ZonEaseTech/bar"]
+    assert rc is None
+    cmd = exec_fn.await_args.args[1]
+    assert "phona/foo" in cmd
+    assert "ZonEaseTech/bar" in cmd
+
+
+@pytest.mark.asyncio
+async def test_clone_helper_uses_default_repos_when_ctx_and_tags_empty(monkeypatch):
+    """ctx + tags 都没 involved_repos → settings.default_involved_repos 兜底。"""
+    exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
+
+    class FakeRC:
+        exec_in_runner = exec_fn
+
+    monkeypatch.setattr(_clone.k8s_runner, "get_controller", lambda: FakeRC())
+
+    repos, rc = await _clone.clone_involved_repos_into_runner(
+        "REQ-X",
+        ctx={"intent_title": "direct analyze, no repo tag"},
+        tags=["analyze", "REQ-X"],
+        default_repos=["phona/sisyphus"],
+    )
+    assert repos == ["phona/sisyphus"]
+    assert rc is None
+
+
+@pytest.mark.asyncio
+async def test_clone_helper_returns_none_when_all_layers_empty(monkeypatch):
+    """ctx + tags + default_repos 全空 → (None, None)，caller 跳过。"""
+    exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
+
+    class FakeRC:
+        exec_in_runner = exec_fn
+
+    monkeypatch.setattr(_clone.k8s_runner, "get_controller", lambda: FakeRC())
+
+    repos, rc = await _clone.clone_involved_repos_into_runner(
+        "REQ-X", ctx={"intent_title": "no repos anywhere"},
+        tags=["analyze"], default_repos=[],
+    )
+    assert repos is None
+    assert rc is None
+    exec_fn.assert_not_awaited()
+
+
+def test_resolve_repos_priority_order():
+    """L1 ctx.intake_finalized_intent > L2 ctx.involved_repos > L3 tags.repo > L4 default。"""
+    # L1 wins
+    repos, src = _clone.resolve_repos(
+        {"intake_finalized_intent": {"involved_repos": ["L1/x"]},
+         "involved_repos": ["L2/x"]},
+        tags=["repo:L3/x"],
+        default_repos=["L4/x"],
+    )
+    assert repos == ["L1/x"]
+    assert src == "ctx.intake_finalized_intent.involved_repos"
+
+    # L1 missing → L2 wins
+    repos, src = _clone.resolve_repos(
+        {"involved_repos": ["L2/x"]},
+        tags=["repo:L3/x"],
+        default_repos=["L4/x"],
+    )
+    assert repos == ["L2/x"]
+    assert src == "ctx.involved_repos"
+
+    # L1+L2 missing → L3 (tags) wins
+    repos, src = _clone.resolve_repos(
+        {"intent_title": "no involved"},
+        tags=["repo:L3/x", "analyze"],
+        default_repos=["L4/x"],
+    )
+    assert repos == ["L3/x"]
+    assert src == "tags.repo"
+
+    # L1+L2+L3 missing → L4 (settings.default) wins
+    repos, src = _clone.resolve_repos(
+        {}, tags=["analyze"], default_repos=["L4/x", "L4/y"],
+    )
+    assert repos == ["L4/x", "L4/y"]
+    assert src == "settings.default_involved_repos"
+
+    # all empty → ([], "none")
+    repos, src = _clone.resolve_repos({}, tags=[], default_repos=[])
+    assert repos == []
+    assert src == "none"
+
+
+def test_resolve_repos_skips_empty_layers():
+    """空 list / 非 list / 含非字符串项的 layer 视作 miss，继续往下找。"""
+    # L1 是空 list → fall through to L2
+    repos, src = _clone.resolve_repos(
+        {"intake_finalized_intent": {"involved_repos": []},
+         "involved_repos": ["fallback/wins"]},
+    )
+    assert repos == ["fallback/wins"]
+    assert src == "ctx.involved_repos"
+
+    # L1 非 list（agent 写错 schema） → fall through
+    repos, src = _clone.resolve_repos(
+        {"intake_finalized_intent": {"involved_repos": "not-a-list"},
+         "involved_repos": ["fallback/wins"]},
+    )
+    assert repos == ["fallback/wins"]
+    assert src == "ctx.involved_repos"
+
+
+def test_extract_repo_tags_validates_slug():
+    """`repo:<org>/<name>` 形式合法的 tag 才算数；非法 slug + 非 repo: 前缀全过滤。"""
+    tags = [
+        "analyze", "REQ-X", "round-2",                # 不是 repo: 前缀
+        "repo:phona/sisyphus",                        # OK
+        "repo:Zone-Ease_Tech/foo",                    # OK（org/repo 字符集）
+        "repo:invalid org/name",                      # 非法 slug（含空格）
+        "repo:/missing-org",                          # 非法 slug
+        "repo:no-slash-here",                         # 非法 slug
+        "repo:phona/sisyphus",                        # 重复，去重
+        "repo:phona/repo-with.dots_and-dash",         # OK
+    ]
+    out = _clone._extract_repo_tags(tags)
+    assert out == [
+        "phona/sisyphus",
+        "phona/repo-with.dots_and-dash",
+    ]
+
+
+def test_extract_repo_tags_handles_none_and_non_string():
+    assert _clone._extract_repo_tags(None) == []
+    assert _clone._extract_repo_tags([]) == []
+    # 非字符串项跳过，不抛
+    assert _clone._extract_repo_tags(["repo:phona/x", 42, None, "repo:phona/y"]) == [
+        "phona/x", "phona/y",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_start_analyze_passes_repo_tags_and_default_to_clone(monkeypatch):
+    """直接 analyze 入口：ctx 没 involved，但 tags 带 `repo:`，sisyphus 替 clone。"""
+    exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
+    _patch_runner(monkeypatch, exec_fn=exec_fn)
+    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_analyze)
+
+    rv = await start_analyze.start_analyze(
+        body=_make_body(), req_id="REQ-X",
+        tags=["intent:analyze", "repo:phona/sisyphus"],
+        ctx={"intent_title": "direct analyze entry"},
+    )
+    exec_fn.assert_awaited_once()
+    cmd = exec_fn.await_args.args[1]
+    assert "phona/sisyphus" in cmd
+    follow_up.assert_awaited_once()
+    assert rv["cloned_repos"] == ["phona/sisyphus"]
+    assert "emit" not in rv
+
+
+@pytest.mark.asyncio
+async def test_start_analyze_uses_settings_default_when_no_ctx_no_tags(monkeypatch):
+    """直接 analyze 入口：ctx 空 + tags 没 repo:，settings.default_involved_repos 兜底。"""
+    exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
+    _patch_runner(monkeypatch, exec_fn=exec_fn)
+    _patch_bkd_client(monkeypatch, target_module=start_analyze)
+    monkeypatch.setattr(start_analyze.settings, "default_involved_repos",
+                        ["phona/sisyphus"])
+
+    rv = await start_analyze.start_analyze(
+        body=_make_body(), req_id="REQ-X",
+        tags=["intent:analyze"],
+        ctx={"intent_title": "single-repo dogfood"},
+    )
+    exec_fn.assert_awaited_once()
+    cmd = exec_fn.await_args.args[1]
+    assert "phona/sisyphus" in cmd
+    assert rv["cloned_repos"] == ["phona/sisyphus"]
+
+
+@pytest.mark.asyncio
+async def test_start_analyze_skip_remains_when_all_layers_empty(monkeypatch):
+    """ctx + tags + settings.default 全空 → 沿用旧 fallback，不调 helper，agent 自己 clone。"""
+    exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
+    _patch_runner(monkeypatch, exec_fn=exec_fn)
+    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_analyze)
+    monkeypatch.setattr(start_analyze.settings, "default_involved_repos", [])
+
+    rv = await start_analyze.start_analyze(
+        body=_make_body(), req_id="REQ-X",
+        tags=["intent:analyze"],
+        ctx={"intent_title": "no repos anywhere"},
+    )
+    exec_fn.assert_not_awaited()
+    follow_up.assert_awaited_once()
+    assert rv["cloned_repos"] is None

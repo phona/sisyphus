@@ -1,0 +1,92 @@
+capability: multi-layer-involved-repos-fallback
+version: "1.0"
+description: |
+  4-layer fallback for resolving the involved_repos list that the
+  server-side clone helper passes to /opt/sisyphus/scripts/sisyphus-clone-repos.sh
+  inside the per-REQ runner pod. Adds two new layers (BKD `repo:<org>/<name>`
+  tags and a settings-level default) on top of the original two ctx-based
+  layers, fixing the direct-analyze entry path where ctx is empty (no intake).
+
+api:
+  module: orchestrator.actions._clone
+
+  resolve_repos:
+    signature: |
+      resolve_repos(
+          ctx: dict | None,
+          *,
+          tags: Iterable[str] | None = None,
+          default_repos: Iterable[str] | None = None,
+      ) -> tuple[list[str], str]
+    returns:
+      repos: ordered, deduplicated list of `org/repo` slugs
+      source_label: one of
+        - "ctx.intake_finalized_intent.involved_repos"
+        - "ctx.involved_repos"
+        - "tags.repo"
+        - "settings.default_involved_repos"
+        - "none"  # all layers empty
+    layer_priority:
+      - L1: ctx["intake_finalized_intent"]["involved_repos"]
+      - L2: ctx["involved_repos"]
+      - L3: tags filtered by prefix `repo:` + slug regex
+      - L4: default_repos (typically settings.default_involved_repos)
+
+  _extract_repo_tags:
+    signature: |
+      _extract_repo_tags(tags: Iterable[str] | None) -> list[str]
+    behavior:
+      - drop tags whose first 5 chars != "repo:"
+      - validate the slug after `repo:` against
+        ^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]*$
+      - log "clone.invalid_repo_tag" for `repo:` tags that fail the regex
+      - tolerate non-string entries in the iterable without raising
+      - dedup preserving first-occurrence order
+
+  clone_involved_repos_into_runner:
+    signature: |
+      async clone_involved_repos_into_runner(
+          req_id: str,
+          ctx: dict | None,
+          *,
+          tags: Iterable[str] | None = None,
+          default_repos: Iterable[str] | None = None,
+      ) -> tuple[list[str] | None, int | None]
+    return_modes:
+      "(None, None)":
+        - all 4 layers yield empty (no repos to clone)
+        - OR k8s_runner.get_controller() raised RuntimeError (dev env)
+      "(repos, None)":
+        helper exit_code == 0 (success)
+      "(repos, exit_code)":
+        helper exit_code != 0 (caller MUST emit VERIFY_ESCALATE)
+    log_fields:
+      - source: which layer matched (added in this REQ — observability)
+
+config:
+  setting:
+    name: default_involved_repos
+    type: list[str]
+    default: []
+    env: SISYPHUS_DEFAULT_INVOLVED_REPOS
+    pydantic_field: Field(default_factory=list)
+    parse_forms:
+      - csv: "phona/foo,phona/bar"
+      - json: '["phona/foo","phona/bar"]'
+    purpose: |
+      Last-resort fallback (L4) for resolve_repos. Default empty so
+      multi-repo deployments are not silently forced onto a wrong default;
+      single-repo deployments (sisyphus self-dogfood, single-repo lab) opt in.
+
+callers:
+  - module: orchestrator.actions.start_analyze
+    function: start_analyze
+    must_pass: ["tags=tags", "default_repos=settings.default_involved_repos"]
+  - module: orchestrator.actions.start_analyze_with_finalized_intent
+    function: start_analyze_with_finalized_intent
+    must_pass: ["tags=tags", "default_repos=settings.default_involved_repos"]
+
+invariants:
+  - _clone.py source MUST NOT contain the literals `intent_title`, `get_issue`, `description` (no free-text inference of repo slugs; enforced by contract test)
+  - resolve_repos is a pure function (no I/O); only clone_involved_repos_into_runner does the kubectl exec
+  - existing 2-layer behavior (intake / explicit ctx) is preserved bit-for-bit; new layers extend, never replace
