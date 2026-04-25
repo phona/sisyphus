@@ -35,6 +35,8 @@ async def done_archive(*, body, req_id, tags, ctx):
             "done_archive.md.j2",
             req_id=req_id, branch=branch, workdir=workdir,
             accept_issue_id=accept_issue_id,
+            project_id=proj,
+            project_alias=proj,
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")

@@ -99,6 +99,8 @@ async def invoke_verifier(
         artifact_paths=artifact_paths or [],
         stderr_tail=stderr_tail or "",
         history=history or [],
+        project_id=project_id,
+        project_alias=project_id,
     )
 
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
@@ -244,6 +246,8 @@ async def start_fixer(*, body, req_id, tags, ctx):
             source_issue_id=ctx.get("verifier_issue_id", ""),
             branch=branch,
             workdir=f"{settings.workdir_root}/feat-{req_id}",
+            project_id=proj,
+            project_alias=proj,
         )
         # 把 verifier 的 scope / reason 叠进 prompt 作为上下文
         if scope or reason:

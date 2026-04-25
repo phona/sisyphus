@@ -116,6 +116,8 @@ async def create_accept(*, body, req_id, tags, ctx):
             namespace=namespace,
             source_issue_id=source_issue_id,
             accept_env=accept_env,
+            project_id=proj,
+            project_alias=proj,
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")

@@ -110,6 +110,8 @@ async def _dispatch_bkd_agent(*, body, req_id: str, ctx: dict) -> dict:
             "pr_ci_watch.md.j2",
             req_id=req_id,
             source_issue_id=source_issue_id,
+            project_id=proj,
+            project_alias=proj,
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")
