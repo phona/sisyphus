@@ -13,6 +13,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 import structlog
+from kubernetes.client import ApiException
 
 from . import k8s_runner
 from .config import settings
@@ -23,6 +24,11 @@ log = structlog.get_logger(__name__)
 
 # 状态机里"终态"和"进行中"的区分
 _TERMINAL_STATES = {"done", "escalated"}
+
+# 进程级 flag：node_disk_usage_ratio 拿到 403（RBAC 缺 nodes:list）时置 True，
+# 后续 GC tick 直接 short-circuit 跳过 disk-check，不再发请求/打日志。
+# 重启 orchestrator 会重新探测一次。
+_DISK_CHECK_DISABLED = False
 
 
 async def _active_req_ids(*, ignore_retention: bool = False) -> set[str]:
@@ -64,16 +70,29 @@ async def gc_once() -> dict:
         return {"skipped": "no runner controller"}
 
     # 检查磁盘压力。压时 escalated PVC 也立即清（不留 retention）。
+    # 若上一次因 RBAC 403 已禁用 disk-check，直接跳，不再发请求。
+    global _DISK_CHECK_DISABLED
     disk_pressure = False
-    try:
-        ratio = await rc.node_disk_usage_ratio()
-        if ratio > settings.runner_gc_disk_pressure_threshold:
-            log.warning("runner_gc.disk_pressure", ratio=round(ratio, 2),
-                        threshold=settings.runner_gc_disk_pressure_threshold)
-            disk_pressure = True
-    except Exception as e:
-        # 取不到磁盘指标 → 退回正常 retention 模式
-        log.debug("runner_gc.disk_check_failed", error=str(e))
+    if not _DISK_CHECK_DISABLED:
+        try:
+            ratio = await rc.node_disk_usage_ratio()
+            if ratio > settings.runner_gc_disk_pressure_threshold:
+                log.warning("runner_gc.disk_pressure", ratio=round(ratio, 2),
+                            threshold=settings.runner_gc_disk_pressure_threshold)
+                disk_pressure = True
+        except ApiException as e:
+            if e.status == 403:
+                # RBAC 没给 nodes:list（orchestrator Role 是 ns-scoped），
+                # 永久降级：之后不再探测，留 retention-only 路径
+                _DISK_CHECK_DISABLED = True
+                log.warning("runner_gc.disk_check_rbac_denied",
+                            hint="ServiceAccount lacks cluster-scoped nodes:list; "
+                                 "disk-pressure emergency purge disabled until restart")
+            else:
+                log.debug("runner_gc.disk_check_failed", error=str(e), status=e.status)
+        except Exception as e:
+            # 取不到磁盘指标 → 退回正常 retention 模式
+            log.debug("runner_gc.disk_check_failed", error=str(e))
 
     active = await _active_req_ids(ignore_retention=disk_pressure)
     cleaned = await rc.gc_orphans(active)

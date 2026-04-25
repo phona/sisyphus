@@ -18,3 +18,6 @@ data:
   SISYPHUS_SKIP_REVIEWER: {{ .Values.env.skip_reviewer | quote }}
   SISYPHUS_SKIP_ARCHIVE: {{ .Values.env.skip_archive | quote }}
   SISYPHUS_TEST_MODE: {{ .Values.env.test_mode | quote }}
+  {{- with .Values.env.snapshot_exclude_project_ids }}
+  SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS: {{ join "," . | quote }}
+  {{- end }}

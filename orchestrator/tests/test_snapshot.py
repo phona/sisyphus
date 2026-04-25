@@ -76,6 +76,75 @@ async def test_sync_once_no_projects_yet(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_sync_once_filters_excluded_projects(monkeypatch):
+    """exclude 清单里的 project_id 不发 list_issues，也不报错。"""
+    captured: list[tuple] = []
+
+    class FakeConn:
+        async def execute(self, sql, *args):
+            captured.append((sql.strip()[:30], args))
+
+        def transaction(self):
+            @asynccontextmanager
+            async def _t():
+                yield
+            return _t()
+
+    class FakeObsPool:
+        def acquire(self):
+            @asynccontextmanager
+            async def _a():
+                yield FakeConn()
+            return _a()
+
+    fake_bkd = AsyncMock()
+    fake_bkd.list_issues = AsyncMock(return_value=[
+        make_issue(id="a", tags=["dev", "REQ-1"]),
+    ])
+
+    @asynccontextmanager
+    async def _client_ctx(*a, **kw):
+        yield fake_bkd
+
+    monkeypatch.setattr(snapshot.db, "get_obs_pool", lambda: FakeObsPool())
+    monkeypatch.setattr(snapshot.db, "get_pool",
+                        lambda: FakeMainPool(["alive-1", "77k9z58j"]))
+    monkeypatch.setattr(snapshot, "BKDClient", _client_ctx)
+    monkeypatch.setattr(snapshot.settings, "snapshot_exclude_project_ids",
+                        ["77k9z58j"])
+
+    n = await snapshot.sync_once()
+
+    assert n == 1
+    # 只调一次：alive-1。77k9z58j 被过滤
+    assert fake_bkd.list_issues.await_count == 1
+    assert fake_bkd.list_issues.await_args.args[0] == "alive-1"
+
+
+@pytest.mark.asyncio
+async def test_sync_once_all_projects_excluded(monkeypatch):
+    """所有 project 都被排除 → 不调 BKD，返 0。"""
+    fake_bkd = AsyncMock()
+    fake_bkd.list_issues = AsyncMock()
+
+    @asynccontextmanager
+    async def _client_ctx(*a, **kw):
+        yield fake_bkd
+
+    monkeypatch.setattr(snapshot.db, "get_obs_pool", lambda: object())
+    monkeypatch.setattr(snapshot.db, "get_pool",
+                        lambda: FakeMainPool(["only-proj"]))
+    monkeypatch.setattr(snapshot, "BKDClient", _client_ctx)
+    monkeypatch.setattr(snapshot.settings, "snapshot_exclude_project_ids",
+                        ["only-proj"])
+
+    n = await snapshot.sync_once()
+
+    assert n == 0
+    fake_bkd.list_issues.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_sync_once_upserts_per_project(monkeypatch):
     """两个 project 各 1 issue，应当 UPSERT 2 行。"""
     captured: list[tuple] = []

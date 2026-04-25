@@ -1,0 +1,50 @@
+capability: orch-noise-cleanup
+version: "1.0"
+description: |
+  Two operational noise reductions in orchestrator background loops:
+    1. snapshot loop honours an exclude list of stale BKD project_ids
+       (default ships with "77k9z58j").
+    2. runner_gc detects RBAC 403 on nodes:list and disables the
+       disk-pressure probe after one warn, instead of failing every tick.
+
+settings:
+  snapshot_exclude_project_ids:
+    module: orchestrator.config
+    env_var: SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS
+    type: list[str]
+    default: []
+    parsing: "pydantic 默认 list 解析（逗号分隔 / JSON 数组）"
+    helm_default:
+      file: orchestrator/helm/values.yaml
+      key: env.snapshot_exclude_project_ids
+      value: ["77k9z58j"]
+    semantics: |
+      sync_once 在迭代 SELECT DISTINCT project_id FROM req_state 结果时，
+      过滤掉所有出现在此列表中的 project_id。被排除的 project 不发 BKD
+      list_issues 请求、不上报到 snapshot.synced.projects、不产生
+      snapshot.list_failed warning。
+
+functions:
+  sync_once:
+    module: orchestrator.snapshot
+    behavior_change: |
+      project_ids = [p for p in req_state_distinct
+                     if p not in settings.snapshot_exclude_project_ids]
+      若过滤后为空 → 直接 return 0（与无 project_id 时一致）
+    backward_compat: |
+      未设置 SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS 或设为空时行为保持不变。
+
+  gc_once:
+    module: orchestrator.runner_gc
+    behavior_change: |
+      新增模块级 flag _DISK_CHECK_DISABLED（bool, default False）。
+      gc_once 进入 disk-check 分支前先看 flag：
+        - 已禁用 → 跳过 node_disk_usage_ratio 调用，disk_pressure=False
+        - 未禁用 → 调 node_disk_usage_ratio：
+            * ApiException(status=403) → flag 置 True；log.warning
+              "runner_gc.disk_check_rbac_denied"（一次）
+            * 其他异常 → log.debug "runner_gc.disk_check_failed"
+            * 成功 → 维持原 ratio > threshold 判逻辑
+    rationale: |
+      orchestrator RBAC 是 namespace-scoped Role（runner-rbac.yaml），
+      没授 cluster-scoped nodes:list。修 RBAC 是 ops 政策选择；编排层降级处理。
