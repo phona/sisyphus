@@ -24,6 +24,12 @@ _TAIL = 2048
 def _build_cmd(req_id: str) -> str:
     """遍历 /workspace/source/*/，先切到 feat/<REQ>，对含 openspec/changes/<REQ>/ 的仓跑两项检查。
 
+    Empty-source guard（防 silent-pass）：
+    - /workspace/source 不存在或没任何子目录 → 直接 exit 1（clone helper 没跑 / PVC 被擦）
+    - 遍历后 ran=0（每仓都被 skip：feat 分支 fetch 不到 / 没 openspec/changes/<REQ>/）
+      → exit 1。checker 不能在零信号情况下报 pass。
+
+    主循环：
     1. git fetch origin feat/<REQ> + git checkout -B feat/<REQ> origin/feat/<REQ>
        —— spec/dev 文件由 agent 推到 feat/<REQ> 分支，runner pod 默认在 main。
        fetch 失败 / 没有该 branch → 该仓视为 not involved（agent 没改它），跳过不算 fail。
@@ -34,7 +40,17 @@ def _build_cmd(req_id: str) -> str:
     """
     return (
         "set -o pipefail; "
+        "if [ ! -d /workspace/source ]; then "
+        '  echo "=== FAIL spec_lint: /workspace/source missing — refusing to silent-pass ===" >&2; '
+        "  exit 1; "
+        "fi; "
+        "repo_count=$(find /workspace/source -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l); "
+        'if [ "$repo_count" -eq 0 ]; then '
+        '  echo "=== FAIL spec_lint: /workspace/source empty (0 cloned repos) — refusing to silent-pass ===" >&2; '
+        "  exit 1; "
+        "fi; "
         "fail=0; "
+        "ran=0; "
         "for repo in /workspace/source/*/; do "
         '  name=$(basename "$repo"); '
         f'  if ! (cd "$repo" && git fetch origin "feat/{req_id}" 2>/dev/null && git checkout -B "feat/{req_id}" "origin/feat/{req_id}" 2>/dev/null); then '
@@ -51,10 +67,15 @@ def _build_cmd(req_id: str) -> str:
         '      echo "=== FAIL scenario-refs: $name ===" >&2; '
         "      fail=1; "
         "    fi; "
+        "    ran=$((ran+1)); "
         "  else "
         f'    echo "[skip] $name: no openspec/changes/{req_id}/"; '
         "  fi; "
         "done; "
+        'if [ "$ran" -eq 0 ]; then '
+        f'  echo "=== FAIL spec_lint: 0 source repos eligible (no feat/{req_id} branch with openspec/changes/{req_id}/) — refusing to silent-pass ===" >&2; '
+        "  exit 1; "
+        "fi; "
         "[ $fail -eq 0 ]"
     )
 

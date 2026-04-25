@@ -11,7 +11,7 @@ import asyncio
 import pytest
 
 from orchestrator.checkers._types import CheckResult
-from orchestrator.checkers.staging_test import run_staging_test
+from orchestrator.checkers.staging_test import _build_cmd, run_staging_test
 from orchestrator.k8s_runner import ExecResult
 
 
@@ -128,3 +128,30 @@ async def test_run_staging_test_timeout(monkeypatch):
 
     with pytest.raises(TimeoutError):
         await run_staging_test("REQ-4")
+
+
+# ── empty-source guard（REQ-checker-empty-source-1777113775）─────────────
+
+
+def test_build_cmd_emits_workspace_source_existence_guard():
+    """`/workspace/source` 不存在 → exit 1，不能 for 循环 0 次默认 pass。"""
+    cmd = _build_cmd("REQ-X")
+    assert "[ ! -d /workspace/source ]" in cmd
+    assert "FAIL staging_test: /workspace/source missing" in cmd
+
+
+def test_build_cmd_emits_repo_count_zero_guard():
+    """`/workspace/source` 空目录（0 cloned repo）→ exit 1。"""
+    cmd = _build_cmd("REQ-X")
+    assert "find /workspace/source -mindepth 1 -maxdepth 1 -type d" in cmd
+    assert '"$repo_count" -eq 0' in cmd
+    assert "FAIL staging_test: /workspace/source empty" in cmd
+
+
+def test_build_cmd_emits_zero_eligible_guard():
+    """所有仓都被 skip（无 feat 分支 / 缺 unit-or-integration target）→ ran=0 → exit 1。"""
+    cmd = _build_cmd("REQ-X")
+    assert "ran=0" in cmd
+    assert "ran=$((ran+1))" in cmd
+    assert '"$ran" -eq 0' in cmd
+    assert "0 source repos eligible" in cmd

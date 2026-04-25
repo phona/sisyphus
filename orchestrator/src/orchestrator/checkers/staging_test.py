@@ -37,12 +37,27 @@ def _build_cmd(req_id: str) -> str:
     """对含 ci-unit-test + ci-integration-test target 的每个 source repo 并行起；
     单 repo 内 unit → integration 串行（&&）。
 
+    Empty-source guard（防 silent-pass）：
+    - /workspace/source 不存在或没任何子目录 → 直接 exit 1
+    - 遍历后 ran=0（feat 分支 fetch 不到 / 没两 target）→ exit 1
+      checker 不能在零信号情况下报 pass。
+
     每仓先切到 feat/<REQ>（agent 推到的分支）；fetch/checkout 失败 → not involved 跳过。
     pids 列表存 `pid:name`，结尾按 pid 依次 wait；失败 tail unit + int 各 50 行到 stderr。
     """
     return (
         "set -o pipefail; "
+        "if [ ! -d /workspace/source ]; then "
+        '  echo "=== FAIL staging_test: /workspace/source missing — refusing to silent-pass ===" >&2; '
+        "  exit 1; "
+        "fi; "
+        "repo_count=$(find /workspace/source -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l); "
+        'if [ "$repo_count" -eq 0 ]; then '
+        '  echo "=== FAIL staging_test: /workspace/source empty (0 cloned repos) — refusing to silent-pass ===" >&2; '
+        "  exit 1; "
+        "fi; "
         "fail=0; "
+        "ran=0; "
         "mkdir -p /tmp/staging-test-logs; "
         'pids=""; '
         "for repo in /workspace/source/*/; do "
@@ -61,10 +76,15 @@ def _build_cmd(req_id: str) -> str:
         '      && make ci-integration-test > "/tmp/staging-test-logs/$name-int.log" 2>&1 '
         "    ) & "
         '    pids="$pids $!:$name"; '
+        "    ran=$((ran+1)); "
         "  else "
         '    echo "[skip] $name: missing ci-unit-test or ci-integration-test target"; '
         "  fi; "
         "done; "
+        'if [ "$ran" -eq 0 ]; then '
+        f'  echo "=== FAIL staging_test: 0 source repos eligible (no feat/{req_id} branch with ci-unit-test+ci-integration-test) — refusing to silent-pass ===" >&2; '
+        "  exit 1; "
+        "fi; "
         "for pid_name in $pids; do "
         "  pid=${pid_name%%:*}; "
         "  name=${pid_name##*:}; "
