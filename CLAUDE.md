@@ -39,7 +39,7 @@
   ↓ intake.pass（新建 analyze issue）
 intent:analyze → analyze(写 proposal/design/tasks) → specs(×2 并行) → dev(1~N 并行, push feat/REQ-x + 真开 PR)
   → staging-test(机械: kubectl exec runner make ci-unit-test && make ci-integration-test) → pr-ci-watch(机械: GitHub REST 轮 check-runs)
-  → accept(make accept-up + agent 跑 FEATURE-A* + make accept-down 必跑) → archive → DONE
+  → accept(make ci-accept-env-up + agent 跑 FEATURE-A* + make ci-accept-env-down 必跑) → archive → DONE
 ```
 
 **入口选择**：`intent:intake` → INTAKING（推荐：不熟悉的仓）；`intent:analyze` → ANALYZING（跳过澄清）。
