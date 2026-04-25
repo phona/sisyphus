@@ -6,6 +6,15 @@ SISYPHUS_BUSINESS_REPO（兼容旧单仓 REQ）。
 
 dev agent 只需 push branch + 创 PR，不用回写任何东西。
 
+SHA 刷新（force-push 检测）：
+- 每 tick 重新拉 head SHA；SHA 变化时重置 check-runs 缓存，从新 SHA 开始判
+- 单 repo 最多允许 _MAX_SHA_FLIPS 次翻转，超限 → fail reason=too-many-sha-flips
+- refetch 失败（HTTP / 找不到 PR）→ 警告 + retry，与 check-run API 错误一致
+
+PR 状态变化：
+- merged → pass（PR 被合并）
+- closed without merge → fail reason=pr-closed-without-merge
+
 多仓 REQ 行为：
 - 任一 repo 的 PR check-runs 红 → 整体 fail
 - 任一 repo 上找不到 open PR → fail（说明 dev agent 没 push 完）
@@ -13,7 +22,8 @@ dev agent 只需 push branch + 创 PR，不用回写任何东西。
 - 还有 pending → 等
 
 GH API:
-- GET /repos/{owner}/{repo}/pulls?head={owner}:{branch}&state=open  → PR list（含 number + head.sha）
+- GET /repos/{owner}/{repo}/pulls?head={owner}:{branch}&state=open  → open PR（含 head.sha）
+- GET /repos/{owner}/{repo}/pulls?head={owner}:{branch}&state=closed → closed/merged PR
 - GET /repos/{owner}/{repo}/commits/{sha}/check-runs                 → check_runs[]
 
 退出码：
@@ -26,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from dataclasses import dataclass
 
 import httpx
 import structlog
@@ -37,9 +48,20 @@ log = structlog.get_logger(__name__)
 
 _GH_API = "https://api.github.com"
 _TAIL = 2048
+_MAX_SHA_FLIPS = 5
 
 _PASS_CONCLUSIONS = {"success", "neutral", "skipped"}
 _FAIL_CONCLUSIONS = {"failure", "cancelled", "timed_out", "action_required", "stale"}
+
+
+@dataclass
+class _RepoState:
+    repo: str
+    pr_number: int
+    sha: str
+    flip_count: int = 0
+    terminal_verdict: str | None = None  # "pass" | "fail" once decided
+    terminal_reason: str | None = None
 
 
 async def watch_pr_ci(
@@ -51,6 +73,8 @@ async def watch_pr_ci(
 ) -> CheckResult:
     """轮询所有 repos 的 PR check-runs → 全绿 / 任一失败 / 超时返 CheckResult。
 
+    每 tick 重新拉 head SHA：force-push 自动切新 SHA；超过 _MAX_SHA_FLIPS 次翻转 → fail。
+    merged → pass；closed without merge → fail；refetch 失败 → retry 到 deadline。
     repos 优先于 SISYPHUS_BUSINESS_REPO 环境变量（per-REQ involved_repos 优先于全局）。
     """
     repo_list = repos or ([os.getenv("SISYPHUS_BUSINESS_REPO")] if os.getenv("SISYPHUS_BUSINESS_REPO") else [])
@@ -73,12 +97,20 @@ async def watch_pr_ci(
 
     start = time.monotonic()
     async with httpx.AsyncClient(base_url=_GH_API, headers=headers, timeout=30.0) as client:
-        # 1. 查每个 repo 的 PR number + head.sha
-        pr_infos: list[tuple[str, int, str]] = []  # [(repo, pr_number, sha)]
+        # Initial PR fetch: fail fast if no PR exists for any repo
+        states: list[_RepoState] = []
         for repo in repo_list:
             try:
-                pr_number, sha = await _get_pr_info(client, repo, branch)
-                pr_infos.append((repo, pr_number, sha))
+                pr_number, sha, pr_state = await _get_pr_info(client, repo, branch)
+                state = _RepoState(repo=repo, pr_number=pr_number, sha=sha)
+                if pr_state == "merged":
+                    state.terminal_verdict = "pass"
+                    log.info("checker.pr_ci_watch.pr_merged", repo=repo, pr=pr_number)
+                elif pr_state == "closed":
+                    state.terminal_verdict = "fail"
+                    state.terminal_reason = "pr-closed-without-merge"
+                    log.info("checker.pr_ci_watch.pr_closed", repo=repo, pr=pr_number)
+                states.append(state)
             except httpx.HTTPError as e:
                 log.exception("checker.pr_ci_watch.pr_lookup_failed",
                               repo=repo, branch=branch)
@@ -89,7 +121,6 @@ async def watch_pr_ci(
                     cmd=f"watch-pr-ci {repo}@{branch}",
                 )
             except ValueError as e:
-                # No open PR found
                 return CheckResult(
                     passed=False, exit_code=1,
                     stdout_tail="", stderr_tail=str(e)[:_TAIL],
@@ -97,19 +128,77 @@ async def watch_pr_ci(
                     cmd=f"watch-pr-ci {repo}@{branch}",
                 )
 
-        cmd_label = "watch-pr-ci " + " ".join(f"{r}#{n}@{s[:8]}" for r, n, s in pr_infos)
+        def _cmd_label() -> str:
+            return "watch-pr-ci " + " ".join(f"{s.repo}#{s.pr_number}@{s.sha[:8]}" for s in states)
+
         deadline = start + timeout_sec
         per_repo_runs: dict[str, list[dict]] = {}
 
         while True:
-            api_error = None
-            for repo, _, sha in pr_infos:
+            # Re-fetch PR info each tick to detect force-pushes and PR state changes
+            for state in states:
+                if state.terminal_verdict is not None:
+                    continue
                 try:
-                    per_repo_runs[repo] = await _get_check_runs(client, repo, sha)
+                    _, new_sha, pr_state = await _get_pr_info(client, state.repo, branch)
+                    if pr_state == "merged":
+                        log.info("checker.pr_ci_watch.pr_merged",
+                                 repo=state.repo, pr=state.pr_number)
+                        state.terminal_verdict = "pass"
+                    elif pr_state == "closed":
+                        log.info("checker.pr_ci_watch.pr_closed",
+                                 repo=state.repo, pr=state.pr_number)
+                        state.terminal_verdict = "fail"
+                        state.terminal_reason = "pr-closed-without-merge"
+                    elif new_sha != state.sha:
+                        log.info("checker.pr_ci_watch.sha_flip",
+                                 repo=state.repo, old=state.sha[:8], new=new_sha[:8],
+                                 flip_count=state.flip_count + 1)
+                        state.flip_count += 1
+                        state.sha = new_sha
+                        per_repo_runs.pop(state.repo, None)  # clear stale runs
+                        if state.flip_count > _MAX_SHA_FLIPS:
+                            state.terminal_verdict = "fail"
+                            state.terminal_reason = "too-many-sha-flips"
+                            log.warning("checker.pr_ci_watch.too_many_sha_flips",
+                                        repo=state.repo, flips=state.flip_count)
+                except (httpx.HTTPError, ValueError) as e:
+                    # Consistent with check-run API errors: retry until deadline
+                    log.warning("checker.pr_ci_watch.pr_refetch_error",
+                                repo=state.repo, error=str(e))
+
+            # Early exit: any terminal fail (too-many-sha-flips / pr-closed)
+            if any(s.terminal_verdict == "fail" for s in states):
+                parts = [
+                    f"{s.repo}: {s.terminal_reason}"
+                    for s in states if s.terminal_verdict == "fail"
+                ]
+                return CheckResult(
+                    passed=False, exit_code=1,
+                    stdout_tail=" | ".join(parts)[:_TAIL],
+                    stderr_tail="", duration_sec=time.monotonic() - start, cmd=_cmd_label(),
+                )
+
+            # Early exit: all repos merged (all terminal pass)
+            if all(s.terminal_verdict == "pass" for s in states):
+                parts = [f"{s.repo}: merged" for s in states]
+                return CheckResult(
+                    passed=True, exit_code=0,
+                    stdout_tail=" | ".join(parts)[:_TAIL],
+                    stderr_tail="", duration_sec=time.monotonic() - start, cmd=_cmd_label(),
+                )
+
+            # Fetch check-runs for non-terminal repos
+            api_error = None
+            for state in states:
+                if state.terminal_verdict is not None:
+                    continue
+                try:
+                    per_repo_runs[state.repo] = await _get_check_runs(client, state.repo, state.sha)
                 except httpx.HTTPError as e:
-                    api_error = (repo, e)
+                    api_error = (state.repo, e)
                     log.warning("checker.pr_ci_watch.api_error",
-                                repo=repo, sha=sha[:8], error=str(e))
+                                repo=state.repo, sha=state.sha[:8], error=str(e))
 
             if api_error and time.monotonic() >= deadline:
                 repo, e = api_error
@@ -117,60 +206,75 @@ async def watch_pr_ci(
                     passed=False, exit_code=124,
                     stdout_tail="",
                     stderr_tail=f"API error at deadline for {repo}: {e}"[:_TAIL],
-                    duration_sec=time.monotonic() - start, cmd=cmd_label,
+                    duration_sec=time.monotonic() - start, cmd=_cmd_label(),
                 )
             if api_error:
                 await asyncio.sleep(poll_interval_sec)
                 continue
 
-            # 聚合判 verdict：任一 fail → fail；全部 pass → pass；否则 pending
-            verdicts = {repo: _classify(runs) for repo, runs in per_repo_runs.items()}
+            # Compute verdicts: terminal overrides check-run classification
+            verdicts: dict[str, str] = {}
+            for state in states:
+                if state.terminal_verdict is not None:
+                    verdicts[state.repo] = state.terminal_verdict
+                else:
+                    verdicts[state.repo] = _classify(per_repo_runs.get(state.repo, []))
+
             log.info("checker.pr_ci_watch.poll",
                      verdicts=verdicts,
-                     run_counts={r: len(rs) for r, rs in per_repo_runs.items()})
+                     run_counts={s.repo: len(per_repo_runs.get(s.repo, [])) for s in states},
+                     sha_flips={s.repo: s.flip_count for s in states if s.flip_count > 0})
 
             if any(v == "fail" for v in verdicts.values()):
-                summary_parts = [
-                    f"{repo}: {_summarize(runs, failed_only=True)}"
-                    for repo, runs in per_repo_runs.items()
-                    if verdicts[repo] == "fail"
-                ]
+                parts = []
+                for state in states:
+                    if verdicts[state.repo] != "fail":
+                        continue
+                    if state.terminal_verdict == "fail":
+                        parts.append(f"{state.repo}: {state.terminal_reason}")
+                    else:
+                        runs = per_repo_runs.get(state.repo, [])
+                        parts.append(f"{state.repo}: {_summarize(runs, failed_only=True)}")
                 return CheckResult(
                     passed=False, exit_code=1,
-                    stdout_tail=" | ".join(summary_parts)[:_TAIL],
-                    stderr_tail="", duration_sec=time.monotonic() - start, cmd=cmd_label,
+                    stdout_tail=" | ".join(parts)[:_TAIL],
+                    stderr_tail="", duration_sec=time.monotonic() - start, cmd=_cmd_label(),
                 )
+
             if all(v == "pass" for v in verdicts.values()):
-                summary_parts = [
-                    f"{repo}: {_summarize(runs)}"
-                    for repo, runs in per_repo_runs.items()
+                parts = [
+                    f"{state.repo}: merged" if state.terminal_verdict == "pass"
+                    else f"{state.repo}: {_summarize(per_repo_runs.get(state.repo, []))}"
+                    for state in states
                 ]
                 return CheckResult(
                     passed=True, exit_code=0,
-                    stdout_tail=" | ".join(summary_parts)[:_TAIL],
-                    stderr_tail="", duration_sec=time.monotonic() - start, cmd=cmd_label,
+                    stdout_tail=" | ".join(parts)[:_TAIL],
+                    stderr_tail="", duration_sec=time.monotonic() - start, cmd=_cmd_label(),
                 )
 
             if time.monotonic() + poll_interval_sec >= deadline:
                 summary_parts = [
-                    f"{repo}: {_summarize(runs)}"
-                    for repo, runs in per_repo_runs.items()
+                    f"{state.repo}: {_summarize(per_repo_runs.get(state.repo, []))}"
+                    for state in states
                 ]
                 return CheckResult(
                     passed=False, exit_code=124,
                     stdout_tail=" | ".join(summary_parts)[:_TAIL],
                     stderr_tail=f"timeout after {timeout_sec}s, still pending",
-                    duration_sec=time.monotonic() - start, cmd=cmd_label,
+                    duration_sec=time.monotonic() - start, cmd=_cmd_label(),
                 )
             await asyncio.sleep(poll_interval_sec)
 
 
 # ── GH API helpers ───────────────────────────────────────────────────────
 
-async def _get_pr_info(client: httpx.AsyncClient, repo: str, branch: str) -> tuple[int, str]:
-    """查 branch 对应的 open PR，返 (pr_number, head_sha)。
+async def _get_pr_info(client: httpx.AsyncClient, repo: str, branch: str) -> tuple[int, str, str]:
+    """查 branch 对应的 PR，返 (pr_number, head_sha, state)。
 
-    用 GitHub REST API `head` 过滤器（替代旧 gh CLI 调用），全程 async 不阻塞事件循环。
+    state: "open" | "merged" | "closed"（closed without merge）。
+    先查 open PR（最常见）；没找到再查 closed 判断是合并还是直接关闭。
+    两种情况都找不到 → ValueError。
     """
     owner, _ = repo.split("/", 1)
     r = await client.get(
@@ -178,11 +282,23 @@ async def _get_pr_info(client: httpx.AsyncClient, repo: str, branch: str) -> tup
         params={"head": f"{owner}:{branch}", "state": "open"},
     )
     r.raise_for_status()
-    pulls = r.json()
-    if not pulls:
-        raise ValueError(f"No open PR found for branch {branch} in {repo}")
-    pr = pulls[0]
-    return int(pr["number"]), str(pr["head"]["sha"])
+    open_pulls = r.json()
+    if open_pulls:
+        pr = open_pulls[0]
+        return int(pr["number"]), str(pr["head"]["sha"]), "open"
+
+    # No open PR – check if merged or closed without merge
+    r = await client.get(
+        f"/repos/{repo}/pulls",
+        params={"head": f"{owner}:{branch}", "state": "closed"},
+    )
+    r.raise_for_status()
+    closed_pulls = r.json()
+    if not closed_pulls:
+        raise ValueError(f"No PR found for branch {branch} in {repo}")
+    pr = closed_pulls[0]
+    pr_state = "merged" if pr.get("merged_at") is not None else "closed"
+    return int(pr["number"]), str(pr["head"]["sha"]), pr_state
 
 
 async def _get_check_runs(client: httpx.AsyncClient, repo: str, sha: str) -> list[dict]:

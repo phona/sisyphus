@@ -1,7 +1,9 @@
-"""checkers/pr_ci_watch.py 单测：mock GitHub API，验全绿/任一失败/全失败/超时。
+"""checkers/pr_ci_watch.py 单测：mock GitHub API，验全绿/任一失败/全失败/超时/SHA翻转/PR合并关闭。
 
 M15：watch_pr_ci(req_id, branch, ...)，repo 从 SISYPHUS_BUSINESS_REPO env 读，
 pr_number + head.sha 用 GitHub REST API `head` 过滤器按 branch 查（这里 mock 掉），不再读 manifest。
+
+SHA refresh（force-push 检测）：每 tick 重新拉 head SHA，SHA 变化时重置 check-runs 缓存。
 """
 from __future__ import annotations
 
@@ -25,13 +27,13 @@ def _run(name: str, status: str = "completed", conclusion: str | None = "success
 
 
 def patch_pr_lookup(monkeypatch, *, repo: str = "phona/ubox-crosser", pr_number: int | None = 42):
-    """SISYPHUS_BUSINESS_REPO env + mock _get_pr_info 返指定 (number, sha)。"""
+    """SISYPHUS_BUSINESS_REPO env + mock _get_pr_info 返指定 (number, sha, state)。"""
     monkeypatch.setenv("SISYPHUS_BUSINESS_REPO", repo)
 
-    async def fake_lookup(client, _repo: str, _branch: str) -> tuple[int, str]:
+    async def fake_lookup(client, _repo: str, _branch: str) -> tuple[int, str, str]:
         if pr_number is None:
             raise ValueError("No open PR found")
-        return pr_number, "deadbeef" * 5
+        return pr_number, "deadbeef" * 5, "open"
 
     monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup)
 
@@ -170,7 +172,7 @@ async def test_watch_pr_ci_pr_lookup_http_error(monkeypatch):
     monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
     monkeypatch.setenv("SISYPHUS_BUSINESS_REPO", "phona/ubox-crosser")
 
-    async def fake_lookup_fail(client, _repo: str, _branch: str) -> tuple[int, str]:
+    async def fake_lookup_fail(client, _repo: str, _branch: str) -> tuple[int, str, str]:
         raise httpx.HTTPError("mocked API error")
     monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup_fail)
 
@@ -218,7 +220,7 @@ async def test_watch_pr_ci_returns_fail_when_no_pr(monkeypatch):
     """找不到对应 PR → 返 fail CheckResult（exit=1），不再抛 ValueError 让 caller 处理。"""
     monkeypatch.setenv("SISYPHUS_BUSINESS_REPO", "phona/ubox-crosser")
 
-    async def fake_lookup_none(client, _repo: str, _branch: str) -> tuple[int, str]:
+    async def fake_lookup_none(client, _repo: str, _branch: str) -> tuple[int, str, str]:
         raise ValueError("No open PR found for branch")
     monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup_none)
 
@@ -235,9 +237,9 @@ async def test_watch_pr_ci_per_req_repos_override_env(monkeypatch):
 
     looked_up: list[str] = []
 
-    async def fake_lookup(client, repo: str, _branch: str):
+    async def fake_lookup(client, repo: str, _branch: str) -> tuple[int, str, str]:
         looked_up.append(repo)
-        return (101, "abc1234567890def")
+        return (101, "abc1234567890def", "open")
 
     async def fake_check_runs(client, _repo: str, _sha: str):
         return [_run("CI", conclusion="success")]
@@ -252,7 +254,7 @@ async def test_watch_pr_ci_per_req_repos_override_env(monkeypatch):
     )
     assert result.passed
     # env var 完全没被用到，只用 caller 给的 repo
-    assert looked_up == ["ZonEaseTech/ttpos-server-go"]
+    assert set(looked_up) == {"ZonEaseTech/ttpos-server-go"}
 
 
 @pytest.mark.asyncio
@@ -260,9 +262,9 @@ async def test_watch_pr_ci_multi_repo_all_green(monkeypatch):
     """多 repo REQ：所有 repo 都绿 → pass，cmd label 含全部 repo+sha。"""
     looked_up: list[str] = []
 
-    async def fake_lookup(client, repo: str, _branch: str):
+    async def fake_lookup(client, repo: str, _branch: str) -> tuple[int, str, str]:
         looked_up.append(repo)
-        return (1, f"sha-{repo[:4]}aaaa")
+        return (1, f"sha-{repo[:4]}aaaa", "open")
 
     async def fake_check_runs(client, _repo: str, _sha: str):
         return [_run("CI", conclusion="success")]
@@ -283,8 +285,8 @@ async def test_watch_pr_ci_multi_repo_all_green(monkeypatch):
 @pytest.mark.asyncio
 async def test_watch_pr_ci_multi_repo_one_fails(monkeypatch):
     """多 repo REQ：任一 repo CI 红 → 整体 fail，stdout 标出哪个 repo 红。"""
-    async def fake_lookup(client, repo: str, _branch: str):
-        return (1, f"sha-{repo[:4]}aaaa")
+    async def fake_lookup(client, repo: str, _branch: str) -> tuple[int, str, str]:
+        return (1, f"sha-{repo[:4]}aaaa", "open")
 
     async def fake_check_runs(client, repo: str, _sha: str):
         if repo == "b/repo-y":
@@ -304,6 +306,189 @@ async def test_watch_pr_ci_multi_repo_one_fails(monkeypatch):
     # 只输出失败的 repo 摘要
     assert "b/repo-y" in result.stdout_tail
     assert "failure" in result.stdout_tail
+
+
+# ── SHA 翻转（force-push）检测 ────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_watch_pr_ci_sha_flip_restarts_check_runs(monkeypatch):
+    """force-push 后 SHA 变化 → 清除旧 check-runs，从新 SHA 重新轮询，最终通过。"""
+    sha_a = "a" * 40
+    sha_b = "b" * 40
+    call_count = [0]
+
+    async def fake_lookup(client, repo: str, branch: str) -> tuple[int, str, str]:
+        call_count[0] += 1
+        # 前两次调用（initial + loop tick 1）返回 sha_a；之后返回 sha_b
+        sha = sha_a if call_count[0] <= 2 else sha_b
+        return (1, sha, "open")
+
+    runs_fetched_for: list[str] = []
+
+    async def fake_check_runs(client, repo: str, sha: str) -> list[dict]:
+        runs_fetched_for.append(sha[:8])
+        if sha == sha_b:
+            return [_run("CI", conclusion="success")]
+        return [_run("CI", status="in_progress", conclusion=None)]
+
+    async def fast_sleep(_):
+        return None
+
+    monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup)
+    monkeypatch.setattr(pr_ci_watch, "_get_check_runs", fake_check_runs)
+    monkeypatch.setattr(pr_ci_watch.asyncio, "sleep", fast_sleep)
+    monkeypatch.setenv("SISYPHUS_BUSINESS_REPO", "phona/repo")
+
+    result = await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9",
+                                            poll_interval_sec=1, timeout_sec=60)
+
+    assert result.passed is True
+    assert result.exit_code == 0
+    # SHA 翻转后 cmd 应反映新 SHA
+    assert sha_b[:8] in result.cmd
+
+
+@pytest.mark.asyncio
+async def test_watch_pr_ci_too_many_sha_flips(monkeypatch):
+    """SHA 翻转超过 5 次 → fail reason=too-many-sha-flips。"""
+    call_count = [0]
+
+    async def fake_lookup(client, repo: str, branch: str) -> tuple[int, str, str]:
+        call_count[0] += 1
+        # 每次调用返回不同 SHA，模拟持续 force-push
+        sha = f"{call_count[0]:040x}"
+        return (1, sha, "open")
+
+    async def fake_check_runs(client, repo: str, sha: str) -> list[dict]:
+        return [_run("CI", status="in_progress", conclusion=None)]
+
+    async def fast_sleep(_):
+        return None
+
+    monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup)
+    monkeypatch.setattr(pr_ci_watch, "_get_check_runs", fake_check_runs)
+    monkeypatch.setattr(pr_ci_watch.asyncio, "sleep", fast_sleep)
+    monkeypatch.setenv("SISYPHUS_BUSINESS_REPO", "phona/repo")
+
+    result = await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9",
+                                            poll_interval_sec=0, timeout_sec=60)
+
+    assert result.passed is False
+    assert result.exit_code == 1
+    assert "too-many-sha-flips" in result.stdout_tail
+
+
+# ── PR merged / closed 检测 ───────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_watch_pr_ci_pr_merged_returns_pass(monkeypatch):
+    """loop 轮询中 PR 被 merge → 立即返 pass（不等 check-runs）。"""
+    call_count = [0]
+
+    async def fake_lookup(client, repo: str, branch: str) -> tuple[int, str, str]:
+        call_count[0] += 1
+        # initial fetch → open；loop tick 1 re-fetch → merged
+        state = "open" if call_count[0] == 1 else "merged"
+        return (1, "a" * 40, state)
+
+    check_run_calls = [0]
+
+    async def fake_check_runs(client, repo: str, sha: str) -> list[dict]:
+        check_run_calls[0] += 1
+        return [_run("CI", status="in_progress", conclusion=None)]
+
+    monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup)
+    monkeypatch.setattr(pr_ci_watch, "_get_check_runs", fake_check_runs)
+    monkeypatch.setenv("SISYPHUS_BUSINESS_REPO", "phona/repo")
+
+    result = await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9",
+                                            poll_interval_sec=0, timeout_sec=60)
+
+    assert result.passed is True
+    assert result.exit_code == 0
+    assert "merged" in result.stdout_tail
+    # 检测到 merged 后不再拉 check-runs
+    assert check_run_calls[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_watch_pr_ci_pr_closed_returns_fail(monkeypatch):
+    """loop 轮询中 PR 被关闭（未 merge）→ fail reason=pr-closed-without-merge。"""
+    call_count = [0]
+
+    async def fake_lookup(client, repo: str, branch: str) -> tuple[int, str, str]:
+        call_count[0] += 1
+        state = "open" if call_count[0] == 1 else "closed"
+        return (1, "a" * 40, state)
+
+    async def fake_check_runs(client, repo: str, sha: str) -> list[dict]:
+        return [_run("CI", conclusion="success")]
+
+    monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup)
+    monkeypatch.setattr(pr_ci_watch, "_get_check_runs", fake_check_runs)
+    monkeypatch.setenv("SISYPHUS_BUSINESS_REPO", "phona/repo")
+
+    result = await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9",
+                                            poll_interval_sec=0, timeout_sec=60)
+
+    assert result.passed is False
+    assert result.exit_code == 1
+    assert "pr-closed-without-merge" in result.stdout_tail
+
+
+@pytest.mark.asyncio
+async def test_watch_pr_ci_initial_pr_already_merged(monkeypatch):
+    """初始 fetch 就发现 PR 已 merge → 立即 pass（连 loop 都不需等）。"""
+    async def fake_lookup(client, repo: str, branch: str) -> tuple[int, str, str]:
+        return (1, "a" * 40, "merged")
+
+    check_run_calls = [0]
+
+    async def fake_check_runs(client, repo: str, sha: str) -> list[dict]:
+        check_run_calls[0] += 1
+        return []
+
+    monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup)
+    monkeypatch.setattr(pr_ci_watch, "_get_check_runs", fake_check_runs)
+    monkeypatch.setenv("SISYPHUS_BUSINESS_REPO", "phona/repo")
+
+    result = await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9",
+                                            poll_interval_sec=0, timeout_sec=60)
+
+    assert result.passed is True
+    assert "merged" in result.stdout_tail
+    assert check_run_calls[0] == 0
+
+
+# ── refetch 失败重试 ──────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_watch_pr_ci_pr_refetch_error_retries(monkeypatch):
+    """loop 内 _get_pr_info 抛 HTTP 错误 → 警告 + retry，不立即 fail。"""
+    call_count = [0]
+
+    async def fake_lookup(client, repo: str, branch: str) -> tuple[int, str, str]:
+        call_count[0] += 1
+        if call_count[0] == 2:  # loop tick 1 re-fetch 失败
+            raise httpx.HTTPError("transient error")
+        return (1, "a" * 40, "open")
+
+    async def fake_check_runs(client, repo: str, sha: str) -> list[dict]:
+        return [_run("CI", conclusion="success")]
+
+    async def fast_sleep(_):
+        return None
+
+    monkeypatch.setattr(pr_ci_watch, "_get_pr_info", fake_lookup)
+    monkeypatch.setattr(pr_ci_watch, "_get_check_runs", fake_check_runs)
+    monkeypatch.setattr(pr_ci_watch.asyncio, "sleep", fast_sleep)
+    monkeypatch.setenv("SISYPHUS_BUSINESS_REPO", "phona/repo")
+
+    # tick 1: re-fetch 失败但 check-runs 用 cached SHA 成功 → pass
+    result = await pr_ci_watch.watch_pr_ci("REQ-9", "feat/REQ-9",
+                                            poll_interval_sec=1, timeout_sec=60)
+
+    assert result.passed is True
 
 
 # ── _classify 单测 ───────────────────────────────────────────────────────
