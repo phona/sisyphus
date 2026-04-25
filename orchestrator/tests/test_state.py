@@ -38,6 +38,8 @@ EXPECTED = [
     (ReqState.REVIEW_RUNNING,       Event.VERIFY_FIX_NEEDED,   ReqState.FIXER_RUNNING,       "start_fixer"),
     (ReqState.REVIEW_RUNNING,       Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
     (ReqState.FIXER_RUNNING,        Event.FIXER_DONE,          ReqState.REVIEW_RUNNING,      "invoke_verifier_after_fix"),
+    # fixer round cap：start_fixer 自检超 cap → 链 emit verify.escalate 走 escalate
+    (ReqState.FIXER_RUNNING,        Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
 ]
 
 

@@ -500,6 +500,76 @@ def test_is_intake_no_result_tag_grid():
         ReqState.INTAKING, _mk("completed", []),
     ) is True
 
+
+# ─── Case 9b：FIXER_RUNNING + fixer_round 已到 cap → 标 escalated_reason=fixer-round-cap ─
+@pytest.mark.asyncio
+async def test_fixer_round_cap_marks_reason(monkeypatch):
+    """defense in depth：start_fixer 写完 ctx.fixer_round 后挂掉 / engine.step 失败
+    留下孤儿 FIXER_RUNNING；watchdog 30 min 后扫到，发现 round 已达 cap → 把
+    escalated_reason 标 fixer-round-cap，escalate.py 会识别为 hard reason 不
+    auto-resume + tag intent issue reason:fixer-round-cap。
+    """
+    pool = FakePool(rows=[
+        _row("REQ-FX", ReqState.FIXER_RUNNING.value,
+             ctx={
+                 "fixer_issue_id": "fix-9",
+                 "fixer_round": 5,
+                 "intent_issue_id": "intent-fx",
+             }),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="failed", id="fix-9"))
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    update_calls: list = []
+
+    async def fake_update(pool, req_id, patch):
+        update_calls.append((req_id, patch))
+
+    monkeypatch.setattr("orchestrator.watchdog.req_state.update_context", fake_update)
+    # 显式锁 cap 默认为 5（防 helm values 覆盖污染测试）
+    monkeypatch.setattr("orchestrator.watchdog.settings.fixer_round_cap", 5)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 1}
+    # 写了 escalated_reason=fixer-round-cap
+    assert any(
+        p.get("escalated_reason") == "fixer-round-cap" for _, p in update_calls
+    )
+    # 仍走 SESSION_FAILED 推到 escalate
+    assert step_calls[0]["event"] == Event.SESSION_FAILED
+
+
+@pytest.mark.asyncio
+async def test_fixer_round_below_cap_does_not_mark(monkeypatch):
+    """FIXER_RUNNING + fixer_round < cap → 不写 fixer-round-cap，走原 watchdog-stuck 路径。"""
+    pool = FakePool(rows=[
+        _row("REQ-FX", ReqState.FIXER_RUNNING.value,
+             ctx={"fixer_issue_id": "fix-9", "fixer_round": 2,
+                  "intent_issue_id": "intent-fx"}),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="failed", id="fix-9"))
+    _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    update_calls: list = []
+
+    async def fake_update(pool, req_id, patch):
+        update_calls.append((req_id, patch))
+
+    monkeypatch.setattr("orchestrator.watchdog.req_state.update_context", fake_update)
+    monkeypatch.setattr("orchestrator.watchdog.settings.fixer_round_cap", 5)
+
+    await watchdog._tick()
+
+    assert not any(
+        p.get("escalated_reason") == "fixer-round-cap" for _, p in update_calls
+    )
+
+
 # ─── Case 9：engine.step 抛异常不阻塞后续 row ─────────────────────────────
 @pytest.mark.asyncio
 async def test_engine_step_failure_isolated(monkeypatch):

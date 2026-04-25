@@ -183,6 +183,23 @@ async def _check_and_escalate(row) -> bool:
         stage_label = f"watchdog:{state_str}"
         stderr_tail = f"stuck for {stuck_sec}s in state {state_str}"
 
+    # 防 verifier↔fixer 死循环兜底：FIXER_RUNNING 卡住且 fixer_round 已达 cap →
+    # 显式标 escalated_reason=fixer-round-cap，escalate.py 识别为 hard reason 直接终止。
+    fx_round = int(ctx.get("fixer_round") or 0)
+    cap = settings.fixer_round_cap
+    if state == ReqState.FIXER_RUNNING and fx_round >= cap:
+        try:
+            await req_state.update_context(pool, req_id, {
+                "escalated_reason": "fixer-round-cap",
+                "fixer_round_cap_hit": cap,
+            })
+            ctx["escalated_reason"] = "fixer-round-cap"
+            log.warning("watchdog.fixer_round_cap_hit",
+                        req_id=req_id, fixer_round=fx_round, cap=cap)
+        except Exception as e:
+            log.warning("watchdog.fixer_round_cap_tag_failed",
+                        req_id=req_id, error=str(e))
+
     # 3. 写 artifact_checks 记一笔，给 dashboard M7 04-fail-kind-distribution 抓
     check = CheckResult(
         passed=False,

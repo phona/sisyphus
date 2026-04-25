@@ -396,6 +396,86 @@ async def test_escalate_action_error_is_transient(monkeypatch):
     fake.follow_up_issue.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_escalate_fixer_round_cap_is_hard_reason(monkeypatch):
+    """ctx.escalated_reason='fixer-round-cap' 即使 body.event 是 canonical 信号
+    （watchdog.stuck / session.failed）也不能被覆盖、不能 auto-resume。
+
+    保护场景：watchdog 检到孤儿 FIXER_RUNNING（start_fixer 写完 ctx 但 emit 失败），
+    若 escalate 把 reason 重写成 watchdog-stuck → 误判 transient → auto-resume →
+    BKD 续上去 → fixer 继续跑 → 死循环回归。
+    """
+    from orchestrator.actions import escalate as mod
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, "escalate", fake)
+    patch_db(monkeypatch, "escalate")
+    from unittest.mock import AsyncMock
+
+    from orchestrator import k8s_runner as krunner
+    from orchestrator.store import req_state as rs
+
+    class FakeRow:
+        state = type("S", (), {"value": "fixer-running"})()
+    monkeypatch.setattr(rs, "get", AsyncMock(return_value=FakeRow()))
+    monkeypatch.setattr(rs, "cas_transition", AsyncMock(return_value=True))
+    monkeypatch.setattr(krunner, "get_controller", lambda: type("C", (), {"cleanup_runner": AsyncMock()})())
+
+    body = make_body(issue_id="src-1", event="watchdog.stuck")
+    out = await mod.escalate(
+        body=body, req_id="REQ-9", tags=["watchdog:fixer-running"],
+        ctx={
+            "intent_issue_id": "intent-1",
+            "escalated_reason": "fixer-round-cap",
+            "fixer_round": 5,
+        },
+    )
+    # ctx hard reason 压过 canonical → reason 保留 fixer-round-cap，不 auto-resume
+    assert out["escalated"] is True
+    assert out["reason"] == "fixer-round-cap"
+    fake.follow_up_issue.assert_not_awaited()
+    fake.merge_tags_and_update.assert_awaited_once()
+    # 加的 tag 含 reason:fixer-round-cap
+    _, mtu_kwargs = fake.merge_tags_and_update.call_args
+    add_tags = mtu_kwargs.get("add") or []
+    assert "escalated" in add_tags
+    assert "reason:fixer-round-cap" in add_tags
+
+
+@pytest.mark.asyncio
+async def test_escalate_fixer_round_cap_session_completed_path(monkeypatch):
+    """start_fixer 主链路径：body.event=session.completed（verifier 完成事件触发）。
+    ctx.escalated_reason=fixer-round-cap → 真 escalate（非 transient），且
+    is_session_failed_path=False，依赖 engine 已 CAS 推 ESCALATED（这里只验 action 行为）。
+    """
+    from orchestrator.actions import escalate as mod
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, "escalate", fake)
+    patch_db(monkeypatch, "escalate")
+
+    body = make_body(issue_id="vfy-1", event="session.completed")
+    out = await mod.escalate(
+        body=body, req_id="REQ-9", tags=["verifier"],
+        ctx={
+            "intent_issue_id": "intent-1",
+            "escalated_reason": "fixer-round-cap",
+        },
+    )
+    assert out["escalated"] is True
+    assert out["reason"] == "fixer-round-cap"
+    fake.follow_up_issue.assert_not_awaited()
+    fake.merge_tags_and_update.assert_awaited_once()
+
+
+def test_is_transient_treats_fixer_round_cap_as_hard():
+    """单测：_is_transient 对 fixer-round-cap 永远返 False，不论 body.event。"""
+    from orchestrator.actions.escalate import _is_transient
+    assert _is_transient("session.failed", "fixer-round-cap") is False
+    assert _is_transient("watchdog.stuck", "fixer-round-cap") is False
+    assert _is_transient(None, "fixer-round-cap") is False
+    # sanity: 老的 transient 仍 transient
+    assert _is_transient("session.failed", "session-failed") is True
+
+
 # ─── done_archive ─────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_done_archive(monkeypatch):

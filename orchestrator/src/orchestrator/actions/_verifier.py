@@ -208,6 +208,12 @@ async def start_fixer(*, body, req_id, tags, ctx):
     stage 优先从当前 verifier issue 的 tags 取（`verify:<stage>`）—— 多 verifier 并发
     时 ctx.verifier_stage 可能被后来者覆盖，从触发本次 transition 的 issue tag 直读
     更稳。
+
+    硬 cap 防 verifier↔fixer 死循环：
+      ctx.fixer_round 是"已起过的 round 数"。本次将起的是 next_round = current + 1。
+      next_round > settings.fixer_round_cap 时不再起 fixer，emit VERIFY_ESCALATE 走
+      标准 escalate（reason=fixer-round-cap，escalate.py 识别为 hard reason，不会被
+      auto-resume 绕过）。
     """
     proj = body.projectId
     ctx = ctx or {}
@@ -223,6 +229,29 @@ async def start_fixer(*, body, req_id, tags, ctx):
     reason = ctx.get("verifier_reason") or ""
     branch = ctx.get("branch") or f"feat/{req_id}"
 
+    pool = db.get_pool()
+
+    # ─── round cap：第 N+1 次 start_fixer 直接 escalate（不起 fixer）───────
+    current_round = int(ctx.get("fixer_round") or 0)
+    next_round = current_round + 1
+    cap = settings.fixer_round_cap
+    if next_round > cap:
+        await req_state.update_context(pool, req_id, {
+            "escalated_reason": "fixer-round-cap",
+            "fixer_round_cap_hit": cap,
+        })
+        log.warning(
+            "start_fixer.round_cap_exceeded",
+            req_id=req_id, stage=stage, fixer=fixer,
+            current_round=current_round, cap=cap,
+        )
+        return {
+            "emit": Event.VERIFY_ESCALATE.value,
+            "reason": "fixer-round-cap",
+            "fixer_round": current_round,
+            "cap": cap,
+        }
+
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
             project_id=proj,
@@ -233,6 +262,7 @@ async def start_fixer(*, body, req_id, tags, ctx):
                 f"fixer:{fixer}",
                 f"parent-stage:{stage}",
                 f"parent-id:{ctx.get('verifier_issue_id', '')}",
+                f"round:{next_round}",
             ],
             status_id="todo",
             use_worktree=True,
@@ -241,7 +271,7 @@ async def start_fixer(*, body, req_id, tags, ctx):
         # 通用 bugfix prompt 作为过渡；PR4 再做每类 fixer 专用模板。
         prompt = render(
             "bugfix.md.j2",
-            req_id=req_id, round_n=ctx.get("fixer_round", 1),
+            req_id=req_id, round_n=next_round,
             kind=f"verifier-{fixer}",
             source_issue_id=ctx.get("verifier_issue_id", ""),
             branch=branch,
@@ -255,16 +285,20 @@ async def start_fixer(*, body, req_id, tags, ctx):
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")
 
-    pool = db.get_pool()
     await req_state.update_context(pool, req_id, {
         "fixer_issue_id": issue.id,
         "fixer_role": fixer,
         "fixer_scope": scope,
+        "fixer_round": next_round,
     })
 
     log.info("start_fixer.done",
-             req_id=req_id, fixer=fixer, stage=stage, issue_id=issue.id)
-    return {"fixer_issue_id": issue.id, "fixer": fixer, "stage": stage}
+             req_id=req_id, fixer=fixer, stage=stage, issue_id=issue.id,
+             round=next_round, cap=cap)
+    return {
+        "fixer_issue_id": issue.id, "fixer": fixer, "stage": stage,
+        "fixer_round": next_round,
+    }
 
 
 @register("invoke_verifier_after_fix", idempotent=False)
