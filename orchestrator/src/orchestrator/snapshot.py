@@ -97,7 +97,8 @@ async def sync_once() -> int:
     main_pool = db.get_pool()
 
     rows_proj = await main_pool.fetch("SELECT DISTINCT project_id FROM req_state")
-    project_ids = [r["project_id"] for r in rows_proj]
+    excluded = set(settings.snapshot_exclude_project_ids)
+    project_ids = [r["project_id"] for r in rows_proj if r["project_id"] not in excluded]
     if not project_ids:
         log.info("snapshot.no_projects_yet")
         return 0

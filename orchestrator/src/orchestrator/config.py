@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     # bkd_snapshot 同步间隔（秒）。0 = 不跑（替代 n8n 5min cron）
     snapshot_interval_sec: int = 300
 
+    # 已知死项目排除清单（snapshot loop 跳过 BKD list_issues 调用，避免 5min 一次
+    # 的 snapshot.list_failed warning）。env 用逗号分隔或 JSON 数组：
+    #   SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS=77k9z58j,old-proj
+    snapshot_exclude_project_ids: list[str] = Field(default_factory=list)
+
     # 不存任何 repo / project_id：
     # - repo URL 由 agent 自己 `git remote get-url origin` 取（在 BKD session cwd 里）
     # - project_id 来自 webhook payload；snapshot 扫描 req_state.project_id distinct（多项目自然支持）

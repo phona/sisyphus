@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from kubernetes.client import ApiException
 
 from orchestrator import k8s_runner, runner_gc
 
@@ -32,6 +33,14 @@ def mock_controller(monkeypatch):
     k8s_runner.set_controller(fake)
     yield fake
     k8s_runner.set_controller(None)
+
+
+@pytest.fixture(autouse=True)
+def _reset_disk_check_flag():
+    """每个 case 前后重置 _DISK_CHECK_DISABLED，防止前一 test 把它置为 True。"""
+    runner_gc._DISK_CHECK_DISABLED = False
+    yield
+    runner_gc._DISK_CHECK_DISABLED = False
 
 
 @pytest.mark.asyncio
@@ -116,3 +125,50 @@ async def test_skips_when_no_controller(monkeypatch):
     k8s_runner.set_controller(None)
     result = await runner_gc.gc_once()
     assert "skipped" in result
+
+
+@pytest.mark.asyncio
+async def test_disk_check_403_disables_after_first_warn(monkeypatch, mock_controller, capsys):
+    """ApiException(403) → 进程级 flag 置 True；warn 一次，disk_pressure=False。"""
+    pool = _FakePool([_row("REQ-1", "analyzing")])
+    monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
+    mock_controller.node_disk_usage_ratio = AsyncMock(
+        side_effect=ApiException(status=403, reason="Forbidden"),
+    )
+
+    assert runner_gc._DISK_CHECK_DISABLED is False
+    result = await runner_gc.gc_once()
+
+    assert result["disk_pressure"] is False
+    assert runner_gc._DISK_CHECK_DISABLED is True
+    out = capsys.readouterr().out
+    assert "disk_check_rbac_denied" in out
+
+
+@pytest.mark.asyncio
+async def test_disk_check_short_circuits_after_disabled(monkeypatch, mock_controller):
+    """_DISK_CHECK_DISABLED=True 时不再调 node_disk_usage_ratio。"""
+    pool = _FakePool([_row("REQ-1", "analyzing")])
+    monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
+    mock_controller.node_disk_usage_ratio = AsyncMock(return_value=0.5)
+    runner_gc._DISK_CHECK_DISABLED = True
+
+    result = await runner_gc.gc_once()
+
+    assert result["disk_pressure"] is False
+    mock_controller.node_disk_usage_ratio.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_disk_check_non_403_keeps_probe_alive(monkeypatch, mock_controller):
+    """ApiException(500) → 不禁用，下一轮还会再尝试。"""
+    pool = _FakePool([_row("REQ-1", "analyzing")])
+    monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
+    mock_controller.node_disk_usage_ratio = AsyncMock(
+        side_effect=ApiException(status=500, reason="Internal"),
+    )
+
+    result = await runner_gc.gc_once()
+
+    assert result["disk_pressure"] is False
+    assert runner_gc._DISK_CHECK_DISABLED is False  # 没禁用

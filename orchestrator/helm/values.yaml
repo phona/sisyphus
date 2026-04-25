@@ -74,6 +74,10 @@ env:
   workdir_root: /var/sisyphus-ci
   # 不存任何 project_id / repo_url —— project_id 来自 webhook，
   # repo_url 来自 agent 自己 `git remote get-url origin`
+  # snapshot loop 排除已知死项目（每 5min 一次的 BKD list_issues 失败 noise）。
+  # 新增死项目走这里加 env，不动代码。
+  snapshot_exclude_project_ids:
+    - 77k9z58j
   # ─── Mock / 调试开关（生产全 false）─────────────────────────────
   # 任一 stage skip = create_<stage> 不调 BKD agent，直接 emit done/pass
   # test_mode: true = 全部 skip，秒级走完整 state 机
