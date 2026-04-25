@@ -183,6 +183,11 @@ accept-env-down:
 按下面这份模板抄。约定跟 helm 那份一样：`accept-env-up` 起 stack 并在 stdout
 **最后一行**吐 endpoint JSON；`accept-env-down` 幂等清理。
 
+> 想看完整的 **「mobile App + 后端 stack」端到端 lab** 食谱（compose 起 backend +
+> headless Android emulator + 编 APK + 装到 emulator + 多键 endpoint JSON），
+> 看 [`docs/cookbook/ttpos-arch-lab-accept-env.md`](cookbook/ttpos-arch-lab-accept-env.md)。
+> 这里的 §4.2.2 只是纯后端 stack 的最小骨架。
+
 ```makefile
 .PHONY: accept-env-up accept-env-down
 

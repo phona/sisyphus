@@ -133,3 +133,4 @@ kubectl logs -n sisyphus deploy/sisyphus-orchestrator -f
 | [observability/sisyphus-dashboard.md](observability/sisyphus-dashboard.md) | 13 张 Metabase 看板 + SQL（M7 + M14e） |
 | [docs/prompts.md](docs/prompts.md) | 各阶段 agent prompt 总览（按 role） |
 | [docs/api-tag-management-spec.md](docs/api-tag-management-spec.md) | BKD issue tag 命名规范（router 依赖） |
+| [docs/cookbook/](docs/cookbook/) | 按 lab 形态分别给 `accept-env-up/down` 实现样板（如 `ttpos-arch-lab-accept-env.md`：compose + emulator + APK + endpoint） |
