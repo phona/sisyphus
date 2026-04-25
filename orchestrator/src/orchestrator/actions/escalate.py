@@ -37,9 +37,18 @@ _TRANSIENT_REASONS = {
     "archive-failed-after-2-retries",  # 兜底防自循环（archive 路径）
 }
 
+# Hard reasons：明确叫人停 + 不允许 auto-resume 绕过。
+# 即使 body.event 是 canonical 信号（watchdog.stuck / session.failed），ctx 里只要
+# 写了这些 reason，escalate 就用它（避免 watchdog 把 fixer-round-cap 这类硬终止
+# 二次包装成 watchdog-stuck → 被 _is_transient 判 transient → 继续 auto-resume → 再
+# 多起一轮 fixer，回到死循环）。
+_HARD_REASONS = {"fixer-round-cap"}
+
 
 def _is_transient(body_event: str | None, reason: str) -> bool:
     """判断是不是 transient 失败：值得 auto-resume continue 一次"""
+    if reason in _HARD_REASONS:
+        return False  # 硬停，绝不 auto-resume
     if reason == "verifier-decision-escalate":
         return False  # verifier 主观判，不重试
     if body_event == "session.failed":
@@ -85,14 +94,19 @@ async def escalate(*, body, req_id, tags, ctx):
     intent_issue_id = (ctx or {}).get("intent_issue_id") or body.issueId
     failed_issue_id = body.issueId  # 这次崩的具体 BKD issue
     # reason 优先级：
-    #   1. body.event 是 canonical 失败信号（session.failed / watchdog.stuck）
+    #   1. ctx hard reason（fixer-round-cap 等）—— 即使 body.event 是 canonical
+    #      信号也不能被覆盖，否则 watchdog.stuck 会把 hard 终止误归为 transient
+    #   2. body.event 是 canonical 失败信号（session.failed / watchdog.stuck）
     #      → 用 body.event（最新一手信号；避免被前轮 ctx.escalated_reason 毒化）
-    #   2. ctx.escalated_reason 已被 caller 细分（engine action-error 等）
-    #   3. fallback：body.event 转 slug
-    if body.event in _CANONICAL_SIGNALS:
+    #   3. ctx.escalated_reason 已被 caller 细分（engine action-error 等）
+    #   4. fallback：body.event 转 slug
+    ctx_reason = (ctx or {}).get("escalated_reason")
+    if ctx_reason in _HARD_REASONS:
+        reason = ctx_reason
+    elif body.event in _CANONICAL_SIGNALS:
         reason = body.event.replace(".", "-")[:40]
     else:
-        reason = (ctx or {}).get("escalated_reason") or (
+        reason = ctx_reason or (
             (body.event or "unknown").replace(".", "-")[:40]
         )
     # 二次 override：BKD 真发的 session.failed webhook 也能识别 archive 阶段
