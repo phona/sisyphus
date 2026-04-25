@@ -6,8 +6,12 @@ kubectl exec 进去能立刻用。Pod 生命周期绑本 REQ 直到 done/escalat
 REQ-clone-and-pr-ci-fallback-1777115925：在 ensure_runner 之后、follow-up
 prompt 之前，把 ctx 里的 involved_repos 替 agent server-side clone 进
 /workspace/source/<basename>/。clone 失败 → 直接 emit VERIFY_ESCALATE，不
-让 agent 进空 PVC 干活。直接 analyze 路径（无 intake，ctx 没 involved_repos）
-保留 fallback：跳过 server-side clone，agent 按 prompt Part A.3 自己跑 helper。
+让 agent 进空 PVC 干活。
+
+REQ-clone-fallback-direct-analyze-1777119520：直接 analyze 路径（无 intake，
+ctx 没 involved_repos）也试 multi-layer fallback —— 把 BKD intent issue tags
+里的 `repo:<org>/<name>` 跟 settings.default_involved_repos 喂给 _clone helper。
+所有层都拿不到 → 才落到 agent prompt Part A.3 的"自跑 helper"路径。
 
 行为：
 1. ensure_runner（K8s：建 PVC + Pod，等 Ready）
@@ -49,8 +53,11 @@ async def start_analyze(*, body, req_id, tags, ctx):
         pod_name = await rc.ensure_runner(req_id, wait_ready=True)
         log.info("start_analyze.runner_ready", req_id=req_id, pod=pod_name)
 
-    # 2. server-side clone（ctx 有 involved_repos 时；直接 analyze 路径无声跳过）
-    cloned_repos, clone_rc = await clone_involved_repos_into_runner(req_id, ctx)
+    # 2. server-side clone（multi-layer fallback：ctx → tags → settings.default
+    # 都没拿到 → 无声跳过，让 agent 按 prompt Part A.3 自跑 helper）
+    cloned_repos, clone_rc = await clone_involved_repos_into_runner(
+        req_id, ctx, tags=tags, default_repos=settings.default_involved_repos,
+    )
     if clone_rc is not None:
         # helper 跑过但失败 → 不 dispatch agent，直接 escalate
         return {

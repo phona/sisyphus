@@ -129,6 +129,16 @@ class Settings(BaseSettings):
     # vm-node04 默认 id 见 runner_container.md.j2 的 fallback。helm values 可覆盖。
     aissh_server_id: str = "5b25f0cd-4fef-4a1f-a4c0-14ecf1395d84"
 
+    # ─── REQ-clone-fallback-direct-analyze-1777119520：multi-layer involved_repos
+    # 的 last-resort fallback 层（L4）。直接 analyze 路径（无 intake）+ ctx 没
+    # involved_repos + tags 也没 `repo:<org>/<name>` → 用这里的 default 喂 server-side
+    # clone helper。单仓部署（如 sisyphus 自 dogfood）配 `phona/sisyphus` 一条即可，
+    # 直接 analyze 入口就能 auto-clone；多仓 / 跨项目部署留空（Field default_factory），
+    # 强制用户走 intake 或在 intent issue 上挂 `repo:` tag 显式声明。
+    # env：`SISYPHUS_DEFAULT_INVOLVED_REPOS=phona/sisyphus,phona/foo`（逗号分隔）
+    # 或 JSON 数组 `["phona/sisyphus","phona/foo"]`。
+    default_involved_repos: list[str] = Field(default_factory=list)
+
     # ─── M14b/M14c：verifier-agent 框架 ─────────────────────────────────
     # 每个 stage transition（成功 or 失败）先起一个 verifier-agent 做主观判断
     # —— 3 路决策：pass / fix / escalate，再由 webhook 路由推进状态机。

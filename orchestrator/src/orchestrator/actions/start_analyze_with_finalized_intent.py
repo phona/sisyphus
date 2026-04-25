@@ -53,8 +53,12 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
         pod_name = await rc.ensure_runner(req_id, wait_ready=True)
         log.info("start_analyze_with_finalized_intent.runner_ready", req_id=req_id, pod=pod_name)
 
-    # 2. server-side clone（intake 路径必有 involved_repos；失败 → escalate）
-    cloned_repos, clone_rc = await clone_involved_repos_into_runner(req_id, ctx)
+    # 2. server-side clone（intake 路径必有 involved_repos；失败 → escalate）。
+    # tags + settings.default_involved_repos 是 REQ-clone-fallback-direct-analyze
+    # 的 multi-layer 兜底，intake 路径正常用不上但传进去保持调用形状一致。
+    cloned_repos, clone_rc = await clone_involved_repos_into_runner(
+        req_id, ctx, tags=tags, default_repos=settings.default_involved_repos,
+    )
     if clone_rc is not None:
         return {
             "emit": Event.VERIFY_ESCALATE.value,
