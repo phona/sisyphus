@@ -1,0 +1,65 @@
+capability: accept-env-gc-skeleton
+version: "0.1"
+description: |
+  Pure file-skeleton placeholder for the future accept_env_gc subsystem.
+
+  Locks the public coroutine API surface (module path + two async function
+  names) so the follow-up implementation REQ can land K8s + DB logic without
+  changing callers. No business behaviour is described here; both stubs raise
+  NotImplementedError when awaited and ship zero side-effecting imports so the
+  module is safe to import in unit tests without production env vars.
+
+  This capability is *throwaway*: the follow-up implementation REQ will retire
+  it entirely (delete the skeleton test, replace stubs with real bodies, and
+  introduce a separate long-lived `accept-env-gc` capability that documents
+  the actual GC behaviour). Do NOT extend this spec with additional behavioural
+  requirements; route those through the implementation REQ instead.
+
+module:
+  path: orchestrator/src/orchestrator/accept_env_gc.py
+  python_module: orchestrator.accept_env_gc
+
+api_surface:
+  gc_once:
+    kind: coroutine_function
+    signature: "async def gc_once() -> typing.NoReturn"
+    body: 'raise NotImplementedError("accept_env_gc skeleton ...")'
+    semantics: |
+      Skeleton stub. Future implementation will perform a single GC pass over
+      `accept-req-*` namespaces and return a result dict. Skeleton MUST raise
+      NotImplementedError so accidental wiring fails loud.
+
+  run_loop:
+    kind: coroutine_function
+    signature: "async def run_loop() -> typing.NoReturn"
+    body: 'raise NotImplementedError("accept_env_gc skeleton ...")'
+    semantics: |
+      Skeleton stub. Future implementation will be the long-running periodic
+      GC loop registered into `main.startup`'s `_bg_tasks`. Skeleton MUST
+      raise NotImplementedError so accidental wiring fails loud (rather than
+      hanging in an infinite no-op sleep loop).
+
+import_constraints:
+  forbidden_at_skeleton_stage:
+    - orchestrator.config
+    - orchestrator.k8s_runner
+    - orchestrator.store
+    - kubernetes
+    - asyncpg
+    - httpx
+  rationale: |
+    Importing the module at this skeleton stage MUST have zero runtime side
+    effects (no DB pool init, no K8s client creation, no env-var-dependent
+    Settings load). This keeps the unit test trivially safe to run in any
+    environment, including ones that have no SISYPHUS_* env vars set.
+
+throwaway_marker:
+  retire_in: implementation_req
+  retire_actions:
+    - delete orchestrator/tests/test_accept_env_gc_skeleton.py
+    - replace NotImplementedError stubs with real bodies
+    - introduce separate `accept-env-gc` capability for behavioural contracts
+  rationale: |
+    The long-lived spec library (openspec/specs/) MUST NOT contain a
+    requirement of the form "the system SHALL raise NotImplementedError";
+    that is purely a build-up-the-pipeline artifact, not a durable contract.
