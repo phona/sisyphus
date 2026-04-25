@@ -42,16 +42,18 @@ def _closed(sha: str):
 def _cr_url(sha: str) -> re.Pattern:
     return re.compile(rf"https://api\.github\.com/repos/{re.escape(REPO)}/commits/{re.escape(sha)}/check-runs.*")
 
+_GHA_APP = {"slug": "github-actions"}
+
 def _pending_cr(sha: str) -> dict:
     return {
         "total_count": 1,
-        "check_runs": [{"id": 1, "name": "CI", "head_sha": sha, "status": "in_progress", "conclusion": None}],
+        "check_runs": [{"id": 1, "name": "CI", "head_sha": sha, "status": "in_progress", "conclusion": None, "app": _GHA_APP}],
     }
 
 def _success_cr(sha: str) -> dict:
     return {
         "total_count": 1,
-        "check_runs": [{"id": 1, "name": "CI", "head_sha": sha, "status": "completed", "conclusion": "success"}],
+        "check_runs": [{"id": 1, "name": "CI", "head_sha": sha, "status": "completed", "conclusion": "success", "app": _GHA_APP}],
     }
 
 def _call_seq(*states):
