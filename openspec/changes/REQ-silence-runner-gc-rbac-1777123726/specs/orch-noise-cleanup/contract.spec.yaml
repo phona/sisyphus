@@ -1,0 +1,65 @@
+capability: orch-noise-cleanup
+version: "1.1"
+description: |
+  Delta over orch-noise-cleanup v1.0 (PR #66 / REQ-orch-noise-cleanup-1777078500).
+
+  PR #66 added a process-level `_DISK_CHECK_DISABLED` flag that suppresses the
+  `runner_gc.disk_check_rbac_denied` log after the first 403 within a single
+  orchestrator process. This delta keeps that flag behavior intact and only
+  changes the log level for the first emission from WARNING to INFO so that
+  alert dashboards (loki / Grafana / pagerduty filters keyed on level=warning)
+  no longer receive a repeated entry across orchestrator pod restarts (helm
+  upgrade, livenessProbe restart, deployment rollout).
+
+  No other behavior changes:
+    - retention-based GC fallback unchanged
+    - disk-pressure emergency purge path unchanged
+    - non-403 ApiException still logged at debug
+    - exit short-circuit on subsequent ticks unchanged
+
+log_levels:
+  runner_gc_disk_check_rbac_denied:
+    module: orchestrator.runner_gc
+    function: gc_once
+    previous: warning            # PR #66 contract
+    current: info                # this delta
+    rationale: |
+      RBAC missing cluster-scoped nodes:list is an expected configuration on
+      namespace-scoped Role deployments of sisyphus. Repeating a warning every
+      orchestrator pod restart is alert noise; INFO preserves grep-ability for
+      operators without polluting warning streams.
+    dedup_semantics: |
+      Within a single process, the log line is emitted at most once. The
+      `_DISK_CHECK_DISABLED` module-level flag short-circuits subsequent
+      gc_once ticks before the K8s API call.
+
+  runner_gc_disk_check_failed:
+    module: orchestrator.runner_gc
+    function: gc_once
+    level: debug
+    unchanged: true
+
+  runner_gc_disk_pressure:
+    module: orchestrator.runner_gc
+    function: gc_once
+    level: warning
+    unchanged: true
+    rationale: |
+      Real disk-pressure detection (ratio > threshold) is an actionable signal
+      and stays at WARNING.
+
+state_invariants:
+  process_flag:
+    name: _DISK_CHECK_DISABLED
+    module: orchestrator.runner_gc
+    type: bool
+    initial: false
+    transitions:
+      - "false → true on first ApiException(status=403) raised by node_disk_usage_ratio"
+    persistence: "in-memory only; reset on process restart (intended)"
+
+unchanged_from_v1_0:
+  - snapshot_exclude_project_ids setting and ORCHN-S1..S3 scenarios
+  - non-403 ApiException debug-level handling
+  - disk-pressure emergency purge happy path (ratio > threshold)
+  - retention-only fallback when disk-check is disabled

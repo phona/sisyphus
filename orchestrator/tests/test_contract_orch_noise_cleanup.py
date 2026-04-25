@@ -7,10 +7,11 @@ Scenarios covered:
   ORCHN-S1  排除单个项目时跳过 BKD 调用
   ORCHN-S2  排除清单为空时保持原行为
   ORCHN-S3  全部 project_id 都被排除时短路返回 0
-  ORCHN-S4  首次 403 时 warn 一次并禁用后续 disk-check
+  ORCHN-S4  首次 403 时 info 一次并禁用后续 disk-check
   ORCHN-S5  disk-check 已禁用后 gc_once 不再调 list_node
   ORCHN-S6  非 403 异常仍走 debug 不禁用
   ORCHN-S7  disk-check 正常 ratio > threshold 时仍能触发紧急清理
+  ORCHN-S8  alert 看板按 level=warning 过滤时看不到 rbac_denied
 """
 from __future__ import annotations
 
@@ -176,13 +177,14 @@ async def test_orchn_s3_all_excluded_returns_zero(monkeypatch):
     )
 
 
-# ─── ORCHN-S4: 首次 403 时 warn 一次并禁用后续 disk-check ────────────────────
+# ─── ORCHN-S4: 首次 403 时 info 一次并禁用后续 disk-check ─────────────────────
 
 
-async def test_orchn_s4_first_403_warns_and_disables(monkeypatch):
+async def test_orchn_s4_first_403_logs_info_and_disables(monkeypatch):
     """
     ORCHN-S4: gc_once 在 node_disk_usage_ratio 抛出 ApiException(status=403) 时：
-    - 必须发出一条包含 'runner_gc.disk_check_rbac_denied' 的 WARNING 日志
+    - 必须发出恰好一条 'runner_gc.disk_check_rbac_denied' 的 **INFO** 日志
+      （不是 WARNING —— alert dashboards 按 level=warning 过滤时看不到）
     - 必须把进程级 _DISK_CHECK_DISABLED flag 置为 True
     - 返回结果 disk_pressure=False
     """
@@ -209,11 +211,27 @@ async def test_orchn_s4_first_403_warns_and_disables(monkeypatch):
         "ORCHN-S4: _DISK_CHECK_DISABLED must be True after first 403"
     )
 
-    # exactly one warning with the required key
+    # exactly one INFO record with the required event name
+    rbac_denied_records = [
+        r for r in log_records
+        if "runner_gc.disk_check_rbac_denied" in r.get("event", "")
+    ]
+    assert len(rbac_denied_records) == 1, (
+        f"ORCHN-S4: must log exactly one 'runner_gc.disk_check_rbac_denied'; "
+        f"got {len(rbac_denied_records)}: {rbac_denied_records}"
+    )
+    assert rbac_denied_records[0].get("log_level") == "info", (
+        f"ORCHN-S4: 'runner_gc.disk_check_rbac_denied' must be at INFO level "
+        f"(not WARNING) so alert dashboards stop receiving repeated entries "
+        f"across orchestrator pod restarts; got level "
+        f"{rbac_denied_records[0].get('log_level')!r}"
+    )
+
+    # must NOT emit at warning level (regression guard against PR #66 contract)
     warning_events = [r["event"] for r in log_records if r.get("log_level") == "warning"]
-    assert any("runner_gc.disk_check_rbac_denied" in e for e in warning_events), (
-        f"ORCHN-S4: must log warning 'runner_gc.disk_check_rbac_denied'; "
-        f"actual warnings: {warning_events}"
+    assert not any("runner_gc.disk_check_rbac_denied" in e for e in warning_events), (
+        f"ORCHN-S4: 'runner_gc.disk_check_rbac_denied' MUST NOT appear at "
+        f"WARNING level; warnings: {warning_events}"
     )
 
     # disk_pressure must be False
@@ -359,4 +377,46 @@ async def test_orchn_s7_high_ratio_triggers_disk_pressure(monkeypatch):
     disk_pressure = result.get("disk_pressure") if isinstance(result, dict) else getattr(result, "disk_pressure", None)
     assert disk_pressure is True, (
         f"ORCHN-S7: result disk_pressure must be True when ratio > threshold; got {result!r}"
+    )
+
+
+# ─── ORCHN-S8: alert 看板按 level=warning 过滤时看不到 rbac_denied ────────────
+
+
+async def test_orchn_s8_warning_filter_excludes_rbac_denied(monkeypatch):
+    """
+    ORCHN-S8: 多次 gc_once 在 RBAC 缺 nodes:list 的场景下都不能让
+    'runner_gc.disk_check_rbac_denied' 出现在 warning 流（哪怕第一次也不行）。
+    模拟 alert dashboard / loki 按 log_level == "warning" 过滤的查询。
+    """
+    from kubernetes.client.exceptions import ApiException
+
+    import orchestrator.runner_gc as gc_mod
+
+    monkeypatch.setattr(gc_mod, "_DISK_CHECK_DISABLED", False)
+
+    class _FakeController:
+        async def node_disk_usage_ratio(self):
+            raise ApiException(status=403)
+        async def gc_orphans(self, keep):
+            return []
+
+    monkeypatch.setattr(gc_mod.k8s_runner, "get_controller", lambda: _FakeController())
+    monkeypatch.setattr(gc_mod.db, "get_pool", lambda: _FakePool())
+
+    with structlog.testing.capture_logs() as log_records:
+        # 第一次 tick：触发 403 → log info → set flag
+        await gc_mod.gc_once()
+        # 模拟后续 N 次 tick（flag 已 True，应一律 short-circuit）
+        for _ in range(5):
+            await gc_mod.gc_once()
+
+    warning_records = [
+        r for r in log_records
+        if r.get("log_level") == "warning"
+        and "runner_gc.disk_check_rbac_denied" in r.get("event", "")
+    ]
+    assert warning_records == [], (
+        f"ORCHN-S8: alert filter (level=warning) MUST NOT see "
+        f"'runner_gc.disk_check_rbac_denied'; got: {warning_records}"
     )
