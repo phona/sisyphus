@@ -41,12 +41,15 @@ RUN curl -fsSL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz \
 ENV PATH="/usr/local/go/bin:/root/go/bin:$PATH" \
     GOPATH=/root/go
 
-# ─── 3. openspec CLI ─────────────────────────────────────────────────────
+# ─── 3. uv (Python package manager — ci-lint / ci-unit-test 用 uv run) ──────
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
+# ─── 4. openspec CLI ─────────────────────────────────────────────────────
 # 真包名是 @fission-ai/openspec（旧 Dockerfile 装的 @fission-codes/openspec 不存在，
 # 退回 openspec 是 npm 上的占位空包，REQ-997 analyze 暴露的）
 RUN npm install -g @fission-ai/openspec@latest && openspec --version
 
-# ─── 4. sisyphus 合约脚本 ──────────────────
+# ─── 5. sisyphus 合约脚本 ──────────────────
 # build context 必须是 sisyphus repo 根（CI workflow 已配 context: .）
 COPY scripts/check-scenario-refs.sh \
      scripts/check-tasks-section-ownership.sh \
@@ -56,7 +59,7 @@ COPY scripts/check-scenario-refs.sh \
 RUN chmod +x /opt/sisyphus/scripts/*.sh
 ENV PATH="/opt/sisyphus/scripts:$PATH"
 
-# ─── 5. DinD 入口 ─────────────────────────────────────────────────────────
+# ─── 6. DinD 入口 ─────────────────────────────────────────────────────────
 COPY runner/entrypoint.sh /usr/local/bin/sisyphus-entrypoint.sh
 RUN chmod +x /usr/local/bin/sisyphus-entrypoint.sh
 
