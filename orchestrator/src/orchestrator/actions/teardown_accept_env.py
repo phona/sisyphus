@@ -5,6 +5,7 @@
 - 幂等：make ci-accept-env-down 自己要是幂等的（repo 契约）
 - 失败只 warning，不阻塞状态机（防泄漏资源属于重要，但挂一个 helm uninstall 不该拖垮整个 REQ）
 - 按 ctx.accept_result 分流 emit：TEARDOWN_DONE_PASS / TEARDOWN_DONE_FAIL
+- 工作目录由 _integration_resolver 决策，与 create_accept 保持同源（self-host 回退）
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from .. import k8s_runner
 from ..state import Event
 from ..store import db, req_state
 from . import register
+from ._integration_resolver import resolve_integration_dir
 from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
@@ -47,26 +49,30 @@ async def teardown_accept_env(*, body, req_id, tags, ctx):
         # runner controller 没初始化（本地 dev / kubeconfig 缺）—— 跳过清理
         log.warning("teardown.no_controller", req_id=req_id, error=str(e))
     else:
-        try:
-            result = await rc.exec_in_runner(
-                req_id,
-                # 在 integration repo 根目录跑；integration/* glob 假设只有一个
-                command="cd /workspace/integration/* && make ci-accept-env-down",
-                env={
-                    "SISYPHUS_REQ_ID": req_id,
-                    "SISYPHUS_STAGE": "accept-teardown",
-                    "SISYPHUS_NAMESPACE": f"accept-{req_id.lower()}",
-                },
-                timeout_sec=300,
-            )
-            env_down_ok = result.exit_code == 0
-            log.info(
-                "teardown.done", req_id=req_id,
-                exit_code=result.exit_code, duration_sec=result.duration_sec,
-                stderr_tail=result.stderr[-500:] if result.stderr else "",
-            )
-        except Exception as e:
-            log.warning("teardown.failed", req_id=req_id, error=str(e))
+        # integration 优先 / 单仓 source self-host 回退；与 create_accept 同源
+        resolved = await resolve_integration_dir(rc, req_id)
+        if resolved.dir is None:
+            log.warning("teardown.no_integration_dir", req_id=req_id, reason=resolved.reason)
+        else:
+            try:
+                result = await rc.exec_in_runner(
+                    req_id,
+                    command=f"cd {resolved.dir} && make ci-accept-env-down",
+                    env={
+                        "SISYPHUS_REQ_ID": req_id,
+                        "SISYPHUS_STAGE": "accept-teardown",
+                        "SISYPHUS_NAMESPACE": f"accept-{req_id.lower()}",
+                    },
+                    timeout_sec=300,
+                )
+                env_down_ok = result.exit_code == 0
+                log.info(
+                    "teardown.done", req_id=req_id, integration_dir=resolved.dir,
+                    exit_code=result.exit_code, duration_sec=result.duration_sec,
+                    stderr_tail=result.stderr[-500:] if result.stderr else "",
+                )
+            except Exception as e:
+                log.warning("teardown.failed", req_id=req_id, error=str(e))
 
     # 4. emit 下一步 event（不管 teardown 成不成，都按原 accept_result 分流）
     next_event = (

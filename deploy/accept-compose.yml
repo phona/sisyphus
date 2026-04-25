@@ -1,0 +1,57 @@
+# sisyphus self-dogfood accept env (REQ-self-accept-stage-1777121797)
+#
+# 单 Python 进程 + 单 postgres 的最小 ephemeral 栈，给 sisyphus 改 sisyphus 的 REQ
+# 跑 accept 阶段用。docker-compose 跑在 runner pod 的 DinD 里。
+#
+# 用法：
+#   ../scripts/sisyphus-accept-up-compose.sh    # 由 Makefile ci-accept-env-up 调
+#   ../scripts/sisyphus-accept-down-compose.sh  # 由 Makefile ci-accept-env-down 调
+#
+# 环境变量：
+#   SISYPHUS_NAMESPACE   - compose project name (默认 accept-default)
+#   SISYPHUS_ACCEPT_PORT - host 上 orchestrator 的端口 (默认 18000)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sisyphus
+      POSTGRES_PASSWORD: sisyphus
+      POSTGRES_DB: sisyphus
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sisyphus -d sisyphus"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  orchestrator:
+    build:
+      context: ../orchestrator
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # FastAPI 端口（跟 Dockerfile 里 EXPOSE 8000 / CMD --port 8000 一致）
+      SISYPHUS_HOST: "0.0.0.0"
+      SISYPHUS_PORT: "8000"
+      # required by config.py Field(...)
+      SISYPHUS_PG_DSN: "postgresql://sisyphus:sisyphus@postgres:5432/sisyphus"
+      SISYPHUS_BKD_TOKEN: "smoke-dummy-bkd-token"
+      SISYPHUS_WEBHOOK_TOKEN: "smoke-dummy-webhook-token"
+      # smoke env 不进 K3s（避免读 kubeconfig 失败）
+      SISYPHUS_K8S_IN_CLUSTER: "false"
+      # 关后台 noise（snapshot 要 obs DSN，watchdog 周期扫 db 没 REQ 也 ok 但日志多）
+      SISYPHUS_OBS_PG_DSN: ""
+      SISYPHUS_SNAPSHOT_INTERVAL_SEC: "0"
+      SISYPHUS_WATCHDOG_ENABLED: "false"
+      SISYPHUS_LOG_LEVEL: "INFO"
+      SISYPHUS_LOG_JSON: "true"
+    ports:
+      - "${SISYPHUS_ACCEPT_PORT:-18000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz').status==200 else 1)\""]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 10s

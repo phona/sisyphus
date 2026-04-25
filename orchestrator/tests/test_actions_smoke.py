@@ -495,8 +495,9 @@ async def test_done_archive(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_accept(monkeypatch):
-    """v0.2：create_accept 先跑 env-up（k8s_runner.exec_in_runner）拿 endpoint，
-    再 dispatch BKD accept-agent。
+    """v0.2：create_accept 先跑 integration-resolver 扫一次，再跑 env-up（k8s_runner.exec_in_runner）
+    拿 endpoint，最后 dispatch BKD accept-agent。
+    REQ-self-accept-stage-1777121797 起：env-up 前会先有一次 scan exec_in_runner。
     """
     from orchestrator.actions import create_accept as mod
     from orchestrator.k8s_runner import ExecResult
@@ -507,9 +508,15 @@ async def test_create_accept(monkeypatch):
     patch_db(monkeypatch, "create_accept")
     monkeypatch.setattr("orchestrator.actions.create_accept.settings.skip_accept", False)
 
-    # mock k8s runner controller：env-up 返 exit_code=0 + stdout 末行 JSON
+    # mock k8s runner controller：第一次 (scan) 返 integration 候选 dir；
+    # 第二次 (env-up) 返 exit_code=0 + stdout 末行 JSON
     class FakeRC:
         async def exec_in_runner(self, req_id, command, env=None, timeout_sec=600):
+            if env and env.get("SISYPHUS_STAGE") == "accept-resolve":
+                return ExecResult(
+                    exit_code=0, stdout="I:/workspace/integration/lab\n",
+                    stderr="", duration_sec=0.1,
+                )
             return ExecResult(
                 exit_code=0,
                 stdout='some helm output\n{"endpoint":"http://svc.accept-req-9.svc:8080"}\n',
@@ -533,7 +540,11 @@ async def test_create_accept(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_accept_env_up_fail(monkeypatch):
-    """env-up exit_code != 0 → emit accept-env-up.fail，不 dispatch agent。"""
+    """env-up exit_code != 0 → emit accept-env-up.fail，不 dispatch agent。
+
+    Resolver 扫描成功定位到 integration dir，env-up 才会真跑；env-up 退码非 0 时
+    出 accept-env-up.fail（reason=exit_code=...，stderr_tail）。
+    """
     from orchestrator.actions import create_accept as mod
     from orchestrator.k8s_runner import ExecResult
 
@@ -544,6 +555,11 @@ async def test_create_accept_env_up_fail(monkeypatch):
 
     class FakeRC:
         async def exec_in_runner(self, req_id, command, env=None, timeout_sec=600):
+            if env and env.get("SISYPHUS_STAGE") == "accept-resolve":
+                return ExecResult(
+                    exit_code=0, stdout="I:/workspace/integration/lab\n",
+                    stderr="", duration_sec=0.1,
+                )
             return ExecResult(
                 exit_code=1, stdout="", stderr="helm install failed",
                 duration_sec=3.0,

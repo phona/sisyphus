@@ -1,14 +1,16 @@
 # Sisyphus - 顶层 Makefile
 #
-# 自 dogfood ttpos-ci 标准（docs/integration-contracts.md §2.1）：
+# 自 dogfood ttpos-ci 标准（docs/integration-contracts.md §2.1 + §2.3）：
 #   make ci-lint              —— ruff lint，BASE_REV 非空时仅检变更 *.py
 #   make ci-unit-test         —— pytest -m "not integration"
 #   make ci-integration-test  —— pytest -m integration（exit 5 视为 pass）
+#   make ci-accept-env-up     —— docker compose 起 ephemeral lab，emit endpoint JSON
+#   make ci-accept-env-down   —— 幂等清栈
 #
-# 这三个 target 的存在让 sisyphus 仓自己也能被 sisyphus 的 dev_cross_check / staging_test
-# checker 跑（self-dogfood）。
+# 前 3 个让 sisyphus 仓被 dev_cross_check / staging_test checker 跑；
+# 后 2 个让 self-dogfood 的 accept 阶段跑得起来（REQ-self-accept-stage-1777121797）。
 
-.PHONY: help ci-lint ci-unit-test ci-integration-test test-all test-flutter test-go
+.PHONY: help ci-lint ci-unit-test ci-integration-test ci-accept-env-up ci-accept-env-down test-all test-flutter test-go
 
 SCRIPT_DIR := $(shell pwd)
 
@@ -45,6 +47,15 @@ ci-integration-test: ## pytest 集成测试（integration marker；零收集视�
 	else \
 		exit $$rc; \
 	fi
+
+# ========== ttpos-ci accept env target（self-dogfood; integration repo 契约） ==========
+# REQ-self-accept-stage-1777121797: sisyphus 自己同时充当 source repo 和 integration repo
+
+ci-accept-env-up: ## docker compose 起 ephemeral lab + emit endpoint JSON 到 stdout 末行
+	@./scripts/sisyphus-accept-up-compose.sh
+
+ci-accept-env-down: ## docker compose down -v（幂等；best-effort）
+	@./scripts/sisyphus-accept-down-compose.sh
 
 # ========== 项目级测试聚合（保留） ==========
 

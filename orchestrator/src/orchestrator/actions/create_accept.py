@@ -1,8 +1,10 @@
 """create_accept (v0.2): PR CI 通过后拉 lab + 派 accept-agent。
 
 v0.2 三段：
-1. env-up：sisyphus 直调 k8s_runner.exec_in_runner 跑 `make ci-accept-env-up`
-   （在 /workspace/integration/* 下），拿 stdout 尾行 JSON 的 endpoint
+1. env-up：sisyphus 直调 k8s_runner.exec_in_runner 跑 `make ci-accept-env-up`，
+   工作目录由 `_integration_resolver.resolve_integration_dir` 决策（优先
+   /workspace/integration/<name>，回退到 /workspace/source/<name> 单仓 self-host），
+   拿 stdout 尾行 JSON 的 endpoint
 2. 发 accept-agent BKD issue，注入 endpoint + image_tags + FEATURES
 3. agent 跑 FEATURE-A* scenarios → session.completed 进 teardown_accept_env
 
@@ -21,6 +23,7 @@ from ..prompts import render
 from ..state import Event
 from ..store import db, req_state
 from . import register, short_title
+from ._integration_resolver import resolve_integration_dir
 from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
@@ -46,6 +49,16 @@ async def create_accept(*, body, req_id, tags, ctx):
         # 没 runner controller → 直接走 skip（等同 dev 环境）
         return {"emit": Event.ACCEPT_PASS.value, "note": "no runner controller, skipped env-up"}
 
+    # 解析 integration dir：integration 优先 / 单仓 source self-host 回退
+    resolved = await resolve_integration_dir(rc, req_id)
+    if resolved.dir is None:
+        log.warning("create_accept.no_integration_dir", req_id=req_id, reason=resolved.reason)
+        return {
+            "emit": Event.ACCEPT_ENV_UP_FAIL.value,
+            "reason": resolved.reason,
+        }
+    integration_dir = resolved.dir
+
     # 由 accept-agent 在 Makefile 里自己读 image_tags
     exec_env = {
         "SISYPHUS_REQ_ID": req_id,
@@ -55,10 +68,7 @@ async def create_accept(*, body, req_id, tags, ctx):
     try:
         result = await rc.exec_in_runner(
             req_id,
-            command=(
-                "cd /workspace/integration/* && "
-                "make ci-accept-env-up"
-            ),
+            command=f"cd {integration_dir} && make ci-accept-env-up",
             env=exec_env,
             timeout_sec=600,   # 10 min 应该够 helm install + wait ready
         )
