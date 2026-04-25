@@ -12,8 +12,6 @@ from __future__ import annotations
 from typing import ClassVar
 from unittest.mock import AsyncMock
 
-import pytest
-
 
 class _FakePool:
     """Minimal asyncpg pool fake: ordered fetchrow returns + recorded execute calls."""
