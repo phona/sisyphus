@@ -18,8 +18,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
-import pytest
 from kubernetes.client import ApiException
+import pytest
 
 from orchestrator import accept_env_gc, k8s_runner
 
