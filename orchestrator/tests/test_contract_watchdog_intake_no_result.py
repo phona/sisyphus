@@ -22,7 +22,6 @@ from types import SimpleNamespace
 
 import pytest
 
-
 # ─── Contract 1: watchdog new constants ───────────────────────────────────────
 
 
