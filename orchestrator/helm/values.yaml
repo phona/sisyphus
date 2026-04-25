@@ -78,6 +78,11 @@ env:
   # 新增死项目走这里加 env，不动代码。
   snapshot_exclude_project_ids:
     - 77k9z58j
+  # multi-layer involved_repos fallback 的 L4（env SISYPHUS_DEFAULT_INVOLVED_REPOS）。
+  # 这个 chart 是 sisyphus self-deployment 专用 → ship 单仓 dogfood 默认。
+  # 多仓 / 跨项目部署：在你的 my-values.yaml 里 override 成空 [] 或 ['phona/foo','phona/bar']。
+  default_involved_repos:
+    - phona/sisyphus
   # ─── Mock / 调试开关（生产全 false）─────────────────────────────
   # 任一 stage skip = create_<stage> 不调 BKD agent，直接 emit done/pass
   # test_mode: true = 全部 skip，秒级走完整 state 机
