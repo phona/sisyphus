@@ -208,5 +208,6 @@ ci-build:
 | REQ 卡住 | `curl /admin/req/REQ-N` 看 state + history + ctx.manifest_snapshot |
 | manifest 格式错 | `kubectl exec runner-<req> -- validate-manifest.py` |
 | workspace 丢 / 容器异常 | `POST /admin/req/REQ-N/rebuild-workspace`（S5 提供）|
-| 资源紧想让路 | `POST /admin/req/REQ-N/pause`（S5 提供）|
+| 资源紧想让路 | `POST /admin/req/REQ-N/runner-pause`（S5 提供）|
+| ESCALATED REQ 想推下一 stage / 重起 fixer | `POST /admin/req/REQ-N/resume` body `{"action": "pass"\|"fix-needed", "stage"?: "...", "reason"?: "..."}` |
 | bug 积累分析 | `gh issue list --label sisyphus:pre-release-bug` / `ci-bug` / `post-release-bug` |

@@ -1,4 +1,4 @@
-"""admin endpoints 烟测：emit / escalate / complete / get-req。"""
+"""admin endpoints 烟测：emit / escalate / complete / resume / get-req."""
 from __future__ import annotations
 
 import asyncio
@@ -7,16 +7,19 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from orchestrator.admin import (
     CompleteBody,
     EmitBody,
+    ResumeBody,
     _FakeBody,
     complete_req,
     force_escalate,
     get_req,
+    resume_req,
 )
-from orchestrator.state import ReqState
+from orchestrator.state import Event, ReqState
 
 
 def test_fakebody_shape():
@@ -348,3 +351,321 @@ def test_complete_body_optional_reason():
     """CompleteBody 的 reason 可省略."""
     assert CompleteBody().reason is None
     assert CompleteBody(reason="x").reason == "x"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# /admin/req/{req_id}/resume tests (REQ-admin-resume-escalated-1777123726)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _bypass_auth_pool_and_update(
+    monkeypatch,
+    pool: _FakePool,
+    row: _FakeRow | None,
+    second_row: _FakeRow | None = None,
+):
+    """resume_req 需要：_verify_token + db.get_pool + req_state.get（两次）+
+    req_state.update_context。第二次 get 默认返跟第一次同 row（覆盖原 ctx）。
+    """
+    from orchestrator import admin as admin_mod
+    monkeypatch.setattr(admin_mod, "_verify_token", lambda x: None)
+
+    calls = {"n": 0}
+    second = second_row if second_row is not None else row
+
+    async def _get(_pool, _req_id):
+        calls["n"] += 1
+        return row if calls["n"] == 1 else second
+
+    monkeypatch.setattr("orchestrator.admin.req_state.get", _get)
+    monkeypatch.setattr("orchestrator.admin.db.get_pool", lambda: pool)
+
+    update_calls: list = []
+
+    async def _update(_pool, _req_id, patch):
+        update_calls.append(patch)
+
+    monkeypatch.setattr("orchestrator.admin.req_state.update_context", _update)
+    return update_calls
+
+
+@pytest.mark.asyncio
+async def test_resume_404_when_not_found(monkeypatch):
+    """ARE-S4: REQ 不存在 → 404."""
+    pool = _FakePool()
+    _bypass_auth_pool_and_update(monkeypatch, pool, row=None)
+
+    with pytest.raises(HTTPException) as ei:
+        await resume_req(
+            "REQ-MISSING", body=ResumeBody(action="pass"),
+            authorization="Bearer x",
+        )
+    assert ei.value.status_code == 404
+    assert "not found" in ei.value.detail
+
+
+@pytest.mark.asyncio
+async def test_resume_409_when_not_escalated(monkeypatch):
+    """ARE-S3: state=analyzing → 409 with hint about /escalate first."""
+    pool = _FakePool()
+    row = _FakeRow(req_id="REQ-X", project_id="p", state=ReqState.ANALYZING)
+    _bypass_auth_pool_and_update(monkeypatch, pool, row=row)
+
+    step_calls: list = []
+
+    async def _step(*a, **kw):
+        step_calls.append((a, kw))
+
+    monkeypatch.setattr("orchestrator.admin.engine.step", _step)
+
+    with pytest.raises(HTTPException) as ei:
+        await resume_req(
+            "REQ-X", body=ResumeBody(action="pass"), authorization="Bearer x",
+        )
+    assert ei.value.status_code == 409
+    assert "analyzing" in ei.value.detail
+    assert "/escalate" in ei.value.detail
+    assert step_calls == []
+
+
+@pytest.mark.asyncio
+async def test_resume_400_when_pass_missing_stage(monkeypatch):
+    """ARE-S5: action=pass + ctx 没 verifier_stage + body 没 stage → 400."""
+    pool = _FakePool()
+    row = _FakeRow(
+        req_id="REQ-X", project_id="p", state=ReqState.ESCALATED,
+        context={},  # 没 verifier_stage
+    )
+    _bypass_auth_pool_and_update(monkeypatch, pool, row=row)
+
+    step_calls: list = []
+
+    async def _step(*a, **kw):
+        step_calls.append((a, kw))
+
+    monkeypatch.setattr("orchestrator.admin.engine.step", _step)
+
+    with pytest.raises(HTTPException) as ei:
+        await resume_req(
+            "REQ-X", body=ResumeBody(action="pass"), authorization="Bearer x",
+        )
+    assert ei.value.status_code == 400
+    assert "verifier_stage" in ei.value.detail
+    assert step_calls == []
+
+
+@pytest.mark.asyncio
+async def test_resume_pass_dispatches_verify_pass_event(monkeypatch):
+    """ARE-S1: state=escalated, ctx.verifier_stage=staging_test, action=pass →
+    engine.step 被调一次 with event=VERIFY_PASS."""
+    pool = _FakePool()
+    row = _FakeRow(
+        req_id="REQ-X", project_id="p", state=ReqState.ESCALATED,
+        context={"verifier_stage": "staging_test"},
+    )
+    update_calls = _bypass_auth_pool_and_update(monkeypatch, pool, row=row)
+
+    step_calls: list = []
+
+    async def _step(*a, **kw):
+        step_calls.append(kw)
+        return {"action": "no-op", "next_state": "review-running"}
+
+    monkeypatch.setattr("orchestrator.admin.engine.step", _step)
+
+    result = await resume_req(
+        "REQ-X", body=ResumeBody(action="pass"), authorization="Bearer x",
+    )
+
+    assert result["action"] == "resumed"
+    assert result["from_state"] == "escalated"
+    assert result["event"] == "verify.pass"
+    assert "chained" in result
+    # engine.step 被调一次，event 是 VERIFY_PASS
+    assert len(step_calls) == 1
+    assert step_calls[0]["event"] == Event.VERIFY_PASS
+    assert step_calls[0]["cur_state"] == ReqState.ESCALATED
+    assert step_calls[0]["req_id"] == "REQ-X"
+    # ctx 被 patch（resumed_by_admin + resume_action）
+    assert len(update_calls) == 1
+    assert update_calls[0]["resumed_by_admin"] is True
+    assert update_calls[0]["resume_action"] == "pass"
+    assert "verifier_stage" not in update_calls[0]  # 没传 body.stage 不应 patch
+
+
+@pytest.mark.asyncio
+async def test_resume_pass_with_body_stage_overrides_ctx(monkeypatch):
+    """ARE-S6: body.stage="pr_ci" → ctx 被 patch verifier_stage."""
+    pool = _FakePool()
+    row = _FakeRow(
+        req_id="REQ-X", project_id="p", state=ReqState.ESCALATED,
+        context={"verifier_stage": "staging_test"},  # 旧 stage
+    )
+    update_calls = _bypass_auth_pool_and_update(monkeypatch, pool, row=row)
+
+    async def _step(*a, **kw):
+        return {"action": "no-op"}
+
+    monkeypatch.setattr("orchestrator.admin.engine.step", _step)
+
+    body = ResumeBody(action="pass", stage="pr_ci")
+    await resume_req("REQ-X", body=body, authorization="Bearer x")
+
+    assert update_calls[0]["verifier_stage"] == "pr_ci"
+
+
+@pytest.mark.asyncio
+async def test_resume_fix_needed_dispatches_verify_fix_needed_event(monkeypatch):
+    """ARE-S2: action=fix-needed → engine.step with event=VERIFY_FIX_NEEDED."""
+    pool = _FakePool()
+    row = _FakeRow(
+        req_id="REQ-X", project_id="p", state=ReqState.ESCALATED,
+        context={
+            "verifier_stage": "dev_cross_check",
+            "verifier_fixer": "dev",
+        },
+    )
+    _bypass_auth_pool_and_update(monkeypatch, pool, row=row)
+
+    step_calls: list = []
+
+    async def _step(*a, **kw):
+        step_calls.append(kw)
+        return {"action": "start_fixer"}
+
+    monkeypatch.setattr("orchestrator.admin.engine.step", _step)
+
+    body = ResumeBody(action="fix-needed")
+    result = await resume_req("REQ-X", body=body, authorization="Bearer x")
+
+    assert result["event"] == "verify.fix-needed"
+    assert step_calls[0]["event"] == Event.VERIFY_FIX_NEEDED
+
+
+@pytest.mark.asyncio
+async def test_resume_writes_audit_to_context(monkeypatch):
+    """ARE-S7: body.reason="..." → ctx.resume_reason / resumed_by_admin patch."""
+    pool = _FakePool()
+    row = _FakeRow(
+        req_id="REQ-X", project_id="p", state=ReqState.ESCALATED,
+        context={"verifier_stage": "staging_test"},
+    )
+    update_calls = _bypass_auth_pool_and_update(monkeypatch, pool, row=row)
+
+    async def _step(*a, **kw):
+        return {}
+
+    monkeypatch.setattr("orchestrator.admin.engine.step", _step)
+
+    body = ResumeBody(action="pass", reason="GHA infra flake confirmed")
+    await resume_req("REQ-X", body=body, authorization="Bearer x")
+
+    patch = update_calls[0]
+    assert patch["resumed_by_admin"] is True
+    assert patch["resume_action"] == "pass"
+    assert patch["resume_reason"] == "GHA infra flake confirmed"
+
+
+@pytest.mark.asyncio
+async def test_resume_fixer_override_in_body(monkeypatch):
+    """body.fixer="spec" → ctx.verifier_fixer patched."""
+    pool = _FakePool()
+    row = _FakeRow(
+        req_id="REQ-X", project_id="p", state=ReqState.ESCALATED,
+        context={"verifier_stage": "spec_lint", "verifier_fixer": "dev"},
+    )
+    update_calls = _bypass_auth_pool_and_update(monkeypatch, pool, row=row)
+
+    async def _step(*a, **kw):
+        return {}
+
+    monkeypatch.setattr("orchestrator.admin.engine.step", _step)
+
+    body = ResumeBody(action="fix-needed", fixer="spec")
+    await resume_req("REQ-X", body=body, authorization="Bearer x")
+    assert update_calls[0]["verifier_fixer"] == "spec"
+
+
+def test_resume_body_invalid_action_raises():
+    """ResumeBody schema 拒绝 action ∉ {pass, fix-needed}."""
+    with pytest.raises(ValidationError):
+        ResumeBody(action="bogus")
+
+
+def test_resume_body_invalid_fixer_raises():
+    """ResumeBody schema 拒绝 fixer ∉ {dev, spec}."""
+    with pytest.raises(ValidationError):
+        ResumeBody(action="fix-needed", fixer="qa")
+
+
+def test_resume_body_action_required():
+    """ResumeBody.action 是必传，缺 → ValidationError."""
+    with pytest.raises(ValidationError):
+        ResumeBody()
+
+
+@pytest.mark.asyncio
+async def test_resume_auth_check_before_db(monkeypatch):
+    """ARE-S8: bad token → 401，没 req_state.get / engine.step."""
+    from orchestrator import admin as admin_mod
+
+    def _bad_token(_):
+        raise HTTPException(status_code=401, detail="bad token")
+
+    monkeypatch.setattr(admin_mod, "_verify_token", _bad_token)
+
+    get_called: list = []
+    step_called: list = []
+
+    async def _get(*a, **kw):
+        get_called.append(1)
+        return None
+
+    async def _step(*a, **kw):
+        step_called.append(1)
+
+    monkeypatch.setattr("orchestrator.admin.req_state.get", _get)
+    monkeypatch.setattr("orchestrator.admin.db.get_pool", lambda: _FakePool())
+    monkeypatch.setattr("orchestrator.admin.engine.step", _step)
+
+    with pytest.raises(HTTPException) as ei:
+        await resume_req(
+            "REQ-X", body=ResumeBody(action="pass"), authorization=None,
+        )
+    assert ei.value.status_code == 401
+    assert get_called == []
+    assert step_called == []
+
+
+# ─── runner endpoint rename：路径切到 /runner-pause / /runner-resume ─────
+
+
+def test_admin_route_table_runner_pause_renamed():
+    """ARE-S9: /admin/req/{req_id}/runner-pause 已注册，旧 /pause 不存在."""
+    from orchestrator.admin import admin as admin_router
+
+    paths = {
+        r.path
+        for r in admin_router.routes
+        if hasattr(r, "path") and "POST" in (getattr(r, "methods", set()) or set())
+    }
+    assert "/admin/req/{req_id}/runner-pause" in paths
+    assert "/admin/req/{req_id}/pause" not in paths
+
+
+def test_admin_route_table_runner_resume_renamed():
+    """ARE-S10: /admin/req/{req_id}/runner-resume 已注册，bare /resume 现在
+    指向新的 state-level resume_req（不是旧 resume_runner）."""
+    from orchestrator.admin import admin as admin_router
+    from orchestrator.admin import resume_req, resume_runner
+
+    paths_to_endpoint: dict = {
+        r.path: r.endpoint
+        for r in admin_router.routes
+        if hasattr(r, "path") and "POST" in (getattr(r, "methods", set()) or set())
+    }
+    # runner 路径绑 resume_runner
+    assert paths_to_endpoint.get("/admin/req/{req_id}/runner-resume") is resume_runner
+    # bare /resume 绑 state-level resume_req（不是 resume_runner）
+    assert paths_to_endpoint.get("/admin/req/{req_id}/resume") is resume_req
+    assert paths_to_endpoint.get("/admin/req/{req_id}/resume") is not resume_runner

@@ -2,24 +2,28 @@
 
 需要同样的 Authorization: Bearer <webhook_token> 头。
 
-基础（已有）：
+State 操作：
   POST /admin/req/{req_id}/emit       body: {"event": "..."}
   POST /admin/req/{req_id}/escalate
   POST /admin/req/{req_id}/complete   body: {"reason": "..."} (optional)
+  POST /admin/req/{req_id}/resume     body: {"action": "pass"|"fix-needed", "stage"?, "fixer"?, "reason"?}
+                                       → state-level resume from ESCALATED
+                                       （派 VERIFY_PASS / VERIFY_FIX_NEEDED 走合法 transition）
   GET  /admin/metrics
   GET  /admin/req/{req_id}
 
-v0.2 runner 运维（新）：
-  POST /admin/req/{req_id}/pause      → 删 Pod，PVC 保留
-  POST /admin/req/{req_id}/resume     → 重建 Pod
+v0.2 K8s runner 运维：
+  POST /admin/req/{req_id}/runner-pause       → 删 Pod，PVC 保留
+  POST /admin/req/{req_id}/runner-resume      → 重建 Pod
   POST /admin/req/{req_id}/rebuild-workspace  → 强拉代码重建 workspace（需 PVC 存在）
-  GET  /admin/runners                  → 列所有 runner pod / pvc 状态
+  GET  /admin/runners                          → 列所有 runner pod / pvc 状态
 """
 from __future__ import annotations
 
 import asyncio
 import json
 from datetime import UTC, datetime
+from typing import Literal
 
 import structlog
 from fastapi import APIRouter, Header, HTTPException
@@ -219,6 +223,111 @@ async def complete_req(
     }
 
 
+class ResumeBody(BaseModel):
+    """state-level resume from ESCALATED 的 body schema。
+
+    action 必传，无默认 —— 走 admin override 绕过 verifier-agent 的语义要求 explicit。
+    其余可选：stage / fixer 覆盖 ctx 路由字段；reason 仅审计。
+    """
+    action: Literal["pass", "fix-needed"]
+    stage: str | None = None
+    fixer: Literal["dev", "spec"] | None = None
+    reason: str | None = None
+
+
+@admin.post("/req/{req_id}/resume")
+async def resume_req(
+    req_id: str,
+    body: ResumeBody,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """从 ESCALATED 派 verifier 决策 Event，走合法 transition 推进状态机。
+
+    跟 BKD verifier follow-up 路径并行：两条路径都最终命中
+    `(ESCALATED, VERIFY_PASS) → REVIEW_RUNNING (apply_verify_pass)` 或
+    `(ESCALATED, VERIFY_FIX_NEEDED) → FIXER_RUNNING (start_fixer)`，
+    区别仅在事件来源（BKD verifier 路径有 verifier_decisions 行；admin
+    路径靠 ctx.resumed_by_admin 标识）。
+
+    适用：
+    - 已经知道答案（infra flake / agent 误判），跑 verifier 浪费 quota
+    - ESCALATED 来自非 verifier 路径（pr_ci.timeout / accept-env-up.fail
+      / intake.fail），没 verifier issue 给人 follow-up
+    """
+    _verify_token(authorization)
+
+    pool = db.get_pool()
+    row = await req_state.get(pool, req_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"req {req_id} not found")
+
+    if row.state != ReqState.ESCALATED:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"req {req_id} is in state {row.state.value}; expected escalated. "
+                f"Hint: POST /admin/req/{req_id}/escalate first to abort an "
+                f"in-flight REQ."
+            ),
+        )
+
+    # action=pass 必须有可路由的 verifier_stage（apply_verify_pass 拿不到会
+    # emit VERIFY_ESCALATE 走自循环，对调用方静默 —— 早 fail 给清晰错误）。
+    effective_stage = body.stage or (row.context or {}).get("verifier_stage")
+    if body.action == "pass" and not effective_stage:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "verifier_stage required for action=pass; "
+                "provide body.stage or use BKD verifier follow-up"
+            ),
+        )
+
+    # ctx 预置：admin 标记 + 可选覆盖
+    ctx_patch: dict = {
+        "resumed_by_admin": True,
+        "resume_action": body.action,
+    }
+    if body.stage:
+        ctx_patch["verifier_stage"] = body.stage
+    if body.fixer:
+        ctx_patch["verifier_fixer"] = body.fixer
+    if body.reason:
+        ctx_patch["resume_reason"] = body.reason
+    await req_state.update_context(pool, req_id, ctx_patch)
+
+    # 重读 ctx，让 engine.step 收到 patched 后的版本
+    row = await req_state.get(pool, req_id)
+    if row is None:  # 极小概率：admin 调用前并发删 row
+        raise HTTPException(status_code=404, detail=f"req {req_id} not found")
+
+    event = (
+        Event.VERIFY_PASS if body.action == "pass" else Event.VERIFY_FIX_NEEDED
+    )
+    fake = _FakeBody(req_id, row.project_id)
+    log.warning(
+        "admin.resume",
+        req_id=req_id, action=body.action, stage=effective_stage,
+        fixer=body.fixer, reason=body.reason,
+    )
+    chained = await engine.step(
+        pool,
+        body=fake,
+        req_id=req_id,
+        project_id=row.project_id,
+        tags=[],
+        cur_state=row.state,
+        ctx=row.context,
+        event=event,
+    )
+    return {
+        "action": "resumed",
+        "from_state": ReqState.ESCALATED.value,
+        "event": event.value,
+        "chained": chained,
+    }
+
+
 @admin.get("/metrics")
 async def metrics(
     authorization: str | None = Header(default=None),
@@ -342,14 +451,17 @@ def _require_controller() -> k8s_runner.RunnerController:
         ) from None
 
 
-@admin.post("/req/{req_id}/pause")
+@admin.post("/req/{req_id}/runner-pause")
 async def pause_runner(
     req_id: str,
     authorization: str | None = Header(default=None),
 ) -> dict:
     """删 Pod（PVC 保留），释放 docker daemon / 节点内存资源；workspace 保留。
 
-    适合"让出资源给高优 REQ"的场景。resume 即恢复。
+    适合"让出资源给高优 REQ"的场景。runner-resume 即恢复 Pod。
+
+    路径加 `runner-` 前缀（曾经是 `/pause`），跟 state-level `/resume` 区分
+    （后者派 verifier 决策 Event，跟 K8s 资源无关）。
     """
     _verify_token(authorization)
     rc = _require_controller()
@@ -364,12 +476,16 @@ async def pause_runner(
     return {"action": "paused", "pod_deleted": deleted, "pvc_kept": True}
 
 
-@admin.post("/req/{req_id}/resume")
+@admin.post("/req/{req_id}/runner-resume")
 async def resume_runner(
     req_id: str,
     authorization: str | None = Header(default=None),
 ) -> dict:
-    """重建 Pod，PVC 自动重新挂载。"""
+    """重建 Pod，PVC 自动重新挂载。
+
+    路径加 `runner-` 前缀（曾经是 `/resume`），跟 state-level `/resume`
+    （从 ESCALATED 派 verifier 决策 Event）区分。
+    """
     _verify_token(authorization)
     rc = _require_controller()
 

@@ -1,0 +1,224 @@
+capability: admin-resume-endpoint
+version: "1.0"
+description: |
+  Admin endpoint POST /admin/req/{req_id}/resume: state-level resume from
+  ESCALATED. 把 verifier-agent 的 pass / fix-needed 决策语义封装成一条 admin
+  endpoint，复用现有 (ESCALATED, VERIFY_PASS) → REVIEW_RUNNING + (ESCALATED,
+  VERIFY_FIX_NEEDED) → FIXER_RUNNING transition。
+
+  跟 BKD verifier follow-up 路径并行：verifier 路径走 BKD agent 重判 + 写
+  decision JSON；admin 路径走人工直派 Event。两条路径殊途同归，命中同一组
+  transition + action handler。
+
+  附带：rename 旧 v0.2 K8s runner endpoint /pause /resume → /runner-pause
+  /runner-resume，让出 /resume 给 state-level resume。
+
+http:
+  - method: POST
+    path: /admin/req/{req_id}/resume
+    auth: Bearer <webhook_token>
+    handler: admin.resume_req                 # NEW (state-level)
+    request_body:
+      content_type: application/json
+      schema:
+        type: object
+        required: [action]
+        properties:
+          action:
+            type: string
+            enum: [pass, fix-needed]
+            description: |
+              "pass" → emit Event.VERIFY_PASS（推下一 stage）
+              "fix-needed" → emit Event.VERIFY_FIX_NEEDED（起 fixer agent）
+          stage:
+            type: ["string", "null"]
+            description: |
+              覆盖 ctx.verifier_stage（影响 apply_verify_pass 路由）。pass 路径
+              ctx 没 verifier_stage 时必传。
+          fixer:
+            type: ["string", "null"]
+            enum: [dev, spec, null]
+            description: 覆盖 ctx.verifier_fixer（fix-needed 路径用）。
+          reason:
+            type: ["string", "null"]
+            description: 写到 ctx.resume_reason，仅审计用。
+        additionalProperties: false
+    responses:
+      "200_pass":
+        condition: state was escalated, action=pass dispatched
+        body:
+          action: resumed
+          from_state: escalated
+          event: verify.pass
+          chained: "<engine.step result dict>"
+      "200_fix":
+        condition: state was escalated, action=fix-needed dispatched
+        body:
+          action: resumed
+          from_state: escalated
+          event: verify.fix-needed
+          chained: "<engine.step result dict>"
+      "400":
+        condition: action=pass with no resolvable verifier_stage
+        body:
+          detail: "verifier_stage required for action=pass; provide body.stage or use BKD verifier follow-up"
+      "404":
+        condition: no req_state row with req_id
+        body:
+          detail: "req <id> not found"
+      "409":
+        condition: state != escalated
+        body:
+          detail: "req <id> is in state <X>; expected escalated. Hint: POST /admin/req/<id>/escalate first to abort an in-flight REQ."
+      "422":
+        condition: pydantic validation fails (action ∉ {pass, fix-needed}, fixer ∉ {dev, spec})
+        body: pydantic standard error envelope
+      "401_or_403":
+        condition: missing / invalid Authorization header
+        handler: webhook._verify_token raises HTTPException
+
+  # rename 项（path 改，函数名 / 行为不变）
+  - method: POST
+    path: /admin/req/{req_id}/runner-pause     # was /pause
+    auth: Bearer <webhook_token>
+    handler: admin.pause_runner                # 函数名不变
+    behavior_unchanged: true                   # 行为：删 Pod 保 PVC
+  - method: POST
+    path: /admin/req/{req_id}/runner-resume    # was /resume
+    auth: Bearer <webhook_token>
+    handler: admin.resume_runner               # 函数名不变
+    behavior_unchanged: true                   # 行为：重建 Pod
+
+precondition_chain:
+  description: |
+    检查顺序固定（验证 → 取数 → 状态 → schema → ctx 路由），保证错误码不互相覆盖。
+  sequence:
+    - "1. _verify_token(authorization)                                # 401/403"
+    - "2. ResumeBody schema validation (pydantic)                     # 422"
+    - "3. row = await req_state.get(pool, req_id)"
+    - "4. if row is None: raise HTTPException(404)"
+    - "5. if row.state != ReqState.ESCALATED: raise HTTPException(409)"
+    - "6. effective_stage = body.stage or row.context.get('verifier_stage')"
+    - "7. if action == 'pass' and not effective_stage: raise HTTPException(400)"
+    - "8. ctx_patch = {resumed_by_admin: true, resume_action: action,"
+    - "                + (verifier_stage: body.stage if body.stage else omit),"
+    - "                + (verifier_fixer: body.fixer if body.fixer else omit),"
+    - "                + (resume_reason: body.reason if body.reason else omit)}"
+    - "9. await req_state.update_context(pool, req_id, ctx_patch)"
+    - "10. row = await req_state.get(pool, req_id)   # reload patched ctx"
+    - "11. event = VERIFY_PASS if action=='pass' else VERIFY_FIX_NEEDED"
+    - "12. fake_body = _FakeBody(req_id, project_id)"
+    - "13. result = await engine.step(pool, body=fake_body, ..., event=event)"
+    - "14. return {action: resumed, from_state: escalated, event: ..., chained: result}"
+
+state_change:
+  before: "req_state.state = 'escalated'"
+  after_pass:
+    - "context patched with resumed_by_admin / resume_action / optional resume_reason / stage"
+    - "state moves via engine.step → apply_verify_pass internally CAS to <stage>_running"
+    - "stage_runs row for verifier closed (handled by apply_verify_pass)"
+    - "ensure_runner re-pulls Pod (apply_verify_pass internal)"
+  after_fix_needed:
+    - "context patched"
+    - "state moves to FIXER_RUNNING via engine.step + start_fixer transition action"
+    - "start_fixer creates new BKD fixer issue + writes ctx.fixer_round"
+  context_patch_always:
+    resumed_by_admin: true
+    resume_action: <body.action>
+  context_patch_optional:
+    verifier_stage: <body.stage if provided>
+    verifier_fixer: <body.fixer if provided>
+    resume_reason: <body.reason if provided>
+
+invariants:
+  no_state_machine_pollution:
+    - "不在 state.py 加新 Event"
+    - "不在 TRANSITIONS 加 (ESCALATED, ?) 新 transition"
+    - "endpoint 仅是 Event 注入的入口；transition 表示已有的合法图"
+
+  reuse_existing_handlers:
+    - "apply_verify_pass 已支持 cas_transition 接 (REVIEW_RUNNING, ESCALATED) 双源"
+    - "start_fixer 已通过 (ESCALATED, VERIFY_FIX_NEEDED) → FIXER_RUNNING transition 接通"
+    - "本 endpoint 0 重复实现"
+
+  audit_distinguishable:
+    - "ctx.resumed_by_admin=true 跟 verifier_decisions 表行不冲突"
+    - "verifier_decisions 表只反映 BKD verifier-agent 真做的判断"
+    - "admin 路径不 insert verifier_decisions（没 verifier session）"
+    - "Metabase 看板想区分 admin resume vs verifier resume → 看 resumed_by_admin ctx flag"
+
+  path_disambiguation:
+    - "/resume 现在只语义化 state resume"
+    - "/runner-resume 处理 K8s pod 重建"
+    - "/runner-pause 处理 K8s pod 删除"
+    - "rename 不破坏任何 caller（grep 确认仅 docs 引用，无脚本 / 自动化）"
+
+interaction_with_verifier_followup:
+  description: |
+    用户用 BKD UI 在 verifier issue 续 follow-up 这条路径仍可用（state.py
+    transitions 不动），跟 admin /resume 并行存在。两者命中相同 transition；
+    区别仅在事件来源：BKD verifier 路径有 verifier_decisions 行 + verifier
+    re-decision；admin 路径靠 ctx.resumed_by_admin 标识。
+  use_admin_when:
+    - "已经知道答案（infra flake / agent 误判）—— 跑 verifier 浪费 quota + 时间"
+    - "ESCALATED 来自非 verifier 路径（pr_ci.timeout / accept-env-up.fail / intake.fail）—— 没 verifier issue 给人 follow-up"
+    - "verifier round cap 触顶 (_HARD_REASONS=fixer-round-cap) —— 操作员决定 hand-craft 一次跳过"
+  use_verifier_when:
+    - "想让 agent 重判（结果不确定）"
+    - "需要变更 fixer scope / reason 由 agent 重新捋"
+
+interaction_with_complete:
+  description: |
+    resume 跟 complete 都是 ESCALATED → 出口；语义对立：
+      resume: 给 REQ 一次机会推 stage / 重 fix
+      complete: 宣告 REQ 作废，进 done + 清 PVC
+    操作员看 admin /req/{id} 的 ctx 决定走哪条；endpoint 互不冲突
+    （precondition 都要求 state=escalated；并发时 SQL CAS 保串行）。
+
+interaction_with_force_escalate:
+  description: |
+    完整 escalated 出入口：
+      in-flight → force_escalate → ESCALATED
+      ESCALATED → resume(pass)        → next stage（推主链）
+      ESCALATED → resume(fix-needed)  → fixer-running
+      ESCALATED → complete            → done
+      ESCALATED → BKD verifier follow-up → 同 resume
+
+failure_modes:
+  cas_lost_to_concurrent_followup:
+    cause: |
+      操作员 POST /resume 同时另一边 BKD verifier follow-up 完成 webhook，两个
+      engine.step 同时尝试 CAS ESCALATED → REVIEW_RUNNING / FIXER_RUNNING。
+    handler: |
+      asyncpg / Postgres 行级 CAS 自带原子性。第二个调用 cas_transition 返
+      False，engine.step 返 {action: skip, reason: concurrent state change}，
+      被 admin endpoint 透传 chained 字段返给调用方。
+    state_outcome: 第一个胜出方推到 next state；第二个无副作用。
+    user_impact: 调用方拿 200 但 chained.action="skip"，应再读 /admin/req/{id} 确认 state。
+
+  ctx_verifier_stage_inconsistent:
+    cause: |
+      ctx.verifier_stage 跟实际 verifier issue 的 verify:<stage> tag 不一致
+      （多并发 verifier 把 ctx 覆盖过）。
+    handler: |
+      apply_verify_pass 优先读 tags（_verifier.py L144-152），admin 路径 tags
+      为 []（_FakeBody），fallback 到 ctx.verifier_stage —— body.stage 显式传
+      可彻底绕过该不一致。
+    user_impact: 操作员遇到 ctx 看着不对要传 body.stage 显式覆盖。
+
+  bad_stage_value:
+    cause: body.stage 传了一个不在 _PASS_ROUTING 里的值（如 "bogus"）
+    handler: |
+      apply_verify_pass 内部 _PASS_ROUTING.get(stage) 返 None → emit
+      VERIFY_ESCALATE 把 REQ 推回 ESCALATED 自循环。
+    detection: chained.result.emit == "verify.escalate"。
+    mitigation: 后续可以在 admin endpoint 增加 body.stage 校验白名单（暂不做，避免双份维护 _PASS_ROUTING）。
+
+  fix_needed_round_cap_already_hit:
+    cause: |
+      操作员对一个 fixer_round 已超 cap 的 REQ 调 resume(fix-needed)。
+      start_fixer 内部检测 fixer_round + 1 > settings.fixer_round_cap →
+      emit VERIFY_ESCALATE。
+    handler: 自然走 escalate.py，REQ 留 ESCALATED + ctx.escalated_reason="fixer-round-cap"。
+    user_impact: chained.result.emit == "verify.escalate"，REQ 没真起新 fixer。
+    mitigation: 操作员要么 reset ctx.fixer_round 后再 resume（手动 emit 无），要么走 complete 收尾。
