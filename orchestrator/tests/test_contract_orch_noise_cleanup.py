@@ -14,8 +14,6 @@ Scenarios covered:
 """
 from __future__ import annotations
 
-import logging
-
 import structlog.testing
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
