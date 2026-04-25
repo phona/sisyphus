@@ -368,6 +368,84 @@ async def test_apply_verify_pass_cas_fail_returns_skip(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_apply_verify_pass_closes_orphan_verifier_stage_run(monkeypatch):
+    """REGRESSION: (REVIEW_RUNNING, VERIFY_PASS) 是 self-loop transition →
+    engine._record_stage_transitions 跳过 close → verifier 行 outcome 永远为 None。
+
+    DB 实证：18 条 verifier outcome=NULL（占 verifier 总数 29%）污染 stage_stats /
+    agent_quality / failure_mode 三张 Metabase 看板。修：apply_verify_pass 在
+    REVIEW_RUNNING → target_state CAS 成功后，手动 close_latest_stage_run("verifier",
+    outcome="pass")。
+    """
+    from orchestrator.actions import _verifier as v
+
+    close_calls: list = []
+
+    async def fake_cas(*a, **kw):
+        return True
+
+    async def fake_close(pool, req_id, stage, *, outcome, fail_reason=None):
+        close_calls.append({"req_id": req_id, "stage": stage, "outcome": outcome})
+        return 42  # any non-None id
+
+    monkeypatch.setattr(
+        "orchestrator.actions._verifier.req_state.cas_transition", fake_cas,
+    )
+    monkeypatch.setattr(
+        "orchestrator.actions._verifier.stage_runs.close_latest_stage_run",
+        fake_close,
+    )
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+
+    out = await v.apply_verify_pass(
+        body=make_body(), req_id="REQ-9", tags=[],
+        ctx={"verifier_stage": "pr_ci"},
+    )
+
+    assert out["emit"] == Event.PR_CI_PASS.value
+    assert close_calls == [
+        {"req_id": "REQ-9", "stage": "verifier", "outcome": "pass"},
+    ], "verifier orphan stage_run must be closed with outcome=pass when CAS from REVIEW_RUNNING"
+
+
+@pytest.mark.asyncio
+async def test_apply_verify_pass_skips_close_on_escalated_resume(monkeypatch):
+    """resume from ESCALATED：上一轮 verifier 行已被前次 escalate 路径关掉
+    （outcome=escalate）；此时不应再 close 一次，避免改写 outcome 或关错行。"""
+    from orchestrator.actions import _verifier as v
+
+    close_calls: list = []
+
+    async def fake_cas(pool, req_id, expected, nxt, event, action, context_patch=None):
+        # 模拟 REQ 在 ESCALATED：CAS REVIEW_RUNNING 失败，CAS ESCALATED 成功
+        return expected.value == "escalated"
+
+    async def fake_close(pool, req_id, stage, *, outcome, fail_reason=None):
+        close_calls.append({"req_id": req_id, "stage": stage, "outcome": outcome})
+        return 42
+
+    monkeypatch.setattr(
+        "orchestrator.actions._verifier.req_state.cas_transition", fake_cas,
+    )
+    monkeypatch.setattr(
+        "orchestrator.actions._verifier.stage_runs.close_latest_stage_run",
+        fake_close,
+    )
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+
+    out = await v.apply_verify_pass(
+        body=make_body(), req_id="REQ-9", tags=[],
+        ctx={"verifier_stage": "pr_ci"},
+    )
+
+    assert out["emit"] == Event.PR_CI_PASS.value
+    assert close_calls == [], (
+        "ESCALATED-resume 路径不应 close verifier stage_run "
+        "（前次 escalate 已 close，重复 close 会改写 outcome）"
+    )
+
+
+@pytest.mark.asyncio
 async def test_apply_verify_pass_resumes_from_escalated(monkeypatch):
     """resume 路径：用户 follow-up escalate 的 verifier issue → 新 decision=pass →
     apply_verify_pass 第一次 CAS REVIEW_RUNNING 失败（state 是 ESCALATED），

@@ -33,7 +33,7 @@ from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
 from ..state import Event, ReqState
-from ..store import db, req_state
+from ..store import db, req_state, stage_runs
 from . import register, short_title
 
 log = structlog.get_logger(__name__)
@@ -178,6 +178,23 @@ async def apply_verify_pass(*, body, req_id, tags, ctx):
     if src_state is None:
         log.warning("apply_verify_pass.cas_failed", req_id=req_id, stage=stage)
         return {"cas_failed": True}
+
+    # 收尾 stage_runs.verifier 行（best-effort）。
+    # transition (REVIEW_RUNNING, VERIFY_PASS) -> REVIEW_RUNNING 是 self-loop —
+    # engine._record_stage_transitions 看到 cur==next 直接 return，**不写**
+    # stage_runs；这里手 CAS 推到 target_state 也绕过 engine 的钩子。结果是
+    # verifier 行 insert 后没人 close（DB 实证：18 条 outcome=NULL，污染
+    # Metabase 的 stage_stats / agent_quality 看板）。
+    # 仅 src=REVIEW_RUNNING 路径需要 close（ESCALATED 续是 self-loop 重入，
+    # 上一轮 verifier 行已被前次 escalate 路径关掉，不会有新的 open verifier 行）。
+    if src_state == ReqState.REVIEW_RUNNING:
+        try:
+            await stage_runs.close_latest_stage_run(
+                pool, req_id, "verifier", outcome="pass",
+            )
+        except Exception as e:
+            log.warning("apply_verify_pass.stage_runs.close_failed",
+                        req_id=req_id, error=str(e))
 
     # 推下一 stage 前 ensure_runner（idempotent，pod 在则秒返）。
     # 关键场景：从 ESCALATED 续 → escalate 时 runner pod 被删了；fixer 跑完续也可能没 pod。
