@@ -12,10 +12,9 @@ import re
 from unittest.mock import patch
 
 import httpx
-import pytest
 
-from orchestrator.checkers._types import CheckResult
 from orchestrator.checkers import pr_ci_watch as checker
+from orchestrator.checkers._types import CheckResult
 
 _MODULE = "orchestrator.checkers.pr_ci_watch"
 REPO = "phona/sisyphus"
