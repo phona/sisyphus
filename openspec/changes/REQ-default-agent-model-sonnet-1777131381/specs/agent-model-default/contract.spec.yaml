@@ -1,0 +1,21 @@
+capability: agent-model-default
+version: "1.0"
+description: |
+  Sets the default model for all sisyphus-dispatched sub-agents to
+  claude-sonnet-4-6 (previously None → BKD default of claude-opus).
+
+  Affected agents: verifier, fixer, accept, pr_ci_watch, done_archive,
+  staging_test. The model is configurable via SISYPHUS_AGENT_MODEL env var.
+
+settings:
+  agent_model:
+    field: orchestrator.config.Settings.agent_model
+    type: "str | None"
+    previous_default: null
+    current_default: "claude-sonnet-4-6"
+    env_var: SISYPHUS_AGENT_MODEL
+    rationale: |
+      Previous default None resolved to BKD per-engine default (claude-opus),
+      the most expensive model. Sonnet-4-6 provides sufficient quality for
+      structured-output sub-agents (verifier JSON decisions, CI runner commands,
+      spec archival) at significantly lower token cost.

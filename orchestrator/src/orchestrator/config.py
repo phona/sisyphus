@@ -117,11 +117,11 @@ class Settings(BaseSettings):
 
     # ─── agent model 控制 ─────────────────────────────────────────────────
     # sisyphus 起的 agent 用哪个模型（verifier / fixer / accept / pr_ci_watch /
-    # done_archive / staging_test）。None = 用 BKD per-engine 默认。
-    # 生产 None 走 BKD 默认（opus）；测试 helm values 覆盖成 'claude-haiku-4-5'。
+    # done_archive / staging_test）。None = 用 BKD per-engine 默认（opus）。
+    # 默认 claude-sonnet-4-6（成本低于 opus；测试 helm values 可覆盖成 'claude-haiku-4-5'）。
     # 注意：analyze agent 的 model 是 user 创 intent issue 时定的，sisyphus 不控；
     # analyze fan out 的 sub-issue model 由 analyze prompt 自己控（见 analyze.md.j2）。
-    agent_model: str | None = None
+    agent_model: str | None = "claude-sonnet-4-6"
 
     # ─── aissh-tao MCP server id (vm-node04) ─────────────────────────────
     # BKD agent 跑在 Coder workspace 没装 kubectl，所有 vm-node04 上的 kubectl 命令
