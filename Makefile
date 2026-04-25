@@ -26,7 +26,7 @@ help: ## 显示帮助信息
 ci-lint: ## ruff lint；BASE_REV 非空 → 仅 lint 变更 *.py
 	@if [ -z "$$BASE_REV" ]; then \
 		echo "ci-lint: full scan (BASE_REV empty)"; \
-		cd orchestrator && uv run ruff check src/ tests/; \
+		cd orchestrator && uv run --extra dev ruff check src/ tests/; \
 	else \
 		files=$$(git diff --name-only --diff-filter=ACMR "$$BASE_REV"...HEAD -- 'orchestrator/src/**.py' 'orchestrator/tests/**.py' 2>/dev/null || true); \
 		if [ -z "$$files" ]; then \
@@ -35,7 +35,7 @@ ci-lint: ## ruff lint；BASE_REV 非空 → 仅 lint 变更 *.py
 		fi; \
 		echo "ci-lint: scoped to $$(echo "$$files" | wc -l) file(s) (BASE_REV=$$BASE_REV)"; \
 		rel=$$(echo "$$files" | sed 's|^orchestrator/||'); \
-		cd orchestrator && uv run ruff check $$rel; \
+		cd orchestrator && uv run --extra dev ruff check $$rel; \
 	fi
 
 ci-unit-test: ## pytest 单测套件（排除 integration marker）
