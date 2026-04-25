@@ -368,6 +368,110 @@ async def test_action_fail_escalates_no_retry(stub_actions):
     assert pool.rows["REQ-1"].state == ReqState.ANALYZING.value
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# REQ-escalate-reason-audit: engine 在 dispatch escalate action 前
+# 按状态机 Event 预填 ctx.escalated_reason 为 canonical slug
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cur_state,event,expected_reason",
+    [
+        (ReqState.INTAKING, Event.INTAKE_FAIL, "intake-fail"),
+        (ReqState.PR_CI_RUNNING, Event.PR_CI_TIMEOUT, "pr-ci-timeout"),
+        (ReqState.ACCEPT_RUNNING, Event.ACCEPT_ENV_UP_FAIL, "accept-env-up-fail"),
+        (ReqState.REVIEW_RUNNING, Event.VERIFY_ESCALATE, "verifier-decision-escalate"),
+    ],
+)
+async def test_engine_prepopulates_escalated_reason(
+    stub_actions, cur_state, event, expected_reason,
+):
+    """非 SESSION_FAILED escalate 路径：engine 在 dispatch 前按 Event 预填 ctx.escalated_reason
+    （body.event 是 BKD webhook 类型，slug fallback 给的是 misleading 值如 'session-completed'）。
+    """
+    calls, reg = stub_actions
+
+    async def escalate_stub(*, body, req_id, tags, ctx):
+        calls.append(("escalate", {"req_id": req_id, "ctx": dict(ctx)}))
+        return {"escalated": True, "reason": ctx.get("escalated_reason")}
+
+    reg["escalate"] = escalate_stub
+
+    pool = FakePool({"REQ-1": FakeReq(state=cur_state.value, context={})})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=cur_state, ctx={}, event=event,
+    )
+
+    # action 接到的 ctx 已含 canonical reason
+    escalate_call_ctx = next(c for n, c in calls if n == "escalate")["ctx"]
+    assert escalate_call_ctx["escalated_reason"] == expected_reason
+    # DB 已持久化（FakePool.execute 模拟 update_context jsonb merge）
+    assert pool.rows["REQ-1"].context["escalated_reason"] == expected_reason
+
+
+@pytest.mark.asyncio
+async def test_engine_session_failed_does_not_prepopulate(stub_actions):
+    """SESSION_FAILED 路径：engine 不预填 ctx.escalated_reason。escalate.py 用 body.event
+    canonical（session.failed / watchdog.stuck）自行处理。"""
+    calls, reg = stub_actions
+
+    async def escalate_stub(*, body, req_id, tags, ctx):
+        calls.append(("escalate", {"req_id": req_id, "ctx": dict(ctx)}))
+        return {"escalated": True}
+
+    reg["escalate"] = escalate_stub
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.STAGING_TEST_RUNNING.value, context={})})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.failed"})()
+
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.STAGING_TEST_RUNNING, ctx={}, event=Event.SESSION_FAILED,
+    )
+
+    # engine 没向 ctx 写 escalated_reason
+    escalate_call_ctx = next(c for n, c in calls if n == "escalate")["ctx"]
+    assert "escalated_reason" not in escalate_call_ctx
+    # DB 也没被 engine 改（escalate.py 真 escalate 时才会写 final_reason，这里 stub 没写）
+    assert "escalated_reason" not in pool.rows["REQ-1"].context
+
+
+@pytest.mark.asyncio
+async def test_engine_does_not_overwrite_action_error_reason(stub_actions):
+    """engine._emit_escalate 注 'action-error:...' 后，再次 step（event=SESSION_FAILED）走
+    escalate transition 时 engine 不可覆盖原 reason —— action 异常的具体信息比 Event slug
+    更有诊断价值。"""
+    calls, reg = stub_actions
+
+    async def escalate_stub(*, body, req_id, tags, ctx):
+        calls.append(("escalate", {"req_id": req_id, "ctx": dict(ctx)}))
+        return {"escalated": True}
+
+    reg["escalate"] = escalate_stub
+
+    initial_ctx = {
+        "escalated_reason": "action-error:RuntimeError: pod not ready in 120s after 3 attempts",
+    }
+    pool = FakePool({
+        "REQ-1": FakeReq(state=ReqState.ANALYZING.value, context=dict(initial_ctx)),
+    })
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "issue.updated"})()
+
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.ANALYZING, ctx=dict(initial_ctx),
+        event=Event.SESSION_FAILED,
+    )
+
+    escalate_call_ctx = next(c for n, c in calls if n == "escalate")["ctx"]
+    assert escalate_call_ctx["escalated_reason"] == initial_ctx["escalated_reason"]
+    assert pool.rows["REQ-1"].context["escalated_reason"] == initial_ctx["escalated_reason"]
+
+
 @pytest.mark.asyncio
 async def test_recursion_depth_guard(stub_actions, monkeypatch):
     """防 emit 死循环（depth > 12 返回 error）。"""

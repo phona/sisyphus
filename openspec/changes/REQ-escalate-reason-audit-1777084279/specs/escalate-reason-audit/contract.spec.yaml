@@ -1,0 +1,29 @@
+capability: escalate-reason-audit
+version: "1.0"
+description: |
+  All transitions to ESCALATED state must populate ctx.escalated_reason with a
+  canonical, event-specific reason slug — not the BKD webhook event type.
+  Driven by engine.step pre-population mapping keyed on the state-machine Event.
+
+mapping:
+  module: orchestrator.engine
+  symbol: _EVENT_TO_ESCALATE_REASON
+  type: "dict[Event, str]"
+  entries:
+    INTAKE_FAIL: "intake-fail"
+    PR_CI_TIMEOUT: "pr-ci-timeout"
+    ACCEPT_ENV_UP_FAIL: "accept-env-up-fail"
+    VERIFY_ESCALATE: "verifier-decision-escalate"
+  excluded:
+    SESSION_FAILED: "handled by escalate.py via body.event canonical signals"
+
+pre_populate_rules:
+  trigger: "transition.action == 'escalate' and event in _EVENT_TO_ESCALATE_REASON"
+  effect: "engine writes ctx.escalated_reason = mapping[event] before dispatching escalate"
+  preserves_action_error: "if ctx.escalated_reason starts with 'action-error:', leave untouched"
+  persistence: "via store.req_state.update_context (jsonb merge)"
+
+downstream_invariants:
+  - failure_mode_view: "context->>'escalated_reason' groups by canonical reason, never by 'session-completed'/'issue-updated' for intake/pr-ci-timeout/accept-env-up/verify paths"
+  - bkd_tag: "intent issue receives tag 'reason:<canonical>' matching the persisted ctx value"
+  - is_transient: "verifier-decision-escalate path no longer relies on dead-code special case"

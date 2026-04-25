@@ -42,6 +42,23 @@ _STATE_TO_STAGE: dict[ReqState, str] = {
     ReqState.ARCHIVING:              "archive",
 }
 
+# 非 SESSION_FAILED 的 escalate 路径触发 Event → 写入 ctx.escalated_reason 的 canonical
+# slug。escalate.py 之前只对 body.event in {"session.failed", "watchdog.stuck"} 走 canonical
+# 分支；其他 escalate transition（INTAKE_FAIL / PR_CI_TIMEOUT / ACCEPT_ENV_UP_FAIL /
+# VERIFY_ESCALATE）触发时 body.event 通常是 BKD webhook 类型（"session.completed" /
+# "issue.updated"），ctx 也没有 caller 提前写 escalated_reason，于是 reason fallback 退到
+# webhook 类型 slug，failure_mode 看板会把 4 类完全不同的失败归并到 "session-completed"
+# 一桶。预填 ctx.escalated_reason 把这 4 路从 webhook-type 跳到 event-type。
+# SESSION_FAILED 不入表：body.event 自身 canonical（session.failed / watchdog.stuck）+
+# _emit_escalate 注 "action-error:..." 已经能区分细路。
+_EVENT_TO_ESCALATE_REASON: dict[Event, str] = {
+    Event.INTAKE_FAIL:        "intake-fail",
+    Event.PR_CI_TIMEOUT:      "pr-ci-timeout",
+    Event.ACCEPT_ENV_UP_FAIL: "accept-env-up-fail",
+    Event.VERIFY_ESCALATE:    "verifier-decision-escalate",
+}
+
+
 # event → stage_runs.outcome 标签。escalate / session.failed 全归 fail。
 _EVENT_TO_OUTCOME: dict[Event, str] = {
     Event.ANALYZE_DONE:         "pass",
@@ -206,6 +223,19 @@ async def step(
     if handler is None:
         log.error("engine.action_not_registered", action=transition.action)
         return {"action": "error", "reason": f"action {transition.action} not registered"}
+
+    # escalate action 前预填 ctx.escalated_reason —— escalate.py 的 reason fallback 只读
+    # body.event slug，对非 SESSION_FAILED 路径会写 misleading 值（session-completed /
+    # issue-updated）；这里按状态机 Event 写 canonical slug。
+    if transition.action == "escalate" and event in _EVENT_TO_ESCALATE_REASON:
+        cur_reason = (ctx or {}).get("escalated_reason") or ""
+        # action-error:... 由 _emit_escalate 注入，比 Event slug 更有信息量；不覆盖
+        if not cur_reason.startswith("action-error:"):
+            canonical_reason = _EVENT_TO_ESCALATE_REASON[event]
+            await req_state.update_context(
+                pool, req_id, {"escalated_reason": canonical_reason},
+            )
+            ctx = {**(ctx or {}), "escalated_reason": canonical_reason}
 
     ok, result = await _dispatch_with_retry(
         pool,

@@ -39,7 +39,8 @@ _TRANSIENT_REASONS = {
 def _is_transient(body_event: str | None, reason: str) -> bool:
     """判断是不是 transient 失败：值得 auto-resume continue 一次"""
     if reason == "verifier-decision-escalate":
-        return False  # verifier 主观判，不重试
+        # engine.step 给 VERIFY_ESCALATE 预填的 canonical slug；verifier 主观判不重试
+        return False
     if body_event == "session.failed":
         return True
     if body_event == "watchdog.stuck":
@@ -65,8 +66,11 @@ async def escalate(*, body, req_id, tags, ctx):
     # reason 优先级：
     #   1. body.event 是 canonical 失败信号（session.failed / watchdog.stuck）
     #      → 用 body.event（最新一手信号；避免被前轮 ctx.escalated_reason 毒化）
-    #   2. ctx.escalated_reason 已被 caller 细分（engine action-error 等）
-    #   3. fallback：body.event 转 slug
+    #   2. ctx.escalated_reason 已被 caller 细分：
+    #      - engine._emit_escalate 注的 "action-error:..."
+    #      - engine.step 在 dispatch 前按状态机 Event 预填的 canonical slug
+    #        （intake-fail / pr-ci-timeout / accept-env-up-fail / verifier-decision-escalate）
+    #   3. fallback：body.event 转 slug（理论上不再走到，留兜底防回归）
     if body.event in _CANONICAL_SIGNALS:
         reason = body.event.replace(".", "-")[:40]
     else:
