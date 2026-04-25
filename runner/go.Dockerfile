@@ -36,19 +36,25 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-# ─── 2. openspec CLI ─────────────────────────────────────────────────────
+# ─── 2. helm ─────────────────────────────────────────────────────────────
+ARG HELM_VERSION=3.17.3
+RUN curl -fsSL https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz \
+      | tar -xz --strip-components=1 -C /usr/local/bin linux-amd64/helm \
+    && helm version
+
+# ─── 3. openspec CLI ─────────────────────────────────────────────────────
 # 真包名是 @fission-ai/openspec（旧版本误装 npm 上的占位 openspec@0.0.0 是空的，导致
 # REQ-997 analyze 报 "openspec: command not found"）
 RUN npm install -g @fission-ai/openspec@latest && openspec --version
 
-# ─── 2b. golangci-lint（业务仓 Makefile ci-lint target 依赖） ──────────
+# ─── 3b. golangci-lint（业务仓 Makefile ci-lint target 依赖） ──────────
 # REQ-final13 实证：ubox-crosser dev-cross-check → ci-lint 调 golangci-lint，没装
 # 时 fixer 死循环试图修 Makefile 也修不好。Go runner image 装上避免 env-bug 转 fix-dev。
 RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
     | sh -s -- -b /usr/local/bin v1.62.2 \
     && golangci-lint --version
 
-# ─── 3. sisyphus 合约脚本 ──────────────────
+# ─── 4. sisyphus 合约脚本 ──────────────────
 COPY scripts/check-scenario-refs.sh \
      scripts/check-tasks-section-ownership.sh \
      scripts/pre-commit-acl.sh \
@@ -57,7 +63,7 @@ COPY scripts/check-scenario-refs.sh \
 RUN chmod +x /opt/sisyphus/scripts/*.sh
 ENV PATH="/opt/sisyphus/scripts:$PATH"
 
-# ─── 4. DinD 入口（跟 runner/entrypoint.sh 共用） ──────────────────────
+# ─── 5. DinD 入口（跟 runner/entrypoint.sh 共用） ──────────────────────
 COPY runner/entrypoint.sh /usr/local/bin/sisyphus-entrypoint.sh
 RUN chmod +x /usr/local/bin/sisyphus-entrypoint.sh
 
