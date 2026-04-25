@@ -14,7 +14,7 @@
 
 ### 你的 BKD 上下文（已知，直接用）
 
-- **PROJECT** = `{{ project_alias or 'workflowtest' }}` （也可用 projectId `{{ project_id or 'illwkr1k' }}` 替代，二者等价）
+- **PROJECT** = `{{ project_alias }}` （也可用 projectId `{{ project_id }}` 替代，二者等价）
 - **MY_ISSUE_ID** = `{{ issue_id or '<from-cwd>' }}`
   - 如果上面是 `<from-cwd>`，从你 cwd 取：cwd 是 `/workspace/worktrees/<projectId>/<issueId>/`，basename 即 issueId
 
@@ -28,7 +28,7 @@
 BKD 在 agent 所在 host 的 `localhost:3000`。**不用 token**（localhost 绕过 Coder 网关）。
 
 ```bash
-PROJECT={{ project_alias or 'workflowtest' }}
+PROJECT={{ project_alias }}
 MY={{ issue_id or '$(basename $PWD)' }}    # 你自己 issue 的 BKD 行 id
 
 # 取 issue（看 tags / status / prompt）
