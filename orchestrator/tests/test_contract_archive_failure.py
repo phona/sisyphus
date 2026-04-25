@@ -20,7 +20,6 @@ from unittest.mock import AsyncMock
 
 from orchestrator.state import Event, ReqState
 
-
 # ─── Shared fakes (定义独立于 unit test，不复用 unit test 实现) ────────────
 
 
@@ -329,8 +328,8 @@ async def test_arch_s6_retries_exhausted_final_reason(monkeypatch):
     - 用 merge_tags_and_update 给 intent issue 加 reason:archive-failed-after-2-retries tag
     - 不发 follow_up_issue
     """
-    from orchestrator.actions import escalate as mod
     from orchestrator import k8s_runner as krunner
+    from orchestrator.actions import escalate as mod
     from orchestrator.store import req_state as rs
 
     fake = _make_bkd_fake()
