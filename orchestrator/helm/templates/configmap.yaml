@@ -21,3 +21,8 @@ data:
   {{- with .Values.env.snapshot_exclude_project_ids }}
   SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS: {{ join "," . | quote }}
   {{- end }}
+  {{- with .Values.env.default_involved_repos }}
+  # JSON-encoded（不是 csv）—— pydantic-settings v2 对 list[str] 复合字段
+  # 默认 JSON 解析；csv `phona/x,phona/y` 会触发 SettingsError 启动失败。
+  SISYPHUS_DEFAULT_INVOLVED_REPOS: {{ toJson . | quote }}
+  {{- end }}
