@@ -82,7 +82,21 @@ async def _record_stage_transitions(
     - 进入 *_RUNNING（cur ≠ next）→ open 新一条 run
     - 自循环（mark_*_reviewed_and_check / apply_verify_pass 等）不动
     任何错误只 log 不抛，避免拖垮主流程。
+
+    例外：(REVIEW_RUNNING, VERIFY_PASS) 是 transition 表声明的 self-loop，但
+    apply_verify_pass action 内部手工 CAS 把 state 推到 target stage_running，那条手工
+    CAS 绕过本函数。如果不在这里显式 close verifier 那条 run，stage_runs 会留 orphan
+    （ended_at IS NULL），Q12/Q13 verifier 看板漏掉 PASS 决策。
     """
+    if cur_state == ReqState.REVIEW_RUNNING and event == Event.VERIFY_PASS:
+        try:
+            await stage_runs.close_latest_stage_run(
+                pool, req_id, "verifier", outcome="pass",
+            )
+        except Exception as e:
+            log.warning("engine.stage_runs.write_failed",
+                        req_id=req_id, cur=cur_state.value, nxt=next_state.value,
+                        evt=event.value, error=str(e))
     if cur_state == next_state:
         return
     try:

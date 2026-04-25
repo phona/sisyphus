@@ -25,10 +25,16 @@ class FakeReq:
 
 
 class FakePool:
-    """模拟 asyncpg.Pool 的 fetchrow / execute，支持 req_state CAS + ctx patch。"""
+    """模拟 asyncpg.Pool 的 fetchrow / execute，支持 req_state CAS + ctx patch。
+
+    `stage_runs_calls` 记录 (op, sql, args)，op ∈ {"insert", "close", "update"}，
+    用于断言 `engine._record_stage_transitions` 的副作用。
+    """
 
     def __init__(self, initial: dict[str, FakeReq]):
         self.rows = initial
+        self.stage_runs_calls: list[tuple[str, str, tuple]] = []
+        self._next_stage_run_id = 1
 
     async def fetchrow(self, sql: str, *args):
         sql_stripped = sql.strip()
@@ -58,6 +64,17 @@ class FakePool:
                 except (json.JSONDecodeError, TypeError):
                     pass
             return {"req_id": req_id}
+        if sql_stripped.startswith("INSERT INTO stage_runs"):
+            self.stage_runs_calls.append(("insert", sql_stripped, args))
+            row_id = self._next_stage_run_id
+            self._next_stage_run_id += 1
+            return {"id": row_id}
+        if sql_stripped.startswith("UPDATE stage_runs"):
+            # close_latest_stage_run uses subquery with RETURNING id; pretend a row matched.
+            self.stage_runs_calls.append(("close", sql_stripped, args))
+            row_id = self._next_stage_run_id
+            self._next_stage_run_id += 1
+            return {"id": row_id}
         raise NotImplementedError(sql[:60])
 
     async def execute(self, sql: str, *args):
@@ -69,6 +86,10 @@ class FakePool:
             r = self.rows.get(req_id)
             if r:
                 r.context.update(patch)
+            return
+        if sql_stripped.startswith("UPDATE stage_runs"):
+            # update_stage_run path (no RETURNING). Recorded for completeness.
+            self.stage_runs_calls.append(("update", sql_stripped, args))
             return
         raise NotImplementedError(sql[:60])
 
@@ -407,3 +428,111 @@ async def test_recursion_depth_guard(stub_actions, monkeypatch):
         if not current:
             break
     assert found_error, "Expected recursion guard error in chained results"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# REQ-verifier-stagerun-close: VERIFY_PASS self-loop must close verifier stage_run
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_verify_pass_closes_orphan_verifier_stage_run(stub_actions):
+    """(REVIEW_RUNNING, VERIFY_PASS) 是 transition 表的 self-loop，但
+    apply_verify_pass 内部手 CAS，绕过 _record_stage_transitions。fix 后 engine 必须
+    显式 close verifier 那条 stage_run（outcome='pass'），否则 ended_at 永远 NULL。
+    """
+    calls, reg = stub_actions
+
+    async def apply_verify_pass(*, body, req_id, tags, ctx):
+        calls.append(("apply_verify_pass", {"req_id": req_id}))
+        return {"ok": True}
+
+    reg["apply_verify_pass"] = apply_verify_pass
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.REVIEW_RUNNING.value)})
+    body = type("B", (), {"issueId": "v-1", "projectId": "p", "event": "session.completed"})()
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p",
+        tags=["verifier", "REQ-1", "verify:spec_lint"],
+        cur_state=ReqState.REVIEW_RUNNING,
+        ctx={"verifier_stage": "spec_lint"}, event=Event.VERIFY_PASS,
+    )
+
+    # transition 表声明的 self-loop：state 不变
+    assert pool.rows["REQ-1"].state == ReqState.REVIEW_RUNNING.value
+
+    # close_latest_stage_run 必须被调一次：req_id, stage='verifier', outcome='pass', fail_reason=None
+    closes = [c for c in pool.stage_runs_calls if c[0] == "close"]
+    assert len(closes) == 1, f"expected exactly 1 close, got {pool.stage_runs_calls!r}"
+    _, _, args = closes[0]
+    assert args[0] == "REQ-1"
+    assert args[1] == "verifier"
+    assert args[2] == "pass"
+    assert args[3] is None
+
+    # 不应该 open 任何新 stage_run（self-loop 不进入新 *_RUNNING）
+    inserts = [c for c in pool.stage_runs_calls if c[0] == "insert"]
+    assert inserts == []
+
+
+@pytest.mark.asyncio
+async def test_verify_fix_needed_still_closes_verifier_via_normal_path(stub_actions):
+    """REGRESSION: VERIFY_FIX_NEEDED → REVIEW_RUNNING → FIXER_RUNNING 是不同 state，应仍走
+    通用 close-on-leave + open-on-enter 路径：verifier outcome='fix' + 新开 fixer。
+    """
+    calls, reg = stub_actions
+
+    async def start_fixer(*, body, req_id, tags, ctx):
+        calls.append(("start_fixer", {"req_id": req_id}))
+        return {"ok": True}
+
+    reg["start_fixer"] = start_fixer
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.REVIEW_RUNNING.value)})
+    body = type("B", (), {"issueId": "v-1", "projectId": "p", "event": "session.completed"})()
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p",
+        tags=["verifier", "REQ-1", "verify:dev_cross_check"],
+        cur_state=ReqState.REVIEW_RUNNING,
+        ctx={"verifier_stage": "dev_cross_check"}, event=Event.VERIFY_FIX_NEEDED,
+    )
+
+    assert pool.rows["REQ-1"].state == ReqState.FIXER_RUNNING.value
+
+    closes = [c for c in pool.stage_runs_calls if c[0] == "close"]
+    inserts = [c for c in pool.stage_runs_calls if c[0] == "insert"]
+    # 通用 close: verifier outcome='fix'（不是 'pass'）
+    assert len(closes) == 1, pool.stage_runs_calls
+    args = closes[0][2]
+    assert args[1] == "verifier"
+    assert args[2] == "fix"
+    # 通用 open: fixer
+    assert len(inserts) == 1
+    insert_args = inserts[0][2]
+    assert insert_args[1] == "fixer"
+
+
+@pytest.mark.asyncio
+async def test_review_running_self_loop_other_event_does_not_close_verifier(stub_actions):
+    """fix 必须只在 event == VERIFY_PASS 触发；其他 REVIEW_RUNNING self-loop 事件
+    （如 SESSION_FAILED 经状态机 self-loop 给 escalate action 自决）不动 verifier stage_run。
+    """
+    calls, reg = stub_actions
+
+    async def escalate(*, body, req_id, tags, ctx):
+        calls.append(("escalate", {"req_id": req_id}))
+        return {"ok": True}
+
+    reg["escalate"] = escalate
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.REVIEW_RUNNING.value)})
+    body = type("B", (), {"issueId": "v-1", "projectId": "p", "event": "session.failed"})()
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p",
+        tags=["verifier", "REQ-1"],
+        cur_state=ReqState.REVIEW_RUNNING, ctx={}, event=Event.SESSION_FAILED,
+    )
+
+    # 没 close 任何 stage_run（escalate action 自己决定真 escalate 后由后续 transition close）
+    closes = [c for c in pool.stage_runs_calls if c[0] == "close"]
+    assert closes == [], f"unexpected close on SESSION_FAILED self-loop: {closes!r}"
