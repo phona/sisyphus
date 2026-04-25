@@ -1,0 +1,84 @@
+capability: checker-empty-source-guard
+version: "1.0"
+description: |
+  Three sisyphus mechanical checkers (spec_lint / dev_cross_check / staging_test)
+  emit a shell template that iterates `/workspace/source/*/` inside the runner
+  pod. Before this change, any of {missing source dir, empty source dir, all
+  repos skipped} caused the for-loop to iterate zero or one (literal-glob)
+  times and the trailing `[ $fail -eq 0 ]` to evaluate true — a silent-pass
+  with zero work performed.
+
+  This capability defines a uniform three-gate guard added to all three
+  checkers: directory existence, non-empty subdirectory count, and a per-loop
+  `ran` counter that fails when no repo was actually verified.
+
+guards:
+  guard_a_source_dir_exists:
+    location: emitted at the very top of the shell template, before any state mutation
+    check: |
+      [ ! -d /workspace/source ] → echo `=== FAIL <stage>: /workspace/source missing — refusing to silent-pass ===` >&2; exit 1
+    rationale: |
+      Catches the runner-pod scenario where the PVC is unmounted or the
+      sisyphus-clone-repos.sh helper was never invoked.
+
+  guard_b_repo_count_nonzero:
+    location: emitted right after guard A, still before any state mutation
+    check: |
+      repo_count=$(find /workspace/source -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+      [ "$repo_count" -eq 0 ] → echo `=== FAIL <stage>: /workspace/source empty (0 cloned repos) — refusing to silent-pass ===` >&2; exit 1
+    rationale: |
+      Catches the case where the directory exists but contains zero cloned
+      repos (e.g. helper failed mid-clone, or PVC half-wiped). The
+      `find -mindepth 1 -maxdepth 1 -type d` form is POSIX-portable and
+      counts only immediate subdirectories.
+
+  guard_c_at_least_one_repo_eligible:
+    location: emitted after the per-repo for-loop, before the trailing `[ $fail -eq 0 ]`
+    check: |
+      ran=0 (initialized before the loop)
+      ran=$((ran+1)) (incremented inside the per-stage eligibility branch)
+      [ "$ran" -eq 0 ] → echo `=== FAIL <stage>: 0 source repos eligible (no feat/<REQ> branch with required artifact) — refusing to silent-pass ===` >&2; exit 1
+    eligibility_predicates:
+      spec_lint: |
+        repo has feat/<REQ> branch fetchable from origin AND
+        repo has openspec/changes/<REQ>/ directory
+      dev_cross_check: |
+        repo has feat/<REQ> branch fetchable from origin AND
+        repo's root Makefile contains `^ci-lint:` target
+      staging_test: |
+        repo has feat/<REQ> branch fetchable from origin AND
+        repo's root Makefile contains BOTH `^ci-unit-test:` AND `^ci-integration-test:`
+    rationale: |
+      Catches the case where the analyze / dev agent reported done but did
+      not actually push artifacts to feat/<REQ>, or the source repo lacks the
+      ttpos-ci standard Makefile targets. checker SHALL NOT emit *_PASS when
+      it has zero signal.
+
+stderr_format:
+  contract: |
+    All FAIL messages emitted by these guards MUST follow the literal pattern
+    `=== FAIL <stage>: <reason> — refusing to silent-pass ===` with `<stage>`
+    being one of `spec_lint`, `dev_cross_check`, `staging_test`. The verifier
+    prompt at orchestrator/src/orchestrator/prompts/verifier/<stage>_fail.md.j2
+    relies on stderr-tail substring matching for diagnosis hints; uniform
+    prefix keeps the verifier's classification stable.
+
+invariants:
+  exit_code_semantics:
+    - "exit 0: every eligible repo (ran >= 1) passed every per-tool check"
+    - "exit 1: at least one of {missing dir, empty dir, 0 eligible, per-tool fail}"
+    - "exit -1: timeout (handled at the Python wrapper layer, not in shell)"
+
+  no_change_to_pass_path: |
+    On the happy path (>=1 repo with feat/<REQ> branch and required artifacts),
+    the new shell template behaves identically to the previous template. The
+    only added cost is one `find | wc -l` invocation (~10ms) and three integer
+    comparisons. No new dependencies required in the runner-pod image
+    (find / wc / bash are all baseline coreutils).
+
+  three_checkers_share_template_shape: |
+    spec_lint / dev_cross_check / staging_test all emit a structurally parallel
+    shell template. Future checker authors that copy-paste from any of these
+    three SHALL inherit the empty-source guard by default. This shape parity
+    is enforced by tests/test_checkers_empty_source_guard.py which parametrizes
+    the same three guard scenarios across all three `_build_cmd` functions.

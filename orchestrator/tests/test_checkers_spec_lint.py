@@ -1,8 +1,5 @@
-"""checkers/dev_cross_check.py 单测：mock RunnerController，验 CheckResult 字段。
-
-ttpos-ci 契约统一后：cmd 遍历 /workspace/source/*，串行对每个含 `ci-lint` target 的仓
-跑 `BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`。
-BASE_REV 缺失（fetch 不到 origin/main / develop / dev）则传空，ci-lint 退化为全量扫描。
+"""checkers/spec_lint.py 单测：mock RunnerController，验 CheckResult 字段 +
+empty-source guard（REQ-checker-empty-source-1777113775）的 cmd 形状。
 """
 from __future__ import annotations
 
@@ -11,7 +8,7 @@ import asyncio
 import pytest
 
 from orchestrator.checkers._types import CheckResult
-from orchestrator.checkers.dev_cross_check import _build_cmd, run_dev_cross_check
+from orchestrator.checkers.spec_lint import _build_cmd, run_spec_lint
 from orchestrator.k8s_runner import ExecResult
 
 
@@ -25,38 +22,31 @@ def make_fake_controller(exit_code: int, stdout: str = "", stderr: str = "", dur
 
 
 def _assert_for_each_repo_cmd(cmd: str) -> None:
-    """验证 cmd 是 for-each-repo 串行 shell 模板，跑 ci-lint + BASE_REV。"""
+    """验证 cmd 是 for-each-repo 模板，跑 openspec validate + scenario refs。"""
     assert "/workspace/source/*/" in cmd
-    assert "make ci-lint" in cmd
-    assert "ci-lint:" in cmd  # grep Makefile target 过滤
-    # BASE_REV 计算 + 注入
-    assert "BASE_REV=" in cmd
-    assert "git merge-base HEAD origin/main" in cmd
-    assert "git merge-base HEAD origin/develop" in cmd  # fallback
-    assert "git merge-base HEAD origin/dev" in cmd  # fallback
-    # 累加 fail 标志
+    assert "openspec validate" in cmd
+    assert "check-scenario-refs.sh" in cmd
     assert "fail=0" in cmd
     assert "fail=1" in cmd
-    assert "[ $fail -eq 0 ]" in cmd  # 不能用 `exit $fail`：orch 包装的 exit-marker echo 不再跑
+    assert "[ $fail -eq 0 ]" in cmd
 
 
 # ── pass ──────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_run_dev_cross_check_pass(monkeypatch):
-    FakeRC = make_fake_controller(exit_code=0, stdout="ok\n", stderr="", duration=1.5)
+async def test_run_spec_lint_pass(monkeypatch):
+    FakeRC = make_fake_controller(exit_code=0, stdout="ok\n", stderr="", duration=2.0)
     monkeypatch.setattr(
-        "orchestrator.checkers.dev_cross_check.k8s_runner.get_controller",
+        "orchestrator.checkers.spec_lint.k8s_runner.get_controller",
         lambda: FakeRC(),
     )
-    result = await run_dev_cross_check("REQ-1")
+    result = await run_spec_lint("REQ-1")
 
     assert isinstance(result, CheckResult)
     assert result.passed is True
     assert result.exit_code == 0
     assert result.stdout_tail == "ok\n"
-    assert result.stderr_tail == ""
     _assert_for_each_repo_cmd(result.cmd)
     assert FakeRC.last_cmd == result.cmd
 
@@ -65,54 +55,34 @@ async def test_run_dev_cross_check_pass(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_dev_cross_check_fail(monkeypatch):
+async def test_run_spec_lint_fail(monkeypatch):
     FakeRC = make_fake_controller(
-        exit_code=1, stdout="lint warnings...\n",
-        stderr="=== FAIL: ttpos-server-go ===\n", duration=8.2,
+        exit_code=1, stdout="",
+        stderr="=== FAIL: repo-a ===\n", duration=3.1,
     )
     monkeypatch.setattr(
-        "orchestrator.checkers.dev_cross_check.k8s_runner.get_controller",
+        "orchestrator.checkers.spec_lint.k8s_runner.get_controller",
         lambda: FakeRC(),
     )
-    result = await run_dev_cross_check("REQ-2")
+    result = await run_spec_lint("REQ-2")
 
     assert result.passed is False
     assert result.exit_code == 1
     assert "FAIL" in result.stderr_tail
 
 
-# ── stdout/stderr tail 截尾 ───────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_run_dev_cross_check_truncates_tails(monkeypatch):
-    big_out = "x" * 5000
-    big_err = "e" * 4000
-    FakeRC = make_fake_controller(exit_code=0, stdout=big_out, stderr=big_err)
-    monkeypatch.setattr(
-        "orchestrator.checkers.dev_cross_check.k8s_runner.get_controller",
-        lambda: FakeRC(),
-    )
-    result = await run_dev_cross_check("REQ-3")
-
-    assert len(result.stdout_tail) == 2048
-    assert len(result.stderr_tail) == 2048
-    assert result.stdout_tail == big_out[-2048:]
-    assert result.stderr_tail == big_err[-2048:]
-
-
 # ── timeout ───────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_run_dev_cross_check_timeout(monkeypatch):
+async def test_run_spec_lint_timeout(monkeypatch):
     class SlowRC:
         async def exec_in_runner(self, req_id, command, **kw):
             await asyncio.sleep(9999)
             return ExecResult(exit_code=0, stdout="", stderr="", duration_sec=0)
 
     monkeypatch.setattr(
-        "orchestrator.checkers.dev_cross_check.k8s_runner.get_controller",
+        "orchestrator.checkers.spec_lint.k8s_runner.get_controller",
         lambda: SlowRC(),
     )
 
@@ -124,10 +94,9 @@ async def test_run_dev_cross_check_timeout(monkeypatch):
         except asyncio.CancelledError:
             raise TimeoutError() from None
 
-    monkeypatch.setattr("orchestrator.checkers.dev_cross_check.asyncio.wait_for", fast_wait_for)
+    monkeypatch.setattr("orchestrator.checkers.spec_lint.asyncio.wait_for", fast_wait_for)
 
-    # timeout 走 internal CheckResult 返回（不抛异常）
-    result = await run_dev_cross_check("REQ-4", timeout_sec=1)
+    result = await run_spec_lint("REQ-3", timeout_sec=1)
     assert result.passed is False
     assert result.exit_code == -1
     assert "超时" in result.stderr_tail
@@ -137,22 +106,22 @@ async def test_run_dev_cross_check_timeout(monkeypatch):
 
 
 def test_build_cmd_emits_workspace_source_existence_guard():
-    """`/workspace/source` 不存在 → exit 1，不能 for 循环 0 次默认 pass。"""
+    """`/workspace/source` 不存在直接 exit 1，不能让 for 循环 0 次默认 pass。"""
     cmd = _build_cmd("REQ-X")
     assert "[ ! -d /workspace/source ]" in cmd
-    assert "FAIL dev_cross_check: /workspace/source missing" in cmd
+    assert "FAIL spec_lint: /workspace/source missing" in cmd
 
 
 def test_build_cmd_emits_repo_count_zero_guard():
-    """`/workspace/source` 空目录（0 cloned repo）→ exit 1。"""
+    """`/workspace/source` 是空目录（0 个 cloned repo）也直接 exit 1。"""
     cmd = _build_cmd("REQ-X")
     assert "find /workspace/source -mindepth 1 -maxdepth 1 -type d" in cmd
     assert '"$repo_count" -eq 0' in cmd
-    assert "FAIL dev_cross_check: /workspace/source empty" in cmd
+    assert "FAIL spec_lint: /workspace/source empty" in cmd
 
 
 def test_build_cmd_emits_zero_eligible_guard():
-    """所有仓都被 skip（无 feat 分支 / 无 ci-lint target）→ ran=0 → exit 1。"""
+    """所有仓都被 skip（feat 分支不存在 / 没 openspec/changes/<REQ>/）→ ran=0 → exit 1。"""
     cmd = _build_cmd("REQ-X")
     assert "ran=0" in cmd
     assert "ran=$((ran+1))" in cmd

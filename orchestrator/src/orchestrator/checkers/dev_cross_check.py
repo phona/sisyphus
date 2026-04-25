@@ -26,12 +26,27 @@ _TAIL = 2048
 def _build_cmd(req_id: str) -> str:
     """遍历 /workspace/source/*/，先切到 feat/<REQ>，对含 ci-lint target 的仓跑 make ci-lint。
 
+    Empty-source guard（防 silent-pass）：
+    - /workspace/source 不存在或没任何子目录 → 直接 exit 1
+    - 遍历后 ran=0（feat 分支 fetch 不到 / 没 ci-lint target）→ exit 1
+      checker 不能在零信号情况下报 pass。
+
     BASE_REV 计算：`git merge-base HEAD origin/main`，fallback `origin/develop`、
     `origin/dev`，再失败传空字符串（ci-lint 退化为全量扫描）。
     """
     return (
         "set -o pipefail; "
+        "if [ ! -d /workspace/source ]; then "
+        '  echo "=== FAIL dev_cross_check: /workspace/source missing — refusing to silent-pass ===" >&2; '
+        "  exit 1; "
+        "fi; "
+        "repo_count=$(find /workspace/source -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l); "
+        'if [ "$repo_count" -eq 0 ]; then '
+        '  echo "=== FAIL dev_cross_check: /workspace/source empty (0 cloned repos) — refusing to silent-pass ===" >&2; '
+        "  exit 1; "
+        "fi; "
         "fail=0; "
+        "ran=0; "
         "for repo in /workspace/source/*/; do "
         '  name=$(basename "$repo"); '
         f'  if ! (cd "$repo" && git fetch origin "feat/{req_id}" 2>/dev/null && git checkout -B "feat/{req_id}" "origin/feat/{req_id}" 2>/dev/null); then '
@@ -48,10 +63,15 @@ def _build_cmd(req_id: str) -> str:
         '      echo "=== FAIL: $name ===" >&2; '
         "      fail=1; "
         "    fi; "
+        "    ran=$((ran+1)); "
         "  else "
         '    echo "[skip] $name: no make ci-lint target"; '
         "  fi; "
         "done; "
+        'if [ "$ran" -eq 0 ]; then '
+        f'  echo "=== FAIL dev_cross_check: 0 source repos eligible (no feat/{req_id} branch with make ci-lint target) — refusing to silent-pass ===" >&2; '
+        "  exit 1; "
+        "fi; "
         "[ $fail -eq 0 ]"
     )
 
