@@ -121,7 +121,7 @@ class Settings(BaseSettings):
     # 默认 claude-sonnet-4-6（成本低于 opus；测试 helm values 可覆盖成 'claude-haiku-4-5'）。
     # 注意：analyze agent 的 model 是 user 创 intent issue 时定的，sisyphus 不控；
     # analyze fan out 的 sub-issue model 由 analyze prompt 自己控（见 analyze.md.j2）。
-    agent_model: str | None = "claude-sonnet-4-6"
+    agent_model: str | None = "claude-opus-4-7[1m]"  # 实证：sonnet 在 code scope (single-file Dockerfile / new module) 跑 60-100min 反复 escalate，retry-token 总成本反而高于 opus 一次过；docs scope 仍可手动指定 sonnet (per-REQ model param)
 
     # ─── aissh-tao MCP server id (vm-node04) ─────────────────────────────
     # BKD agent 跑在 Coder workspace 没装 kubectl，所有 vm-node04 上的 kubectl 命令
