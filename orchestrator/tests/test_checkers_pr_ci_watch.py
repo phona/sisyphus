@@ -22,8 +22,21 @@ def _runs_payload(*runs: dict) -> dict:
     return {"total_count": len(runs), "check_runs": list(runs)}
 
 
-def _run(name: str, status: str = "completed", conclusion: str | None = "success") -> dict:
-    return {"name": name, "status": status, "conclusion": conclusion}
+def _run(
+    name: str,
+    status: str = "completed",
+    conclusion: str | None = "success",
+    app_slug: str = "github-actions",
+) -> dict:
+    """Default app.slug=github-actions matches sisyphus's PR-CI-watch contract
+    (CI = GHA workflows). Pass app_slug="anthropic-claude" / etc. to simulate
+    review-only check-runs that should NOT count as CI success."""
+    return {
+        "name": name,
+        "status": status,
+        "conclusion": conclusion,
+        "app": {"slug": app_slug},
+    }
 
 
 def patch_pr_lookup(monkeypatch, *, repo: str = "phona/ubox-crosser", pr_number: int | None = 42):
@@ -521,3 +534,67 @@ def test_classify_pending_when_any_in_progress():
 def test_classify_recognizes_all_fail_conclusions():
     for c in ["failure", "cancelled", "timed_out", "action_required", "stale"]:
         assert pr_ci_watch._classify([_run("x", conclusion=c)]) == "fail", c
+
+
+# ── no-gha 防假阳性 pass（REQ-acceptance-e2e-1777084500 真实事故）─────────
+
+
+def test_classify_all_green_but_only_review_only_check_run_is_no_gha():
+    """全绿但 0 条 GHA app check-run → no-gha（假阳性 pass，应判 fail）。
+
+    REQ-acceptance-e2e-1777084500 真实事故重现：PR 目标分支不在 ci.yml 触发
+    列表，GHA 整套没跑；claude-review 这种 review-only bot 报 success；旧实现
+    把它当全绿 pass，sisyphus 推进到 accept 才被 verifier 人肉 catch。
+    """
+    assert pr_ci_watch._classify([
+        _run("claude-review", app_slug="anthropic-claude"),
+    ]) == "no-gha"
+
+
+def test_classify_mixed_gha_plus_review_is_pass():
+    """有任何 GHA check-run + 全绿 → pass（review bot 不污染正常 CI 跑过的判定）。"""
+    assert pr_ci_watch._classify([
+        _run("lint"),                                            # GHA
+        _run("claude-review", app_slug="anthropic-claude"),      # review-only
+    ]) == "pass"
+
+
+def test_classify_pending_overrides_no_gha():
+    """还有 pending 就别急着断 no-gha —— GHA workflow 可能刚要起。"""
+    assert pr_ci_watch._classify([
+        _run("claude-review", app_slug="anthropic-claude"),
+        _run("setup", status="in_progress", conclusion=None,
+             app_slug="anthropic-claude"),
+    ]) == "pending"
+
+
+def test_classify_check_run_missing_app_field_treated_as_non_gha():
+    """check-run 没 app 字段 → 当 review-only / 未知来源处理（保守不当 GHA）。"""
+    assert pr_ci_watch._classify([
+        {"name": "weird", "status": "completed", "conclusion": "success"},
+    ]) == "no-gha"
+
+
+@pytest.mark.asyncio
+async def test_watch_pr_ci_review_only_check_runs_treated_as_fail(
+    httpx_mock, monkeypatch,
+):
+    """端到端：PR 只有 claude-review 报绿 → checker 返 passed=False reason=no-gha。"""
+    monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
+    patch_pr_lookup(monkeypatch)
+
+    httpx_mock.add_response(
+        url="https://api.github.com/repos/phona/ubox-crosser/commits/"
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/check-runs?per_page=100",
+        json=_runs_payload(_run("claude-review", app_slug="anthropic-claude")),
+    )
+
+    result = await pr_ci_watch.watch_pr_ci(
+        "REQ-9", "feat/REQ-9", poll_interval_sec=1, timeout_sec=60,
+    )
+
+    assert result.passed is False
+    assert result.exit_code == 1
+    assert "no-gha-checks-ran" in result.stdout_tail
+    # 露出实际跑了啥（review-only bot 真身），便于人工 / verifier 一眼判
+    assert "claude-review" in result.stdout_tail

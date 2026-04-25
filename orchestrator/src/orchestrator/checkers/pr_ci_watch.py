@@ -53,6 +53,12 @@ _MAX_SHA_FLIPS = 5
 _PASS_CONCLUSIONS = {"success", "neutral", "skipped"}
 _FAIL_CONCLUSIONS = {"failure", "cancelled", "timed_out", "action_required", "stale"}
 
+# sisyphus 契约：业务 PR 必须由 GitHub Actions 跑 lint/unit/integration。
+# check-run 的 app.slug == "github-actions" 表示该 check 由 GHA workflow 产生；
+# 别的 slug（如 "anthropic-claude" / 第三方 review bot）属于 review-only signal。
+# 用于检测假阳性 pass：全绿但全是 review-only check-run（GHA 一次没跑）。
+_GHA_APP_SLUG = "github-actions"
+
 
 @dataclass
 class _RepoState:
@@ -225,13 +231,22 @@ async def watch_pr_ci(
                      run_counts={s.repo: len(per_repo_runs.get(s.repo, [])) for s in states},
                      sha_flips={s.repo: s.flip_count for s in states if s.flip_count > 0})
 
-            if any(v == "fail" for v in verdicts.values()):
+            if any(v in ("fail", "no-gha") for v in verdicts.values()):
                 parts = []
                 for state in states:
-                    if verdicts[state.repo] != "fail":
+                    v = verdicts[state.repo]
+                    if v not in ("fail", "no-gha"):
                         continue
                     if state.terminal_verdict == "fail":
                         parts.append(f"{state.repo}: {state.terminal_reason}")
+                    elif v == "no-gha":
+                        # 全绿但 0 条 GHA check-run —— 列出实际跑了啥（露出 review-only bot
+                        # 的真身），给 verifier / 人工审一眼能看出"GHA 没跑"。
+                        runs = per_repo_runs.get(state.repo, [])
+                        parts.append(
+                            f"{state.repo}: no-gha-checks-ran "
+                            f"(only non-CI signals: {_summarize(runs)})"
+                        )
                     else:
                         runs = per_repo_runs.get(state.repo, [])
                         parts.append(f"{state.repo}: {_summarize(runs, failed_only=True)}")
@@ -310,19 +325,28 @@ async def _get_check_runs(client: httpx.AsyncClient, repo: str, sha: str) -> lis
 # ── verdict 计算 ─────────────────────────────────────────────────────────
 
 def _classify(runs: list[dict]) -> str:
-    """返 'pass' / 'fail' / 'pending'。
+    """返 'pass' / 'fail' / 'pending' / 'no-gha'。
 
     - 任一 completed 且 conclusion 红 → fail（fail 优先：早死早超生）
     - 任一未 completed → pending
-    - 全 completed 且 conclusion 全绿 → pass
+    - 全 completed 且 conclusion 全绿 + 至少一条 GHA check-run → pass
+    - 全 completed 且 conclusion 全绿 但 0 条 GHA check-run → no-gha（假阳性 pass）
     - 空 → pending（PR 刚开 GHA 没触发，先等）
+
+    no-gha 触发场景：PR 目标分支不在源仓 ci.yml 触发列表 / workflow 被禁 /
+    GHA webhook miss 整套，导致 lint/unit/integration 一次都没跑；只剩
+    claude-review 这种 review-only bot 报绿。verifier-agent 之前是兜底人肉 catch
+    （REQ-acceptance-e2e-1777084500），机械层应自己识别。
     """
     if not runs:
         return "pending"
 
     has_fail = False
     has_pending = False
+    has_gha = False
     for r in runs:
+        if (r.get("app") or {}).get("slug") == _GHA_APP_SLUG:
+            has_gha = True
         if r.get("status") != "completed":
             has_pending = True
             continue
@@ -332,7 +356,10 @@ def _classify(runs: list[dict]) -> str:
     if has_fail:
         return "fail"
     if has_pending:
+        # 还有 pending 就继续等 —— GHA workflow 可能刚要起；不当下断 no-gha
         return "pending"
+    if not has_gha:
+        return "no-gha"
     return "pass"
 
 
