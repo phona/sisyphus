@@ -309,6 +309,13 @@ async def webhook(request: Request) -> JSONResponse:
         await req_state.update_context(pool, req_id, patch)
         ctx = {**ctx, **patch}
 
+    # ─── 5.8 VERIFY_ESCALATE → 预置 escalated_reason ────────────────────────
+    # escalate action 从 ctx.escalated_reason 读 reason；没设则 fallback 到
+    # body.event.replace(".", "-") = "session-completed"，语义不明。
+    if event == Event.VERIFY_ESCALATE:
+        await req_state.update_context(pool, req_id, {"escalated_reason": "verifier-decision"})
+        ctx = {**ctx, "escalated_reason": "verifier-decision"}
+
     # ─── 6. 推进状态机（engine 内部循环 emit）─────────────────────────────
     result = await engine.step(
         pool,

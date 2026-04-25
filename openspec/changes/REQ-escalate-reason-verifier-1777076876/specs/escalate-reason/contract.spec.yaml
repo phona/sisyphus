@@ -1,0 +1,22 @@
+openspec: "1.0"
+id: escalate-reason
+title: escalated_reason for verifier decisions
+scenarios:
+  - id: ERV-S1
+    title: verifier escalate sets reason verifier-decision in context
+    given:
+      - verifier agent session.completed with action=escalate decision
+    when:
+      - webhook processes event and derives VERIFY_ESCALATE
+    then:
+      - ctx.escalated_reason == "verifier-decision"
+      - escalate action returns reason == "verifier-decision"
+  - id: ERV-S2
+    title: verifier-decision is not treated as transient
+    given:
+      - ctx.escalated_reason = "verifier-decision"
+    when:
+      - escalate action evaluates _is_transient
+    then:
+      - _is_transient returns False
+      - real escalate performed, no auto-resume
