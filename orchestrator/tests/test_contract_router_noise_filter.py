@@ -85,9 +85,9 @@ def _setup_for_skip(monkeypatch) -> dict:
     derive_calls: list = []
 
     monkeypatch.setattr(dedup, "check_and_record", AsyncMock(return_value="new"))
-    monkeypatch.setattr(dedup, "mark_processed", AsyncMock(side_effect=mark_calls.append))
+    monkeypatch.setattr(dedup, "mark_processed", AsyncMock(side_effect=lambda *a, **kw: mark_calls.append(a)))
     monkeypatch.setattr(db, "get_pool", lambda: _FakePool())
-    monkeypatch.setattr(obs, "record_event", AsyncMock(side_effect=obs_calls.append))
+    monkeypatch.setattr(obs, "record_event", AsyncMock(side_effect=lambda *a, **kw: obs_calls.append(a)))
 
     orig_derive = router_lib.derive_event
 
@@ -122,7 +122,7 @@ def _setup_for_passthrough(monkeypatch, *, req_id: str | None, derive_event_val)
     monkeypatch.setattr(dedup, "check_and_record", AsyncMock(return_value="new"))
     monkeypatch.setattr(dedup, "mark_processed", AsyncMock())
     monkeypatch.setattr(db, "get_pool", lambda: _FakePool())
-    monkeypatch.setattr(obs, "record_event", AsyncMock(side_effect=obs_calls.append))
+    monkeypatch.setattr(obs, "record_event", AsyncMock(side_effect=lambda *a, **kw: obs_calls.append(a)))
     monkeypatch.setattr(router_lib, "extract_req_id", lambda tags, num=None: req_id)
     monkeypatch.setattr(router_lib, "derive_event", lambda evt, tags: derive_event_val)
 
@@ -219,7 +219,7 @@ async def test_rnf_s2_issue_updated_with_req_tag_proceeds(monkeypatch):
     tracking = _setup_for_passthrough(
         monkeypatch,
         req_id="REQ-rnf-s2-test",
-        derive_event_val=Event.SESSION_COMPLETED,
+        derive_event_val=Event.SESSION_FAILED,
     )
 
     req = _make_request("issue.updated", ["REQ-rnf-s2-test", "analyze"])
