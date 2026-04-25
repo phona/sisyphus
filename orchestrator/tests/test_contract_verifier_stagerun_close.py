@@ -28,7 +28,6 @@ from unittest.mock import AsyncMock
 import pytest
 import structlog.testing
 
-
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
