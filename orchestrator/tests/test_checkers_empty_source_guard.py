@@ -135,54 +135,61 @@ def test_guard_b_source_dir_with_only_files_not_subdirs_is_empty(builder, name, 
 
 # ── Guard C: 0 eligible repos ─────────────────────────────────────────────────
 # Scenarios CESG-S3, CESG-S6, CESG-S9
+#
+# REQ-checker-no-feat-branch-fail-loud-1777123726 split the pre-existing skip
+# path "no feat branch / not involved" into two outcomes:
+#   - spec_lint: missing feat branch still hits Guard C (ran=0 → "0 source
+#     repos eligible") because spec changes may legitimately live only in the
+#     spec_home repo. CESG-S3 retains its original semantics.
+#   - dev_cross_check / staging_test: missing feat branch on a cloned repo is
+#     a structural failure of the analyze-agent and now fail loud immediately
+#     with "has no feat/<REQ> branch on origin". CESG-S6/S9 still fire Guard C
+#     for the *Makefile-target-missing* sub-case (covered by the new REQ's
+#     spec; tests for that scenario live in
+#     test_checkers_no_feat_branch_fail_loud.py).
 
 
-@pytest.mark.parametrize("builder,name", _BUILDERS)
-def test_cmd_exits_nonzero_when_no_repo_eligible(builder, name, tmp_path):
-    """CESG-S3/S6/S9: exit 1 when a repo subdir exists but has no feat/<REQ> branch."""
+def test_cmd_spec_lint_exits_nonzero_with_zero_eligible_when_no_feat_branch(tmp_path):
+    """CESG-S3: spec_lint exit 1 when subdir exists but has no feat/<REQ> branch."""
     fake_root = tmp_path / "source"
     (fake_root / "repo-a").mkdir(parents=True)
-    r = _run(_patched_cmd(builder, str(fake_root)))
-    assert r.returncode != 0, (
-        f"{name} should fail when 0 repos eligible, got rc={r.returncode}"
-    )
+    r = _run(_patched_cmd(build_spec_lint_cmd, str(fake_root)))
+    assert r.returncode != 0, f"spec_lint should fail, got rc={r.returncode}"
     assert "0 source repos eligible" in r.stderr, (
-        f"{name}: expected '0 source repos eligible' in stderr.\nstderr: {r.stderr}"
+        f"spec_lint: expected '0 source repos eligible'.\nstderr: {r.stderr}"
     )
 
 
-@pytest.mark.parametrize("builder,name", _BUILDERS)
-def test_guard_c_real_git_repo_without_feat_branch(builder, name, tmp_path):
-    """CESG-S3/S6/S9 (real git): a real git repo with no remote → fetch fails → ran stays 0.
+def test_guard_c_spec_lint_real_git_repo_without_feat_branch(tmp_path):
+    """CESG-S3 (real git): spec_lint with a real git repo but no remote → ran stays 0.
 
     Spec precondition: '/workspace/source/repo-a exists (real git repo) but has no
-    feat/<REQ> branch on origin'. This test uses a git init'd repo without any remote
-    so that `git fetch origin feat/<REQ>` exits non-zero, triggering the skip path.
+    feat/<REQ> branch on origin'. spec_lint silently skips and Guard C fires.
     """
     fake_root = tmp_path / "source"
     repo_dir = fake_root / "repo-a"
     repo_dir.mkdir(parents=True)
-    subprocess.run(
-        ["git", "init", str(repo_dir)],
-        capture_output=True, check=True,
-    )
-    r = _run(_patched_cmd(builder, str(fake_root)))
-    assert r.returncode != 0, (
-        f"{name}: real git repo with no remote should cause Guard C to fire.\n"
-        f"rc={r.returncode}\nstderr: {r.stderr}"
-    )
+    subprocess.run(["git", "init", str(repo_dir)], capture_output=True, check=True)
+    r = _run(_patched_cmd(build_spec_lint_cmd, str(fake_root)))
+    assert r.returncode != 0
     assert "0 source repos eligible" in r.stderr, (
-        f"{name}: expected '0 source repos eligible'.\nstderr: {r.stderr}"
+        f"spec_lint: expected '0 source repos eligible'.\nstderr: {r.stderr}"
     )
 
 
 @pytest.mark.parametrize("builder,name", _BUILDERS)
 def test_guard_c_stderr_contains_refusing_to_silent_pass(builder, name, tmp_path):
-    """CESG-S3/S6/S9 (format): Guard C stderr MUST contain 'refusing to silent-pass'."""
+    """CESG-S3/S6/S9 (format): zero-eligible stderr MUST contain 'refusing to silent-pass'.
+
+    For spec_lint this is Guard C ("0 source repos eligible"); for dev_cross_check
+    and staging_test it is the new per-repo fail-loud message ("has no feat/<REQ>
+    branch on origin"). Both must carry the literal silent-pass refusal phrase
+    so the verifier's substring matcher attributes the failure correctly.
+    """
     fake_root = tmp_path / "source"
     (fake_root / "repo-a").mkdir(parents=True)
     r = _run(_patched_cmd(builder, str(fake_root)))
     assert "refusing to silent-pass" in r.stderr, (
-        f"{name}: contract.spec.yaml requires 'refusing to silent-pass' in Guard C stderr.\n"
+        f"{name}: contract requires 'refusing to silent-pass' in stderr.\n"
         f"stderr: {r.stderr}"
     )

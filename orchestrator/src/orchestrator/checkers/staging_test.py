@@ -7,6 +7,13 @@
 多仓重构后：遍历 /workspace/source/*，含 Makefile `ci-unit-test` + `ci-integration-test`
 target 的仓并行起（per-repo 30min × N 串行会超 timeout）。
 
+feat/<REQ> 缺失语义（REQ-checker-no-feat-branch-fail-loud-1777123726）：
+sisyphus-clone-repos.sh 把 involved_repos 列的每个仓 clone 进 /workspace/source/，
+所以 /workspace/source/<repo>/ 存在 ⇒ analyze-agent 声明该仓 involved，**必须**
+推到 feat/<REQ> 分支。fetch + checkout feat/<REQ> 失败 → fail loud（fail=1 + 拒绝
+silent-pass 信息），不再 [skip] 噤声。Makefile 缺 ci-unit-test/ci-integration-test
+target 仍 [skip]（仓本身不可测，与 analyze-agent 无关）。
+
 为何单 repo 内 unit/integration **串行**而非并行：
 - ci-unit-test 内部已经 main + bmp 双并发跑 go test
 - ci-integration-test 内部已经 main + bmp 双并发起 docker compose
@@ -39,10 +46,13 @@ def _build_cmd(req_id: str) -> str:
 
     Empty-source guard（防 silent-pass）：
     - /workspace/source 不存在或没任何子目录 → 直接 exit 1
-    - 遍历后 ran=0（feat 分支 fetch 不到 / 没两 target）→ exit 1
+    - 任一 cloned repo 缺 feat/<REQ> 分支 → fail=1 + 拒绝 silent-pass stderr
+      （REQ-checker-no-feat-branch-fail-loud-1777123726：clone helper 已克隆该仓 ⇒
+      该仓 involved；analyze-agent 没推 feat 分支是结构性失败，不再 [skip] 噤声）
+    - 遍历后 ran=0（所有仓都缺 ci-unit-test/ci-integration-test target）→ exit 1
       checker 不能在零信号情况下报 pass。
 
-    每仓先切到 feat/<REQ>（agent 推到的分支）；fetch/checkout 失败 → not involved 跳过。
+    每仓先切到 feat/<REQ>（agent 推到的分支）。
     pids 列表存 `pid:name`，结尾按 pid 依次 wait；失败 tail unit + int 各 50 行到 stderr。
     """
     return (
@@ -63,7 +73,8 @@ def _build_cmd(req_id: str) -> str:
         "for repo in /workspace/source/*/; do "
         '  name=$(basename "$repo"); '
         f'  if ! (cd "$repo" && git fetch origin "feat/{req_id}" 2>/dev/null && git checkout -B "feat/{req_id}" "origin/feat/{req_id}" 2>/dev/null); then '
-        '    echo "[skip] $name: no feat branch / not involved"; '
+        f'    echo "=== FAIL staging_test: $name has no feat/{req_id} branch on origin — refusing to silent-pass ===" >&2; '
+        "    fail=1; "
         "    continue; "
         "  fi; "
         '  if [ -f "$repo/Makefile" ] '
@@ -81,8 +92,8 @@ def _build_cmd(req_id: str) -> str:
         '    echo "[skip] $name: missing ci-unit-test or ci-integration-test target"; '
         "  fi; "
         "done; "
-        'if [ "$ran" -eq 0 ]; then '
-        f'  echo "=== FAIL staging_test: 0 source repos eligible (no feat/{req_id} branch with ci-unit-test+ci-integration-test) — refusing to silent-pass ===" >&2; '
+        'if [ "$ran" -eq 0 ] && [ "$fail" -eq 0 ]; then '
+        f'  echo "=== FAIL staging_test: 0 source repos eligible (no ci-unit-test+ci-integration-test target on feat/{req_id}) — refusing to silent-pass ===" >&2; '
         "  exit 1; "
         "fi; "
         "for pid_name in $pids; do "
