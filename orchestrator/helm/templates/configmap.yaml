@@ -26,3 +26,10 @@ data:
   # 默认 JSON 解析；csv `phona/x,phona/y` 会触发 SettingsError 启动失败。
   SISYPHUS_DEFAULT_INVOLVED_REPOS: {{ toJson . | quote }}
   {{- end }}
+  {{- if .Values.env.gh_incident_repo }}
+  SISYPHUS_GH_INCIDENT_REPO: {{ .Values.env.gh_incident_repo | quote }}
+  {{- end }}
+  {{- with .Values.env.gh_incident_labels }}
+  # JSON-encoded list[str]，跟 default_involved_repos 同。
+  SISYPHUS_GH_INCIDENT_LABELS: {{ toJson . | quote }}
+  {{- end }}

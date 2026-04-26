@@ -1,0 +1,56 @@
+version: 1
+title: gh-incident-open on REQ escalate
+capability: gh-incident-open
+
+config:
+  - key: gh_incident_repo
+    type: string
+    default: ""
+    description: |
+      `owner/name` of the GitHub repo that receives incident issues when a REQ
+      escalates. Empty = feature disabled (no GH POST). When set, requires
+      SISYPHUS_GITHUB_TOKEN to have `Issues: Read-and-write` on this repo.
+  - key: gh_incident_labels
+    type: list[str]
+    default: ["sisyphus:incident"]
+    description: |
+      Base labels applied to every incident issue. The escalate handler also
+      appends a per-issue `reason:{escalated_reason}` label so existing
+      `gh issue list --label reason:fixer-round-cap` style queries keep working.
+  - key: github_token
+    type: string
+    default: ""
+    description: |
+      Existing setting. When `gh_incident_repo` is non-empty, this PAT MUST
+      have `Issues: Read-and-write` on the configured repo.
+
+functions:
+  - name: orchestrator.gh_incident.open_incident
+    signature: |
+      async def open_incident(
+          *,
+          req_id: str,
+          reason: str,
+          retry_count: int,
+          intent_issue_id: str,
+          failed_issue_id: str,
+          project_id: str,
+          state: str | None = None,
+      ) -> str | None
+    behavior:
+      - "Returns None and skips HTTP if `gh_incident_repo` empty OR `github_token` empty (disabled)."
+      - "Otherwise POSTs `/repos/{owner}/{repo}/issues` with body containing REQ id, reason, retry count, intent_issue_id, failed_issue_id, project_id, state, UTC timestamp."
+      - "Labels = settings.gh_incident_labels + [f'reason:{reason}']."
+      - "Title format: `[REQ: {req_id}] escalated — {reason}`."
+      - "Returns the new issue's `html_url` on success (HTTP 201)."
+      - "On any exception or non-2xx response, logs warning and returns None — never raises."
+
+action_integration:
+  - location: orchestrator/src/orchestrator/actions/escalate.py
+    branch: real_escalate (after merge_tags_and_update, before final log line)
+    behavior:
+      - "If ctx.gh_incident_url is already set: reuse, do not POST again (idempotent under resume cycles)."
+      - "Else call gh_incident.open_incident; on success extend ctx with gh_incident_url + gh_incident_opened_at."
+      - "Append `github-incident` to the `add` list passed to bkd.merge_tags_and_update so the BKD intent issue picks up the canonical stage tag (already in snapshot._STAGE_FROM_TAGS)."
+      - "GH failure (open_incident returns None) does NOT abort the escalate flow: tag merge, state CAS, runner cleanup all proceed normally."
+      - "Auto-resume branch is unchanged: GH issue is only opened on `real escalate`."

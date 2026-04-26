@@ -8,15 +8,20 @@
 2. 否则（retry 用完 / verifier 主动判 escalate）:
    → 在 intent issue 上加 `escalated` + `reason:<细分>` tag
    → 落 ctx 标记 escalated_reason
+   → 若 settings.gh_incident_repo 非空且 ctx.gh_incident_url 未设：开一条 GH
+     issue（gh_incident.open_incident）+ `github-incident` BKD tag
    → state 进 ESCALATED
 
-不开新 issue（避免污染列表）；不 cancel 当前 issue（让人工有现场）。
+不在 BKD 开新 issue（避免污染列表）；不 cancel 当前 issue（让人工有现场）。
+GH issue 是给人看的事故面板，不在 BKD 里复制；REST 失败不阻塞 escalate。
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import structlog
 
-from .. import k8s_runner
+from .. import gh_incident, k8s_runner
 from ..bkd import BKDClient
 from ..config import settings
 from ..state import Event, ReqState
@@ -158,21 +163,57 @@ async def escalate(*, body, req_id, tags, ctx):
         else:
             final_reason = "session-failed-after-2-retries"
 
+    pool = db.get_pool()
+
+    # ─── GH 事故 issue（idempotent on ctx.gh_incident_url） ────────────────
+    # 仅在 real-escalate 路径开 issue（auto-resume 不开，会刷屏）。
+    # disabled (gh_incident_repo / github_token 任一为空) → open_incident 返
+    # None，flow 不变。GH 5xx / 401 等失败也只 log warning，escalate 仍正常完成。
+    existing_gh_url = (ctx or {}).get("gh_incident_url")
+    if existing_gh_url:
+        gh_url = existing_gh_url  # resume 后再 escalate，复用旧 URL
+    elif not settings.gh_incident_repo:
+        gh_url = None  # feature disabled; skip open_incident entirely
+    else:
+        # 取当前 state 给 issue body（best-effort，None 也能继续）
+        try:
+            row = await req_state.get(pool, req_id)
+            state_str = row.state.value if row else None
+        except Exception:
+            state_str = None
+        gh_url = await gh_incident.open_incident(
+            req_id=req_id,
+            reason=final_reason,
+            retry_count=retry_count,
+            intent_issue_id=intent_issue_id,
+            failed_issue_id=failed_issue_id,
+            project_id=proj,
+            state=state_str,
+        )
+
+    add_tags = ["escalated", f"reason:{final_reason}"]
+    if gh_url:
+        # snapshot._STAGE_FROM_TAGS 已包含 'github-incident'，让 Metabase 看板自然识别
+        add_tags.append("github-incident")
+
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         try:
             await bkd.merge_tags_and_update(
                 proj, intent_issue_id,
-                add=["escalated", f"reason:{final_reason}"],
+                add=add_tags,
             )
         except Exception as e:
             log.warning("escalate.tag_failed", req_id=req_id, error=str(e))
 
-    pool = db.get_pool()
-    await req_state.update_context(pool, req_id, {
+    ctx_patch = {
         "escalated_reason": final_reason,
         "escalated_source_issue_id": failed_issue_id,
         "escalated_retry_count": retry_count,
-    })
+    }
+    if gh_url and not existing_gh_url:
+        ctx_patch["gh_incident_url"] = gh_url
+        ctx_patch["gh_incident_opened_at"] = datetime.now(UTC).isoformat(timespec="seconds")
+    await req_state.update_context(pool, req_id, ctx_patch)
 
     # SESSION_FAILED 类路径下 transition 是 self-loop（state 没动），需手动 CAS 推到
     # ESCALATED 并清 runner。

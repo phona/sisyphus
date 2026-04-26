@@ -51,8 +51,21 @@ class Settings(BaseSettings):
 
     # GitHub token（烘进 runner Pod env，给 agent 用 gh CLI / docker login ghcr.io）
     # scope: repo + read:packages
+    # 注意：当 gh_incident_repo 非空时，本 PAT 必须额外有 Issues: Read-and-write
+    # 才能在 ESCALATED 时开 GH 事故 issue（详见 gh_incident.py / orchestrator/helm/values.yaml）。
     github_token: str = ""
     github_pull_user: str = "x-access-token"
+
+    # ─── REQ-impl-gh-incident-open-1777173133：ESCALATED 自动开 GH issue ─────
+    # 任一 REQ 进 ESCALATED（real escalate，不是 auto-resume），sisyphus 用
+    # github_token POST `/repos/{owner}/{repo}/issues` 开一条事故 issue，让人能在
+    # `gh issue list --label sisyphus:incident` 看到。空 = 关闭（默认；dev / 未配
+    # 部署不会写 GH）。生产建议设 `phona/sisyphus`。
+    # 失败不阻塞 escalate：GH 5xx / 401 等只 log warning，REQ 仍进 ESCALATED。
+    gh_incident_repo: str = ""
+    gh_incident_labels: list[str] = Field(
+        default_factory=lambda: ["sisyphus:incident"]
+    )
 
     # Postgres
     pg_dsn: str = Field(..., description="postgresql://user:pass@host:5432/sisyphus")
