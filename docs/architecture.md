@@ -271,7 +271,7 @@ flowchart LR
 | 0 | **intake** (可选) | `intent:intake` tag | BKD chat 多轮澄清 + finalized intent JSON（6 字段）。不写代码，不开 PR | intake-agent PATCH `result:pass` + JSON 解析成功 → 新建 analyze issue |
 | 1 | **analyze** | `intent:analyze` tag（跳过 intake）或 intake.pass 后新建 issue | `openspec/changes/REQ-x/{proposal,design,tasks}.md` 在**每个被改的 source repo** 各一份（没有主从）；高层文档放 spec home repo | session.completed + analyze tag |
 | 2 | **spec-lint** (机械, for-each-repo) | analyze done | **遍历 `/workspace/source/*`**：每仓有 `openspec/changes/REQ-x/` 就跑 `openspec validate` + `check-scenario-refs.sh --specs-search-path`（跨仓引用）。任一仓红 → 整体红 | sisyphus 自己判，无 BKD agent |
-| 3 | **dev-cross-check** (机械, for-each-repo) | spec-lint pass | 遍历每仓 `BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`（ttpos-ci 标准，仅 lint 变更文件）；任一仓红 → 整体红 | sisyphus 自己判，无 BKD agent |
+| 3 | **dev-cross-check** (机械, for-each-repo) | spec-lint pass | 遍历每仓 `BASE_REV=$(git merge-base HEAD origin/<default_branch>) make ci-lint`（default_branch 先读 `origin/HEAD` 符号引用拿仓真实值，再退 main/master/develop/dev；ttpos-ci 标准，仅 lint 变更文件）；任一仓红 → 整体红 | sisyphus 自己判，无 BKD agent |
 | 4 | **dev (1~N 并行)** | dev-cross-check pass | 业务代码 + 各仓 push `feat/REQ-x` + 开 PR（多仓 REQ 通常每仓一个 dev agent） | 每个 dev session.completed → mark_dev_reviewed_and_check 聚合 → DEV_ALL_PASSED |
 | 5 | **staging-test** (机械, for-each-repo **并行**) | DEV_ALL_PASSED | 遍历每仓 `make ci-unit-test && make ci-integration-test`（**单 repo 内串行**，避免内存峰值叠加），**repo 之间并行**起所有仓；任一仓退非 0 → 整体红 | sisyphus 自己判，无 BKD agent |
 | 6 | **pr-ci-watch** (机械) | staging-test pass | GitHub REST 轮 PR check-runs（按 `feat/REQ-x` branch 查 PR）直至全绿 / 任一红 / 1800s 超时 | sisyphus 自己判 |
@@ -331,7 +331,11 @@ done
 ```bash
 for repo in /workspace/source/*; do
   [ -f "$repo/Makefile" ] && grep -q '^ci-lint:' "$repo/Makefile" || continue
-  base_rev=$(cd "$repo" && (git merge-base HEAD origin/main 2>/dev/null \
+  default_branch=$(cd "$repo" && git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null \
+                   | sed 's@^origin/@@' || true)
+  base_rev=$(cd "$repo" && (([ -n "$default_branch" ] && git merge-base HEAD "origin/$default_branch" 2>/dev/null) \
+                       || git merge-base HEAD origin/main 2>/dev/null \
+                       || git merge-base HEAD origin/master 2>/dev/null \
                        || git merge-base HEAD origin/develop 2>/dev/null \
                        || git merge-base HEAD origin/dev 2>/dev/null \
                        || echo ""))

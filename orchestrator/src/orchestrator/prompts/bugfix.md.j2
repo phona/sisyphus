@@ -82,11 +82,14 @@ kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
 
 防 trivial 回归把球踢回 verifier 多走一轮（本来 fixer 就是来修问题的，又引入新的 lint 错就是浪费 round）。
 
-对你这轮**修过的每个 source repo** 跑：
+对你这轮**修过的每个 source repo** 跑（BASE_REV 用仓真实 default_branch，
+default 非 main 的仓如 ttpos-server-go/release 同样能算到 merge-base，避免全量
+扫历史包袱）：
 ```bash
 kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
   "cd /workspace/source/REPO && \
-   BASE_REV=\$(git merge-base HEAD origin/main) make ci-lint"
+   default_branch=\$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@') && \
+   BASE_REV=\$(git merge-base HEAD \"origin/\${default_branch:-main}\") make ci-lint"
 ```
 
 `BASE_REV` 让 lint 只校变更文件，不卷历史包袱（契约见 docs/integration-contracts.md §2）。

@@ -1,8 +1,9 @@
 """checkers/dev_cross_check.py 单测：mock RunnerController，验 CheckResult 字段。
 
 ttpos-ci 契约统一后：cmd 遍历 /workspace/source/*，串行对每个含 `ci-lint` target 的仓
-跑 `BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`。
-BASE_REV 缺失（fetch 不到 origin/main / develop / dev）则传空，ci-lint 退化为全量扫描。
+跑 `BASE_REV=$(git merge-base HEAD origin/<default_branch>) make ci-lint`。
+BASE_REV 计算先读 `git symbolic-ref refs/remotes/origin/HEAD` 拿仓实际 default_branch，
+再退到静态链 `main → master → develop → dev → 空`（REQ-fix-base-rev-default-branch-1777214183）。
 """
 from __future__ import annotations
 
@@ -29,9 +30,15 @@ def _assert_for_each_repo_cmd(cmd: str) -> None:
     assert "/workspace/source/*/" in cmd
     assert "make ci-lint" in cmd
     assert "ci-lint:" in cmd  # grep Makefile target 过滤
-    # BASE_REV 计算 + 注入
+    # BASE_REV 计算 + 注入（REQ-fix-base-rev-default-branch-1777214183）
     assert "BASE_REV=" in cmd
+    # 优先：origin/HEAD 符号引用（仓真实 default_branch，如 release）
+    assert "git symbolic-ref --short refs/remotes/origin/HEAD" in cmd
+    assert "default_branch=" in cmd
+    assert 'git merge-base HEAD "origin/$default_branch"' in cmd
+    # 退化静态链：main → master → develop → dev
     assert "git merge-base HEAD origin/main" in cmd
+    assert "git merge-base HEAD origin/master" in cmd  # fallback
     assert "git merge-base HEAD origin/develop" in cmd  # fallback
     assert "git merge-base HEAD origin/dev" in cmd  # fallback
     # 累加 fail 标志
@@ -165,3 +172,35 @@ def test_build_cmd_emits_zero_eligible_guard():
     assert "ran=$((ran+1))" in cmd
     assert '"$ran" -eq 0' in cmd
     assert "0 source repos eligible" in cmd
+
+
+# ── BASE_REV default_branch resolution（REQ-fix-base-rev-default-branch-1777214183）──
+
+
+def test_build_cmd_resolves_default_branch_from_origin_head_first():
+    """BASE_REV 链先 resolve 仓真实 default_branch（origin/HEAD 符号引用），再退静态链。
+
+    修这条前静态链 main → develop → dev 全 miss 时（默认分支 release / master 等）
+    BASE_REV 必空 → ci-lint 退化全量扫，增量功能形同虚设。
+    """
+    cmd = _build_cmd("REQ-X")
+
+    # 步骤 1: 解析 origin/HEAD 符号引用（剥 `origin/` 前缀拿到 branch 名）
+    assert "git symbolic-ref --short refs/remotes/origin/HEAD" in cmd
+    assert "sed 's@^origin/@@'" in cmd
+    assert "default_branch=" in cmd
+
+    # 步骤 2: 优先用 default_branch 跑 merge-base，且必须 gate 在 `[ -n ... ]` 里
+    # 防 default_branch 空时调 `origin/` 触发歧义错误
+    assert '[ -n "$default_branch" ] && git merge-base HEAD "origin/$default_branch"' in cmd
+
+    # 步骤 3: 退化静态链顺序固定（symbolic-ref 失败时兜底）
+    head = cmd.find("default_branch=")
+    main_idx = cmd.find("git merge-base HEAD origin/main", head)
+    master_idx = cmd.find("git merge-base HEAD origin/master", head)
+    develop_idx = cmd.find("git merge-base HEAD origin/develop", head)
+    dev_idx = cmd.find('git merge-base HEAD origin/dev 2>/dev/null', head)
+    assert head < main_idx < master_idx < develop_idx < dev_idx
+
+    # 步骤 4: 全 miss 退空字符串
+    assert 'echo ""' in cmd

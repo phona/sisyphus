@@ -25,7 +25,7 @@
 | `intaking` | **INTAKING** intake-agent 在跑（多轮 BKD chat 澄清 + 写 finalized intent） | in-flight |
 | `analyzing` | analyze-agent 在跑 | in-flight |
 | `spec-lint-running` | **M15** 客观检查：**for-each-repo** openspec validate + check-scenario-refs.sh（遍历 `/workspace/source/*`） | in-flight |
-| `dev-cross-check-running` | **M15** 客观检查：**for-each-repo** `BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`（ttpos-ci 标准，仅 lint 变更文件） | in-flight |
+| `dev-cross-check-running` | **M15** 客观检查：**for-each-repo** `BASE_REV=$(git merge-base HEAD origin/<default_branch>) make ci-lint`（default_branch 先 resolve `origin/HEAD` 符号引用，再退 main/master/develop/dev；ttpos-ci 标准，仅 lint 变更文件） | in-flight |
 | `staging-test-running` | **for-each-repo 并行** 跑 `make ci-unit-test && make ci-integration-test`（**单 repo 内串行**，避免内存峰值叠加） | in-flight |
 | `pr-ci-running` | PR 已开，等 GHA 全套绿（机械） | in-flight |
 | `accept-running` | env-up 完，accept-agent 跑 FEATURE-A* | in-flight |

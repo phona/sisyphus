@@ -125,7 +125,7 @@ unset TOKEN
 
 | target | 谁调 | 在哪跑 | 期望 |
 |---|---|---|---|
-| `make ci-lint` | dev-cross-check checker（M15） | runner pod，**for-each-repo** `cd /workspace/source/<repo> && BASE_REV=$(git merge-base HEAD origin/main) make ci-lint` | go vet + golangci-lint，仅 lint 变更文件（BASE_REV 缺失则全量）；退码 0 = pass |
+| `make ci-lint` | dev-cross-check checker（M15） | runner pod，**for-each-repo** `cd /workspace/source/<repo> && BASE_REV=$(git merge-base HEAD origin/<default_branch>) make ci-lint`（default_branch 先 resolve `origin/HEAD` 符号引用，再退 main/master/develop/dev） | go vet + golangci-lint，仅 lint 变更文件（BASE_REV 缺失则全量）；退码 0 = pass |
 | `make ci-unit-test` | staging-test checker（M1） | runner pod，**for-each-repo** `cd /workspace/source/<repo> && make ci-unit-test` | 单元测试（业务聚合 main + bmp 等）；退码 0 = pass |
 | `make ci-integration-test` | staging-test checker（M1） | 同上 | 集成测试（docker compose 起 stack）；退码 0 = pass |
 
@@ -133,15 +133,25 @@ staging-test checker 单 repo 内 **`ci-unit-test && ci-integration-test` 串行
 
 ### 2.2 BASE_REV 约定
 
-dev-cross-check checker 在 runner pod 内每仓计算：
+dev-cross-check checker 在 runner pod 内每仓计算（先读仓**真实** default_branch，
+再退静态链；REQ-fix-base-rev-default-branch-1777214183）：
 
 ```bash
-base_rev=$(git merge-base HEAD origin/main 2>/dev/null \
+default_branch=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null \
+                 | sed 's@^origin/@@' || true)
+base_rev=$(([ -n "$default_branch" ] && git merge-base HEAD "origin/$default_branch" 2>/dev/null) \
+        || git merge-base HEAD origin/main 2>/dev/null \
+        || git merge-base HEAD origin/master 2>/dev/null \
         || git merge-base HEAD origin/develop 2>/dev/null \
         || git merge-base HEAD origin/dev 2>/dev/null \
         || echo "")
 BASE_REV="$base_rev" make ci-lint
 ```
+
+`origin/HEAD` 符号引用由 `git clone` 自动设置，指向 GitHub repo 当时的默认分支。
+默认分支非 main / master / develop / dev 的仓（ttpos-server-go / ttpos-flutter
+默认 `release`）以前整条链全 miss → BASE_REV 为空 → ci-lint 退化全量扫；
+现在先读 `origin/HEAD` 拿到 `release`，正确计算 merge-base。
 
 业务 `ci-lint` 必须接受 `BASE_REV` env 变量（空字符串 = 全量扫描）。golangci-lint
 推荐写法：`golangci-lint run ${BASE_REV:+--new-from-rev=$BASE_REV}`，空值时
