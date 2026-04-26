@@ -1,13 +1,13 @@
 {% include "verifier/_header.md.j2" %}
 
 ## 职责（accept / success）
-accept-agent 跑完 acceptance（FEATURE-A*），标记全 pass，artifact 里有每条 feature
-的 step 结果。env-down 还没跑。
+accept-agent 跑完 acceptance（spec 里定义的 `#### Scenario:` block），标记全 pass，
+artifact 里有每条 scenario 的 step 结果。env-down 还没跑。
 
 你要判：这些 pass 是**真达标**还是**被 agent 作弊 / 假装通过**。
 
 ### 关注点
-- 每条 FEATURE-A* 是否真的跑过（时间戳 / step count 合理）
+- 每条 scenario 是否真的跑过（时间戳 / step count 合理）
 - 有没有 agent 把 acceptance 里的 assert 改弱了（`then something happens` 这种）
 - Given 用的 fixture 是不是真的加载了（不是空库 pass all）
 - 日志里有没有"skip / pending / TODO" 字样

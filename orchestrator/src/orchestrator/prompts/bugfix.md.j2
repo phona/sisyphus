@@ -56,10 +56,11 @@ BRANCH={{ branch }}
 **禁止**：自装 Go / 自配 git token / kubectl cp 代码绕过 / 超过 3 个 tool_use 死磕环境。
 环境是 sisyphus 自己的事，绕过会掩盖运维问题；CODE / SPEC bug 才走 Step 1+。
 
-Step 1 进 runner pod，切到 feat 分支:
+Step 1 进 runner pod，切到 feat 分支（对你这轮要修的每个 source repo 都跑一次；
+`REPO` 替换成该仓的 basename，与同文件 Step 3 / 3.5 / 4 占位一致）:
 ```bash
 kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
-  "cd /workspace/source/sisyphus && git fetch origin && git checkout feat/{{ req_id }}"
+  "cd /workspace/source/REPO && git fetch origin && git checkout feat/{{ req_id }}"
 ```
 
 Step 2 读 SOURCE_ISSUE 拿 CI 失败日志。
@@ -77,7 +78,7 @@ kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
    git commit -m 'fix(REQ): <具体修了什么>'"
 ```
 
-### Step 3.5 — push 前 `make ci-lint` 自检（**必跑，按 ttpos-ci 契约**）
+### Step 3.5 — push 前 `make ci-lint` 自检（**必跑，按 Makefile ci 契约** —— 详见 docs/integration-contracts.md）
 
 防 trivial 回归把球踢回 verifier 多走一轮（本来 fixer 就是来修问题的，又引入新的 lint 错就是浪费 round）。
 

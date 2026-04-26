@@ -31,9 +31,12 @@ REQ={{ req_id }}
 ### A.2 找 spec home repo（spec 在哪个仓）
 
 读 BKD intent issue 的 description 取 "spec home repo"（一般跟 BKD project 同 repo）。
+`<spec_home_repo>` 是 `<owner>/<repo>` 形式（如 `<owner>/repo-a`）；下面路径里出现的
+`<spec_home_repo_basename>` 是其 basename（GitHub 仓名最后一段，与
+`scripts/sisyphus-clone-repos.sh` 的 clone 落点 `/workspace/source/<basename>/` 一致）。
 ```bash
 # 在 runner pod
-kubectl exec runner-{{ req_id | lower }} -- ls /workspace/source/<spec_home_repo>/openspec/changes/{{ req_id }}/specs/
+kubectl exec runner-{{ req_id | lower }} -- ls /workspace/source/<spec_home_repo_basename>/openspec/changes/{{ req_id }}/specs/
 ```
 
 ### A.3 读 spec —— **只**读 spec，**不**读业务代码
@@ -133,7 +136,7 @@ func TestBuildinfo_S2_JSONShape(t *testing.T) {
 
 在你自己 cwd（不是 runner pod，runner 只读）：
 ```bash
-gh repo clone phona/<spec_home_repo> ./repo
+gh repo clone <spec_home_repo> ./repo
 cd ./repo
 git checkout feat/{{ req_id }}     # checkout 到 dev 已用的 feat 分支
 # 写 tests/integration/*.go
@@ -147,7 +150,7 @@ git push
 在 runner pod 跑你的 test 一次，确认它能编译 + 现在确实失败（dev 没实现）：
 ```bash
 kubectl exec runner-{{ req_id | lower }} -- bash -c "
-  cd /workspace/source/<spec_home_repo> && \
+  cd /workspace/source/<spec_home_repo_basename> && \
   git fetch origin feat/{{ req_id }} && git checkout feat/{{ req_id }} && \
   go test -tags=contract ./tests/integration/... 2>&1 | tail -20
 "

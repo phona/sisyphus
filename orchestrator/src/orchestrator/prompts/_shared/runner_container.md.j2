@@ -42,7 +42,7 @@ sisyphus 的所有机械 checker（spec_lint / dev_cross_check / staging_test）
 /workspace/
 ├── source/<repo-basename>/      ← 每个 source repo 一个，basename = github 仓名最后一段
 │   ├── .git/
-│   ├── Makefile                 ← ttpos-ci 标准 target: ci-lint / ci-unit-test / ci-integration-test
+│   ├── Makefile                 ← Makefile ci 契约 target: ci-lint / ci-unit-test / ci-integration-test (docs/integration-contracts.md)
 │   └── openspec/changes/<REQ>/  ← 该仓的 spec（如果本 REQ 改了它）
 └── integration/<repo-basename>/ ← lab repo（accept 阶段才用）
 ```
@@ -55,7 +55,7 @@ sisyphus 的所有机械 checker（spec_lint / dev_cross_check / staging_test）
 
 ```bash
 kubectl -n $NS exec $POD -- /opt/sisyphus/scripts/sisyphus-clone-repos.sh \
-  phona/repo-a phona/repo-b
+  <owner>/repo-a <owner>/repo-b
 ```
 
 行为：

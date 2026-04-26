@@ -20,7 +20,7 @@ PARENT_ISSUE_ID={{ source_issue_id }}
 > 兜底路径下用本 prompt（保持老行为不破）。
 
 你的职责：在 runner Pod 的 `/workspace/source/<repo>/` **逐仓**执行
-`make ci-unit-test && make ci-integration-test`（ttpos-ci 标准），验收 dev 推上来的代码。
+`make ci-unit-test && make ci-integration-test`（Makefile ci 契约，详见 docs/integration-contracts.md），验收 dev 推上来的代码。
 
 这是**机械自检**：无需分析根因，**任一仓**失败就报，bugfix 由另一个 agent 做。
 
