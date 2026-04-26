@@ -13,8 +13,7 @@ from __future__ import annotations
 
 import json
 from typing import ClassVar
-from unittest.mock import AsyncMock, MagicMock, call, patch
-
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # ─── Shared helpers ──────────────────────────────────────────────────────────
 
@@ -86,10 +85,10 @@ async def _run_escalate(monkeypatch, ctx, body=None, tags=None, *, bkd_cls=None,
     Helper: call actions.escalate with mocked deps, return (result, ctx_updates_list).
     ctx_updates: externally-provided list to capture update_context calls.
     """
-    from orchestrator.actions import escalate as esc_mod
     from orchestrator import gh_incident as ghi
-    from orchestrator.bkd import BKDClient as RealBKDClient
-    from orchestrator.store import req_state as rs_mod, db
+    from orchestrator.actions import escalate as esc_mod
+    from orchestrator.store import db
+    from orchestrator.store import req_state as rs_mod
 
     if body is None:
         body = _FakeBody()
@@ -422,7 +421,7 @@ async def test_ghi_s6_real_escalate_single_repo_opens_one_incident(monkeypatch):
     )
     # Also: gh_incident_url (legacy) must be set
     assert any("gh_incident_url" in u for u in ctx_updates), (
-        f"GHI-S6: legacy ctx.gh_incident_url MUST also be set"
+        "GHI-S6: legacy ctx.gh_incident_url MUST also be set"
     )
 
     # Contract 3: BKD tag includes 'github-incident'
@@ -467,7 +466,7 @@ async def test_ghi_s7_idempotent_preexisting_urls_skips_post(monkeypatch):
         intent_issue_id="intent-s7",
     )
 
-    result, ctx_updates = await _run_escalate(
+    _, ctx_updates = await _run_escalate(
         monkeypatch,
         ctx=ctx,
         body=_FakeBody(event="session.completed", issue_id="issue-s7"),
@@ -520,7 +519,7 @@ async def test_ghi_s8_auto_resume_does_not_open_incident(monkeypatch):
         intent_issue_id="intent-s8",
     )
 
-    result, ctx_updates = await _run_escalate(
+    await _run_escalate(
         monkeypatch,
         ctx=ctx,
         body=_FakeBody(event="session.failed", issue_id="issue-s8"),
@@ -684,7 +683,7 @@ async def test_ghi_s11_multi_repo_opens_one_incident_per_repo(monkeypatch):
         intent_issue_id="intent-s11",
     )
 
-    result, ctx_updates = await _run_escalate(
+    _, ctx_updates = await _run_escalate(
         monkeypatch,
         ctx=ctx,
         body=_FakeBody(event="session.completed", issue_id="issue-s11"),
@@ -705,7 +704,7 @@ async def test_ghi_s11_multi_repo_opens_one_incident_per_repo(monkeypatch):
 
     # Contract 2: ctx.gh_incident_urls contains both
     gh_url_updates = [u for u in ctx_updates if "gh_incident_urls" in u]
-    assert gh_url_updates, f"GHI-S11: update_context MUST include gh_incident_urls"
+    assert gh_url_updates, "GHI-S11: update_context MUST include gh_incident_urls"
     final_urls = gh_url_updates[-1]["gh_incident_urls"]
     assert "phona/repo-a" in final_urls, (
         f"GHI-S11: gh_incident_urls MUST contain phona/repo-a. Got: {final_urls}"
@@ -803,7 +802,7 @@ async def test_ghi_s13_idempotent_multi_repo_only_posts_missing(monkeypatch):
         intent_issue_id="intent-s13",
     )
 
-    result, ctx_updates = await _run_escalate(
+    _, ctx_updates = await _run_escalate(
         monkeypatch,
         ctx=ctx,
         body=_FakeBody(event="session.completed", issue_id="issue-s13"),
@@ -863,7 +862,7 @@ async def test_ghi_s14_fallback_to_gh_incident_repo(monkeypatch):
         intent_issue_id="intent-s14",
     )
 
-    result, ctx_updates = await _run_escalate(
+    _, ctx_updates = await _run_escalate(
         monkeypatch,
         ctx=ctx,
         body=_FakeBody(event="session.completed", issue_id="issue-s14"),
@@ -919,7 +918,7 @@ async def test_ghi_s15_layers_1_to_4_take_precedence_over_gh_incident_repo(monke
         intent_issue_id="intent-s15",
     )
 
-    result, ctx_updates = await _run_escalate(
+    _, ctx_updates = await _run_escalate(
         monkeypatch,
         ctx=ctx,
         body=_FakeBody(event="session.completed", issue_id="issue-s15"),
