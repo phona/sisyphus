@@ -101,6 +101,19 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     (ReqState.INIT, Event.INTENT_ANALYZE):
         Transition(ReqState.ANALYZING, "start_analyze", "kick off"),
 
+    # start_analyze 内部判 escalate（如 clone_involved_repos 失败 → emit VERIFY_ESCALATE）
+    # 没这条 transition 会被 engine.illegal_transition 吞掉，REQ 卡 ANALYZING 60min
+    # 才靠 watchdog auto_resume，浪费一轮 BKD agent token；实证 2026-04-26 REQ-ttpos-pat-validate。
+    (ReqState.ANALYZING, Event.VERIFY_ESCALATE):
+        Transition(ReqState.ESCALATED, "escalate",
+                   "start_analyze 内部判 escalate（clone failed 等）"),
+
+    # 同理 start_analyze_with_finalized_intent (INTAKING → ANALYZING via INTAKE_PASS) 内部
+    # 也可能 emit VERIFY_ESCALATE（intent 缺字段 / clone failed）。补 INTAKING 那条避免漏。
+    (ReqState.INTAKING, Event.VERIFY_ESCALATE):
+        Transition(ReqState.ESCALATED, "escalate",
+                   "start_analyze_with_finalized_intent 内部判 escalate"),
+
     (ReqState.ANALYZING, Event.ANALYZE_DONE):
         Transition(ReqState.SPEC_LINT_RUNNING, "create_spec_lint", "下发 openspec validate 任务"),
 
