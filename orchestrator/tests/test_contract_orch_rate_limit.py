@@ -204,10 +204,12 @@ async def test_s6_controller_raises_fails_open(monkeypatch):
 async def test_c1_start_intake_emits_escalate_on_rejection(monkeypatch):
     """ORCH-RATE-C1: when check_admission rejects, start_intake MUST:
     - return dict with emit='verify.escalate'
-    - set ctx['escalated_reason'] containing 'inflight-cap-exceeded'
+    - record escalated_reason containing 'inflight-cap-exceeded' (via ctx mutation
+      or update_context call)
     """
     import orchestrator.admission as adm_mod
     from orchestrator.store import db as db_mod
+    from orchestrator.store import req_state as rs_mod
 
     from collections import namedtuple
     Rejected = namedtuple("Rejected", ["admit", "reason"])
@@ -216,6 +218,14 @@ async def test_c1_start_intake_emits_escalate_on_rejection(monkeypatch):
 
     monkeypatch.setattr(adm_mod, "check_admission", mock_gate)
     monkeypatch.setattr(db_mod, "get_pool", lambda: _CountPool(0))
+
+    # Capture any update_context calls (action may write escalated_reason this way)
+    ctx_patches: list[dict] = []
+
+    async def _capture_update(pool, req_id, patch):
+        ctx_patches.append(dict(patch))
+
+    monkeypatch.setattr(rs_mod, "update_context", _capture_update, raising=False)
 
     from orchestrator.actions import start_intake as mod
     monkeypatch.setattr(mod, "check_admission", mock_gate, raising=False)
@@ -249,9 +259,14 @@ async def test_c1_start_intake_emits_escalate_on_rejection(monkeypatch):
     assert result.get("emit") == "verify.escalate", (
         f"ORCH-RATE-C1: emit MUST be 'verify.escalate'. Got result={result!r}"
     )
-    assert "inflight-cap-exceeded" in ctx.get("escalated_reason", ""), (
-        f"ORCH-RATE-C1: ctx['escalated_reason'] MUST contain 'inflight-cap-exceeded'. "
-        f"Got ctx={ctx!r}"
+    # Check escalated_reason in ctx dict OR in update_context patches
+    all_reasons = (
+        [ctx.get("escalated_reason", "")]
+        + [p.get("escalated_reason", "") for p in ctx_patches]
+    )
+    assert any("inflight-cap-exceeded" in (r or "") for r in all_reasons), (
+        f"ORCH-RATE-C1: escalated_reason MUST contain 'inflight-cap-exceeded'. "
+        f"ctx={ctx!r}, update_context patches={ctx_patches}"
     )
 
 
@@ -261,10 +276,12 @@ async def test_c1_start_intake_emits_escalate_on_rejection(monkeypatch):
 async def test_c2_start_analyze_emits_escalate_on_rejection(monkeypatch):
     """ORCH-RATE-C2: when check_admission rejects, start_analyze MUST:
     - return dict with emit='verify.escalate'
-    - set ctx['escalated_reason'] containing 'inflight-cap-exceeded'
+    - record escalated_reason containing 'inflight-cap-exceeded' (via ctx mutation
+      or update_context call)
     """
     import orchestrator.admission as adm_mod
     from orchestrator.store import db as db_mod
+    from orchestrator.store import req_state as rs_mod
 
     from collections import namedtuple
     Rejected = namedtuple("Rejected", ["admit", "reason"])
@@ -273,6 +290,13 @@ async def test_c2_start_analyze_emits_escalate_on_rejection(monkeypatch):
 
     monkeypatch.setattr(adm_mod, "check_admission", mock_gate)
     monkeypatch.setattr(db_mod, "get_pool", lambda: _CountPool(0))
+
+    ctx_patches: list[dict] = []
+
+    async def _capture_update(pool, req_id, patch):
+        ctx_patches.append(dict(patch))
+
+    monkeypatch.setattr(rs_mod, "update_context", _capture_update, raising=False)
 
     from orchestrator.actions import start_analyze as mod
     monkeypatch.setattr(mod, "check_admission", mock_gate, raising=False)
@@ -306,9 +330,13 @@ async def test_c2_start_analyze_emits_escalate_on_rejection(monkeypatch):
     assert result.get("emit") == "verify.escalate", (
         f"ORCH-RATE-C2: emit MUST be 'verify.escalate'. Got result={result!r}"
     )
-    assert "inflight-cap-exceeded" in ctx.get("escalated_reason", ""), (
-        f"ORCH-RATE-C2: ctx['escalated_reason'] MUST contain 'inflight-cap-exceeded'. "
-        f"Got ctx={ctx!r}"
+    all_reasons = (
+        [ctx.get("escalated_reason", "")]
+        + [p.get("escalated_reason", "") for p in ctx_patches]
+    )
+    assert any("inflight-cap-exceeded" in (r or "") for r in all_reasons), (
+        f"ORCH-RATE-C2: escalated_reason MUST contain 'inflight-cap-exceeded'. "
+        f"ctx={ctx!r}, update_context patches={ctx_patches}"
     )
 
 
