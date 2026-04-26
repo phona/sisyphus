@@ -431,3 +431,104 @@ def test_strip_exit_marker_cleans_tail():
 def test_strip_exit_marker_no_op_when_missing():
     stdout = "line1\nline2\n"
     assert _strip_exit_marker(stdout) == "line1\nline2\n"
+
+
+# ─── exec stream race retry (regression: REQ-ttpos-pat-validate-v2 dev_cross_check) ──
+
+
+def _fake_stream_resp(stdout: str, stderr: str = "", *, opens: int = 1):
+    """Mock kubernetes WSClient: 第一次 update 灌一次数据，之后 is_open=False。
+
+    opens=0 模拟 race：is_open 立刻 False、peek_* 全 False，零输出。
+    """
+    resp = MagicMock()
+    state = {"opens_left": opens, "stdout": stdout, "stderr": stderr}
+    resp.is_open = lambda: state["opens_left"] > 0
+    resp.update = MagicMock()
+    resp.peek_stdout = lambda: bool(state["stdout"])
+    resp.peek_stderr = lambda: bool(state["stderr"])
+
+    def _read_stdout():
+        out, state["stdout"] = state["stdout"], ""
+        state["opens_left"] = 0
+        return out
+
+    def _read_stderr():
+        err, state["stderr"] = state["stderr"], ""
+        return err
+
+    resp.read_stdout = _read_stdout
+    resp.read_stderr = _read_stderr
+    resp.close = MagicMock()
+    return resp
+
+
+@pytest.mark.asyncio
+async def test_exec_in_runner_retries_on_stream_race(monkeypatch):
+    """实证 race: 第一次 stream 全空 + 极短耗时 → 自动重试一次拿到真结果。"""
+    rc = _make_controller()
+    calls = {"n": 0}
+
+    def fake_stream(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # race: is_open 立刻 False，零输出
+            return _fake_stream_resp("", "", opens=0)
+        # retry: 正常返结果
+        return _fake_stream_resp("hello\n__SISY_EXEC_EXIT__:0\n")
+
+    monkeypatch.setattr("orchestrator.k8s_runner.stream", fake_stream)
+    result = await rc.exec_in_runner("REQ-1", "echo hi", timeout_sec=2)
+    assert calls["n"] == 2, "应重试一次"
+    assert result.exit_code == 0
+    assert "hello" in result.stdout
+
+
+@pytest.mark.asyncio
+async def test_exec_in_runner_no_retry_on_normal_success(monkeypatch):
+    """正常一次过的命令不应触发重试。"""
+    rc = _make_controller()
+    calls = {"n": 0}
+
+    def fake_stream(*args, **kwargs):
+        calls["n"] += 1
+        return _fake_stream_resp("ok\n__SISY_EXEC_EXIT__:0\n")
+
+    monkeypatch.setattr("orchestrator.k8s_runner.stream", fake_stream)
+    result = await rc.exec_in_runner("REQ-1", "true", timeout_sec=2)
+    assert calls["n"] == 1
+    assert result.exit_code == 0
+
+
+@pytest.mark.asyncio
+async def test_exec_in_runner_no_retry_on_nonzero_exit(monkeypatch):
+    """命令真失败（exit_code != 0 但 != -1）也别重试，让 caller 判。"""
+    rc = _make_controller()
+    calls = {"n": 0}
+
+    def fake_stream(*args, **kwargs):
+        calls["n"] += 1
+        return _fake_stream_resp("err\n__SISY_EXEC_EXIT__:1\n", "boom\n")
+
+    monkeypatch.setattr("orchestrator.k8s_runner.stream", fake_stream)
+    result = await rc.exec_in_runner("REQ-1", "false", timeout_sec=2)
+    assert calls["n"] == 1
+    assert result.exit_code == 1
+    assert "boom" in result.stderr
+
+
+@pytest.mark.asyncio
+async def test_exec_in_runner_no_retry_when_partial_output(monkeypatch):
+    """有 stdout/stderr 但 marker 缺（被 truncate）→ 不重试，是真 truncate 不是 race。"""
+    rc = _make_controller()
+    calls = {"n": 0}
+
+    def fake_stream(*args, **kwargs):
+        calls["n"] += 1
+        return _fake_stream_resp("partial output no marker\n")
+
+    monkeypatch.setattr("orchestrator.k8s_runner.stream", fake_stream)
+    result = await rc.exec_in_runner("REQ-1", "long", timeout_sec=2)
+    assert calls["n"] == 1
+    assert result.exit_code == -1
+    assert "partial" in result.stdout
