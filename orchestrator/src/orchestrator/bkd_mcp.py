@@ -14,6 +14,7 @@ import httpx
 import structlog
 
 from .bkd import Issue, _to_issue
+from .bkd_rest import _ensure_sisyphus_tag
 
 log = structlog.get_logger(__name__)
 
@@ -108,7 +109,7 @@ class BKDMcpClient:
             "title": title,
             "statusId": status_id,
             "useWorktree": use_worktree,
-            "tags": tags,
+            "tags": _ensure_sisyphus_tag(tags),
         })
         return _to_issue(data)
 

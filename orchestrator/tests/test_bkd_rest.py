@@ -65,11 +65,13 @@ async def test_create_issue_payload_shape(monkeypatch):
 
     assert captured["url"] == "https://bkd.example/api/projects/myproj/issues"
     assert captured["headers"]["Coder-Session-Token"] == "tok123"
+    # `sisyphus` is auto-prepended (pipeline-identity tag); caller-supplied
+    # tags follow in original order.
     assert captured["json"] == {
         "title": "Add /version",
         "statusId": "todo",
         "useWorktree": True,
-        "tags": ["intent:analyze", "REQ-1"],
+        "tags": ["sisyphus", "intent:analyze", "REQ-1"],
     }
     assert issue.id == "new-1"
 
@@ -97,6 +99,93 @@ async def test_create_issue_with_engine_and_model():
     )
     assert captured["json"]["engineType"] == "claude-code"
     assert captured["json"]["model"] == "claude-haiku-4-5"
+
+
+# ─── sisyphus auto-label (REQ-pr-label-sisyphus-auto-opened-1777217850) ─────
+
+@pytest.mark.asyncio
+async def test_create_issue_auto_injects_sisyphus_tag():
+    """SAL-S1: caller passes tags w/o `sisyphus` → client prepends `sisyphus`."""
+    captured = {}
+
+    class FakeHttp:
+        async def post(self, url, headers=None, json=None):
+            captured["json"] = json
+            return httpx.Response(
+                201,
+                text='{"success":true,"data":{"id":"x","projectId":"p","issueNumber":1,"title":"t","statusId":"todo","tags":[]}}',
+            )
+
+        async def aclose(self):
+            pass
+
+    client = BKDRestClient("https://bkd.example/api", "tok")
+    client._http = FakeHttp()  # type: ignore[assignment]
+    await client.create_issue("p", "T", ["analyze", "REQ-1"])
+    assert captured["json"]["tags"] == ["sisyphus", "analyze", "REQ-1"]
+
+
+@pytest.mark.asyncio
+async def test_create_issue_does_not_duplicate_sisyphus_tag():
+    """SAL-S2: caller already includes `sisyphus` → no duplicate, order preserved."""
+    captured = {}
+
+    class FakeHttp:
+        async def post(self, url, headers=None, json=None):
+            captured["json"] = json
+            return httpx.Response(
+                201,
+                text='{"success":true,"data":{"id":"x","projectId":"p","issueNumber":1,"title":"t","statusId":"todo","tags":[]}}',
+            )
+
+        async def aclose(self):
+            pass
+
+    client = BKDRestClient("https://bkd.example/api", "tok")
+    client._http = FakeHttp()  # type: ignore[assignment]
+    await client.create_issue("p", "T", ["sisyphus", "analyze", "REQ-1"])
+    assert captured["json"]["tags"] == ["sisyphus", "analyze", "REQ-1"]
+
+
+def test_ensure_sisyphus_tag_helper_idempotent():
+    """Pure helper: prepend if missing, no-op if present."""
+    from orchestrator.bkd_rest import _ensure_sisyphus_tag
+
+    assert _ensure_sisyphus_tag([]) == ["sisyphus"]
+    assert _ensure_sisyphus_tag(["a", "b"]) == ["sisyphus", "a", "b"]
+    assert _ensure_sisyphus_tag(["sisyphus", "a"]) == ["sisyphus", "a"]
+    # Doesn't mutate caller's list
+    src = ["a"]
+    _ensure_sisyphus_tag(src)
+    assert src == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_create_issue_auto_injects_sisyphus_tag():
+    """SAL-S3: BKDMcpClient.create_issue mirrors REST client auto-inject."""
+    from unittest.mock import AsyncMock
+
+    from orchestrator.bkd_mcp import BKDMcpClient
+
+    client = BKDMcpClient("https://bkd.example/api", "tok")
+    captured = {}
+
+    async def _fake_call(tool, arguments):
+        captured["tool"] = tool
+        captured["arguments"] = arguments
+        return {"id": "x", "projectId": "p", "issueNumber": 1, "title": "t",
+                "statusId": "todo", "tags": []}
+
+    client.call = _fake_call  # type: ignore[assignment,method-assign]
+    client._http.aclose = AsyncMock()  # avoid real httpx close
+
+    await client.create_issue("p", "T", ["analyze"])
+    assert captured["tool"] == "create-issue"
+    assert captured["arguments"]["tags"] == ["sisyphus", "analyze"]
+
+    # idempotent
+    await client.create_issue("p", "T", ["sisyphus", "x"])
+    assert captured["arguments"]["tags"] == ["sisyphus", "x"]
 
 
 @pytest.mark.asyncio

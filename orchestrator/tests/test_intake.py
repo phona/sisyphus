@@ -183,6 +183,9 @@ async def test_start_intake(monkeypatch):
     assert "[INTAKE]" in kwargs["title"]
     assert "intake" in kwargs["tags"]
     assert "REQ-9" in kwargs["tags"]
+    # SAL-S4: pipeline-identity tag is set explicitly here (intent issue isn't
+    # opened by sisyphus, so create_issue's auto-inject can't reach it).
+    assert "sisyphus" in kwargs["tags"]
 
 
 def _admit():

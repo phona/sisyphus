@@ -37,10 +37,11 @@ curl -sS http://localhost:3000/api/projects/$PROJECT/issues/$MY
 # 列 issues
 curl -sS "http://localhost:3000/api/projects/$PROJECT/issues?limit=50"
 
-# 创 sub-issue（fan out 用）
+# 创 sub-issue（fan out 用）—— **tags 必须含 `sisyphus`**（统一身份标签，让人 / 仪表盘
+# 一眼分辨 sisyphus pipeline 自己开的工件 vs 人开的）
 curl -sS -X POST http://localhost:3000/api/projects/$PROJECT/issues \
   -H 'content-type: application/json' \
-  -d '{"title":"...", "tags":[...], "statusId":"todo", "useWorktree":true, "engineType":"claude-code"}'
+  -d '{"title":"...", "tags":["sisyphus", ...], "statusId":"todo", "useWorktree":true, "engineType":"claude-code"}'
 
 # follow-up（追加 prompt 给 sub-agent，target_id 不是 $MY 而是 sub-issue 的 id）
 curl -sS -X POST http://localhost:3000/api/projects/$PROJECT/issues/<sub_issue_id>/follow-up \
