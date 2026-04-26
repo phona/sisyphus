@@ -96,6 +96,18 @@ env:
   skip_archive: false
   test_mode: false
 
+  # ─── REQ-impl-gh-incident-open-1777173133：ESCALATED 自动开 GH issue ────
+  # 设非空 = 任一 REQ 进 ESCALATED 时 sisyphus 用 SISYPHUS_GITHUB_TOKEN POST
+  # `/repos/{owner}/{repo}/issues` 开一条事故 issue。空 = 关闭（默认安全）。
+  # 启用前必须把 SISYPHUS_GITHUB_TOKEN 升级到包含 `Issues: Read-and-write` 的 PAT
+  # （runner Pod 自己的 read-only `gh_token` 不动 —— "runner = read-only checker"）。
+  # 失败不阻塞 escalate（GH 5xx / 401 只 log warning）。
+  gh_incident_repo: ""
+  # 每条事故 issue 的基础 label 集合；escalate 还会追加 `reason:<final_reason>`
+  # 让 `gh issue list --label reason:fixer-round-cap` 这种现有 query 仍能命中。
+  gh_incident_labels:
+    - sisyphus:incident
+
 # ─── v0.2 runner（调试环境 Pod + PVC）─────────────────────────────────────
 # 每个 REQ 一个 Pod（runner-<req>）+ 一个 PVC（workspace-<req>），住在独立
 # namespace。Pod 是 privileged + DinD + fuse-overlayfs；PVC 挂 /workspace 做
