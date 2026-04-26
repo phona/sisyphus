@@ -1,470 +1,131 @@
-# API 标签管理规范
+# BKD issue tag 命名规范（router.py 依赖）
 
-> 基于 Apifox 标签功能实现接口生命周期管理
+> **唯一真相源**：[orchestrator/src/orchestrator/router.py](../orchestrator/src/orchestrator/router.py)。
+> 本文档记录 sisyphus router 实际识别的 tag 模式，方便 agent / 接入方 / 维护者
+> 对照写入。**router 只看 tag 不看 title**，所以 tag 是 sisyphus 跟 BKD agent 沟通
+> 的唯一信道。
 
----
+router 的入口是 [`derive_event(event_type, tags)`](../orchestrator/src/orchestrator/router.py)，
+按事件类型（`issue.updated` / `session.completed` / `session.failed`）+ tag 集合
+推断 sisyphus state-machine 的 `Event`。
 
-## 1. 规范目的
+## 1. 入口 tag —— 启动 REQ
 
-本文档规范团队使用 Apifox 标签管理 API 接口生命周期的标准流程，确保：
+人在 BKD UI 给 issue 打这两类 tag 之一来触发流水线：
 
-- 接口状态清晰可见
-- 前后端协作顺畅
-- 接口变更可追溯
-- 减少沟通成本
+| tag | 触发 Event | 意义 |
+|---|---|---|
+| `intent:intake` | `INTENT_INTAKE` | 走完整流水线：先起 intake-agent 多轮澄清需求 → finalized intent JSON → 新建 analyze issue 接力（推荐：不熟悉的仓） |
+| `intent:analyze` | `INTENT_ANALYZE` | 跳过 intake，直接进 analyze-agent（适合 trivial REQ） |
 
----
+router 看到 `intent:*` tag 且 issue 还没进 `analyze` / `intake` 阶段（即 issue 上**没有**
+对应的 stage role tag）才 fire，避免 self-loop。
 
-## 2. 标签体系
+## 2. REQ 标识 tag
 
-### 2.1 标签分类
+| 形式 | 例 | 谁写 | 谁读 |
+|---|---|---|---|
+| `REQ-<slug>` | `REQ-docs-drift-audit-1777220568` | 人或上游创建 issue 时带 | router `extract_req_id`，找不到时退回 `REQ-<issueNumber>` |
 
-| 分类 | 用途 | 可选值 | 是否必填 |
-|------|------|--------|----------|
-| **状态标签** | 标识接口当前状态 | 设计中/评审中/已发布/已废弃 | ✅ 必填 |
-| **版本标签** | 标识接口版本 | v1.0/v1.1/v2.0 | ⚠️ 推荐填写 |
-| **模块标签** | 标识业务模块 | 订单/支付/用户/... | ⚠️ 推荐填写 |
-| **优先级标签** | 标识接口优先级 | P0/P1/P2 | ❌ 可选 |
+REQ id 是 workflow 标识；一条 BKD issue 同时有 BKD 行 id（`fepr3eys` 这种）和 REQ id
+两个标识，**不要混淆**。REQ id 是 tag，BKD 行 id 是 REST endpoint 的 `{id}`。
 
-### 2.2 状态标签详解
+## 3. Stage role tag —— 谁在跑
 
-```
-🟡 设计中    → 接口正在设计，不可用
-🟠 评审中    → 设计完成，等待评审，临时可用
-🟢 已发布    → 评审通过，正式可用
-⬛ 已废弃    → 不再维护，即将下线
-```
+每个 stage agent / sub-agent 在 BKD issue 上必带的 role tag。router 用它分流
+`session.completed` 事件到对应主链 transition：
 
-#### 状态说明
+| tag | 用在哪 |
+|---|---|
+| `intake` | intake-agent issue |
+| `analyze` | analyze-agent issue（M17 全责交付） |
+| `challenger` | challenger-agent issue（M18） |
+| `staging-test` | （v0.1 兼容）staging-test agent issue；M1 起被 checker 取代但 tag 仍走 router |
+| `pr-ci` | （v0.1 兼容）pr-ci-watch agent issue；M2 起被 checker 取代 |
+| `accept` | accept-agent issue |
+| `verifier` | verifier-agent issue |
+| `fixer` | fixer-agent issue |
+| `done-archive` | done-archive agent issue |
 
-| 标签 | 颜色 | 可用性 | 使用说明 |
-|------|------|--------|----------|
-| **设计中** | 🟡 黄色 | ❌ **禁止调用** | 后端正在设计接口，Schema 可能大幅变更 |
-| **评审中** | 🟠 橙色 | ⚠️ **谨慎调用** | 设计完成，待前端评审，小范围变更可能 |
-| **已发布** | 🟢 绿色 | ✅ **可以调用** | 评审通过，接口稳定，可用于生产 |
-| **已废弃** | ⬛ 灰色 | ⚠️ **尽快迁移** | 有新接口替代，将在未来版本下线 |
+## 4. 结果 tag —— 报告 stage 完成
 
-**🔴 红线规定：只有「已发布」标签的接口才能用于生产环境开发！**
+stage agent 完成时 PATCH 自己的 issue 加这些 tag，router 据此 fire 对应 `*_PASS` /
+`*_FAIL` 事件。**注意 tag 替换语义**：每次 PATCH 必须先 GET 当前 tags，merge 后再 PATCH。
 
----
+| tag | 含义 |
+|---|---|
+| `result:pass` | 该 stage 跑通（pass / 通过 / 全绿） |
+| `result:fail` | 该 stage 失败 |
 
-## 3. 状态流转流程
+router 看到 `result:*` 时配合 stage role tag 推断具体事件，例如：
+- `intake` + `result:pass` → `INTAKE_PASS`
+- `challenger` + `result:fail` → `CHALLENGER_FAIL`
+- `accept` + `result:pass` → `ACCEPT_PASS`
+- `done-archive` + `result:pass` → `ARCHIVE_DONE`
 
-### 3.1 正常流程
+`pr-ci` 类比但用 `pr-ci:pass` / `pr-ci:fail` / `pr-ci:timeout` 子键空间（见 router.py L302–310）。
 
-```
-创建接口 → 设计中 → 评审中 → 已发布
-              ↑______|
-```
+## 5. verifier-agent 专用 tag
 
-### 3.2 变更流程
+verifier-agent 完成 session 时必加：
 
-```
-已发布接口需要变更：
+| tag | 含义 |
+|---|---|
+| `verifier` | role tag |
+| `verify:<stage>` | 这次 verify 的目标 stage（`analyze` / `spec_lint` / `challenger` / `dev_cross_check` / `staging_test` / `pr_ci` / `accept`） |
+| `trigger:<success\|fail>` | 触发本次 verify 的事件类型（success = stage 机械 pass 后的 sanity verify；fail = stage 机械 fail） |
+| `decision:<urlsafe-base64-json>` | 决策 JSON（首选；router 看 tag 优先，base64 编码避开 BKD tag 字符限制） |
 
-1. 向后兼容的变更（添加字段、新增可选参数）
-   → 直接修改接口，保持「已发布」标签
-   → 在变更说明中注明兼容性
+decision JSON schema（router `validate_decision`）：
 
-2. 不兼容的变更（删除字段、新增必填参数、修改返回格式）
-   → 复制新接口，标签设为「v2.0 + 设计中」
-   → 原接口标签增加「已废弃」
-   → 通知使用方迁移
-```
-
-### 3.3 废弃流程
-
-```
-已发布 → 已废弃 → [3个月后] → 删除接口
-   ↓         ↓
-  通知      警告
-  使用方    返回
-```
-
----
-
-## 4. 角色职责
-
-### 4.1 后端开发
-
-| 阶段 | 动作 | 标签操作 |
-|------|------|----------|
-| 开始设计 | 在 Apifox 创建接口 | 打上「设计中」标签 |
-| 设计完成 | 配置 Mock 数据，自测通过 | 修改为「评审中」，@前端评审 |
-| 评审通过 | 等待前端确认 | 修改为「已发布」，全员通知 |
-| 接口变更 | 评估兼容性 | 兼容：保持标签<br>不兼容：创建 v2 + 废弃旧接口 |
-| 接口下线 | 确认无调用方 | 删除接口或标记「已废弃」 |
-
-### 4.2 前端开发
-
-| 阶段 | 动作 | 检查项 |
-|------|------|--------|
-| 接到任务 | 查看 Apifox 接口列表 | 筛选「已发布」标签 |
-| 开始开发 | 配置 Mock URL | 确认接口标签为「已发布」或「评审中」 |
-| 接口评审 | 检查 Schema 是否合理 | 有问题：评论反馈<br>没问题：回复确认 |
-| 联调阶段 | 对接真实接口 | 发现与文档不符：提问题 |
-
-### 4.3 接口管理员（推荐指定专人）
-
-- 每周检查接口标签是否规范
-- 处理「已废弃」接口的迁移跟踪
-- 维护版本标签的统一性
-
----
-
-## 5. 操作流程
-
-### 5.1 创建新接口
-
-**步骤 1：后端开发创建接口**
-```
-1. 登录 Apifox
-2. 选择对应项目
-3. 点击「新建接口」
-4. 填写接口基本信息（Path、Method）
-5. 在「标签」处选择「设计中」
-6. 选择版本标签（如 v1.0）
-7. 选择模块标签（如 订单模块）
-8. 保存接口
+```json
+{
+  "action": "pass" | "fix" | "escalate",
+  "fixer": "dev" | "spec" | null,
+  "confidence": "high" | "low",
+  "reason": "≤ 500 字解释",
+  "target_repo": "owner/repo  (M16 多仓可选，告诉 fixer 哪仓修)"
+}
 ```
 
-**步骤 2：设计接口详情**
-```
-1. 定义请求参数（Query/Body）
-2. 定义响应数据结构
-3. 编写成功/失败示例
-4. 配置 Mock 规则（可选）
-5. 保存并自测
-```
-
-**步骤 3：提交评审**
-```
-1. 修改标签：设计中 → 评审中
-2. 在「描述」中 @前端开发
-3. 飞书/Webhook 自动通知
-```
-
-### 5.2 评审接口
-
-**前端开发评审清单：**
-
-- [ ] 接口路径符合 RESTful 规范
-- [ ] 请求参数命名清晰
-- [ ] 响应字段满足 UI 需求
-- [ ] 错误码定义完整
-- [ ] 示例数据合理
-- [ ] Mock 规则可用
-
-**评审结果处理：**
-
-```
-通过：
-  → 在 Apifox 评论 "评审通过"
-  → 后端修改标签：评审中 → 已发布
-
-不通过：
-  → 在 Apifox 评论具体问题
-  → 后端修改后重新提交评审
-```
-
-### 5.3 接口变更
-
-**兼容性判断：**
-
-| 变更类型 | 是否兼容 | 处理方式 |
-|----------|----------|----------|
-| 添加响应字段 | ✅ 兼容 | 直接修改，保持「已发布」 |
-| 添加可选请求参数 | ✅ 兼容 | 直接修改，保持「已发布」 |
-| 修改字段含义 | ❌ 不兼容 | 创建 v2 接口 |
-| 删除字段 | ❌ 不兼容 | 创建 v2 接口 + 废弃旧接口 |
-| 新增必填参数 | ❌ 不兼容 | 创建 v2 接口 + 废弃旧接口 |
-| 修改错误码 | ⚠️ 可能不兼容 | 评估影响，必要时创建 v2 |
-
-**创建 v2 接口步骤：**
-
-```
-1. 复制原接口
-2. 修改 Path 为 /v2/xxx 或添加版本参数
-3. 标签设为「v2.0 + 设计中」
-4. 按新需求修改接口
-5. 重新走评审流程
-6. 原接口标签增加「已废弃」
-7. 在原接口描述中注明：「已迁移到 v2，请使用新接口」
-8. 飞书通知使用方迁移
-```
-
----
-
-## 6. Webhook 通知配置
-
-### 6.1 飞书机器人配置
-
-**步骤 1：创建飞书机器人**
-```
-1. 飞书群设置 → 群机器人 → 添加机器人
-2. 选择「自定义机器人」
-3. 设置机器人名称：API 变更通知
-4. 复制 Webhook 地址
-```
-
-**步骤 2：Apifox 配置 Webhook**
-```
-1. Apifox → 项目设置 → Webhook
-2. 粘贴飞书 Webhook 地址
-3. 选择触发事件：
-   - ✅ 接口创建
-   - ✅ 接口更新
-   - ✅ 标签变更
-   - ❌ 接口删除（避免误删通知）
-4. 保存配置
-```
-
-### 6.2 通知内容示例
-
-**状态变更通知：**
-```
-🟢 接口状态变更
-
-接口：POST /api/v1/order/create
-路径：订单模块 > 创建订单
-状态：评审中 → 已发布
-版本：v1.0
-变更人：@后端开发小王
-时间：2024-01-15 14:30
-
-✅ 此接口现已可用，前端可开始对接
-[查看接口] [查看文档] [在线调试]
-```
-
-**新接口通知：**
-```
-🆕 新接口创建
-
-接口：GET /api/v1/order/list
-路径：订单模块 > 订单列表
-状态：设计中 🟡
-版本：v1.0
-创建人：@后端开发小李
-
-⚠️ 此接口正在设计中，请勿使用
-如有需求，请联系 @后端开发小李
-```
-
-**接口废弃通知：**
-```
-⬛ 接口废弃提醒
-
-接口：POST /api/v1/order/create（旧版）
-替代接口：POST /api/v2/order/create
-废弃时间：2024-01-15
-预计下线：2024-04-15（3个月后）
-
-⚠️ 请尽快迁移到新接口！
-影响方：@前端开发 @小程序开发 @App开发
-迁移文档：[点击这里]
-```
-
----
-
-## 7. 目录结构规范
-
-### 7.1 推荐目录组织
-
-```
-订单模块/
-├── v1/
-│   ├── 创建订单      [POST /v1/order/create]     标签：已废弃 ⬛
-│   ├── 查询订单      [GET  /v1/order/detail]     标签：已发布 🟢
-│   └── 取消订单      [POST /v1/order/cancel]     标签：已发布 🟢
-├── v2/
-│   ├── 创建订单      [POST /v2/order/create]     标签：已发布 🟢  ← 替代 v1
-│   └── 批量创建      [POST /v2/order/batch]      标签：设计中 🟡
-└── 内部接口/
-    └── 订单统计      [GET  /internal/order/stat] 标签：已发布 🟢
-
-支付模块/
-├── 发起支付          [POST /v1/pay/create]       标签：已发布 🟢
-├── 查询支付状态      [GET  /v1/pay/status]       标签：已发布 🟢
-└── 退款              [POST /v1/pay/refund]       标签：评审中 🟠
-```
-
-### 7.2 命名规范
-
-**接口名称：**
-```
-✅ 推荐：创建订单、查询订单详情、取消订单
-❌ 避免：orderCreate、createOrder、新建订单接口
-```
-
-**目录命名：**
-```
-✅ 推荐：订单模块、支付模块、用户模块
-❌ 避免：order、pay、user（太简单）
-     OrderModule、PayModule（英文不必要）
-```
-
----
-
-## 8. 检查与治理
-
-### 8.1 每日检查清单
-
-**前端组长每日检查：**
-```
-□ 查看「已发布」接口是否有变更
-□ 检查项目是否使用了「设计中」的接口
-□ 确认「已废弃」接口的迁移进度
-```
-
-**后端组长每日检查：**
-```
-□ 检查是否有未打标签的接口
-□ 确认「评审中」接口的评审进度
-□ 跟进「已废弃」接口的下线计划
-```
-
-### 8.2 每周治理会议
-
-**参会人：** 前后端组长 + 接口管理员
-
-**议程：**
-```
-1. 接口标签规范检查（5分钟）
-   - 是否有未打标签的接口？
-   - 标签使用是否规范？
-
-2. 废弃接口清理（10分钟）
-   - 本周是否有新废弃接口？
-   - 到期下线接口处理
-
-3. 接口质量回顾（10分钟）
-   - 本周是否有接口变更导致的问题？
-   - 是否需要调整规范？
-
-4. 下周计划（5分钟）
-   - 新增接口规划
-   - 废弃接口迁移计划
-```
-
-### 8.3 自动化检查（CI）
-
-**GitHub Actions 示例：**
-
-```yaml
-name: API Tag Check
-
-on: [pull_request]
-
-jobs:
-  check-api-tags:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Check API Tags
-        run: |
-          # 导出 Apifox 接口数据
-          curl -s "https://api.apifox.com/api/v1/projects/$PROJECT_ID/apis" \
-            -H "Authorization: Bearer $APIFOX_TOKEN" > apis.json
-          
-          # 检查无标签接口
-          no_tags=$(cat apis.json | jq '.data[] | select(.tags | length == 0) | .name')
-          if [ -n "$no_tags" ]; then
-            echo "❌ 发现无标签接口："
-            echo "$no_tags"
-            exit 1
-          fi
-          
-          # 检查代码是否使用了「设计中」接口
-          # 需要接口定义中包含 x-api-id
-          echo "✅ API 标签检查通过"
-```
-
----
-
-## 9. 常见问题 FAQ
-
-### Q1：接口正在「设计中」，前端急着开发怎么办？
-
-**A：** 有两种处理方式：
-
-1. **紧急需求**：后端优先完成设计，快速推进到「评审中」状态
-2. **并行开发**：前端基于「设计中」的 Mock 开发 UI，但需承担接口变更风险
-
-**建议：** 优先完成接口设计，避免返工。
-
-### Q2：发现「已发布」接口有 Bug，怎么修改？
-
-**A：** 
-
-1. 如果是向后兼容的修复（如修复错误提示），直接修改，保持「已发布」
-2. 如果是不兼容的修复，必须创建 v2 接口，原接口标记「已废弃」
-3. 在接口描述中注明变更记录
-
-### Q3：旧接口下线前怎么通知使用方？
-
-**A：**
-
-1. 接口标签改为「已废弃」
-2. 在接口描述中注明：
-   - 废弃原因
-   - 替代接口
-   - 下线时间
-3. 飞书群 @所有使用方
-4. 每周在站会同步迁移进度
-
-### Q4：一个人可以既当后端又当前端吗？
-
-**A：** 可以，但需要严格执行流程：
-
-1. 设计接口时，站在前端角度审视
-2. 仍然要打标签，走评审流程（可简化）
-3. Mock 开发完成后，再对接真实接口
-
-### Q5：Apifox 标签能否批量修改？
-
-**A：** 目前 Apifox 不支持批量修改标签，需要逐个修改。
-
-**建议：**
-- 保持规范，避免大量接口需要批量修改标签
-- 如需批量操作，可导出 JSON，修改后重新导入
-
----
-
-## 10. 附录
-
-### 10.1 快速参考卡
-
-```
-┌─────────────────────────────────────────┐
-│         API 标签管理速查卡               │
-├─────────────────────────────────────────┤
-│ 🟡 设计中  → 不可用，正在设计           │
-│ 🟠 评审中  → 临时可用，待确认           │
-│ 🟢 已发布  → 可用，稳定                 │
-│ ⬛ 已废弃  → 尽快迁移                   │
-├─────────────────────────────────────────┤
-│ 创建接口 → 打「设计中」标签             │
-│ 设计完成 → 改「评审中」标签             │
-│ 评审通过 → 改「已发布」标签             │
-│ 不兼容变更 → 创建 v2 + 废弃旧接口       │
-├─────────────────────────────────────────┤
-│ 🔴 只有「已发布」接口才能用于生产！     │
-└─────────────────────────────────────────┘
-```
-
-### 10.2 相关文档
-
-- [架构设计](./architecture.md)
-- [状态机权威](./state-machine.md)
-- [Prompt 索引](./prompts.md)
-
-### 10.3 修订记录
-
-| 版本 | 日期 | 修订人 | 修订内容 |
-|------|------|--------|----------|
-| v1.0 | 2024-01-15 | 技术团队 | 初始版本 |
-
----
-
-**本文档由技术团队维护，如有问题请提 Issue 或联系接口管理员。**
+约束：
+- `action=fix` 时 `fixer` 必须非 null；其他 action `fixer` 必须 null。
+- 不合规 → `VERIFY_ESCALATE` → 终态 ESCALATED。
+
+兜底：decision JSON 也可以写在 issue description 的 ```` ```json ```` 块里（取最后一个），
+router `extract_decision_from_issue` 优先 tag、其次 description code block、最后扫
+description 大括号。
+
+## 6. fixer-agent 专用 tag
+
+| tag | 含义 |
+|---|---|
+| `fixer` | role tag |
+| `fixer:dev` 或 `fixer:spec` | scope（业务码 vs spec） |
+| `parent-stage:<stage>` | fixer 是修哪个 stage 的失败（用于关联 stage_runs） |
+| `parent-id:<verifier_issue_id>` | 关联到判 fix 的 verifier issue（router `get_parent_id`） |
+| `round-N` | 第几轮 fixer（router `get_round`，用于 fixer round cap） |
+
+## 7. M16 多仓辅助 tag（可选）
+
+| tag | 含义 |
+|---|---|
+| `repo:<owner/repo>` | 当前 sub-issue / verifier 决策针对哪个仓（多仓 REQ 时可选；router `get_target` 也支持 `target:<repo>` 别名） |
+| `parent:<stage>` | 通用 parent stage 标记（区别于 `parent-id:`） |
+
+## 8. 不要做的事
+
+- ❌ 不要在 PATCH tags 时只传新 tag，导致 REQ-xxx / role tag 被覆盖丢失
+  （BKD 的 tags 字段是整数组替换语义，必须先 GET 再 merge）
+- ❌ 不要给 fixer 的 issue 漏 `round-N`：fixer round cap 靠它判断
+- ❌ 不要把 decision JSON 直接拼进 tag 文本（不 base64）—— BKD tag 字符集限制会丢字符
+- ❌ 不要给 sub-agent 加 `intent:*` —— 那是人触发入口，agent 内部派 sub-issue
+  请用 `parent-id:` + role tag
+
+## 9. 加新 tag / 新 stage 时
+
+1. 在 [router.py `derive_event`](../orchestrator/src/orchestrator/router.py) 加 tag → Event 翻译
+2. 在 [state.py](../orchestrator/src/orchestrator/state.py) 加对应 `Event` / `ReqState` / `Transition`
+3. 给该 stage 的 agent prompt（`prompts/<stage>.md.j2`）加上"完成时 PATCH 这些 tag"指令
+4. 如果该 stage 走 verifier 框架，加 `prompts/verifier/<stage>_{success,fail}.md.j2`
+5. 更新本文档表格 + [docs/state-machine.md](./state-machine.md) §3 Event 表

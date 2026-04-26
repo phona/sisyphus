@@ -3,8 +3,11 @@
 > 唯一真相源是 [orchestrator/src/orchestrator/state.py](../orchestrator/src/orchestrator/state.py)。
 > 本文档把 `ReqState`、`Event`、`TRANSITIONS` 三个枚举可视化，方便看代码前先建立心智模型。
 >
-> 状态机当前形态：M14c + INTAKING —— verifier-agent 接管所有 stage fail 路径，旧 BUGFIX/DIAGNOSE 子链已砍。
-> INTAKING 为物理隔离 brainstorm 阶段：intake-agent 只读代码 + 问问题，不能写实现。
+> 状态机当前形态：M14c + INTAKING + M16 多仓 + M17 全责交付 + M18 challenger ——
+> verifier-agent 接管所有 stage fail 路径（旧 BUGFIX/DIAGNOSE 子链已砍）；
+> INTAKING 为物理隔离 brainstorm 阶段（intake-agent 只读代码 + 问问题，不能写实现）；
+> M17 起 sisyphus 不再起 spec / dev BKD 子 agent，由 analyze-agent 全责交付 spec + 业务码 + PR；
+> M18 在 spec-lint 后插入 challenger-agent 黑盒读 spec 写 contract test。
 
 ## 1. 设计要点
 
@@ -23,8 +26,9 @@
 |---|---|---|
 | `init` | 还没 analyze（intent_analyze 之前） | start |
 | `intaking` | **INTAKING** intake-agent 在跑（多轮 BKD chat 澄清 + 写 finalized intent） | in-flight |
-| `analyzing` | analyze-agent 在跑 | in-flight |
+| `analyzing` | analyze-agent 在跑（M17 起全责交付：spec + 业务码 + push + 开 PR 都在 analyze 一段里完成） | in-flight |
 | `spec-lint-running` | **M15** 客观检查：**for-each-repo** openspec validate + check-scenario-refs.sh（遍历 `/workspace/source/*`） | in-flight |
+| `challenger-running` | **M18** challenger-agent 跑：黑盒读 spec 写 contract test + push feat 分支（不看 dev 代码，避免 prompt 泄露实现） | in-flight |
 | `dev-cross-check-running` | **M15** 客观检查：**for-each-repo** `BASE_REV=$(git merge-base HEAD origin/<default_branch>) make ci-lint`（default_branch 先 resolve `origin/HEAD` 符号引用，再退 main/master/develop/dev；ttpos-ci 标准，仅 lint 变更文件） | in-flight |
 | `staging-test-running` | **for-each-repo 并行** 跑 `make ci-unit-test && make ci-integration-test`（**单 repo 内串行**，避免内存峰值叠加） | in-flight |
 | `pr-ci-running` | PR 已开，等 GHA 全套绿（机械） | in-flight |
@@ -33,11 +37,11 @@
 | `review-running` | **M14b** verifier-agent 在跑（success / fail 两触发统一入口） | in-flight |
 | `fixer-running` | **M14b** decision=fix → 起对应 fixer agent | in-flight |
 | `archiving` | done-archive agent 跑：每仓 `openspec apply` + 写 archive 结果。**不 auto-merge / 不 push main**——final merge 由人在每仓审过再合（#124） | in-flight |
-| `gh-incident-open` | ~~（已规划，未启用）GitHub issue 已开等人 \| wait-human~~ — 设计被 PR #118 / #122 重新走"escalate side-effect"路：进 ESCALATED 时 `escalate` action 调 `gh_incident.open_incident()`，对**每个 involved source repo**（intake_finalized_intent / ctx.involved_repos / `repo:` tag / `default_involved_repos` / `settings.gh_incident_repo` 5 层 fallback）独立 POST 一条 GH issue，URL 写入 `ctx.gh_incident_urls: dict[str, str]`，**不引入新 state**。本行保留作历史，下次大改 state 表时删 |
+| `gh-incident-open` | ~~（已规划，未启用）GitHub issue 已开等人 \| wait-human~~ — 设计被 PR #118 / #122 重新走"escalate side-effect"路：进 ESCALATED 时 `escalate` action 调 `gh_incident.open_incident()`，对**每个 involved source repo**（intake_finalized_intent / ctx.involved_repos / `repo:` tag / `default_involved_repos` / `settings.gh_incident_repo` 5 层 fallback）独立 POST 一条 GH issue，URL 写入 `ctx.gh_incident_urls: dict[str, str]`，**不引入新 state**。enum 仍保留，但 TRANSITIONS 表无任何条目用到它，相当于 dead code，下次大改 state 表时删 |
 | **`done`** | REQ 完成 | **terminal** |
 | **`escalated`** | 熔断 / session-failed / 人工止损 | **terminal** |
 
-## 3. Event 枚举（25 个）
+## 3. Event 枚举（27 个）
 
 | event | 来源 | 触发什么 |
 |---|---|---|
@@ -46,11 +50,12 @@
 | **`intake.fail`** | intake-agent PATCH `result:fail` / 或 finalized intent JSON 解析失败 | escalate |
 | `intent.analyze` | 人在 BKD 打 `intent:analyze` tag（跳过 intake 直接进 analyze） | start_analyze |
 | `analyze.done` | analyze-agent session.completed | create_spec_lint |
-| **`spec-lint.pass`** | **M15** spec-lint checker 退码 0 | create_dev_cross_check |
+| **`spec-lint.pass`** | **M15** spec-lint checker 退码 0 | start_challenger（M18：先起 challenger 写 contract test） |
 | **`spec-lint.fail`** | **M15** spec-lint checker 退码非 0 | invoke_verifier_for_spec_lint_fail |
+| **`challenger.pass`** | **M18** challenger-agent 写完 contract test 推 feat 分支 | create_dev_cross_check |
+| **`challenger.fail`** | **M18** challenger 写失败 / 拒绝（spec 自相矛盾等） | invoke_verifier_for_challenger_fail |
 | **`dev-cross-check.pass`** | **M15** dev-cross-check checker 退码 0 | create_staging_test |
 | **`dev-cross-check.fail`** | **M15** dev-cross-check checker 退码非 0 | invoke_verifier_for_dev_cross_check_fail |
-| `dev.done` | dev-agent session.completed | （aggregated as DEV_ALL_PASSED） |
 | `staging-test.pass` | M1 checker 退码 0 | create_pr_ci_watch |
 | `staging-test.fail` | M1 checker 退码非 0 | invoke_verifier_for_staging_test_fail |
 | `pr-ci.pass` | M2 checker 全绿 | create_accept |
@@ -81,9 +86,12 @@ stateDiagram-v2
     intaking --> escalated: verify.escalate\n(start_analyze_with_finalized_intent 内部判 escalate)
     analyzing --> escalated: verify.escalate\n(start_analyze 内部判 escalate, 如 clone failed)
     analyzing --> spec_lint_running: analyze.done
-    spec_lint_running --> dev_cross_check_running: spec-lint.pass
+    spec_lint_running --> challenger_running: spec-lint.pass
     spec_lint_running --> review_running: spec-lint.fail
-    
+
+    challenger_running --> dev_cross_check_running: challenger.pass
+    challenger_running --> review_running: challenger.fail
+
     dev_cross_check_running --> staging_test_running: dev-cross-check.pass
     dev_cross_check_running --> review_running: dev-cross-check.fail
 
