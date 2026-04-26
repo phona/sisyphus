@@ -214,7 +214,7 @@ def test_ODB_S13_q13_watchdog_escalate_frequency_joins_both_tables():
 def test_ODB_S14_dashboard_md_links_every_sql_file(nn: str):
     """Dashboard md links every SQL file by relative path (queries/sisyphus/<NN>-)."""
     content = DASHBOARD_MD.read_text(encoding="utf-8") if DASHBOARD_MD.exists() else ""
-    assert DASHBOARD_MD.exists(), f"observability/sisyphus-dashboard.md not found"
+    assert DASHBOARD_MD.exists(), "observability/sisyphus-dashboard.md not found"
     pattern = f"queries/sisyphus/{nn}-"
     assert pattern in content, (
         f"sisyphus-dashboard.md MUST contain a link to 'queries/sisyphus/{nn}-…sql' "
@@ -268,7 +268,7 @@ def test_ODB_S16_refresh_section_mentions_every_question(q_label: str):
     """Every Q1–Q13 appears after the '## 刷新频率' heading."""
     content = _read(DASHBOARD_MD)
     refresh_marker = "## 刷新频率"
-    assert refresh_marker in content, f"No '## 刷新频率' section found in dashboard md"
+    assert refresh_marker in content, "No '## 刷新频率' section found in dashboard md"
     refresh_section = content[content.index(refresh_marker):]
     assert q_label in refresh_section, (
         f"sisyphus-dashboard.md refresh section MUST mention '{q_label}' "
