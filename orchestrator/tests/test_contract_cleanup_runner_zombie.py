@@ -58,6 +58,7 @@ async def test_fre_s1_schedules_cleanup_task_on_active_req(monkeypatch):
     ReqState.ESCALATED before the endpoint returns.
     """
     from httpx import ASGITransport, AsyncClient
+
     from orchestrator import engine as engine_mod
     from orchestrator.main import app
     from orchestrator.state import ReqState
@@ -100,6 +101,7 @@ async def test_fre_s2_noop_on_already_escalated(monkeypatch):
     MUST NOT execute any SQL UPDATE and MUST NOT schedule a cleanup task.
     """
     from httpx import ASGITransport, AsyncClient
+
     from orchestrator import engine as engine_mod
     from orchestrator.main import app
     from orchestrator.store import db
@@ -141,6 +143,7 @@ async def test_fre_s3_unknown_req_returns_404_no_side_effects(monkeypatch):
     MUST NOT execute any SQL UPDATE and MUST NOT schedule a cleanup task.
     """
     from httpx import ASGITransport, AsyncClient
+
     from orchestrator import engine as engine_mod
     from orchestrator.main import app
     from orchestrator.store import db
@@ -185,6 +188,7 @@ async def test_fre_s4_cleanup_arg_is_escalated_not_done(monkeypatch):
     for the human-debug retention window.
     """
     from httpx import ASGITransport, AsyncClient
+
     from orchestrator import engine as engine_mod
     from orchestrator.main import app
     from orchestrator.state import ReqState
