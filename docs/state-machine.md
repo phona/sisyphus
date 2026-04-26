@@ -32,8 +32,8 @@
 | `accept-tearing-down` | env-down 清 lab（无论 accept pass/fail 都跑） | in-flight |
 | `review-running` | **M14b** verifier-agent 在跑（success / fail 两触发统一入口） | in-flight |
 | `fixer-running` | **M14b** decision=fix → 起对应 fixer agent | in-flight |
-| `archiving` | done-archive agent 跑（合 PR + 关 issue） | in-flight |
-| `gh-incident-open` | ~~（已规划，未启用）GitHub issue 已开等人 \| wait-human~~ — 设计被 PR #118 重新走"escalate side-effect"路：进 ESCALATED 时 `escalate` action 调 `gh_incident.file_incident()` 在 source repo 开 GH issue，**不引入新 state**。本行保留作历史，下次大改 state 表时删 |
+| `archiving` | done-archive agent 跑：每仓 `openspec apply` + 写 archive 结果。**不 auto-merge / 不 push main**——final merge 由人在每仓审过再合（#124） | in-flight |
+| `gh-incident-open` | ~~（已规划，未启用）GitHub issue 已开等人 \| wait-human~~ — 设计被 PR #118 / #122 重新走"escalate side-effect"路：进 ESCALATED 时 `escalate` action 调 `gh_incident.open_incident()`，对**每个 involved source repo**（intake_finalized_intent / ctx.involved_repos / `repo:` tag / `default_involved_repos` / `settings.gh_incident_repo` 5 层 fallback）独立 POST 一条 GH issue，URL 写入 `ctx.gh_incident_urls: dict[str, str]`，**不引入新 state**。本行保留作历史，下次大改 state 表时删 |
 | **`done`** | REQ 完成 | **terminal** |
 | **`escalated`** | 熔断 / session-failed / 人工止损 | **terminal** |
 
