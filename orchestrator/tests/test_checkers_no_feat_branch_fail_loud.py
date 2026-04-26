@@ -13,7 +13,7 @@ push to a declared-involved repo.
 This REQ tightens dev_cross_check and staging_test (NOT spec_lint, because
 spec changes may legitimately consolidate in a single spec_home repo): if a
 cloned repo lacks feat/<REQ>, the checker now sets fail=1 and emits a
-'has no feat/<REQ> branch on origin — refusing to silent-pass' line to
+'has no feat/<REQ> branch reachable on origin — refusing to silent-pass' line to
 stderr, instead of '[skip] $name: no feat branch / not involved'.
 
 Scenarios:
@@ -102,13 +102,13 @@ def _make_repo_without_feat_branch(parent: Path, name: str) -> Path:
         pytest.param(
             build_dev_cross_check_cmd,
             "dev_cross_check",
-            f"FAIL dev_cross_check: repo-a has no feat/{REQ_ID} branch on origin",
+            f"FAIL dev_cross_check: repo-a has no feat/{REQ_ID} branch reachable on origin",
             id="dev_cross_check",
         ),
         pytest.param(
             build_staging_test_cmd,
             "staging_test",
-            f"FAIL staging_test: repo-a has no feat/{REQ_ID} branch on origin",
+            f"FAIL staging_test: repo-a has no feat/{REQ_ID} branch reachable on origin",
             id="staging_test",
         ),
     ],
@@ -222,7 +222,7 @@ def test_spec_lint_no_feat_branch_still_silent_skip_to_guard_c(tmp_path):
 def test_build_cmd_emits_per_repo_no_feat_branch_fail_loud_literal(builder, name):
     """CNFB-S6: shell template MUST contain the per-repo fail-loud line + fail=1 marker."""
     cmd = builder(REQ_ID)
-    assert f"FAIL {name}: $name has no feat/{REQ_ID} branch on origin" in cmd, (
+    assert f"FAIL {name}: $name has no feat/{REQ_ID} branch reachable on origin" in cmd, (
         f"{name}: shell template missing per-repo fail-loud literal.\n"
         f"got cmd: {cmd}"
     )
