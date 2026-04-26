@@ -17,7 +17,7 @@ sisyphus 的机械 spec_lint checker 红了。它**遍历所有 source repo**—
 ### 多仓识别（重要）
 
 stderr 里 sisyphus 用 `=== FAIL: <repo-basename> ===` 标记**哪个仓**挂了。
-找到后在 decision JSON 里**填 `target_repo`**（如 `phona/repo-a`），
+找到后在 decision JSON 里**填 `target_repo`**（如 `<owner>/repo-a`），
 fixer 不用全仓盲扫。
 
 如果多仓同时红，挑**根因仓**填（一般是上游 contract 仓 / producer 仓）；

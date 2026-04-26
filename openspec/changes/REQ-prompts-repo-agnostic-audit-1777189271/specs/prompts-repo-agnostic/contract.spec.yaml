@@ -1,0 +1,121 @@
+capability: prompts-repo-agnostic
+version: "1.0"
+description: |
+  Code-quality contract for sisyphus orchestrator prompt templates.
+
+  All Jinja2 templates under orchestrator/src/orchestrator/prompts/ (including
+  _shared/ and verifier/ subdirectories) must remain repo-agnostic — they MUST
+  NOT bake in identifiers tied to the historical operator (the GitHub org
+  `phona/`), the historical product line (`ttpos-ci 标准` Makefile branding,
+  `FEATURE-A*` acceptance scenario id prefix), or the orchestrator's own repo
+  basename (`/workspace/source/sisyphus`). Sisyphus is built as a thin orchestration
+  layer that any GitHub org can adopt; bake-ins in the shipped prompts mislead
+  agents into thinking the orchestrator is restricted to the original deployment.
+
+  The contract is enforced as a set of grep invariants on the prompts directory
+  (see scenarios PRA-S1, PRA-S3, PRA-S5, PRA-S7).
+
+scope:
+  files:
+    - orchestrator/src/orchestrator/prompts/**/*.md.j2
+  excludes:
+    - orchestrator/src/orchestrator/prompts/__init__.py
+  related_but_out_of_scope:
+    - docs/integration-contracts.md            # ttpos-ci 标准 命名是契约文档自身命名，独立 REQ 处理
+    - docs/cookbook/ttpos-arch-lab-accept-env.md
+    - docs/cookbook/ttpos-flutter-makefile.md
+    - CLAUDE.md                                 # repo 自身指南，非渲染给 agent 的 prompt
+
+invariants:
+  no_phona_org_in_examples:
+    rule: "literal substring `phona/` MUST NOT appear in any *.md.j2 under prompts/"
+    enforcement: |
+      grep -RE 'phona/' orchestrator/src/orchestrator/prompts/  ;  exit 1 expected
+    rationale: |
+      `phona/` is the historical operator's GitHub org. Baking it into placeholder
+      examples implies the orchestrator only works against that org. Use neutral
+      `<owner>/...` (matches existing `intake.md.j2` convention).
+    replacement_pattern:
+      - "phona/repo-a"           -> "<owner>/repo-a"
+      - "phona/repo-b"           -> "<owner>/repo-b"
+      - "phona/<spec_home_repo>" -> "<spec_home_repo>"
+      - "phona/xxx"              -> "<owner>/repo"
+
+  no_ttpos_ci_brand:
+    rule: "literal substring `ttpos-ci 标准` MUST NOT appear in any *.md.j2 under prompts/"
+    enforcement: |
+      grep -RF 'ttpos-ci 标准' orchestrator/src/orchestrator/prompts/  ;  exit 1 expected
+    rationale: |
+      The Makefile target contract (ci-lint / ci-unit-test / ci-integration-test)
+      is not a ttpos product feature; any source repo joining sisyphus must
+      provide it. Refer to it as "Makefile ci 契约" with a pointer to
+      docs/integration-contracts.md so new agents can find the canonical contract.
+    replacement_pattern:
+      - "ttpos-ci 标准"        -> "Makefile ci 契约"
+      - "（按 ttpos-ci 契约）" -> "（按 Makefile ci 契约）"
+
+  no_feature_a_scenario_prefix:
+    rule: "literal substring `FEATURE-A` MUST NOT appear in any *.md.j2 under prompts/"
+    enforcement: |
+      grep -RF 'FEATURE-A' orchestrator/src/orchestrator/prompts/  ;  exit 1 expected
+    rationale: |
+      Acceptance scenario ids are spec-author-defined per repo. The orchestrator
+      template MUST use the same heading match as scripts/check-scenario-refs.sh
+      (`HEADING_PATTERN: ^##+ Scenario:`), not a hardcoded prefix.
+    replacement_pattern:
+      - "FEATURE-A* Acceptance Scenario"        -> "spec 里定义的 Acceptance Scenario block"
+      - "`#### Scenario: FEATURE-A*` block"     -> "`#### Scenario: ...` block"
+      - "FEATURE-A1: PASS"                       -> "<scenario-id>:1: PASS"
+
+  no_workspace_source_sisyphus:
+    rule: "literal substring `/workspace/source/sisyphus` MUST NOT appear in any *.md.j2 under prompts/"
+    enforcement: |
+      grep -RF '/workspace/source/sisyphus' orchestrator/src/orchestrator/prompts/ ; exit 1 expected
+    rationale: |
+      Hardcoding the orchestrator's own basename only works for the M0
+      self-bootstrap REQ (sisyphus modifying sisyphus). Any other REQ would
+      `cd: no such file`. Use `/workspace/source/REPO` (matches the placeholder
+      already used by Step 3 / 3.5 / 4 in the same bugfix.md.j2 template).
+    replacement_pattern:
+      - "/workspace/source/sisyphus" -> "/workspace/source/REPO"
+
+  spec_home_repo_path_uses_basename:
+    rule: |
+      In challenger.md.j2, every `/workspace/source/<spec_home_repo>` path
+      MUST be rewritten to `/workspace/source/<spec_home_repo_basename>`,
+      because `<spec_home_repo>` is in `<owner>/<repo>` form per the analyze /
+      done_archive convention, but `scripts/sisyphus-clone-repos.sh` clones to
+      `<basename>` not `<owner>/<repo>`.
+    rationale: |
+      Without this rewrite, `cd /workspace/source/<owner>/<repo>` fails because
+      the helper landed the repo at `/workspace/source/<repo-basename>/`.
+      Conceptual basename = the last `/`-separated segment of `<owner>/<repo>`.
+    replacement_pattern:
+      - "/workspace/source/<spec_home_repo>" -> "/workspace/source/<spec_home_repo_basename>"
+      - "gh repo clone phona/<spec_home_repo>" -> "gh repo clone <spec_home_repo>"
+
+verification:
+  one_line_grep:
+    description: |
+      All four invariants can be checked in one shell line; expected output is empty.
+    command: |
+      grep -REn 'phona/|ttpos-ci 标准|FEATURE-A|/workspace/source/sisyphus' \
+        orchestrator/src/orchestrator/prompts/
+
+  no_runtime_change:
+    description: |
+      This change touches no Python source, no Jinja2 render context (router.py /
+      engine.py / actions/), no Helm values, no migrations, no tool whitelist.
+      Render-time output for any existing REQ remains semantically equivalent —
+      only example owner names, brand wording, scenario prefix wording, and one
+      hardcoded basename change.
+    enforcement: |
+      git diff --stat main...HEAD -- ':!orchestrator/src/orchestrator/prompts/' \
+        ':!openspec/changes/REQ-prompts-repo-agnostic-audit-1777189271/'
+      # expected: empty (only prompt + openspec change touched)
+
+out_of_scope:
+  - "Removing `ttpos-ci 标准` branding from docs/integration-contracts.md (separate REQ — that doc is the contract's home and renaming has wider blast radius)"
+  - "Adding a CI lint hook to enforce these grep invariants on every PR (separate REQ — can seed allowlist from the four invariants here)"
+  - "Migrating staging_test.md.j2 off `mcp__bkd__follow-up-issue` reference (LEGACY path, separate REQ — orthogonal to repo-agnosticism)"
+  - "Touching CLAUDE.md `phona/sisyphus` references (CLAUDE.md is not a rendered prompt template)"

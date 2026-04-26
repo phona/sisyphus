@@ -25,8 +25,9 @@ sisyphus 已经：
 - 在 `$NAMESPACE` 跑 `make accept-env-up`，lab 已拉起
 - 拿到 lab endpoint（上面 `$ENDPOINT`）
 
-你要做的：跑 FEATURE-A* Acceptance Scenario 判 pass/fail，不管环境。
-跑完不清，sisyphus 会调 `accept-env-down`。
+你要做的：跑 spec 里定义的 Acceptance Scenario block（spec.md 中所有 `#### Scenario:`
+开头的 block，scenario id 由 spec 作者自定，sisyphus 不预设前缀）判 pass/fail，
+不管环境。跑完不清，sisyphus 会调 `accept-env-down`。
 
 ---
 
@@ -55,7 +56,9 @@ kubectl -n $NS exec $POD -- bash -c \
   "cat /workspace/source/*/openspec/changes/{{ req_id }}/specs/*/spec.md"
 ```
 
-找出所有 `#### Scenario: FEATURE-A*` block（Given / When / Then）。
+找出所有 `#### Scenario: <id> <desc>` block（Given / When / Then）；scenario id
+由 spec 作者自定（如 `UBOX-S1` / `S1` / 任意可定位的 token），匹配 heading 用
+`scripts/check-scenario-refs.sh` 同款的 `^####\s+Scenario:` 模式即可。
 
 ### Step 3: 跑每个 scenario
 
@@ -76,8 +79,8 @@ kubectl -n $NS exec $POD -- bash -c \
 ```markdown
 ## Accept Result
 
-- FEATURE-A1: PASS — curl 200, response body correct
-- FEATURE-A2: FAIL — curl 500, error: xxx
+- <scenario-id>:1: PASS — curl 200, response body correct
+- <scenario-id>:2: FAIL — curl 500, error: xxx
 ```
 
 ### Step 5: 贴 tag + move review

@@ -82,7 +82,7 @@ done
 
 跨仓 REQ 经常有"全 REQ 共享"的高层文档（proposal、design、跨仓集成总览）只放在
 **spec home repo**（看 BKD intent issue description 里 analyze-agent 写的
-"spec home repo: phona/xxx" 那一行）。这些文档随该仓 `openspec apply` 已经一起
+"spec home repo: <owner>/repo" 那一行）。这些文档随该仓 `openspec apply` 已经一起
 归档到 `openspec/specs/` —— Step 3 的循环已经覆盖。
 
 如果 BKD intent description 里**没有**指明 spec home repo：
@@ -100,12 +100,12 @@ curl -sS http://localhost:3000/api/projects/{{ project_id }}/issues/{{ intent_is
 ```markdown
 ## Archive Result
 - merged:
-  - phona/repo-a#123
-  - phona/repo-b#456
+  - <owner>/repo-a#123
+  - <owner>/repo-b#456
 - openspec apply:
-  - phona/repo-a: commit <sha>
-  - phona/repo-b: commit <sha>
-- spec home repo: phona/repo-a（高层文档归此仓）
+  - <owner>/repo-a: commit <sha>
+  - <owner>/repo-b: commit <sha>
+- spec home repo: <owner>/repo-a（高层文档归此仓）
 - (optional) any skipped
 ```
 
