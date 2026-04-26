@@ -182,6 +182,28 @@ watchdog (M8) 把"BKD session 卡 N 秒不动"翻译成 SESSION_FAILED 喂回状
 - 选 in-flight state + `updated_at > threshold`
 - 查关联 BKD issue 的 session 状态：不在 running → emit SESSION_FAILED
 
+## 8a. PR-merged shortcut（escalate 入口）
+
+`actions/escalate.py` 在所有路径（auto-resume / GH incident / 真 ESCALATED CAS）之前
+做一次 GH REST 探测：当本 REQ 的 layers 1-4 involved_repos 里**所有开过 PR 的仓**的
+`feat/{REQ}` PR 都已 merged，escalate 直接 short-circuit 到 DONE：
+
+- CAS state → `done`，event=`archive.done`，action=`escalate_pr_merged_override`
+- ctx 写 `completed_via=pr-merge` / `completed_from_state=<prev>` / `completed_repos=[...]`
+- BKD intent issue tags add `done` + `via:pr-merge`，statusId=`done`
+- fire-and-forget cleanup_runner(retain_pvc=False)（mirror admin/complete）
+- 跳过 `escalated` / `reason:*` / `github-incident` tag，跳过 GH incident issue 创建
+
+触发场景（dashboard 上常见的"假阴性 escalated"）：
+1. PR-CI watch 看到 merged → pass，但 accept lab 起不来（accept-env-up.fail）
+2. archive agent 在 openspec apply 时崩，但 PR 已被人工 merge
+3. verifier 判 escalate 后人在 BKD 直接 merge 了 PR
+
+任意 GH API error / 0 PR / 部分 PR 未 merged → fall through 原 escalate 流程，本入口
+探测**纯优化路径**，不接管真出 bug 时的 escalate 兜底。
+
+REQ-archive-state-cleanup-1777195098 起。
+
 ## 9. 怎么在状态机加新 stage / event
 
 1. 在 `state.py` 加 `ReqState` 枚举值
