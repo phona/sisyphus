@@ -169,6 +169,9 @@ async def test_start_intake(monkeypatch):
     from orchestrator.actions import start_intake as mod
     fake = make_fake_bkd()
     patch_bkd(monkeypatch, "orchestrator.actions.start_intake.BKDClient", fake)
+    monkeypatch.setattr(mod, "check_admission",
+                        AsyncMock(return_value=_admit()))
+    monkeypatch.setattr(mod.db, "get_pool", lambda: object())
 
     out = await mod.start_intake(body=make_body(issue_id="intent-1"), req_id="REQ-9", tags=[], ctx={})
     assert out == {"issue_id": "intent-1", "req_id": "REQ-9"}
@@ -180,6 +183,42 @@ async def test_start_intake(monkeypatch):
     assert "[INTAKE]" in kwargs["title"]
     assert "intake" in kwargs["tags"]
     assert "REQ-9" in kwargs["tags"]
+
+
+def _admit():
+    from orchestrator.admission import AdmissionDecision
+    return AdmissionDecision(admit=True)
+
+
+def _deny(reason="inflight-cap-exceeded:10/10"):
+    from orchestrator.admission import AdmissionDecision
+    return AdmissionDecision(admit=False, reason=reason)
+
+
+@pytest.mark.asyncio
+async def test_start_intake_admission_denied_emits_escalate(monkeypatch):
+    """admission deny → emit VERIFY_ESCALATE，不 dispatch BKD agent / 不建 runner。"""
+    from orchestrator.actions import start_intake as mod
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, "orchestrator.actions.start_intake.BKDClient", fake)
+    monkeypatch.setattr(mod, "check_admission",
+                        AsyncMock(return_value=_deny()))
+    update_ctx = AsyncMock()
+    monkeypatch.setattr(mod.req_state, "update_context", update_ctx)
+    monkeypatch.setattr(mod.db, "get_pool", lambda: object())
+
+    out = await mod.start_intake(body=make_body(issue_id="intent-1"),
+                                 req_id="REQ-9", tags=[], ctx={})
+
+    assert out["emit"] == Event.VERIFY_ESCALATE.value
+    assert "admission denied" in out["reason"]
+    assert "inflight-cap-exceeded" in out["reason"]
+    # ctx.escalated_reason 必须落 ctx，让 escalate.py 派 reason tag
+    update_ctx.assert_awaited_once()
+    patch = update_ctx.await_args.args[2]
+    assert patch["escalated_reason"].startswith("rate-limit:")
+    # 不能调到 BKD（不浪费 agent token）
+    fake.follow_up_issue.assert_not_awaited()
 
 
 # ─── 5. start_analyze_with_finalized_intent smoke test ───────────────────────

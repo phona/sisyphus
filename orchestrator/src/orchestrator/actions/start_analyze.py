@@ -25,10 +25,12 @@ from __future__ import annotations
 import structlog
 
 from .. import k8s_runner
+from ..admission import check_admission
 from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
 from ..state import Event
+from ..store import db, req_state
 from . import register, short_title
 from ._clone import clone_involved_repos_into_runner
 from ._skip import skip_if_enabled
@@ -42,6 +44,18 @@ async def start_analyze(*, body, req_id, tags, ctx):
         return rv
     proj = body.projectId
     issue_id = body.issueId
+
+    # 0. Admission gate（in-flight cap + disk pressure）。拒了直接 escalate，
+    # 不浪费 PVC / Pod 的资源。fail-open by design：DB / disk 探测异常仍 admit。
+    decision = await check_admission(db.get_pool(), req_id=req_id)
+    if not decision.admit:
+        await req_state.update_context(db.get_pool(), req_id, {
+            "escalated_reason": f"rate-limit:{decision.reason}",
+        })
+        return {
+            "emit": Event.VERIFY_ESCALATE.value,
+            "reason": f"admission denied: {decision.reason}",
+        }
 
     # 1. 拉 K8s Pod + PVC（幂等；已存在就跳）
     try:
