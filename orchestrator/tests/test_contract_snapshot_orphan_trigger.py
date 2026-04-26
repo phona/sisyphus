@@ -18,7 +18,6 @@ from orchestrator.bkd import Issue
 from orchestrator.state import Event, ReqState
 from orchestrator.store import db
 
-
 # ─── Shared helpers ───────────────────────────────────────────────────────────
 
 
