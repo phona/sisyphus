@@ -18,6 +18,7 @@ dependencies = [
     "kubernetes>=31.0",      # v0.2 K8s runner（pod/pvc/exec）
     "jsonschema>=4.0",       # M3 manifest/openspec admission（schema validate）
     "pyyaml>=6.0",           # M3 读 PVC 上 manifest.yaml
+    "mcp>=1.2",              # sisyphus-dispatch MCP server（dispatch_mcp/，stdio transport，M0）
 ]
 
 [project.optional-dependencies]
