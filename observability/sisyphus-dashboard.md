@@ -24,9 +24,12 @@
 `sisyphus-postgresql.sisyphus.svc.cluster.local`，Database 填 `sisyphus`，账号和现有
 sisyphus_obs 一致（见 `values/postgresql.yaml`）。后文 Question 都基于这个数据源。
 
-## 5 + 8 条 SQL → 13 个 Question
+## 18 条 SQL → 18 个 Question
 
-M7 原 5 条（Q1–Q5）基于 `artifact_checks`。M14e 追加 8 条（Q6–Q13）基于 `stage_runs` / `verifier_decisions`。
+M7 原 5 条（Q1–Q5）基于 `artifact_checks`。M14e 追加 8 条（Q6–Q13）基于 `stage_runs` /
+`verifier_decisions`。Fixer audit 加 3 条（Q14–Q16）基于 `verifier_decisions.audit`
+JSONB（migration 0006）。Q17 监控去重重试率（基于 migration 0007 的
+`event_seen.processed_at`）。Q18 是机械 checker silent-pass 兜底检测。
 
 所有 SQL 在 [queries/sisyphus/](queries/sisyphus/)。Metabase 里 **New Question → SQL 模式
 → 选 sisyphus 数据源 → 粘贴 SQL → Save**。
@@ -176,6 +179,21 @@ M7 原 5 条（Q1–Q5）基于 `artifact_checks`。M14e 追加 8 条（Q6–Q13
   - `test_changes > src_changes` 且 `test_changes ≥ 5` → fixer 改测试比改代码还多，可疑
   - `spec_changes` 持续增长 → fixer 在改 spec 迎合实现，spec-drift 告警
 
+## Webhook dedup 处理状态（Q17）
+
+Migration 0007 给 `event_seen` 表加了 `processed_at` 列，记录 webhook 第一次处理
+完成的时间。Q17 按小时把 `event_seen` 行分桶为 `done`（`processed_at IS NOT NULL`，
+已成功处理）和 `pending_or_crashed`（`processed_at IS NULL`，首次处理时崩溃或还在跑）。
+健康环境 `pending_or_crashed` 应接近 0。
+
+### Q17. Webhook dedup processed-at split
+
+- **SQL**：[queries/sisyphus/17-dedup-retry-rate.sql](queries/sisyphus/17-dedup-retry-rate.sql)
+- **Visualization**：Stacked bar chart，X = `hour`，Y = COUNT，两系列 `done` / `pending_or_crashed`
+- **人工介入阈值**：
+  - 任意一小时 `pending_or_crashed > 0` 且持续 ≥ 2h → webhook handler 在崩 / 卡死，看 orchestrator 日志
+  - `pending_or_crashed` 占比 > 10% → BKD webhook delivery 重试退化，查 webhook receiver 行为
+
 ## 机械 checker silent-pass（Q18）
 
 `spec_lint` / `dev_cross_check` / `staging_test` / `pr_ci_watch` 各自源代码里都有
@@ -250,12 +268,15 @@ Q12/Q13 是"此刻在出事吗"，放最上；Q6/Q8 是周度趋势；Q9/Q11 是
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**机械 checker silent-pass 看板（建议挂 M7 看板底部，跟 Q1 同一界面方便对照）**：
+**机械 checker silent-pass + webhook dedup 看板（建议挂 M7 看板底部，跟 Q1 同一界面方便对照）**：
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Q18. Silent-pass detector（机械 checker 沉默通过）           │
 │  (table 全宽，guard-leak / no-gha-pass 行标红)                │
+├─────────────────────────────────────────────────────────────┤
+│  Q17. Webhook dedup processed-at split                      │
+│  (stacked bar by hour，pending_or_crashed > 0 标红)          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -274,7 +295,10 @@ M14e 质量看板：
 机械 checker silent-pass 看板：
 - Q18：每 5 分钟（和 Q2 同一节奏；guard-leak / no-gha-pass 出现等于"checker 实现有 bug"，越早发现越好）
 
-Metabase Question 设置 `Results cache TTL`：Q5/Q1 设 30s，Q2/Q3/Q4/Q12/Q13/Q18 设 120s，其余设 1800s。
+Webhook dedup 看板：
+- Q17：每 5 分钟（pending_or_crashed > 0 通常意味 webhook handler 崩了，越早发现越好）
+
+Metabase Question 设置 `Results cache TTL`：Q5/Q1 设 30s，Q2/Q3/Q4/Q12/Q13/Q17/Q18 设 120s，其余设 1800s。
 
 ## 告警（后续 issue，不在 M7 范围）
 
