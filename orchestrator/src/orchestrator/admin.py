@@ -90,12 +90,23 @@ async def emit_event(
     )
 
 
+# 持引用防 fire-and-forget cleanup task 被 GC（done_callback 自清）。
+# 跟 _complete_cleanup_tasks 同模式但隔离作用域，便于测试 introspect 仅本 endpoint 起的 task。
+_force_escalate_cleanup_tasks: set[asyncio.Task] = set()
+
+
 @admin.post("/req/{req_id}/escalate")
 async def force_escalate(
     req_id: str,
     authorization: str | None = Header(default=None),
 ) -> dict:
-    """强制 REQ 进入 escalated（卡死时手工止损）。"""
+    """强制 REQ 进入 escalated（卡死时手工止损）+ 立即清 runner Pod（保 PVC 给人工 debug）。
+
+    所有走状态机 transition 进 ESCALATED 的路径都会被 engine._cleanup_runner_on_terminal
+    清掉 Pod（retain_pvc=True）。force_escalate 是 raw SQL UPDATE 绕过 engine，必须在
+    这里手动起同一个 cleanup task，否则 Pod 会以 zombie 存活整个 pvc_retain_on_escalate_days
+    保留期（runner_gc 把 escalated retention 内的 REQ 当 active，不扫 Pod）。
+    """
     _verify_token(authorization)
 
     pool = db.get_pool()
@@ -113,6 +124,17 @@ async def force_escalate(
         req_id,
         '{"escalated_reason": "admin"}',
     )
+
+    # 立即触发 runner cleanup（不等 runner_gc 下一轮）；fire-and-forget。
+    # retain_pvc=True 由 _cleanup_runner_on_terminal 内部根据 ESCALATED 自动设置，
+    # 跟所有走 transition 进 ESCALATED 的路径行为一致：删 Pod，留 PVC 给人工 debug，
+    # 过期由 runner_gc 按 pvc_retain_on_escalate_days 兜底清。
+    task = asyncio.create_task(
+        engine._cleanup_runner_on_terminal(req_id, ReqState.ESCALATED)
+    )
+    _force_escalate_cleanup_tasks.add(task)
+    task.add_done_callback(_force_escalate_cleanup_tasks.discard)
+
     log.warning("admin.force_escalate", req_id=req_id, from_state=row.state.value)
     return {"action": "force_escalated", "from_state": row.state.value}
 

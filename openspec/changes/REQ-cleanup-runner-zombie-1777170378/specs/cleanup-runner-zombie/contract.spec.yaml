@@ -1,0 +1,127 @@
+capability: cleanup-runner-zombie
+version: "1.0"
+description: |
+  Bug fix for admin POST /admin/req/{req_id}/escalate: must schedule
+  fire-and-forget cleanup_runner_on_terminal(ReqState.ESCALATED) after the
+  raw SQL UPDATE so the runner Pod is deleted within seconds. Without this
+  fix the Pod survives the entire pvc_retain_on_escalate_days retention
+  window because runner_gc treats escalated-within-retention REQs as active
+  and skips them in gc_orphans.
+
+  跟 admin.complete 配对：complete 是 escalated→done + cleanup(retain_pvc=False)；
+  本 REQ 修的是 force_escalate 的 *→escalated + cleanup(retain_pvc=True)。
+  两个 endpoint 都用同一个底层 cleanup helper，差别只在 terminal_state 参数。
+
+http:
+  method: POST
+  path: /admin/req/{req_id}/escalate
+  auth: Bearer <webhook_token>   # 同 webhook._verify_token
+  request_body: none             # 既存契约：force_escalate 不接 body
+  responses:
+    "200_force_escalated":
+      condition: state was non-escalated, transition to escalated succeeded
+      body:
+        action: force_escalated
+        from_state: "<previous state name>"
+    "200_noop":
+      condition: state already escalated (idempotent retry)
+      body:
+        action: noop
+        state: "already escalated"
+    "404":
+      condition: no req_state row with req_id
+      body:
+        detail: "req <id> not found"
+    "401_or_403":
+      condition: missing / invalid Authorization header
+      handler: webhook._verify_token raises HTTPException
+
+precondition_chain:
+  description: |
+    检查顺序固定，保证 401 ≠ 404 ≠ noop 不互相覆盖；cleanup 只在真改 state
+    的分支起。
+  sequence:
+    - "1. _verify_token(authorization)  # 401/403 if invalid"
+    - "2. row = await req_state.get(pool, req_id)"
+    - "3. if row is None: raise HTTPException(404)  # no SQL, no cleanup"
+    - "4. if row.state == ReqState.ESCALATED: return noop  # no SQL, no cleanup"
+    - "5. SQL UPDATE state=escalated + escalated_reason ctx patch"
+    - "6. asyncio.create_task(_cleanup_runner_on_terminal(req_id, ReqState.ESCALATED))"
+    - "7. _force_escalate_cleanup_tasks.add(task) + done_callback"
+    - "8. return {action: force_escalated, from_state: <prev>, ...}"
+
+state_change:
+  before: "req_state.state ∈ {init, intaking, analyzing, ..., archiving, review-running, fixer-running}"
+  after: "req_state.state = 'escalated'"
+  context_patch:
+    escalated_reason: admin
+
+runner_cleanup:
+  trigger_path: |
+    asyncio.create_task(engine._cleanup_runner_on_terminal(req_id, ReqState.ESCALATED))
+  retain_pvc: true                         # ESCALATED 留 PVC 给人翻 workspace
+  fire_and_forget: true                    # endpoint 返回时 cleanup 还在跑；runner_gc 兜底失败
+  task_lifecycle:
+    - "set 引用：_force_escalate_cleanup_tasks: set[asyncio.Task]"
+    - "起 task 时 add(task)"
+    - "task.add_done_callback(_force_escalate_cleanup_tasks.discard)"
+    - "rationale: 避免 fire-and-forget task 被 asyncio loop GC（mirror engine._cleanup_tasks 模式）"
+  rationale: |
+    runner_gc._active_req_ids 把 escalated retention 期内的 REQ 当 active；
+    active 集合内的 REQ 不进 gc_orphans。所以 GC 整段 retention 内不会扫
+    Pod，必须在 force_escalate 路径自己 schedule cleanup，否则 Pod 是 zombie。
+
+invariants:
+  no_state_machine_pollution:
+    - "force_escalate 不在 state.py 加 admin.escalate event"
+    - "不动 TRANSITIONS 表"
+    - "admin override 是状态机外的工具，不进 transition 表"
+
+  retain_pvc_semantics_preserved:
+    - "cleanup task 必须传 ReqState.ESCALATED（→ retain_pvc=True）"
+    - "不能传 ReqState.DONE，否则 PVC 也被删，破坏 ESCALATED 的人工 debug 窗口"
+    - "PVC 跟 transition 路径进入 ESCALATED 的契约一致"
+
+  noop_branch_no_cleanup:
+    - "state=escalated 已 noop，不再 schedule cleanup"
+    - "rationale: 第一次 force_escalate 已清过 Pod，第二次只浪费 K8s API"
+    - "如果手工 kubectl apply 重建了 Pod，靠 runner_gc 在 retention 过期后兜底"
+
+interaction_with_runner_gc:
+  description: |
+    runner_gc 周期 = settings.runner_gc_interval_sec（默认 60s）。fire-and-forget
+    cleanup 通常在秒级删 Pod；即使任务挂了，runner_gc 会在 retention 过期后
+    通过 PVC sweep 兜底（cleanup_runner 处理 404 幂等，不会重复爆错）。
+  redundancy: by design
+
+interaction_with_complete:
+  description: |
+    force_escalate 后跟 complete 形成"踢死信队列 → 清死信队列"的两步操作：
+      POST /admin/req/REQ-X/escalate  → state=escalated, Pod 删, PVC 留
+      POST /admin/req/REQ-X/complete  → state=done,      PVC 删
+    两次 cleanup task 互不冲突：第一次以 ESCALATED 删 Pod；第二次以 DONE
+    再次跑 cleanup_runner（pod 已 404 跳过 + 删 PVC）。
+  example_sequence:
+    - "POST /admin/req/REQ-X/escalate     # state: analyzing → escalated, Pod 删 PVC 留"
+    - "POST /admin/req/REQ-X/complete     # state: escalated → done, PVC 删"
+
+failure_modes:
+  cleanup_task_exception:
+    cause: "K8s API 不通 / runner controller 挂了"
+    handler: "_cleanup_runner_on_terminal 内部 try/except，记 warning，runner_gc 兜底"
+    state_outcome: "DB state 仍是 escalated，retention 过期后 runner_gc 扫 PVC 重试清"
+    user_impact: "API 调用方仍拿 200（DB 已改），实际 Pod 释放可能延迟一个 GC 周期"
+
+  task_lost_no_callback:
+    cause: "asyncio loop GC 把 task 当孤儿回收（无 set reference）"
+    handler: "本 REQ 显式维护 _force_escalate_cleanup_tasks set + add_done_callback"
+    state_outcome: "task 跑完才从 set 移除，GC 不能回收"
+
+  concurrent_force_escalate:
+    cause: "两个 admin 同时 POST /escalate 同一 REQ"
+    handler: |
+      第一个：row.state='analyzing' → SQL UPDATE → 起 cleanup task
+      第二个：row.state 可能仍 read 到 'analyzing'（race），SQL UPDATE 把已 escalated
+              的行覆写为 escalated（幂等）+ 起第二个 cleanup task
+              但 cleanup_runner 本身幂等（404 处理），第二轮删 Pod 时已 404 → 无副作用
+    state_outcome: "state=escalated；可能起 1~2 个 cleanup task，结果相同"
