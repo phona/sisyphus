@@ -18,8 +18,6 @@ from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
-import pytest
-
 
 # ─── Test infrastructure (black-box: mocks external deps only) ───────────────
 
