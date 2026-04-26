@@ -45,14 +45,14 @@ class TestParseScan:
 
 
 class TestDecide:
-    """SDA-S4..S7 covered here as pure logic."""
+    """SDA-S4..S7 + SDA-S10 covered here as pure logic."""
 
-    def test_integration_priority_when_present(self):
-        # SDA-S4: integration always wins
+    def test_source_priority_when_single_source_present(self):
+        # SDA-S4: a single source candidate wins even when integration also has one
         d = _decide(["/workspace/integration/lab"], ["/workspace/source/sisyphus"])
-        assert d.dir == "/workspace/integration/lab"
+        assert d.dir == "/workspace/source/sisyphus"
 
-    def test_single_source_fallback(self):
+    def test_single_source_primary(self):
         # SDA-S5: integration empty + exactly one source candidate
         d = _decide([], ["/workspace/source/sisyphus"])
         assert d.dir == "/workspace/source/sisyphus"
@@ -65,12 +65,25 @@ class TestDecide:
         assert "no integration dir resolvable" in d.reason
 
     def test_multiple_source_refuses_to_pick(self):
-        # SDA-S7: ambiguous source candidates
+        # SDA-S7: ambiguous source candidates with no explicit integration
         d = _decide([], ["/workspace/source/a", "/workspace/source/b"])
         assert d.dir is None
         assert "multiple source candidates" in d.reason
         assert "/workspace/source/a" in d.reason
         assert "/workspace/source/b" in d.reason
+
+    def test_integration_breaks_tie_for_multiple_sources(self):
+        # SDA-S10: explicit integration dir disambiguates multi-source case
+        d = _decide(
+            ["/workspace/integration/lab"],
+            ["/workspace/source/a", "/workspace/source/b"],
+        )
+        assert d.dir == "/workspace/integration/lab"
+
+    def test_integration_used_when_source_empty(self):
+        # legacy / explicit-only path: source has no candidate, integration takes over
+        d = _decide(["/workspace/integration/lab"], [])
+        assert d.dir == "/workspace/integration/lab"
 
     def test_first_integration_when_multiple(self):
         # multiple integration candidates → take first (matches old shell glob)
@@ -101,18 +114,31 @@ class _FakeRC:
 
 
 @pytest.mark.asyncio
-async def test_resolve_returns_integration_when_present():
+async def test_resolve_returns_source_when_single_source_present():
+    # Source-first: single source candidate wins even when integration also has one.
     rc = _FakeRC(stdout="I:/workspace/integration/lab\nS:/workspace/source/sisyphus\n")
     result = await resolve_integration_dir(rc, "REQ-9")
     assert isinstance(result, ResolveResult)
-    assert result.dir == "/workspace/integration/lab"
+    assert result.dir == "/workspace/source/sisyphus"
 
 
 @pytest.mark.asyncio
-async def test_resolve_falls_back_to_single_source():
+async def test_resolve_uses_single_source_primary():
     rc = _FakeRC(stdout="S:/workspace/source/sisyphus\n")
     result = await resolve_integration_dir(rc, "REQ-9")
     assert result.dir == "/workspace/source/sisyphus"
+
+
+@pytest.mark.asyncio
+async def test_resolve_uses_integration_when_source_ambiguous():
+    rc = _FakeRC(
+        stdout=(
+            "I:/workspace/integration/lab\n"
+            "S:/workspace/source/a\nS:/workspace/source/b\n"
+        )
+    )
+    result = await resolve_integration_dir(rc, "REQ-9")
+    assert result.dir == "/workspace/integration/lab"
 
 
 @pytest.mark.asyncio
