@@ -40,6 +40,11 @@ EXPECTED = [
     (ReqState.FIXER_RUNNING,        Event.FIXER_DONE,          ReqState.REVIEW_RUNNING,      "invoke_verifier_after_fix"),
     # fixer round cap：start_fixer 自检超 cap → 链 emit verify.escalate 走 escalate
     (ReqState.FIXER_RUNNING,        Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
+    # REQ-fix-clone-failed-illegal-transition-1777164809：start_analyze /
+    # start_analyze_with_finalized_intent clone 失败 / 缺 finalized intent 时
+    # 链 emit verify.escalate；CAS 已推到 ANALYZING（INTAKING 留口防御对称）。
+    (ReqState.ANALYZING,            Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
+    (ReqState.INTAKING,             Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
 ]
 
 

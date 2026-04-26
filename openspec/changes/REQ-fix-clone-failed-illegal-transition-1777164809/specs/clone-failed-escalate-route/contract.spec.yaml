@@ -1,0 +1,64 @@
+capability: clone-failed-escalate-route
+version: "1.0"
+description: |
+  State-machine routes for action-emitted verify.escalate from pre-verifier
+  in-flight states. Specifically: when start_analyze /
+  start_analyze_with_finalized_intent fails its server-side clone (or the
+  finalized intent is missing) and emits {"emit": "verify.escalate"}, the
+  engine MUST chain to the standard escalate action instead of logging
+  illegal_transition and stranding the REQ in ANALYZING.
+
+state_machine_changes:
+  added_transitions:
+    - from: ANALYZING
+      event: VERIFY_ESCALATE
+      to: ESCALATED
+      action: escalate
+      reason: "start_analyze 内部失败（clone / 缺 finalized intent）→ escalate"
+    - from: INTAKING
+      event: VERIFY_ESCALATE
+      to: ESCALATED
+      action: escalate
+      reason: "intake 阶段 action 主动 emit escalate（防御对称）"
+
+actions_emit_paths:
+  start_analyze:
+    module: orchestrator.actions.start_analyze
+    emits_verify_escalate_when:
+      - "_clone.clone_involved_repos_into_runner returns clone_rc != None (helper exit_code != 0)"
+    return_shape:
+      emit: "verify.escalate"
+      reason: "clone failed (rc={exit_code}) for repos={repos}"
+    cas_state_at_emit: "ANALYZING"
+    transition_required: "(ANALYZING, VERIFY_ESCALATE) → ESCALATED + escalate"
+
+  start_analyze_with_finalized_intent:
+    module: orchestrator.actions.start_analyze_with_finalized_intent
+    emits_verify_escalate_when:
+      - "ctx.intake_finalized_intent is missing / falsy"
+      - "_clone.clone_involved_repos_into_runner returns clone_rc != None"
+    return_shape:
+      emit: "verify.escalate"
+      reason: |
+        "intake_finalized_intent missing in ctx" or
+        "clone failed (rc={exit_code}) for repos={repos}"
+    cas_state_at_emit: "ANALYZING"
+    transition_required: "(ANALYZING, VERIFY_ESCALATE) → ESCALATED + escalate"
+
+  escalate:
+    module: orchestrator.actions.escalate
+    invariant: |
+      reused as-is. No changes to escalate action itself: reason resolution,
+      hard reasons set, auto-resume gating, intent issue tagging, runner
+      cleanup all unchanged. The two new transitions simply route
+      action-emitted verify.escalate from ANALYZING / INTAKING into the
+      same escalate handler that already covers (REVIEW_RUNNING,
+      VERIFY_ESCALATE) and (FIXER_RUNNING, VERIFY_ESCALATE).
+
+unchanged_transitions:
+  - "(REVIEW_RUNNING, VERIFY_ESCALATE) → ESCALATED + escalate"
+  - "(FIXER_RUNNING, VERIFY_ESCALATE) → ESCALATED + escalate"
+  - "(ESCALATED, VERIFY_ESCALATE) → ESCALATED (self-loop, no action)"
+  - "(INTAKING, INTAKE_PASS) → ANALYZING + start_analyze_with_finalized_intent"
+  - "(INTAKING, INTAKE_FAIL) → ESCALATED + escalate"
+  - "All session.failed self-loops via escalate action"

@@ -191,6 +191,25 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
         Transition(ReqState.ESCALATED, "escalate",
                    "fixer round 触顶 / start_fixer 自判 escalate"),
 
+    # start_analyze / start_analyze_with_finalized_intent 在 dispatch agent 之前
+    # 跑 server-side clone helper；clone 失败（auth / repo not found / network）
+    # 直接 emit VERIFY_ESCALATE 不打 agent 进空 PVC。这两条 action 由
+    # (INIT, INTENT_ANALYZE) / (INTAKING, INTAKE_PASS) transition 触发，
+    # CAS 后 state 已是 ANALYZING；start_analyze_with_finalized_intent 也会
+    # 在 ctx.intake_finalized_intent 缺失时 emit VERIFY_ESCALATE。没有下面
+    # 这条 transition decide() 会返 None，engine 记 illegal_transition 后
+    # REQ 永远卡在 ANALYZING（直到 watchdog 兜 SESSION_FAILED）。复用
+    # escalate action 收口 reason / tag / runner cleanup。
+    (ReqState.ANALYZING, Event.VERIFY_ESCALATE):
+        Transition(ReqState.ESCALATED, "escalate",
+                   "start_analyze 内部失败（clone / 缺 finalized intent）→ escalate"),
+    # 防御性配对：当前没有 action 在 INTAKING 状态 emit VERIFY_ESCALATE，
+    # 但 start_intake 未来若加 server-side clone 也会复用同一形状 —— 留口
+    # 比让状态机静默卡死好。
+    (ReqState.INTAKING, Event.VERIFY_ESCALATE):
+        Transition(ReqState.ESCALATED, "escalate",
+                   "intake 阶段 action 主动 emit escalate（防御对称）"),
+
     # ─── 终态 ───────────────────────────────────────────────────────────
     (ReqState.ARCHIVING, Event.ARCHIVE_DONE):
         Transition(ReqState.DONE, None, "REQ complete"),

@@ -513,6 +513,73 @@ async def test_verify_fix_needed_still_closes_verifier_via_normal_path(stub_acti
 
 
 @pytest.mark.asyncio
+async def test_start_analyze_clone_failed_chains_to_escalate(stub_actions):
+    """REQ-fix-clone-failed-illegal-transition-1777164809：start_analyze 在 clone
+    失败时 emit verify.escalate；CAS 已把 state 推到 ANALYZING，必须有
+    (ANALYZING, VERIFY_ESCALATE) → (ESCALATED, escalate) transition 兜住，否则
+    engine 记 illegal_transition 后 REQ 永远卡在 ANALYZING。
+    """
+    calls, reg = stub_actions
+
+    async def start_analyze(*, body, req_id, tags, ctx):
+        calls.append(("start_analyze", {"req_id": req_id}))
+        return {"emit": Event.VERIFY_ESCALATE.value, "reason": "clone failed (rc=5)"}
+
+    async def escalate(*, body, req_id, tags, ctx):
+        calls.append(("escalate", {"req_id": req_id, "ctx": dict(ctx)}))
+        return {"ok": True}
+
+    reg["start_analyze"] = start_analyze
+    reg["escalate"] = escalate
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.INIT.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "intent.analyze"})()
+    result = await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=["intent:analyze"],
+        cur_state=ReqState.INIT, ctx={}, event=Event.INTENT_ANALYZE,
+    )
+
+    # 链路：INIT → ANALYZING (start_analyze) → ESCALATED (escalate)
+    assert [n for n, _ in calls] == ["start_analyze", "escalate"]
+    assert pool.rows["REQ-1"].state == ReqState.ESCALATED.value
+
+    # chained 结果不该是 illegal_transition skip
+    chained = result.get("chained")
+    assert chained is not None
+    assert chained.get("action") == "escalate", f"chain should reach escalate, got {chained!r}"
+
+
+@pytest.mark.asyncio
+async def test_start_analyze_with_finalized_intent_clone_failed_chains_to_escalate(stub_actions):
+    """同样的 chain：INTAKING → ANALYZING (start_analyze_with_finalized_intent) →
+    emit verify.escalate → ESCALATED。验 INTAKE_PASS 路径下 ANALYZING 的兜底也成立。
+    """
+    calls, reg = stub_actions
+
+    async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
+        calls.append(("start_analyze_with_finalized_intent", {"req_id": req_id}))
+        return {"emit": Event.VERIFY_ESCALATE.value,
+                "reason": "intake_finalized_intent missing in ctx"}
+
+    async def escalate(*, body, req_id, tags, ctx):
+        calls.append(("escalate", {"req_id": req_id}))
+        return {"ok": True}
+
+    reg["start_analyze_with_finalized_intent"] = start_analyze_with_finalized_intent
+    reg["escalate"] = escalate
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.INTAKING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=["intake", "result:pass"],
+        cur_state=ReqState.INTAKING, ctx={}, event=Event.INTAKE_PASS,
+    )
+
+    assert [n for n, _ in calls] == ["start_analyze_with_finalized_intent", "escalate"]
+    assert pool.rows["REQ-1"].state == ReqState.ESCALATED.value
+
+
+@pytest.mark.asyncio
 async def test_review_running_self_loop_other_event_does_not_close_verifier(stub_actions):
     """fix 必须只在 event == VERIFY_PASS 触发；其他 REVIEW_RUNNING self-loop 事件
     （如 SESSION_FAILED 经状态机 self-loop 给 escalate action 自决）不动 verifier stage_run。
