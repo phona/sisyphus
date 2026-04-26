@@ -24,7 +24,7 @@
 | [staging_test.md.j2](../orchestrator/src/orchestrator/prompts/staging_test.md.j2) | M1 起被 `checkers/staging_test.py` 取代；保留作回退 |
 | [pr_ci_watch.md.j2](../orchestrator/src/orchestrator/prompts/pr_ci_watch.md.j2) | M2 起被 `checkers/pr_ci_watch.py` 取代；保留作回退 |
 
-> M16 起 sisyphus 不再起 spec / dev BKD 子 agent，曾经的 `spec.md.j2` / `dev.md.j2` /
+> M16 起 sisyphus 不再起 spec / dev BKD 子 agent，曾经的 spec.md.j2 / dev.md.j2 /
 > `actions/fanout_specs.py` / `actions/create_dev.py` 已删；M17 起由 analyze-agent
 > 全责交付（写 spec + 写业务码 + push + 开 PR），如需并行 analyze-agent 自决开 BKD sub-issue。
 

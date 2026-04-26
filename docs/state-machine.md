@@ -20,7 +20,7 @@
   `staging-test-running` 三个 checker stage 内部从单仓变成 for-each-repo 遍历
   （任一仓红 → stage fail）。状态机层面无影响。
 
-## 2. ReqState 枚举（17 个）
+## 2. ReqState 枚举（16 个）
 
 | state | 含义 | 类型 |
 |---|---|---|
