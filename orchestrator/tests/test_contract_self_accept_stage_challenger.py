@@ -17,9 +17,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-
 # ── helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -33,7 +30,7 @@ def _write_makefile(path: Path, *, has_accept_env_up: bool) -> None:
 
 def _resolver():
     """Import and return _resolve_integration_dir from the resolver module."""
-    import orchestrator.actions._integration_resolver as m  # noqa: PLC0415
+    import orchestrator.actions._integration_resolver as m
 
     fn = getattr(m, "_resolve_integration_dir", None)
     assert fn is not None, (
@@ -54,7 +51,7 @@ def _call(workspace: Path) -> Path | None:
 
 def test_SDA_M0_module_is_importable() -> None:
     """orchestrator.actions._integration_resolver must be importable with no side effects."""
-    import orchestrator.actions._integration_resolver  # noqa: F401, PLC0415
+    import orchestrator.actions._integration_resolver  # noqa: F401
 
 
 def test_SDA_M0_resolver_function_exposed() -> None:
