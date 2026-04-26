@@ -28,7 +28,9 @@ integration dir.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from pathlib import Path
 
 import structlog
 
@@ -113,6 +115,36 @@ def _decide(integ: list[str], src: list[str]) -> ResolveResult:
             "to break the tie"
         ),
     )
+
+
+def _resolve_integration_dir(workspace_root: Path | str) -> Path | None:
+    """Sync resolver for local/test use: scan workspace_root filesystem directly.
+
+    Equivalent to the async resolve_integration_dir but without kubectl exec —
+    reads Makefile content directly and applies the same _decide policy.
+
+    Returns the Path to run `make accept-env-{up,down}` from, or None.
+    """
+    root = Path(workspace_root)
+
+    def _has_target(makefile: Path) -> bool:
+        try:
+            return bool(re.search(r"^accept-env-up:", makefile.read_text(), re.MULTILINE))
+        except OSError:
+            return False
+
+    def _scan(subdir: str) -> list[str]:
+        d = root / subdir
+        if not d.is_dir():
+            return []
+        return [
+            str(child)
+            for child in sorted(d.iterdir())
+            if child.is_dir() and _has_target(child / "Makefile")
+        ]
+
+    result = _decide(integ=_scan("integration"), src=_scan("source"))
+    return Path(result.dir) if result.dir is not None else None
 
 
 async def resolve_integration_dir(rc, req_id: str) -> ResolveResult:
