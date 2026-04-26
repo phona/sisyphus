@@ -25,6 +25,7 @@ from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
 from ..state import Event
+from ..store import db, req_state
 from . import register, short_title
 from ._clone import clone_involved_repos_into_runner
 
@@ -87,6 +88,13 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")
+
+    # stash analyze_issue_id 进 ctx：让 pr_links.ensure_pr_links_in_ctx 第一次
+    # discover 成功时能 backfill 这条 analyze issue 的 pr:* tag
+    # （REQ-issue-link-pr-quality-base-1777218242）
+    await req_state.update_context(db.get_pool(), req_id, {
+        "analyze_issue_id": issue.id,
+    })
 
     log.info("start_analyze_with_finalized_intent.done", req_id=req_id,
              analyze_issue_id=issue.id, cloned_repos=cloned_repos)

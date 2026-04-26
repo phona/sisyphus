@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import structlog
 
+from .. import pr_links
 from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
@@ -41,11 +42,18 @@ async def start_challenger(*, body, req_id, tags, ctx):
     proj = body.projectId
     source_issue_id = body.issueId   # spec_lint 没 BKD agent issue，用上游 intent issue
 
+    # PR-link tag 注入（REQ-issue-link-pr-quality-base-1777218242）
+    branch_for_links = (ctx or {}).get("branch") or f"feat/{req_id}"
+    links = await pr_links.ensure_pr_links_in_ctx(
+        req_id=req_id, branch=branch_for_links, ctx=ctx, project_id=proj,
+    )
+    extra_tags = pr_links.pr_link_tags(links)
+
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
             project_id=proj,
             title=f"[{req_id}] [CHALLENGER]{short_title(ctx)}",
-            tags=["challenger", req_id, f"parent-id:{source_issue_id}"],
+            tags=["challenger", req_id, f"parent-id:{source_issue_id}", *extra_tags],
             status_id="todo",
             use_worktree=True,   # 黑盒，不污染主 worktree
             model=settings.agent_model,

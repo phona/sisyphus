@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import structlog
 
+from .. import pr_links
 from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
@@ -23,11 +24,17 @@ async def done_archive(*, body, req_id, tags, ctx):
     workdir = (ctx or {}).get("workdir") or f"{settings.workdir_root}/feat-{req_id}"
     accept_issue_id = (ctx or {}).get("accept_issue_id") or body.issueId
 
+    # PR-link tag 注入（REQ-issue-link-pr-quality-base-1777218242）
+    links = await pr_links.ensure_pr_links_in_ctx(
+        req_id=req_id, branch=branch, ctx=ctx, project_id=proj,
+    )
+    extra_tags = pr_links.pr_link_tags(links)
+
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
             project_id=proj,
             title=f"[{req_id}] [DONE] archive & PR{short_title(ctx)}",
-            tags=["done-archive", req_id, f"parent-id:{accept_issue_id}"],
+            tags=["done-archive", req_id, f"parent-id:{accept_issue_id}", *extra_tags],
             status_id="todo",
             model=settings.agent_model,
         )
