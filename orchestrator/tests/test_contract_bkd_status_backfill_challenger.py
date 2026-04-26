@@ -28,7 +28,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
-
 # ─── Embedded mock BKD HTTP server ───────────────────────────────────────────
 
 
