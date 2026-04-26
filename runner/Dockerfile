@@ -52,6 +52,16 @@ ENV PATH="/usr/local/go/bin:/root/go/bin:$PATH" \
 # 退回 openspec 是 npm 上的占位空包，REQ-997 analyze 暴露的）
 RUN npm install -g @fission-ai/openspec@latest && openspec --version
 
+# ─── 4b. uv（sisyphus 自 dogfood + Python 业务仓 Makefile 用 uv run 必装） ─────
+# 实证 2026-04-26 REQ-impl-gh-incident-open-1777173133 dev_cross_check stderr：
+#   /bin/sh: 12: uv: not found
+#   make: *** [Makefile:27: ci-lint] Error 127
+# sisyphus Makefile ci-lint 走 `cd orchestrator && uv run ruff check`，runner 镜像
+# 没 uv → 所有 sisyphus 自 dogfood 在 dev_cross_check 必失败。Flutter runner 也加上
+# 跟 Go runner 对齐（避免 ttpos-flutter REQ 撞同款）。
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
+    && uv --version
+
 # ─── 5. sisyphus 合约脚本 ──────────────────
 # build context 必须是 sisyphus repo 根（CI workflow 已配 context: .）
 COPY scripts/check-scenario-refs.sh \
