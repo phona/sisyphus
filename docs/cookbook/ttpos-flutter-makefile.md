@@ -357,22 +357,28 @@ accept-env-down:
 sisyphus dev_cross_check checker 在 runner pod 里计算（`integration-contracts.md` §2.2）：
 
 ```bash
-base_rev=$(git merge-base HEAD origin/main 2>/dev/null \
+default_branch=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null \
+                 | sed 's@^origin/@@' || true)
+base_rev=$(([ -n "$default_branch" ] && git merge-base HEAD "origin/$default_branch" 2>/dev/null) \
+        || git merge-base HEAD origin/main 2>/dev/null \
+        || git merge-base HEAD origin/master 2>/dev/null \
         || git merge-base HEAD origin/develop 2>/dev/null \
         || git merge-base HEAD origin/dev 2>/dev/null \
         || echo "")
 BASE_REV="$base_rev" make ci-lint
 ```
 
-`ttpos-flutter` 默认分支是 `release`，三条全 fallthrough → `BASE_REV` 为空字符串
-→ **ci-lint 全量扫描**。这是已知且可接受的行为（`integration-contracts.md` §2.2
-明确：空字符串等价全量）。
+`ttpos-flutter` 默认分支是 `release`。**REQ-fix-base-rev-default-branch-1777214183
+之前**这套用静态链 `main → develop → dev`，三条全 fallthrough → `BASE_REV` 为空
+→ ci-lint 全量扫，是降级路径。**之后**先读 `origin/HEAD` 符号引用拿到实际
+`release`，正确算到 merge-base，`BASE_REV` 非空，ci-lint 走增量。
 
-如果将来 `ttpos-flutter` 默认分支改成 `main`，sisyphus 会正确计算 merge-base，
-`flutter analyze` 仍全量扫（方案 A），或 `melos run lint --scope=...`（方案 B）。
+如果方案 A 的 `ci-lint` recipe 不消费 `BASE_REV`（`flutter analyze` 全仓扫），
+非空 `BASE_REV` 不影响行为；方案 B（`melos run lint --scope`）则可以用
+`BASE_REV` 缩小 lint 集合。
 
 **一句话**：Flutter 侧 Makefile 只需要支持"接受 `BASE_REV` env，空时全量，非空时
-也全量（方案 A）"；checker 那边的 BASE_REV 计算不是你改的。
+按 recipe 决定要不要用"；checker 那边的 BASE_REV 计算不是你改的。
 
 ---
 

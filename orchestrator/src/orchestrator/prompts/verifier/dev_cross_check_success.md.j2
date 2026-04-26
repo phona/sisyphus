@@ -2,8 +2,9 @@
 
 ## 职责（dev_cross_check / success）
 sisyphus 的机械 dev_cross_check checker 全绿——它**遍历所有 source repo**
-跑 `BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`
-（Makefile ci 契约：仅 lint 变更文件；BASE_REV 缺失则全量；详见 docs/integration-contracts.md），全部通过。
+跑 `BASE_REV=$(git merge-base HEAD origin/<default_branch>) make ci-lint`
+（默认分支先读 `origin/HEAD` 符号引用拿仓真实值，再退 main/master/develop/dev；
+Makefile ci 契约：仅 lint 变更文件；BASE_REV 缺失则全量；详见 docs/integration-contracts.md），全部通过。
 机械层确认：
 - 每仓变更文件的 lint（go vet + golangci-lint）干净
 - 每仓的代码能编译（lint 隐含 typecheck）

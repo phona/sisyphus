@@ -2,7 +2,7 @@
 
 多仓重构后：每个 source repo 在 runner pod 里挂在 /workspace/source/<repo-name>/。
 checker 遍历 /workspace/source/*，含 Makefile `ci-lint` target 的仓逐一跑
-`BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`；任一失败整体红。
+`BASE_REV=$(git merge-base HEAD origin/<default_branch>) make ci-lint`；任一失败整体红。
 每仓失败时 echo `=== FAIL: $repo ===` 到 stderr。
 
 ci-lint 是 ttpos-ci 标准契约：仅 lint 变更文件 (BASE_REV 缺失则全量)。
@@ -13,6 +13,13 @@ sisyphus-clone-repos.sh 把 involved_repos 列的每个仓 clone 进 /workspace/
 推到 feat/<REQ> 分支。fetch + checkout feat/<REQ> 失败 → fail loud（fail=1 + 拒绝
 silent-pass 信息），不再 [skip] 噤声。Makefile 缺 ci-lint target 仍 [skip]（仓本身
 不可 lint，与 analyze-agent 无关）。
+
+BASE_REV 计算（REQ-fix-base-rev-default-branch-1777214183）：先读
+`git symbolic-ref refs/remotes/origin/HEAD` 拿仓**实际**默认分支（`origin/<name>`，
+clone 时自动设置），再退到静态链 `origin/main → origin/master → origin/develop →
+origin/dev → 空字符串`。修这条之前默认分支非 main/develop/dev 的仓（如 ttpos-server-go
++ ttpos-flutter 默认 `release`）会全 fall through 到空，ci-lint 退化全量扫，
+BASE_REV 增量功能形同虚设——见 REQ-audit-business-repo-makefile-1777125538 audit-report.md §2.3。
 """
 from __future__ import annotations
 
@@ -40,8 +47,15 @@ def _build_cmd(req_id: str) -> str:
     - 遍历后 ran=0（所有仓都缺 ci-lint target）→ exit 1
       checker 不能在零信号情况下报 pass。
 
-    BASE_REV 计算：`git merge-base HEAD origin/main`，fallback `origin/develop`、
-    `origin/dev`，再失败传空字符串（ci-lint 退化为全量扫描）。
+    BASE_REV 计算（REQ-fix-base-rev-default-branch-1777214183）：先 resolve 仓**实际**
+    默认分支，再退到静态链。
+    1. `git symbolic-ref --short refs/remotes/origin/HEAD` → 例如 `origin/release`，
+       `git clone` 时自动设置；剥掉 `origin/` 前缀拿到 `<default_branch>` 名
+    2. 顺序尝试：`origin/<default_branch>` → `origin/main` → `origin/master`
+       → `origin/develop` → `origin/dev` → 空字符串（ci-lint 退化为全量扫描）
+
+    修这条前默认分支非 main/develop/dev 的仓（ttpos-server-go / ttpos-flutter 默认
+    `release`）BASE_REV 必空 → 增量 lint 形同虚设。
     """
     return (
         "set -o pipefail; "
@@ -80,7 +94,16 @@ def _build_cmd(req_id: str) -> str:
         # 实证 ttpos v8 (REQ-ttpos-validate-end-to-end) 卡这个：ttpos-server-go Makefile 里
         # ci-lint target 真存在 (via include) 但 make 评估时某处 exit 非零，pipefail 把 grep 吞光。
         '  if [ -f "$repo/Makefile" ] && (cd "$repo" && (make -p -n 2>/dev/null || true) | grep -q \'^ci-lint:\'); then '
-        '    base_rev=$(cd "$repo" && (git merge-base HEAD origin/main 2>/dev/null '
+        # BASE_REV 计算：先读 origin/HEAD 符号引用拿仓实际 default_branch（git clone
+        # 自动设置），再退静态链 main → master → develop → dev → ""。
+        # 修这条前默认分支非 main/develop/dev 的仓（ttpos-server-go / ttpos-flutter 默
+        # 认 release）整条链全 miss → BASE_REV 必空 → ci-lint 退化为全量扫，增量 lint
+        # 形同虚设（实证 REQ-audit-business-repo-makefile-1777125538 audit-report.md §2.3）。
+        '    default_branch=$(cd "$repo" && git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed \'s@^origin/@@\' || true); '
+        '    base_rev=$(cd "$repo" && ( '
+        '              ([ -n "$default_branch" ] && git merge-base HEAD "origin/$default_branch" 2>/dev/null) '
+        '              || git merge-base HEAD origin/main 2>/dev/null '
+        '              || git merge-base HEAD origin/master 2>/dev/null '
         '              || git merge-base HEAD origin/develop 2>/dev/null '
         '              || git merge-base HEAD origin/dev 2>/dev/null '
         '              || echo "")); '

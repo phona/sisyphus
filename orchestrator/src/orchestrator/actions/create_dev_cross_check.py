@@ -1,11 +1,15 @@
 """create_dev_cross_check：spec lint 通过 → 开发交叉验证。
 
 M1 checker 框架：sisyphus 在 runner pod 执行
-`BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`（ttpos-ci 标准），
+`BASE_REV=$(git merge-base HEAD origin/<default_branch>) make ci-lint`（ttpos-ci 标准），
 根据退出码 emit DEV_CROSS_CHECK_PASS / DEV_CROSS_CHECK_FAIL。
 
 多仓重构 + ttpos-ci 契约统一后：checker 自行遍历 /workspace/source/*，含 Makefile
 `ci-lint` target 的仓逐一跑（仅 lint 变更文件），任一失败整体红。
+
+BASE_REV 计算（REQ-fix-base-rev-default-branch-1777214183）：先读
+`git symbolic-ref refs/remotes/origin/HEAD` 拿仓真实 default_branch，再退静态
+chain main → master → develop → dev → 空。
 """
 from __future__ import annotations
 

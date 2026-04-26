@@ -2,8 +2,9 @@
 
 ## 职责（dev_cross_check / fail）
 sisyphus 的机械 dev_cross_check checker 红了——它**遍历所有 source repo**
-跑 `BASE_REV=$(git merge-base HEAD origin/main) make ci-lint`
-（Makefile ci 契约：仅 lint 变更文件；BASE_REV 缺失则全量；详见 docs/integration-contracts.md），任一仓非 0 即整体红。
+跑 `BASE_REV=$(git merge-base HEAD origin/<default_branch>) make ci-lint`
+（默认分支先读 `origin/HEAD` 符号引用拿仓真实值，再退 main/master/develop/dev；
+Makefile ci 契约：仅 lint 变更文件；BASE_REV 缺失则全量；详见 docs/integration-contracts.md），任一仓非 0 即整体红。
 
 {% if stderr_tail %}
 ### 失败栈尾
