@@ -171,6 +171,19 @@ class RunnerController:
             client.V1EnvVar(name="GOMEMLIMIT", value="2GiB"),
             client.V1EnvVar(name="GOGC", value="50"),
             client.V1EnvVar(name="GOFLAGS", value="-p=2"),
+            # Toolchain 包/构建/下载 cache 全部重定向到 PVC 挂载点
+            # `/workspace/.cache/`。默认位置（GOPATH/pkg/mod = /root/go/pkg/mod、
+            # ~/.cache/go-build、~/.npm、~/.cache/uv）落在容器可写层 / ephemeral
+            # storage：pod 重启 / 节点压力下被驱逐就丢，每次重新下载 modules
+            # 又拖累 dev_cross_check / staging_test 时长，还吃 node /var/lib
+            # 空间。PVC 挂的 /workspace 跟 pod lifecycle 解耦（OOM 重启不掉），
+            # 跨 stage 的 lint/test 复用同一份 cache。
+            # 注：per-REQ PVC 仅 REQ 内共享，不跨 REQ；跨 REQ 共享 cache 是另一
+            # 个话题（需要 RWX volume），不在本次范围。
+            client.V1EnvVar(name="GOMODCACHE", value="/workspace/.cache/go/mod"),
+            client.V1EnvVar(name="GOCACHE", value="/workspace/.cache/go/build"),
+            client.V1EnvVar(name="npm_config_cache", value="/workspace/.cache/npm"),
+            client.V1EnvVar(name="UV_CACHE_DIR", value="/workspace/.cache/uv"),
         ]
         # 从 runner-secrets 注入 GitHub 凭证（optional，secret 缺了 pod 还能起）
         for env_name, secret_key in (

@@ -90,6 +90,22 @@ def test_build_pod_mounts_pvc_and_fuse():
     assert "SISYPHUS_REQ_ID" in env_names
 
 
+def test_build_pod_redirects_toolchain_caches_to_pvc():
+    """Go / npm / uv cache env vars 指向 /workspace/.cache（PVC 挂载点）。
+
+    默认位置（GOPATH/pkg/mod、~/.cache/go-build、~/.npm、~/.cache/uv）落在
+    容器可写层，pod 重启就丢；redirect 到 PVC 让 cache 跨 stage / 跨 pod
+    重启复用，避免 dev_cross_check / staging_test 每次重新下载 modules。
+    """
+    rc = _make_controller()
+    pod = rc.build_pod("REQ-1")
+    env = {e.name: e.value for e in pod.spec.containers[0].env if e.value is not None}
+    assert env.get("GOMODCACHE") == "/workspace/.cache/go/mod"
+    assert env.get("GOCACHE") == "/workspace/.cache/go/build"
+    assert env.get("npm_config_cache") == "/workspace/.cache/npm"
+    assert env.get("UV_CACHE_DIR") == "/workspace/.cache/uv"
+
+
 def test_build_pod_no_image_pull_secrets_when_empty():
     rc = _make_controller()
     pod = rc.build_pod("REQ-1")
