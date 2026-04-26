@@ -14,7 +14,18 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from orchestrator.actions import _clone, start_analyze, start_analyze_with_finalized_intent
+from orchestrator.admission import AdmissionDecision
 from orchestrator.state import Event
+
+
+@pytest.fixture(autouse=True)
+def _admit_by_default(monkeypatch):
+    """Admission gate 默认 admit=True 通过；个别 case 要 deny 自己再 patch。"""
+    monkeypatch.setattr(
+        start_analyze, "check_admission",
+        AsyncMock(return_value=AdmissionDecision(admit=True)),
+    )
+    monkeypatch.setattr(start_analyze.db, "get_pool", lambda: object())
 
 
 @dataclass
@@ -472,3 +483,65 @@ async def test_start_analyze_skip_remains_when_all_layers_empty(monkeypatch):
     exec_fn.assert_not_awaited()
     follow_up.assert_awaited_once()
     assert rv["cloned_repos"] is None
+
+
+# ── REQ-orch-rate-limit-1777202974: admission gate ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_start_analyze_admission_denied_emits_escalate(monkeypatch):
+    """admission deny → emit VERIFY_ESCALATE，不调 ensure_runner / clone / BKD。"""
+    monkeypatch.setattr(
+        start_analyze, "check_admission",
+        AsyncMock(return_value=AdmissionDecision(
+            admit=False, reason="inflight-cap-exceeded:10/10",
+        )),
+    )
+    update_ctx = AsyncMock()
+    monkeypatch.setattr(start_analyze.req_state, "update_context", update_ctx)
+
+    exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
+    fake_rc = _patch_runner(monkeypatch, exec_fn=exec_fn)
+    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_analyze)
+
+    rv = await start_analyze.start_analyze(
+        body=_make_body(), req_id="REQ-X",
+        tags=["intent:analyze"], ctx={},
+    )
+
+    assert rv["emit"] == Event.VERIFY_ESCALATE.value
+    assert "admission denied" in rv["reason"]
+    assert "inflight-cap-exceeded" in rv["reason"]
+    # ctx.escalated_reason 必须落 ctx
+    update_ctx.assert_awaited_once()
+    patch = update_ctx.await_args.args[2]
+    assert patch["escalated_reason"] == "rate-limit:inflight-cap-exceeded:10/10"
+    # 不能花 runner / clone / agent 的成本
+    fake_rc.ensure_runner.assert_not_awaited()
+    exec_fn.assert_not_awaited()
+    follow_up.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_start_analyze_admission_disk_pressure_escalates(monkeypatch):
+    """disk-pressure 拒绝同样 escalate；reason 标 disk-pressure。"""
+    monkeypatch.setattr(
+        start_analyze, "check_admission",
+        AsyncMock(return_value=AdmissionDecision(
+            admit=False, reason="disk-pressure:0.85/0.75",
+        )),
+    )
+    update_ctx = AsyncMock()
+    monkeypatch.setattr(start_analyze.req_state, "update_context", update_ctx)
+    exec_fn = AsyncMock()
+    _patch_runner(monkeypatch, exec_fn=exec_fn)
+    _patch_bkd_client(monkeypatch, target_module=start_analyze)
+
+    rv = await start_analyze.start_analyze(
+        body=_make_body(), req_id="REQ-X", tags=[], ctx={},
+    )
+
+    assert rv["emit"] == Event.VERIFY_ESCALATE.value
+    assert "disk-pressure" in rv["reason"]
+    patch = update_ctx.await_args.args[2]
+    assert "disk-pressure" in patch["escalated_reason"]

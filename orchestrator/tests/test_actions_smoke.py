@@ -70,6 +70,7 @@ async def test_start_analyze(monkeypatch):
     from orchestrator.actions import start_analyze as mod
     fake = make_fake_bkd()
     patch_bkd(monkeypatch, "start_analyze", fake)
+    patch_db(monkeypatch, "start_analyze")  # admission gate reads pool
     body = make_body(issue_id="intent-1", title="加个登录")
     out = await mod.start_analyze(body=body, req_id="REQ-9", tags=["intent:analyze"], ctx={})
     # cloned_repos=None: 直接 analyze 路径无 involved_repos，跳过 server-side clone
@@ -86,6 +87,7 @@ async def test_start_analyze_title_format(monkeypatch):
     from orchestrator.actions import start_analyze as mod
     fake = make_fake_bkd()
     patch_bkd(monkeypatch, "start_analyze", fake)
+    patch_db(monkeypatch, "start_analyze")  # admission gate reads pool
 
     # 场景1：有 intent_title，长度正常
     body = make_body(issue_id="intent-1", title="加个登录端点")

@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     # 磁盘压力阈值：超过此比例 GC 强清所有非 active PVC（不论 retention）
     runner_gc_disk_pressure_threshold: float = 0.8
 
+    # ─── Admission gate（fresh REQ entry rate-limit）────────────────────────
+    # 同时跑的 REQ 上限：start_intake / start_analyze 进门时数 req_state 里非
+    # 终态行（exclude init/done/escalated/gh-incident-open + 自身），>= cap 直接
+    # escalate。0 = 关闭。默认 10：vm-node04 6 GiB RAM、runner request 512Mi，
+    # 10 个并发是调度器开始挤兑前的舒适上限。
+    inflight_req_cap: int = 10
+    # admission 阶段独立的磁盘阈值，比 runner_gc_disk_pressure_threshold(0.8) 更严：
+    # 让"不收新活"先于"紧急清 PVC"触发，避免 GC tick 间隔（15 min）里继续建 PVC。
+    admission_disk_pressure_threshold: float = 0.75
+
     # GitHub token（烘进 runner Pod env，给 agent 用 gh CLI / docker login ghcr.io）
     # scope: repo + read:packages
     # 注意：当 gh_incident_repo 非空时，本 PAT 必须额外有 Issues: Read-and-write
