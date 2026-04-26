@@ -12,7 +12,7 @@
 # accept-env-up/down 不带 ci- 前缀：它们是 accept 阶段 lab 边界，不在 PR-CI 热路径
 # （REQ-rename-accept-targets-1777124774）。
 
-.PHONY: help ci-lint ci-unit-test ci-integration-test accept-env-up accept-env-down test-all test-flutter test-go
+.PHONY: help ci-setup ci-lint ci-unit-test ci-integration-test accept-env-up accept-env-down test-all test-flutter test-go
 
 SCRIPT_DIR := $(shell pwd)
 
@@ -22,6 +22,9 @@ help: ## 显示帮助信息
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 
 # ========== ttpos-ci 标准 target（self-dogfood） ==========
+
+ci-setup: ## 安装 dev optional deps（ruff / pytest / mypy），ci-lint 依赖
+	cd orchestrator && uv sync --extra dev
 
 ci-lint: ## ruff lint；BASE_REV 非空 → 仅 lint 变更 *.py
 	@if [ -z "$$BASE_REV" ]; then \
