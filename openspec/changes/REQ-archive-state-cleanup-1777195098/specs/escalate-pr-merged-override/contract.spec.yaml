@@ -1,0 +1,71 @@
+spec: escalate-pr-merged-override
+version: 1
+description: >-
+  When the escalate action is invoked, before any other side-effect (auto-resume,
+  GH incident issue creation, ESCALATED tag write, or terminal CAS to ESCALATED),
+  the action MUST query GitHub for the merge state of feat/{REQ} PRs across the
+  involved_repos (layers 1-4 fallback). If at least one repo has an open or
+  closed PR for that branch AND every found PR is merged, the action MUST
+  override the destination to DONE instead of ESCALATED.
+
+inputs:
+  - name: req_id
+    type: string
+    description: REQ identifier; branch convention is feat/{req_id}
+  - name: ctx
+    type: object
+    description: REQ context, may include intake_finalized_intent.involved_repos / involved_repos / etc.
+  - name: tags
+    type: list[string]
+    description: BKD intent issue tags, may include `repo:<org>/<name>` slugs
+  - name: github_token
+    type: string
+    description: settings.github_token (PAT). If empty, the merge check MUST be skipped (return False).
+
+side_effects_on_pr_merged_override:
+  - state_transition:
+      from: <any non-DONE state>
+      to: done
+      cas: true
+      event_label: archive.done
+      action_label: escalate_pr_merged_override
+  - context_patch_keys:
+      - completed_via       # value MUST be "pr-merge"
+      - completed_from_state
+      - completed_repos
+  - bkd_intent_issue_tags_added:
+      - done
+      - via:pr-merge
+  - bkd_intent_issue_status: done
+  - runner_cleanup:
+      retain_pvc: false
+  - skipped:
+      - escalated tag
+      - reason:<...> tag
+      - github-incident tag
+      - GH incident issue creation
+      - auto-resume follow-up
+
+side_effects_on_no_override:
+  - existing escalate flow runs unchanged
+
+merge_check_logic:
+  - For each repo in resolve_repos(ctx, tags=tags, default_repos=settings.default_involved_repos):
+      GET /repos/{owner}/{repo}/pulls?head={owner}:feat/{req_id}&state=all
+      On HTTP error: function returns False (treat as "cannot determine merge state")
+      If response is empty (no PR): repo is skipped (not counted)
+      If at least one returned PR has merged_at != null: that repo counts as merged
+      If a repo has PR(s) but none merged: function returns False
+  - Final: True iff at least 1 repo had a found PR AND all found PRs merged
+
+failure_modes:
+  - github_token empty -> merge check returns False, fall through to original escalate flow
+  - involved_repos resolves to empty -> merge check returns False
+  - GH 404 / 5xx / network error -> merge check returns False (no exception bubbles up)
+
+idempotency:
+  - If REQ already in DONE state when override CAS runs, second cas_transition returns False (mismatch), helper returns early without re-tagging BKD or re-cleaning runner.
+
+audit:
+  - history entry MUST contain action="escalate_pr_merged_override" and event="archive.done" so SQL audit can distinguish this path from main-chain ARCHIVING + ARCHIVE_DONE (which uses action="done_archive" or null).
+  - context.completed_via="pr-merge" is the durable marker for dashboards.
