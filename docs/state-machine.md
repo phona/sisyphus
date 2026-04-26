@@ -65,7 +65,7 @@
 | `session.failed` | 任意 stage agent session 崩 / watchdog 超时 | escalate |
 | **`verify.pass`** | M14b verifier decision=pass | apply_verify_pass（手工 CAS 推进下一 stage） |
 | **`verify.fix-needed`** | M14b verifier decision=fix | start_fixer |
-| **`verify.escalate`** | M14b decision=escalate / schema invalid（含基础设施 flaky）| escalate |
+| **`verify.escalate`** | M14b decision=escalate / schema invalid（含基础设施 flaky）；start_analyze* 内部 emit (clone 失败等) | escalate |
 | **`fixer.done`** | fixer agent session.completed | invoke_verifier_after_fix |
 
 ## 4. 完整状态转移图
@@ -78,6 +78,8 @@ stateDiagram-v2
     init --> analyzing: intent.analyze（跳过 intake）
     intaking --> analyzing: intake.pass（新建 analyze issue）
     intaking --> escalated: intake.fail
+    intaking --> escalated: verify.escalate\n(start_analyze_with_finalized_intent 内部判 escalate)
+    analyzing --> escalated: verify.escalate\n(start_analyze 内部判 escalate, 如 clone failed)
     analyzing --> spec_lint_running: analyze.done
     spec_lint_running --> dev_cross_check_running: spec-lint.pass
     spec_lint_running --> review_running: spec-lint.fail
