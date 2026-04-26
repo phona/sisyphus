@@ -75,7 +75,11 @@ def _build_cmd(req_id: str) -> str:
         # 而非 `grep '^ci-lint:'` 顶层（实证 ttpos-server-go：ci-* 在
         # ttpos-scripts/lint-ci-test.mk via `include`，顶层 grep 漏判 →
         # checker 误报"0 source repos eligible" silent fail）。
-        '  if [ -f "$repo/Makefile" ] && (cd "$repo" && make -p -n 2>/dev/null | grep -q \'^ci-lint:\'); then '
+        # `make -p -n || true` 抑制 Makefile 评估期错误（如 include 子 mk 缺 env / target body
+        # 求值挂）；外层 `set -o pipefail` 否则让 pipe 整体 fail → grep 看不到 → 误判"0 eligible"。
+        # 实证 ttpos v8 (REQ-ttpos-validate-end-to-end) 卡这个：ttpos-server-go Makefile 里
+        # ci-lint target 真存在 (via include) 但 make 评估时某处 exit 非零，pipefail 把 grep 吞光。
+        '  if [ -f "$repo/Makefile" ] && (cd "$repo" && (make -p -n 2>/dev/null || true) | grep -q \'^ci-lint:\'); then '
         '    base_rev=$(cd "$repo" && (git merge-base HEAD origin/main 2>/dev/null '
         '              || git merge-base HEAD origin/develop 2>/dev/null '
         '              || git merge-base HEAD origin/dev 2>/dev/null '
