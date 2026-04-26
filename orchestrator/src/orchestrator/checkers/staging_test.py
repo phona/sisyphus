@@ -72,11 +72,19 @@ def _build_cmd(req_id: str) -> str:
         'pids=""; '
         "for repo in /workspace/source/*/; do "
         '  name=$(basename "$repo"); '
-        f'  if ! (cd "$repo" && git fetch origin "feat/{req_id}" 2>/dev/null && git checkout -B "feat/{req_id}" "origin/feat/{req_id}" 2>/dev/null); then '
-        f'    echo "=== FAIL staging_test: $name has no feat/{req_id} branch on origin — refusing to silent-pass ===" >&2; '
+        # 暴露 fetch 真错（之前 2>/dev/null 把 auth/network/dns 失败全吞，silent-pass
+        # guard 一律打成"branch 不存在"，REQ-ttpos-pat-validate-v4 实证：branch 真在
+        # origin，fetch 失败原因被掩盖 → verifier 8min 思考还判不准）。
+        # 现在：捕 stderr，rev-parse 单独验 origin ref 是否真到位，失败时把 fetch 真
+        # 错塞进 silent-pass 信息里。
+        f'  fetch_err=$(cd "$repo" && git fetch origin "feat/{req_id}" 2>&1 || true); '
+        f'  if ! (cd "$repo" && git rev-parse --verify "refs/remotes/origin/feat/{req_id}" >/dev/null 2>&1); then '
+        f'    echo "=== FAIL staging_test: $name has no feat/{req_id} branch reachable on origin — refusing to silent-pass ===" >&2; '
+        '    echo "git fetch stderr: $fetch_err" >&2; '
         "    fail=1; "
         "    continue; "
         "  fi; "
+        f'  cd "$repo" && git checkout -B "feat/{req_id}" "origin/feat/{req_id}" >/dev/null 2>&1; '
         '  if [ -f "$repo/Makefile" ] '
         '       && grep -q \'^ci-unit-test:\' "$repo/Makefile" '
         '       && grep -q \'^ci-integration-test:\' "$repo/Makefile"; then '
