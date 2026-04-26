@@ -25,6 +25,7 @@ LABEL org.opencontainers.image.licenses=MIT
 RUN install -m 0755 -d /etc/apt/keyrings \
     && apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates gnupg curl iptables \
+        iproute2 net-tools \
         git gh jq make bash sudo nodejs npm ssh-client \
         qemu-kvm cpu-checker \
     && curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
