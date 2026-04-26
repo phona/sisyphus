@@ -70,9 +70,10 @@ def _make_httpx_patcher(repo_responses: dict[str, list], raise_for: dict[str, Ex
     calls: list[str] = []
 
     class _FakeClient:
+        def __init__(self, *_args, **_kwargs): pass
         async def __aenter__(self): return self
         async def __aexit__(self, *_): return False
-        async def get(self, url: str, params=None):
+        async def get(self, url: str, params=None, **_kwargs):
             calls.append(url)
             for repo, exc in raise_for.items():
                 if f"/repos/{repo}/" in url:
