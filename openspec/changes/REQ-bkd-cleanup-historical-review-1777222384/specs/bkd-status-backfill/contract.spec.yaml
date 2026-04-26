@@ -1,0 +1,75 @@
+spec: bkd-status-backfill
+version: 1
+description: >-
+  One-shot maintenance CLI that PATCHes BKD sub-agent issues stuck at
+  statusId='review' to statusId='done'. Targets only role-tagged issues
+  (verifier / fixer / analyze / challenger / accept-agent / done-archive)
+  whose sessionStatus != 'running' AND that carry a REQ-* tag. Intent
+  issues (no role tag) and live sessions are protected.
+
+inputs:
+  - name: project_id
+    type: string
+    description: BKD project alias (e.g. nnvxh8wj)
+  - name: bkd_base_url
+    type: string
+    description: BKD REST base URL (e.g. http://localhost:3000)
+  - name: apply
+    type: bool
+    description: |
+      false (default) → dry-run, list candidates only.
+      true            → actually PATCH each candidate to statusId='done'.
+  - name: limit
+    type: int
+    description: BKD issues list page size; default 2000 (one shot, no pagination loop)
+
+side_effects_on_apply:
+  - bkd_patch:
+      method: PATCH
+      path: /api/projects/{project_id}/issues/{issue_id}
+      body: {"statusId": "done"}
+      tags_unchanged: true   # we never write tags; preserves audit trail
+  - stdout_audit_json:
+      shape:
+        - issue_id
+        - req_id
+        - role
+        - sessionStatus
+        - action          # "patched" | "skipped"
+        - reason          # decision_reason string
+
+side_effects_on_dry_run:
+  - no_bkd_writes: true
+  - stdout_audit_json: same shape, action always "skipped"
+
+decision_logic:
+  for_each_issue:
+    - if issue.statusId != "review": skip ("not-review")
+    - elif issue.sessionStatus == "running": skip ("session-running")
+    - elif first_role_tag(issue.tags) is None: skip ("no-role-tag")
+        # role tag set: verifier / fixer / analyze / challenger / accept-agent / done-archive
+    - elif extract_req_tag(issue.tags) is None: skip ("no-req-tag")
+    - else: target (PATCH to done)
+
+failure_modes:
+  - bkd_list_5xx: helper raises; main() exits non-zero (no partial PATCH attempts)
+  - bkd_patch_5xx_for_one_issue: log warning + continue with next issue (best-effort);
+                                  exit code 0 if at least one PATCH succeeded, non-zero
+                                  only if all PATCH calls failed
+  - dry_run: no exit-code change, returns 0 even if no candidates
+
+idempotency:
+  - PATCHing statusId='done' on an already-done issue is a no-op at BKD level
+    (BKD allows it). Re-running with --apply is safe.
+  - Run twice without --apply: deterministic same candidate list.
+
+audit:
+  - stdout MUST be machine-readable JSON lines (one entry per issue), so the
+    operator can pipe to jq / save as evidence in PR description
+  - log lines (stderr) are human-readable, do NOT pollute stdout JSON stream
+
+scope_constraints:
+  - DOES NOT modify sisyphus state machine, req_state rows, history, or context
+  - DOES NOT touch session.failed webhook handling (orthogonal hot-path concern)
+  - DOES NOT remove BKD tags (REQ-* / role / decision tags remain for audit)
+  - DOES NOT delete BKD issues (only PATCHes statusId)
