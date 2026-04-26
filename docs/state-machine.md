@@ -33,7 +33,7 @@
 | `review-running` | **M14b** verifier-agent 在跑（success / fail 两触发统一入口） | in-flight |
 | `fixer-running` | **M14b** decision=fix → 起对应 fixer agent | in-flight |
 | `archiving` | done-archive agent 跑（合 PR + 关 issue） | in-flight |
-| `gh-incident-open` | （已规划，未启用）GitHub issue 已开等人 | wait-human |
+| `gh-incident-open` | ~~（已规划，未启用）GitHub issue 已开等人 \| wait-human~~ — 设计被 PR #118 重新走"escalate side-effect"路：进 ESCALATED 时 `escalate` action 调 `gh_incident.file_incident()` 在 source repo 开 GH issue，**不引入新 state**。本行保留作历史，下次大改 state 表时删 |
 | **`done`** | REQ 完成 | **terminal** |
 | **`escalated`** | 熔断 / session-failed / 人工止损 | **terminal** |
 
