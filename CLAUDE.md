@@ -13,6 +13,7 @@
 - **失败先验，再试错** —— stage fail 不直接 bugfix，verifier-agent 主观判 pass / fix / escalate（M14b/c，3 路）。
 - **指标驱动改进** —— 每条决策入 `stage_runs` / `verifier_decisions`，13 张 Metabase 看板（M7 + M14e）回答"哪条 prompt 该改"。
 - **生产用最强模型** —— 不做"失败升级模型"自适应；haiku 只用于测试加速。
+- **runner = 只读 checker** —— K8s runner pod 只 clone 源、跑测试、跑 accept-env-*；**所有 GH 写操作（push / PR create / merge）都打回 BKD Coder workspace 执行**，由 Coder gh auth 处理，跟 runner secret 完全无关。runner GH_TOKEN 应是 fine-grained PAT, Contents: Read-only。详见 [docs/architecture.md §8](docs/architecture.md)。
 
 ## 跟相邻系统的层级
 

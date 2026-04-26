@@ -289,6 +289,22 @@ wait
 
 ## 8. Runner（K8s Pod + PVC，per-REQ）
 
+> **⚠️ 设计契约：runner = 只读 checker**
+>
+> Runner pod 内只允许：`git clone`（拉源码）、跑 `make ci-*` / `make accept-env-*`、
+> `kubectl exec` / `docker run`、读 GH check-runs。
+>
+> **任何 GH write 操作**（`git push`、`gh pr create`、`gh pr merge`、PR review
+> comment、status check write）**一律打回 BKD Coder workspace（"开发机"）执行**，
+> 由 Coder 自己注入的 gh auth 处理，跟 runner 的 `GH_TOKEN` secret 完全无关。
+>
+> 推论：
+> - runner secret `gh_token` 应是 **fine-grained PAT, Contents: Read-only**
+>   （或 Deploy Key），配错成 classic `repo` 不会让 sisyphus 主动写——但违背契约。
+> - 任何 prompt / action 想在 runner 里跑 push/PR 操作，必须先改设计回来这条注释。
+> - 全链需要 GH write 的部分（dev push feat/REQ-* + 开 PR、archive merge PR）由
+>   BKD agent 在 Coder workspace 完成，是 BKD 的事，不是 sisyphus 的事。
+
 每个 REQ 在 `sisyphus-runners` namespace 起一个：
 - **Pod** `runner-<REQ>` —— privileged + DinD + fuse-overlayfs
 - **PVC** `workspace-<REQ>` —— 挂 `/workspace`，存 clone 的 repos + 中间产物
