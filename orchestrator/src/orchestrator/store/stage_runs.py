@@ -111,3 +111,41 @@ async def close_latest_stage_run(
         req_id, stage, outcome, fail_reason,
     )
     return int(row["id"]) if row else None
+
+
+async def stamp_bkd_session_id(
+    pool: asyncpg.Pool,
+    req_id: str,
+    stage: str,
+    bkd_session_id: str,
+) -> int | None:
+    """把 BKD agent session token 写到最近开着的 (req_id, stage) stage_run。
+
+    用法：webhook 收到 session.completed/failed 时，从 BKD issue 拿到
+    externalSessionId，在 engine.step（即 close_latest_stage_run）跑前 stamp。
+    后续 close 只 UPDATE ended_at/outcome/fail_reason/duration_sec，不动
+    bkd_session_id，所以 stamp 在前 close 在后即可保留。
+
+    幂等：仅当目标行 bkd_session_id IS NULL 时写入；已写过则不覆盖（避免
+    BKD 重发 webhook 把同一 sid 反复写或被并发的 stamp 覆盖）。
+    返回被写入的 id；目标行不存在 / 已写过 → None。
+    """
+    if not bkd_session_id:
+        return None
+    row = await pool.fetchrow(
+        """
+        UPDATE stage_runs SET
+            bkd_session_id = $3
+        WHERE id = (
+            SELECT id FROM stage_runs
+             WHERE req_id = $1 AND stage = $2
+               AND ended_at IS NULL
+               AND bkd_session_id IS NULL
+             ORDER BY started_at DESC
+             LIMIT 1
+        )
+        RETURNING id
+        """,
+        req_id, stage, bkd_session_id,
+    )
+    return int(row["id"]) if row else None

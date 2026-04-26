@@ -29,7 +29,7 @@ _TERMINAL_STATES = {ReqState.DONE, ReqState.ESCALATED}
 
 
 # M14e/M15：state → stage 名（用于 stage_runs 表）。
-_STATE_TO_STAGE: dict[ReqState, str] = {
+STATE_TO_STAGE: dict[ReqState, str] = {
     ReqState.ANALYZING:              "analyze",
     ReqState.SPEC_LINT_RUNNING:      "spec_lint",
     ReqState.DEV_CROSS_CHECK_RUNNING: "dev_cross_check",
@@ -41,6 +41,11 @@ _STATE_TO_STAGE: dict[ReqState, str] = {
     ReqState.FIXER_RUNNING:          "fixer",
     ReqState.ARCHIVING:              "archive",
 }
+# 仅以下 state 对应的 stage 由 BKD agent 跑；其他 state 是机械 checker / teardown，
+# 没 BKD session 可绑。webhook 用此集合决定 stamp_bkd_session_id 是否值得调用。
+AGENT_STAGES: frozenset[str] = frozenset({
+    "analyze", "verifier", "fixer", "accept", "archive",
+})
 
 # event → stage_runs.outcome 标签。escalate / session.failed 全归 fail。
 _EVENT_TO_OUTCOME: dict[Event, str] = {
@@ -100,7 +105,7 @@ async def _record_stage_transitions(
     if cur_state == next_state:
         return
     try:
-        cur_stage = _STATE_TO_STAGE.get(cur_state)
+        cur_stage = STATE_TO_STAGE.get(cur_state)
         if cur_stage:
             outcome = _EVENT_TO_OUTCOME.get(event, "cancelled")
             await stage_runs.close_latest_stage_run(
@@ -108,7 +113,7 @@ async def _record_stage_transitions(
                 outcome=outcome,
                 fail_reason=event.value if outcome != "pass" else None,
             )
-        next_stage = _STATE_TO_STAGE.get(next_state)
+        next_stage = STATE_TO_STAGE.get(next_state)
         if next_stage:
             await stage_runs.insert_stage_run(
                 pool, req_id, next_stage,

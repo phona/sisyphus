@@ -20,7 +20,7 @@ from . import router as router_lib
 from .bkd import BKDClient
 from .config import settings
 from .state import Event, ReqState
-from .store import db, dedup, req_state, verifier_decisions
+from .store import db, dedup, req_state, stage_runs, verifier_decisions
 
 log = structlog.get_logger(__name__)
 api = APIRouter()
@@ -128,11 +128,16 @@ async def webhook(request: Request) -> JSONResponse:
                     reason="previous attempt crashed mid-flight")
 
     # ─── 2. Resolve tags（session events 可能没带，从 BKD 拉）──────────────
+    # session.failed 也走 fetch 路径：除了拿 tags，还顺手抓 externalSessionId
+    # 写进 stage_runs，让 dashboard 能从崩掉的 stage_run 直接跳到对应 BKD chat
+    # 排查 agent 行为。getattr 防御式读 —— 老的 BKD payload / 测试 stub 可能没该字段。
     tags = body.tags or []
-    if not tags or body.event == "session.completed":
+    bkd_session_id: str | None = None
+    if not tags or body.event in ("session.completed", "session.failed"):
         async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
             issue = await bkd.get_issue(body.projectId, body.issueId)
             tags = issue.tags
+            bkd_session_id = getattr(issue, "external_session_id", None)
     log.info("webhook.received", evt=body.event, issue_id=body.issueId, tags=tags)
 
     # ─── 2.5 早期 noise filter ─────────────────────────────────────────────
@@ -327,6 +332,23 @@ async def webhook(request: Request) -> JSONResponse:
     if event == Event.VERIFY_ESCALATE:
         await req_state.update_context(pool, req_id, {"escalated_reason": "verifier-decision"})
         ctx = {**ctx, "escalated_reason": "verifier-decision"}
+
+    # ─── 5.9 stamp BKD session token onto 当前开着的 stage_run ───────────────
+    # 必须放在 engine.step 之前：engine 在 transition 时会 close_latest_stage_run，
+    # 之后这条 row 就不再开着了，stamp 找不到目标。close 只 UPDATE
+    # ended_at/outcome/fail_reason/duration_sec，不动 bkd_session_id，所以
+    # stamp 在前 close 在后能保留 token。机械 stage（spec_lint 等）不在
+    # AGENT_STAGES 里，跳过；fetch issue 失败 → bkd_session_id 仍是 None，跳过。
+    if bkd_session_id:
+        cur_stage = engine.STATE_TO_STAGE.get(cur_state)
+        if cur_stage in engine.AGENT_STAGES:
+            try:
+                await stage_runs.stamp_bkd_session_id(
+                    pool, req_id, cur_stage, bkd_session_id,
+                )
+            except Exception as e:
+                log.warning("webhook.stamp_bkd_session_id_failed",
+                            req_id=req_id, stage=cur_stage, error=str(e))
 
     # ─── 6. 推进状态机（engine 内部循环 emit）─────────────────────────────
     result = await engine.step(
