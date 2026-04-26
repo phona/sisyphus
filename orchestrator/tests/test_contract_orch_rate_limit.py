@@ -207,11 +207,12 @@ async def test_c1_start_intake_emits_escalate_on_rejection(monkeypatch):
     - record escalated_reason containing 'inflight-cap-exceeded' (via ctx mutation
       or update_context call)
     """
+    from collections import namedtuple
+
     import orchestrator.admission as adm_mod
     from orchestrator.store import db as db_mod
     from orchestrator.store import req_state as rs_mod
 
-    from collections import namedtuple
     Rejected = namedtuple("Rejected", ["admit", "reason"])
     rejected = Rejected(admit=False, reason="rate-limit:inflight-cap-exceeded")
     mock_gate = AsyncMock(return_value=rejected)
@@ -279,11 +280,12 @@ async def test_c2_start_analyze_emits_escalate_on_rejection(monkeypatch):
     - record escalated_reason containing 'inflight-cap-exceeded' (via ctx mutation
       or update_context call)
     """
+    from collections import namedtuple
+
     import orchestrator.admission as adm_mod
     from orchestrator.store import db as db_mod
     from orchestrator.store import req_state as rs_mod
 
-    from collections import namedtuple
     Rejected = namedtuple("Rejected", ["admit", "reason"])
     rejected = Rejected(admit=False, reason="rate-limit:inflight-cap-exceeded")
     mock_gate = AsyncMock(return_value=rejected)
