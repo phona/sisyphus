@@ -33,11 +33,10 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared helpers
@@ -470,6 +469,7 @@ class TestCreatePrCiWatchPrUrls:
         exception MUST NOT propagate AND checker dispatch MUST still be entered.
         """
         import httpx
+
         import orchestrator.actions.create_pr_ci_watch as mod
 
         mock_checker = AsyncMock(return_value={})
@@ -777,7 +777,7 @@ class TestEscalateCtxForwarding:
 class TestAnalyzePromptCrossLink:
     """Spec: analyze.md.j2 renders sisyphus:cross-link block conditionally."""
 
-    _BASE_VARS = dict(
+    _BASE_VARS: ClassVar[dict] = dict(
         req_id="REQ-x",
         project_id="P",
         project_alias="P",
@@ -836,7 +836,7 @@ class TestAnalyzePromptCrossLink:
 class TestDoneArchivePromptPrUrls:
     """Spec: done_archive.md.j2 renders Known PRs section conditionally."""
 
-    _BASE_VARS = dict(
+    _BASE_VARS: ClassVar[dict] = dict(
         req_id="REQ-x",
         accept_issue_id="accept-1",
         project_id="P",
@@ -914,7 +914,6 @@ class TestActiveReqOverviewSqlColumns:
         XLINK-S20: row with context containing bkd_intent_url and pr_urls jsonb →
         query result has bkd_intent_url and pr_urls_md with expected values.
         """
-        import asyncpg
 
         sql = open(self._SQL_PATH).read()
         test_req_id = "REQ-xlink-s20-sql-test"
