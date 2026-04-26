@@ -1,6 +1,7 @@
 """Unit tests for orchestrator.gh_incident.open_incident + escalate integration.
 
-Covers GHI-S1..GHI-S10 from openspec/changes/REQ-impl-gh-incident-open-1777173133.
+Covers GHI-S1..GHI-S15 from openspec/specs/gh-incident-open/spec.md (the
+per-involved-repo loop introduced by REQ-gh-incident-per-involved-repo-1777180551).
 """
 from __future__ import annotations
 
@@ -12,15 +13,20 @@ import httpx
 import pytest
 
 
-def _set_settings(monkeypatch, *, repo: str = "phona/sisyphus", token: str = "ghp_xxx",
-                  labels=None):
-    """Override config.settings for the duration of one test."""
+def _set_settings(monkeypatch, *, token: str = "ghp_xxx", labels=None,
+                  gh_incident_repo: str = "",
+                  default_involved_repos=None):
+    """Override config.settings on the gh_incident module."""
     from orchestrator import gh_incident
-    monkeypatch.setattr(gh_incident.settings, "gh_incident_repo", repo)
     monkeypatch.setattr(gh_incident.settings, "github_token", token)
+    monkeypatch.setattr(gh_incident.settings, "gh_incident_repo", gh_incident_repo)
     monkeypatch.setattr(
         gh_incident.settings, "gh_incident_labels",
         labels if labels is not None else ["sisyphus:incident"],
+    )
+    monkeypatch.setattr(
+        gh_incident.settings, "default_involved_repos",
+        default_involved_repos if default_involved_repos is not None else [],
     )
 
 
@@ -57,30 +63,30 @@ def _patch_client(monkeypatch, *, status_code: int = 201,
     return recorder
 
 
-# ─── GHI-S1: disabled when gh_incident_repo empty ─────────────────────────
+# ─── GHI-S1: disabled when repo argument is empty ─────────────────────────
 @pytest.mark.asyncio
 async def test_open_incident_disabled_when_repo_empty(monkeypatch):
     from orchestrator import gh_incident
-    _set_settings(monkeypatch, repo="", token="ghp_xxx")
+    _set_settings(monkeypatch, token="ghp_xxx")
     rec = _patch_client(monkeypatch)  # would record if called
 
     out = await gh_incident.open_incident(
-        req_id="REQ-1", reason="x", retry_count=0,
+        repo="", req_id="REQ-1", reason="x", retry_count=0,
         intent_issue_id="i", failed_issue_id="i", project_id="p",
     )
     assert out is None
-    assert rec == {}, "no HTTP request should be made when disabled"
+    assert rec == {}, "no HTTP request should be made when repo is empty"
 
 
 # ─── GHI-S2: disabled when github_token empty ────────────────────────────
 @pytest.mark.asyncio
 async def test_open_incident_disabled_when_token_empty(monkeypatch):
     from orchestrator import gh_incident
-    _set_settings(monkeypatch, repo="phona/sisyphus", token="")
+    _set_settings(monkeypatch, token="")
     rec = _patch_client(monkeypatch)
 
     out = await gh_incident.open_incident(
-        req_id="REQ-1", reason="x", retry_count=0,
+        repo="phona/sisyphus", req_id="REQ-1", reason="x", retry_count=0,
         intent_issue_id="i", failed_issue_id="i", project_id="p",
     )
     assert out is None
@@ -91,13 +97,14 @@ async def test_open_incident_disabled_when_token_empty(monkeypatch):
 @pytest.mark.asyncio
 async def test_open_incident_success_returns_html_url(monkeypatch):
     from orchestrator import gh_incident
-    _set_settings(monkeypatch, repo="phona/sisyphus", token="ghp_xxx")
+    _set_settings(monkeypatch, token="ghp_xxx")
     rec = _patch_client(
         monkeypatch, status_code=201,
         json_body={"html_url": "https://github.com/phona/sisyphus/issues/42"},
     )
 
     out = await gh_incident.open_incident(
+        repo="phona/sisyphus",
         req_id="REQ-9", reason="verifier-decision-escalate", retry_count=0,
         intent_issue_id="intent-1", failed_issue_id="vfy-3", project_id="proj-A",
         state="executing",
@@ -112,13 +119,14 @@ async def test_open_incident_success_returns_html_url(monkeypatch):
 @pytest.mark.asyncio
 async def test_open_incident_body_contains_context(monkeypatch):
     from orchestrator import gh_incident
-    _set_settings(monkeypatch, repo="phona/sisyphus", token="ghp_xxx")
+    _set_settings(monkeypatch, token="ghp_xxx")
     rec = _patch_client(
         monkeypatch, status_code=201,
         json_body={"html_url": "https://github.com/phona/sisyphus/issues/42"},
     )
 
     await gh_incident.open_incident(
+        repo="phona/sisyphus",
         req_id="REQ-9", reason="fixer-round-cap", retry_count=0,
         intent_issue_id="intent-1", failed_issue_id="vfy-3", project_id="proj-A",
         state="fixer-running",
@@ -138,11 +146,12 @@ async def test_open_incident_body_contains_context(monkeypatch):
 @pytest.mark.asyncio
 async def test_open_incident_http_503_returns_none(monkeypatch):
     from orchestrator import gh_incident
-    _set_settings(monkeypatch, repo="phona/sisyphus", token="ghp_xxx")
+    _set_settings(monkeypatch, token="ghp_xxx")
     _patch_client(monkeypatch, status_code=503,
                   json_body={"message": "service unavailable"})
 
     out = await gh_incident.open_incident(
+        repo="phona/sisyphus",
         req_id="REQ-9", reason="x", retry_count=0,
         intent_issue_id="i", failed_issue_id="i", project_id="p",
     )
@@ -152,10 +161,11 @@ async def test_open_incident_http_503_returns_none(monkeypatch):
 @pytest.mark.asyncio
 async def test_open_incident_network_error_returns_none(monkeypatch):
     from orchestrator import gh_incident
-    _set_settings(monkeypatch, repo="phona/sisyphus", token="ghp_xxx")
+    _set_settings(monkeypatch, token="ghp_xxx")
     _patch_client(monkeypatch, raise_exc=httpx.ConnectError("DNS failure"))
 
     out = await gh_incident.open_incident(
+        repo="phona/sisyphus",
         req_id="REQ-9", reason="x", retry_count=0,
         intent_issue_id="i", failed_issue_id="i", project_id="p",
     )
@@ -165,17 +175,18 @@ async def test_open_incident_network_error_returns_none(monkeypatch):
 @pytest.mark.asyncio
 async def test_open_incident_2xx_without_html_url_returns_none(monkeypatch):
     from orchestrator import gh_incident
-    _set_settings(monkeypatch, repo="phona/sisyphus", token="ghp_xxx")
+    _set_settings(monkeypatch, token="ghp_xxx")
     _patch_client(monkeypatch, status_code=200, json_body={"unexpected": "shape"})
 
     out = await gh_incident.open_incident(
+        repo="phona/sisyphus",
         req_id="REQ-9", reason="x", retry_count=0,
         intent_issue_id="i", failed_issue_id="i", project_id="p",
     )
     assert out is None
 
 
-# ─── escalate-integration tests (GHI-S6..GHI-S10) ─────────────────────────
+# ─── escalate-integration tests (GHI-S6..GHI-S15) ─────────────────────────
 # Sister tests to test_actions_smoke.py — kept here to keep gh-incident
 # scenarios in one file. The fixtures mirror the smoke-test style.
 
@@ -229,6 +240,17 @@ def _patch_db(monkeypatch):
     return patches
 
 
+def _patch_settings(monkeypatch, *, gh_incident_repo: str = "",
+                    default_involved_repos=None):
+    """Stub settings on actions.escalate (NOT gh_incident — that's mocked separately)."""
+    from orchestrator.actions import escalate as mod
+    monkeypatch.setattr(mod.settings, "gh_incident_repo", gh_incident_repo)
+    monkeypatch.setattr(
+        mod.settings, "default_involved_repos",
+        default_involved_repos if default_involved_repos is not None else [],
+    )
+
+
 def _make_body(*, issue_id="src-1", project_id="p", event="verify.escalate"):
     return type("B", (), {
         "issueId": issue_id, "projectId": project_id,
@@ -236,22 +258,25 @@ def _make_body(*, issue_id="src-1", project_id="p", event="verify.escalate"):
     })()
 
 
-@pytest.mark.asyncio
-async def test_escalate_real_path_opens_gh_incident(monkeypatch):
-    """GHI-S6: real-escalate calls open_incident, stores URL, appends github-incident tag."""
-    from orchestrator.actions import escalate as mod
-
-    fake_bkd = _make_fake_bkd()
-    _patch_bkd(monkeypatch, fake_bkd)
-    patches = _patch_db(monkeypatch)
-
+def _stub_req_state_get(monkeypatch):
     from orchestrator.store import req_state as rs
 
     class _Row:
         state = type("S", (), {"value": "executing"})()
     monkeypatch.setattr(rs, "get", AsyncMock(return_value=_Row()))
 
-    monkeypatch.setattr(mod.settings, "gh_incident_repo", "phona/sisyphus")
+
+@pytest.mark.asyncio
+async def test_escalate_real_path_opens_gh_incident(monkeypatch):
+    """GHI-S6: real-escalate single involved repo → one POST + ctx.gh_incident_urls."""
+    from orchestrator.actions import escalate as mod
+
+    fake_bkd = _make_fake_bkd()
+    _patch_bkd(monkeypatch, fake_bkd)
+    patches = _patch_db(monkeypatch)
+    _stub_req_state_get(monkeypatch)
+    _patch_settings(monkeypatch)
+
     open_inc = AsyncMock(return_value="https://github.com/phona/sisyphus/issues/42")
     monkeypatch.setattr(mod.gh_incident, "open_incident", open_inc)
 
@@ -261,26 +286,28 @@ async def test_escalate_real_path_opens_gh_incident(monkeypatch):
         ctx={
             "intent_issue_id": "intent-1",
             "escalated_reason": "verifier-decision-escalate",
+            "involved_repos": ["phona/sisyphus"],
         },
     )
     assert out["escalated"] is True
 
-    # open_incident called once with correct kwargs
     open_inc.assert_awaited_once()
     kw = open_inc.await_args.kwargs
+    assert kw["repo"] == "phona/sisyphus"
     assert kw["req_id"] == "REQ-9"
     assert kw["reason"] == "verifier-decision-escalate"
     assert kw["intent_issue_id"] == "intent-1"
     assert kw["failed_issue_id"] == "vfy-3"
     assert kw["project_id"] == "p"
 
-    # ctx patched with gh_incident_url + opened_at
     final = patches[-1]
+    assert final["gh_incident_urls"] == {
+        "phona/sisyphus": "https://github.com/phona/sisyphus/issues/42",
+    }
     assert final["gh_incident_url"] == "https://github.com/phona/sisyphus/issues/42"
     assert "gh_incident_opened_at" in final
     assert final["escalated_reason"] == "verifier-decision-escalate"
 
-    # BKD tag merge includes github-incident
     fake_bkd.merge_tags_and_update.assert_awaited_once()
     add = fake_bkd.merge_tags_and_update.await_args.kwargs["add"]
     assert "escalated" in add
@@ -290,18 +317,14 @@ async def test_escalate_real_path_opens_gh_incident(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_escalate_idempotent_when_ctx_has_url(monkeypatch):
-    """GHI-S7: ctx.gh_incident_url already set → no second POST."""
+    """GHI-S7: ctx.gh_incident_urls already covers all involved repos → no second POST."""
     from orchestrator.actions import escalate as mod
 
     fake_bkd = _make_fake_bkd()
     _patch_bkd(monkeypatch, fake_bkd)
     patches = _patch_db(monkeypatch)
-
-    from orchestrator.store import req_state as rs
-
-    class _Row:
-        state = type("S", (), {"value": "executing"})()
-    monkeypatch.setattr(rs, "get", AsyncMock(return_value=_Row()))
+    _stub_req_state_get(monkeypatch)
+    _patch_settings(monkeypatch)
 
     open_inc = AsyncMock(return_value="https://example/should/not/be/called")
     monkeypatch.setattr(mod.gh_incident, "open_incident", open_inc)
@@ -312,15 +335,19 @@ async def test_escalate_idempotent_when_ctx_has_url(monkeypatch):
         ctx={
             "intent_issue_id": "intent-1",
             "escalated_reason": "verifier-decision-escalate",
-            "gh_incident_url": "https://github.com/phona/sisyphus/issues/42",
+            "involved_repos": ["phona/sisyphus"],
+            "gh_incident_urls": {
+                "phona/sisyphus": "https://github.com/phona/sisyphus/issues/42",
+            },
         },
     )
 
     open_inc.assert_not_awaited()
-    # ctx_patch must not RE-write gh_incident_url (idempotent: leave existing alone)
     final = patches[-1]
+    # No new URL → ctx_patch must not REWRITE gh_incident_urls / gh_incident_url
+    assert "gh_incident_urls" not in final
     assert "gh_incident_url" not in final
-    # tag still includes github-incident (existing URL → still annotate BKD)
+    # Tag still includes github-incident (existing URLs → still annotate BKD)
     add = fake_bkd.merge_tags_and_update.await_args.kwargs["add"]
     assert "github-incident" in add
 
@@ -333,6 +360,7 @@ async def test_escalate_auto_resume_does_not_open_incident(monkeypatch):
     fake_bkd = _make_fake_bkd()
     _patch_bkd(monkeypatch, fake_bkd)
     _patch_db(monkeypatch)
+    _patch_settings(monkeypatch)
 
     open_inc = AsyncMock(return_value="https://example/should/not/be/called")
     monkeypatch.setattr(mod.gh_incident, "open_incident", open_inc)
@@ -350,18 +378,14 @@ async def test_escalate_auto_resume_does_not_open_incident(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_escalate_gh_failure_does_not_abort(monkeypatch):
-    """GHI-S9: open_incident returns None → escalate still completes; no gh_incident_url written."""
+    """GHI-S9: open_incident returns None → escalate still completes; no URL ctx fields."""
     from orchestrator.actions import escalate as mod
 
     fake_bkd = _make_fake_bkd()
     _patch_bkd(monkeypatch, fake_bkd)
     patches = _patch_db(monkeypatch)
-
-    from orchestrator.store import req_state as rs
-
-    class _Row:
-        state = type("S", (), {"value": "executing"})()
-    monkeypatch.setattr(rs, "get", AsyncMock(return_value=_Row()))
+    _stub_req_state_get(monkeypatch)
+    _patch_settings(monkeypatch)
 
     open_inc = AsyncMock(return_value=None)  # GH outage / disabled
     monkeypatch.setattr(mod.gh_incident, "open_incident", open_inc)
@@ -372,34 +396,30 @@ async def test_escalate_gh_failure_does_not_abort(monkeypatch):
         ctx={
             "intent_issue_id": "intent-1",
             "escalated_reason": "verifier-decision-escalate",
+            "involved_repos": ["phona/sisyphus"],
         },
     )
     assert out["escalated"] is True
     fake_bkd.merge_tags_and_update.assert_awaited_once()
     final = patches[-1]
     assert "gh_incident_url" not in final
-    # github-incident tag NOT appended when no URL was minted
+    assert "gh_incident_urls" not in final
     add = fake_bkd.merge_tags_and_update.await_args.kwargs["add"]
     assert "github-incident" not in add
 
 
 @pytest.mark.asyncio
 async def test_escalate_disabled_default_keeps_old_behavior(monkeypatch):
-    """GHI-S10: settings.gh_incident_repo='' (default) → behavior unchanged."""
+    """GHI-S10: no involved_repos and no settings.gh_incident_repo → behavior unchanged."""
     from orchestrator.actions import escalate as mod
 
     fake_bkd = _make_fake_bkd()
     _patch_bkd(monkeypatch, fake_bkd)
     patches = _patch_db(monkeypatch)
-
-    from orchestrator.store import req_state as rs
-
-    class _Row:
-        state = type("S", (), {"value": "executing"})()
-    monkeypatch.setattr(rs, "get", AsyncMock(return_value=_Row()))
+    _stub_req_state_get(monkeypatch)
+    _patch_settings(monkeypatch)
 
     # Don't mock open_incident — let it run with real (empty) settings
-    monkeypatch.setattr(mod.gh_incident.settings, "gh_incident_repo", "")
     monkeypatch.setattr(mod.gh_incident.settings, "github_token", "")
 
     body = _make_body(issue_id="vfy-3", event="verify.escalate")
@@ -413,7 +433,189 @@ async def test_escalate_disabled_default_keeps_old_behavior(monkeypatch):
     assert out["escalated"] is True
     final = patches[-1]
     assert "gh_incident_url" not in final
+    assert "gh_incident_urls" not in final
     add = fake_bkd.merge_tags_and_update.await_args.kwargs["add"]
     assert "github-incident" not in add
     assert "escalated" in add
     assert "reason:verifier-decision-escalate" in add
+
+
+@pytest.mark.asyncio
+async def test_escalate_multi_repo_opens_incident_per_repo(monkeypatch):
+    """GHI-S11: multi-repo REQ → one POST per involved repo."""
+    from orchestrator.actions import escalate as mod
+
+    fake_bkd = _make_fake_bkd()
+    _patch_bkd(monkeypatch, fake_bkd)
+    patches = _patch_db(monkeypatch)
+    _stub_req_state_get(monkeypatch)
+    _patch_settings(monkeypatch)
+
+    async def _open(*, repo, **_):
+        return {
+            "phona/repo-a": "https://github.com/phona/repo-a/issues/7",
+            "phona/repo-b": "https://github.com/phona/repo-b/issues/3",
+        }.get(repo)
+
+    open_inc = AsyncMock(side_effect=_open)
+    monkeypatch.setattr(mod.gh_incident, "open_incident", open_inc)
+
+    body = _make_body(issue_id="vfy-3", event="verify.escalate")
+    await mod.escalate(
+        body=body, req_id="REQ-9", tags=["verifier"],
+        ctx={
+            "intent_issue_id": "intent-1",
+            "escalated_reason": "verifier-decision-escalate",
+            "involved_repos": ["phona/repo-a", "phona/repo-b"],
+        },
+    )
+
+    assert open_inc.await_count == 2
+    repos_called = sorted(c.kwargs["repo"] for c in open_inc.await_args_list)
+    assert repos_called == ["phona/repo-a", "phona/repo-b"]
+
+    final = patches[-1]
+    assert final["gh_incident_urls"] == {
+        "phona/repo-a": "https://github.com/phona/repo-a/issues/7",
+        "phona/repo-b": "https://github.com/phona/repo-b/issues/3",
+    }
+    add = fake_bkd.merge_tags_and_update.await_args.kwargs["add"]
+    assert add.count("github-incident") == 1
+
+
+@pytest.mark.asyncio
+async def test_escalate_partial_failure_isolated(monkeypatch):
+    """GHI-S12: one repo POST fails (None), the other succeeds → only the success persists."""
+    from orchestrator.actions import escalate as mod
+
+    fake_bkd = _make_fake_bkd()
+    _patch_bkd(monkeypatch, fake_bkd)
+    patches = _patch_db(monkeypatch)
+    _stub_req_state_get(monkeypatch)
+    _patch_settings(monkeypatch)
+
+    async def _open(*, repo, **_):
+        return None if repo == "phona/repo-a" else "https://github.com/phona/repo-b/issues/3"
+
+    open_inc = AsyncMock(side_effect=_open)
+    monkeypatch.setattr(mod.gh_incident, "open_incident", open_inc)
+
+    body = _make_body(issue_id="vfy-3", event="verify.escalate")
+    out = await mod.escalate(
+        body=body, req_id="REQ-9", tags=["verifier"],
+        ctx={
+            "intent_issue_id": "intent-1",
+            "escalated_reason": "verifier-decision-escalate",
+            "involved_repos": ["phona/repo-a", "phona/repo-b"],
+        },
+    )
+    assert out["escalated"] is True
+
+    final = patches[-1]
+    assert final["gh_incident_urls"] == {
+        "phona/repo-b": "https://github.com/phona/repo-b/issues/3",
+    }
+    add = fake_bkd.merge_tags_and_update.await_args.kwargs["add"]
+    assert "github-incident" in add  # one success suffices
+
+
+@pytest.mark.asyncio
+async def test_escalate_idempotent_per_repo_only_missing_posted(monkeypatch):
+    """GHI-S13: existing URLs preserved; only missing repos POSTed on re-entry."""
+    from orchestrator.actions import escalate as mod
+
+    fake_bkd = _make_fake_bkd()
+    _patch_bkd(monkeypatch, fake_bkd)
+    patches = _patch_db(monkeypatch)
+    _stub_req_state_get(monkeypatch)
+    _patch_settings(monkeypatch)
+
+    open_inc = AsyncMock(return_value="https://github.com/phona/repo-b/issues/3")
+    monkeypatch.setattr(mod.gh_incident, "open_incident", open_inc)
+
+    body = _make_body(issue_id="vfy-3", event="verify.escalate")
+    await mod.escalate(
+        body=body, req_id="REQ-9", tags=["verifier"],
+        ctx={
+            "intent_issue_id": "intent-1",
+            "escalated_reason": "verifier-decision-escalate",
+            "involved_repos": ["phona/repo-a", "phona/repo-b"],
+            "gh_incident_urls": {
+                "phona/repo-a": "https://github.com/phona/repo-a/issues/7",
+            },
+        },
+    )
+
+    open_inc.assert_awaited_once()
+    assert open_inc.await_args.kwargs["repo"] == "phona/repo-b"
+
+    final = patches[-1]
+    assert final["gh_incident_urls"] == {
+        "phona/repo-a": "https://github.com/phona/repo-a/issues/7",
+        "phona/repo-b": "https://github.com/phona/repo-b/issues/3",
+    }
+
+
+@pytest.mark.asyncio
+async def test_escalate_falls_back_to_settings_gh_incident_repo(monkeypatch):
+    """GHI-S14: no involved_repos → fall back to settings.gh_incident_repo (legacy single-inbox)."""
+    from orchestrator.actions import escalate as mod
+
+    fake_bkd = _make_fake_bkd()
+    _patch_bkd(monkeypatch, fake_bkd)
+    patches = _patch_db(monkeypatch)
+    _stub_req_state_get(monkeypatch)
+    _patch_settings(monkeypatch, gh_incident_repo="phona/sisyphus")
+
+    open_inc = AsyncMock(return_value="https://github.com/phona/sisyphus/issues/99")
+    monkeypatch.setattr(mod.gh_incident, "open_incident", open_inc)
+
+    body = _make_body(issue_id="vfy-3", event="verify.escalate")
+    await mod.escalate(
+        body=body, req_id="REQ-9", tags=["verifier"],
+        ctx={
+            "intent_issue_id": "intent-1",
+            "escalated_reason": "verifier-decision-escalate",
+        },
+    )
+
+    open_inc.assert_awaited_once()
+    assert open_inc.await_args.kwargs["repo"] == "phona/sisyphus"
+
+    final = patches[-1]
+    assert final["gh_incident_urls"] == {
+        "phona/sisyphus": "https://github.com/phona/sisyphus/issues/99",
+    }
+    add = fake_bkd.merge_tags_and_update.await_args.kwargs["add"]
+    assert "github-incident" in add
+
+
+@pytest.mark.asyncio
+async def test_escalate_involved_repos_take_precedence_over_fallback(monkeypatch):
+    """GHI-S15: ctx.involved_repos beats settings.gh_incident_repo."""
+    from orchestrator.actions import escalate as mod
+
+    fake_bkd = _make_fake_bkd()
+    _patch_bkd(monkeypatch, fake_bkd)
+    patches = _patch_db(monkeypatch)
+    _stub_req_state_get(monkeypatch)
+    _patch_settings(monkeypatch, gh_incident_repo="phona/sisyphus")
+
+    open_inc = AsyncMock(return_value="https://github.com/phona/repo-a/issues/1")
+    monkeypatch.setattr(mod.gh_incident, "open_incident", open_inc)
+
+    body = _make_body(issue_id="vfy-3", event="verify.escalate")
+    await mod.escalate(
+        body=body, req_id="REQ-9", tags=["verifier"],
+        ctx={
+            "intent_issue_id": "intent-1",
+            "escalated_reason": "verifier-decision-escalate",
+            "involved_repos": ["phona/repo-a"],
+        },
+    )
+
+    open_inc.assert_awaited_once()
+    assert open_inc.await_args.kwargs["repo"] == "phona/repo-a"
+
+    final = patches[-1]
+    assert set(final["gh_incident_urls"].keys()) == {"phona/repo-a"}
