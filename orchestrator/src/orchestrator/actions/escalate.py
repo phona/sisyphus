@@ -14,12 +14,18 @@
    → 在 intent issue 上加 `escalated` + `reason:<细分>` tag
    → 落 ctx 标记 escalated_reason
    → 解析 incident-target repos（involved_repos 5 层 fallback，layer 5 是
-     legacy settings.gh_incident_repo）；对每个 repo 独立 POST GH issue，
-     idempotent on ctx.gh_incident_urls；至少一条成功 → 加 `github-incident` BKD tag
+     legacy settings.gh_incident_repo）；对每个 repo:
+       a. 优先 `find_pr_for_branch(feat/{REQ})` → 找到 → `comment_on_pr`
+          （保 1 REQ = 1 PR 不变量；REQ-one-pr-per-req-1777218057）
+       b. 没 PR → fall back `open_incident` 开新 issue（INTAKING / 早期
+          ANALYZING / triage-inbox 部署）
+     idempotent on ctx.gh_incident_urls；ctx.gh_incident_kinds 记录每个
+     repo 是 "comment" 还是 "issue"；至少一条成功 → 加 `github-incident` BKD tag
    → state 进 ESCALATED
 
 不在 BKD 开新 issue（避免污染列表）；不 cancel 当前 issue（让人工有现场）。
-GH issue 是给人看的事故面板，不在 BKD 里复制；REST 失败不阻塞 escalate。
+GH 一面（PR comment / fallback issue）是给人看的事故面板，不在 BKD 里复制；
+REST 失败不阻塞 escalate。
 """
 from __future__ import annotations
 
@@ -356,38 +362,65 @@ async def escalate(*, body, req_id, tags, ctx):
 
     pool = db.get_pool()
 
-    # ─── GH 事故 issue（per-involved-repo loop, idempotent on ctx.gh_incident_urls） ─
-    # 仅在 real-escalate 路径开 issue（auto-resume 不开，会刷屏）。Layer 1-4 是
-    # involved_repos（跟 clone helper 对齐：哪几个仓被 clone，事故就在那几个仓里
-    # 落 issue）；Layer 5 是 settings.gh_incident_repo（legacy single-inbox fallback，
-    # intake 阶段失败 pre-clone / 集中三角部署）。
+    # ─── GH 事故落地（per-involved-repo loop, idempotent on ctx.gh_incident_urls） ─
+    # REQ-one-pr-per-req-1777218057: 优先在 feat/{REQ} PR 上加评论（保 1 REQ = 1 PR
+    # 不变量）；只有该 repo 上还没 PR（escalation in INTAKING / 早期 ANALYZING / triage
+    # inbox 部署）才 fall back 开新 issue（legacy open_incident）。
+    #
+    # 仅在 real-escalate 路径写 GH（auto-resume 不写，会刷屏）。Layer 1-4 是
+    # involved_repos（跟 clone helper 对齐：哪几个仓被 clone，事故就在那几个仓里）；
+    # Layer 5 是 settings.gh_incident_repo（legacy single-inbox fallback）。
     existing_urls = dict((ctx or {}).get("gh_incident_urls") or {})
+    existing_kinds = dict((ctx or {}).get("gh_incident_kinds") or {})
     incident_repos = _resolve_incident_repos(ctx, tags)
     new_urls: dict[str, str] = {}
+    new_kinds: dict[str, str] = {}
     if incident_repos:
-        # 取当前 state 给 issue body（best-effort，None 也能继续）
+        # 取当前 state 给 body（best-effort，None 也能继续）
         try:
             row = await req_state.get(pool, req_id)
             state_str = row.state.value if row else None
         except Exception:
             state_str = None
+        feat_branch = f"feat/{req_id}"
         for incident_repo in incident_repos:
             if incident_repo in existing_urls:
-                continue  # idempotent: 此 repo 已开过 issue
-            url = await gh_incident.open_incident(
-                repo=incident_repo,
-                req_id=req_id,
-                reason=final_reason,
-                retry_count=retry_count,
-                intent_issue_id=intent_issue_id,
-                failed_issue_id=failed_issue_id,
-                project_id=proj,
-                state=state_str,
+                continue  # idempotent: 此 repo 已 comment / open 过
+            pr_number = await gh_incident.find_pr_for_branch(
+                repo=incident_repo, branch=feat_branch,
             )
+            if pr_number:
+                url = await gh_incident.comment_on_pr(
+                    repo=incident_repo,
+                    pr_number=pr_number,
+                    req_id=req_id,
+                    reason=final_reason,
+                    retry_count=retry_count,
+                    intent_issue_id=intent_issue_id,
+                    failed_issue_id=failed_issue_id,
+                    project_id=proj,
+                    state=state_str,
+                )
+                kind = "comment"
+            else:
+                # 没 PR → 兜底开 issue（legacy 行为）
+                url = await gh_incident.open_incident(
+                    repo=incident_repo,
+                    req_id=req_id,
+                    reason=final_reason,
+                    retry_count=retry_count,
+                    intent_issue_id=intent_issue_id,
+                    failed_issue_id=failed_issue_id,
+                    project_id=proj,
+                    state=state_str,
+                )
+                kind = "issue"
             if url:
                 new_urls[incident_repo] = url
+                new_kinds[incident_repo] = kind
 
     merged_urls = {**existing_urls, **new_urls}
+    merged_kinds = {**existing_kinds, **new_kinds}
 
     add_tags = ["escalated", f"reason:{final_reason}"]
     if merged_urls:
@@ -411,6 +444,9 @@ async def escalate(*, body, req_id, tags, ctx):
     if new_urls:
         # 全量替换 dict（merge of existing_urls + new_urls 已在 merged_urls）
         ctx_patch["gh_incident_urls"] = merged_urls
+        # gh_incident_kinds 跟 gh_incident_urls 对齐：每个 repo 一个 "comment" | "issue"
+        # 标记，让 admin / dashboard 能区分两条路径。
+        ctx_patch["gh_incident_kinds"] = merged_kinds
         # legacy single-URL field：保留首次成功 POST 的 URL，让 admin view /
         # Metabase 旧 query 继续工作。优先 existing（保持旧值），否则取新 URL 第一条。
         legacy_url = (ctx or {}).get("gh_incident_url") or next(iter(new_urls.values()))
