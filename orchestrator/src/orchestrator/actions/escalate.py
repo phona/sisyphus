@@ -8,8 +8,9 @@
 2. 否则（retry 用完 / verifier 主动判 escalate）:
    → 在 intent issue 上加 `escalated` + `reason:<细分>` tag
    → 落 ctx 标记 escalated_reason
-   → 若 settings.gh_incident_repo 非空且 ctx.gh_incident_url 未设：开一条 GH
-     issue（gh_incident.open_incident）+ `github-incident` BKD tag
+   → 解析 incident-target repos（involved_repos 5 层 fallback，layer 5 是
+     legacy settings.gh_incident_repo）；对每个 repo 独立 POST GH issue，
+     idempotent on ctx.gh_incident_urls；至少一条成功 → 加 `github-incident` BKD tag
    → state 进 ESCALATED
 
 不在 BKD 开新 issue（避免污染列表）；不 cancel 当前 issue（让人工有现场）。
@@ -27,6 +28,7 @@ from ..config import settings
 from ..state import Event, ReqState
 from ..store import db, req_state
 from . import register
+from ._clone import resolve_repos
 
 log = structlog.get_logger(__name__)
 
@@ -91,6 +93,23 @@ _SESSION_END_SIGNALS = {
     "watchdog.intake_no_result_tag",
     "archive.failed",
 }
+
+
+def _resolve_incident_repos(ctx: dict | None, tags) -> list[str]:
+    """Layered fallback for "where do incidents land for this REQ?"
+
+    Layers 1-4 mirror clone resolution (intake_finalized_intent / ctx.involved_repos /
+    `repo:` tags / settings.default_involved_repos). Layer 5 is settings.gh_incident_repo
+    — the legacy single-inbox knob, only consulted when 1-4 are all empty (intake-stage
+    failures pre-clone, "central triage queue" deployments).
+    """
+    repos, _src = resolve_repos(
+        ctx, tags=tags, default_repos=settings.default_involved_repos,
+    )
+    if repos:
+        return repos
+    fallback = (settings.gh_incident_repo or "").strip()
+    return [fallback] if fallback else []
 
 
 @register("escalate", idempotent=True)
@@ -165,34 +184,41 @@ async def escalate(*, body, req_id, tags, ctx):
 
     pool = db.get_pool()
 
-    # ─── GH 事故 issue（idempotent on ctx.gh_incident_url） ────────────────
-    # 仅在 real-escalate 路径开 issue（auto-resume 不开，会刷屏）。
-    # disabled (gh_incident_repo / github_token 任一为空) → open_incident 返
-    # None，flow 不变。GH 5xx / 401 等失败也只 log warning，escalate 仍正常完成。
-    existing_gh_url = (ctx or {}).get("gh_incident_url")
-    if existing_gh_url:
-        gh_url = existing_gh_url  # resume 后再 escalate，复用旧 URL
-    elif not settings.gh_incident_repo:
-        gh_url = None  # feature disabled; skip open_incident entirely
-    else:
+    # ─── GH 事故 issue（per-involved-repo loop, idempotent on ctx.gh_incident_urls） ─
+    # 仅在 real-escalate 路径开 issue（auto-resume 不开，会刷屏）。Layer 1-4 是
+    # involved_repos（跟 clone helper 对齐：哪几个仓被 clone，事故就在那几个仓里
+    # 落 issue）；Layer 5 是 settings.gh_incident_repo（legacy single-inbox fallback，
+    # intake 阶段失败 pre-clone / 集中三角部署）。
+    existing_urls = dict((ctx or {}).get("gh_incident_urls") or {})
+    incident_repos = _resolve_incident_repos(ctx, tags)
+    new_urls: dict[str, str] = {}
+    if incident_repos:
         # 取当前 state 给 issue body（best-effort，None 也能继续）
         try:
             row = await req_state.get(pool, req_id)
             state_str = row.state.value if row else None
         except Exception:
             state_str = None
-        gh_url = await gh_incident.open_incident(
-            req_id=req_id,
-            reason=final_reason,
-            retry_count=retry_count,
-            intent_issue_id=intent_issue_id,
-            failed_issue_id=failed_issue_id,
-            project_id=proj,
-            state=state_str,
-        )
+        for incident_repo in incident_repos:
+            if incident_repo in existing_urls:
+                continue  # idempotent: 此 repo 已开过 issue
+            url = await gh_incident.open_incident(
+                repo=incident_repo,
+                req_id=req_id,
+                reason=final_reason,
+                retry_count=retry_count,
+                intent_issue_id=intent_issue_id,
+                failed_issue_id=failed_issue_id,
+                project_id=proj,
+                state=state_str,
+            )
+            if url:
+                new_urls[incident_repo] = url
+
+    merged_urls = {**existing_urls, **new_urls}
 
     add_tags = ["escalated", f"reason:{final_reason}"]
-    if gh_url:
+    if merged_urls:
         # snapshot._STAGE_FROM_TAGS 已包含 'github-incident'，让 Metabase 看板自然识别
         add_tags.append("github-incident")
 
@@ -210,8 +236,13 @@ async def escalate(*, body, req_id, tags, ctx):
         "escalated_source_issue_id": failed_issue_id,
         "escalated_retry_count": retry_count,
     }
-    if gh_url and not existing_gh_url:
-        ctx_patch["gh_incident_url"] = gh_url
+    if new_urls:
+        # 全量替换 dict（merge of existing_urls + new_urls 已在 merged_urls）
+        ctx_patch["gh_incident_urls"] = merged_urls
+        # legacy single-URL field：保留首次成功 POST 的 URL，让 admin view /
+        # Metabase 旧 query 继续工作。优先 existing（保持旧值），否则取新 URL 第一条。
+        legacy_url = (ctx or {}).get("gh_incident_url") or next(iter(new_urls.values()))
+        ctx_patch["gh_incident_url"] = legacy_url
         ctx_patch["gh_incident_opened_at"] = datetime.now(UTC).isoformat(timespec="seconds")
     await req_state.update_context(pool, req_id, ctx_patch)
 

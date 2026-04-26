@@ -1,23 +1,28 @@
-"""Contract tests for REQ-impl-gh-incident-open-1777173133:
-feat(orchestrator): open GitHub issue when REQ enters ESCALATED
+"""Contract tests for REQ-gh-incident-per-involved-repo-1777180551:
+feat(orchestrator): open one GitHub incident per involved source repo.
 
 Black-box behavioral contracts derived exclusively from:
-  openspec/changes/REQ-impl-gh-incident-open-1777173133/specs/gh-incident-open/spec.md
+  openspec/specs/gh-incident-open/spec.md (post REQ-gh-incident-per-involved-repo)
 
 Scenarios covered:
-  GHI-S1  open_incident disabled when gh_incident_repo is empty → None, no HTTP
-  GHI-S2  open_incident disabled when github_token is empty → None, no HTTP
-  GHI-S3  open_incident success → POST correct URL + headers, returns html_url
-  GHI-S4  open_incident POST body contains required fields and labels array
-  GHI-S5  open_incident HTTP failure (503) → None, does not raise
-  GHI-S6  escalate real-escalate: open_incident awaited once, ctx stores URL, github-incident tag
-  GHI-S7  escalate idempotent: ctx.gh_incident_url already set → open_incident NOT called
-  GHI-S8  escalate auto-resume branch → open_incident NOT called
-  GHI-S9  escalate: GH failure (open_incident→None) does not abort the flow
-  GHI-S10 escalate: disabled (gh_incident_repo='') → flow proceeds, no github-incident tag
+  GHI-S1   open_incident disabled when repo='' → None, no HTTP
+  GHI-S2   open_incident disabled when github_token='' → None, no HTTP
+  GHI-S3   open_incident success → POST correct URL + headers, returns html_url
+  GHI-S4   open_incident POST body contains required fields and labels array
+  GHI-S5   open_incident HTTP failure (503) → None, does not raise
+  GHI-S6   escalate single involved-repo: one POST, ctx.gh_incident_urls has the entry
+  GHI-S7   escalate idempotent: ctx.gh_incident_urls already covers all involved repos → no POST
+  GHI-S8   escalate auto-resume branch → no POST
+  GHI-S9   escalate: GH failure (open_incident→None) does not abort the flow
+  GHI-S10  escalate: no involved_repos and no settings.gh_incident_repo → no POST, no tag
+  GHI-S11  escalate multi-involved-repo → one POST per repo, urls dict has both keys
+  GHI-S12  escalate partial failure isolated → only successful repo persisted
+  GHI-S13  escalate idempotent across multi-repo: only missing repos POSTed on re-entry
+  GHI-S14  escalate falls back to settings.gh_incident_repo when involved_repos empty
+  GHI-S15  ctx.involved_repos beats settings.gh_incident_repo (layers 1-4 win)
 
-Function signatures verified at test design time (without reading source):
-  open_incident(*, req_id, reason, retry_count, intent_issue_id, failed_issue_id,
+Function signatures verified at test design time:
+  open_incident(*, repo, req_id, reason, retry_count, intent_issue_id, failed_issue_id,
                 project_id, state=None) -> str | None
   escalate(*, body, req_id, tags, ctx) -> dict
 
@@ -38,15 +43,16 @@ import pytest
 
 
 def _make_settings(
-    gh_incident_repo: str = "phona/sisyphus",
+    gh_incident_repo: str = "",
     github_token: str = "ghp_test_token",
     gh_incident_labels: list | None = None,
+    default_involved_repos: list | None = None,
 ) -> Any:
     s = MagicMock()
     s.gh_incident_repo = gh_incident_repo
     s.github_token = github_token
     s.gh_incident_labels = gh_incident_labels if gh_incident_labels is not None else ["sisyphus:incident"]
-    # Fields used by other parts of escalate that are not under test
+    s.default_involved_repos = list(default_involved_repos or [])
     s.bkd_base_url = "https://bkd.example.test/api"
     s.bkd_token = "test-token"
     s.max_auto_retries = 2
@@ -67,17 +73,18 @@ def _make_body(event: str = "verify.escalate", project_id: str = "proj-test") ->
 
 
 class TestOpenIncidentDisabled:
-    """Spec: open_incident returns None when either config setting is empty."""
+    """Spec: open_incident returns None when either input is empty."""
 
-    async def test_ghi_s1_disabled_when_gh_incident_repo_empty(self):
+    async def test_ghi_s1_disabled_when_repo_arg_empty(self):
         """
-        GHI-S1: gh_incident_repo='' → open_incident returns None without making any HTTP request.
+        GHI-S1: open_incident(repo="") → returns None without any HTTP request.
         """
         import orchestrator.gh_incident as ghi
 
-        s = _make_settings(gh_incident_repo="")
+        s = _make_settings()
         with patch.object(ghi, "settings", s):
             result = await ghi.open_incident(
+                repo="",
                 req_id="REQ-1",
                 reason="x",
                 retry_count=0,
@@ -87,18 +94,19 @@ class TestOpenIncidentDisabled:
             )
 
         assert result is None, (
-            f"open_incident MUST return None when gh_incident_repo is empty; got {result!r}"
+            f"open_incident MUST return None when repo arg is empty; got {result!r}"
         )
 
     async def test_ghi_s2_disabled_when_github_token_empty(self):
         """
-        GHI-S2: github_token='' → open_incident returns None without making any HTTP request.
+        GHI-S2: github_token='' → open_incident returns None without any HTTP request.
         """
         import orchestrator.gh_incident as ghi
 
         s = _make_settings(github_token="")
         with patch.object(ghi, "settings", s):
             result = await ghi.open_incident(
+                repo="phona/sisyphus",
                 req_id="REQ-1",
                 reason="x",
                 retry_count=0,
@@ -138,6 +146,7 @@ class TestOpenIncidentSuccess:
         s = _make_settings()
         with patch.object(ghi, "settings", s):
             result = await ghi.open_incident(
+                repo="phona/sisyphus",
                 req_id="REQ-1",
                 reason="test-reason",
                 retry_count=0,
@@ -152,7 +161,7 @@ class TestOpenIncidentSuccess:
 
         request = httpx_mock.get_request()
         assert request is not None, (
-            "open_incident MUST send an HTTP POST request when both settings are non-empty"
+            "open_incident MUST send an HTTP POST request when both inputs are non-empty"
         )
         assert str(request.url) == "https://api.github.com/repos/phona/sisyphus/issues", (
             f"POST URL must be 'https://api.github.com/repos/phona/sisyphus/issues'; "
@@ -184,6 +193,7 @@ class TestOpenIncidentSuccess:
         s = _make_settings()
         with patch.object(ghi, "settings", s):
             await ghi.open_incident(
+                repo="phona/sisyphus",
                 req_id="REQ-9",
                 reason="fixer-round-cap",
                 retry_count=0,
@@ -237,6 +247,7 @@ class TestOpenIncidentHTTPFailure:
         with patch.object(ghi, "settings", s):
             try:
                 result = await ghi.open_incident(
+                    repo="phona/sisyphus",
                     req_id="REQ-1",
                     reason="x",
                     retry_count=0,
@@ -256,10 +267,7 @@ class TestOpenIncidentHTTPFailure:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Part 4: escalate action integration — GHI-S6 to GHI-S10
-#
-# escalate(*, body, req_id, tags, ctx) → dict
-# Patches applied to orchestrator.actions.escalate module attributes.
+# Part 4: escalate action integration — GHI-S6 .. GHI-S15
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -279,20 +287,29 @@ def _make_escalate_mocks(
     open_incident_calls: list,
     merge_tags_calls: list,
     update_ctx_calls: list,
-    gh_return_url: str | None = "https://github.com/phona/sisyphus/issues/42",
+    gh_return: Any = "https://github.com/phona/sisyphus/issues/42",
 ) -> tuple[Any, Any, Any, Any]:
-    """Build mock objects for escalate's module-level imports."""
+    """Build mock objects for escalate's module-level imports.
 
-    # Mock gh_incident module
+    `gh_return` may be:
+      - a string  → all open_incident calls return that string
+      - None      → all calls return None (GH outage)
+      - a dict    → keyed by repo arg; missing keys → None
+      - a callable → called with kwargs, must return str | None
+    """
+
     mock_gh = MagicMock()
 
     async def _capture_open_incident(**kwargs):
         open_incident_calls.append(dict(kwargs))
-        return gh_return_url
+        if callable(gh_return):
+            return gh_return(**kwargs)
+        if isinstance(gh_return, dict):
+            return gh_return.get(kwargs.get("repo"))
+        return gh_return
 
     mock_gh.open_incident = _capture_open_incident
 
-    # Mock BKDClient (used as `async with BKDClient(...) as bkd:`)
     mock_bkd_inner = MagicMock()
 
     async def _capture_merge(*args, **kwargs):
@@ -308,7 +325,6 @@ def _make_escalate_mocks(
     mock_bkd_inst.__aexit__ = AsyncMock(return_value=False)
     mock_BKDClient = MagicMock(return_value=mock_bkd_inst)
 
-    # Mock req_state module
     mock_rs = MagicMock()
 
     async def _capture_update_ctx(*args, **kwargs):
@@ -318,7 +334,6 @@ def _make_escalate_mocks(
     mock_rs.cas_state = AsyncMock()
     mock_rs.get = AsyncMock()
 
-    # Mock k8s_runner module (cleanup calls — must not fail)
     mock_k8s = MagicMock()
     mock_k8s.cleanup_runner = AsyncMock()
     mock_k8s.delete_runner = AsyncMock()
@@ -328,7 +343,6 @@ def _make_escalate_mocks(
 
 
 def _escalate_patches(settings, mock_gh, mock_BKDClient, mock_rs, mock_k8s):
-    """Return list of patch context managers for the escalate module."""
     return [
         patch("orchestrator.actions.escalate.settings", settings),
         patch("orchestrator.actions.escalate.gh_incident", mock_gh),
@@ -351,17 +365,16 @@ def _get_add_list(merge_call: dict) -> list:
     return add_list
 
 
-class TestEscalateRealEscalateGHIS6:
-    """GHI-S6: real-escalate → open_incident called once, ctx URL stored, github-incident tag added."""
+def _last_url_update(update_ctx_calls: list) -> dict | None:
+    matches = [u for u in update_ctx_calls
+               if "gh_incident_urls" in u or "gh_incident_url" in u]
+    return matches[-1] if matches else None
 
-    async def test_ghi_s6_real_escalate_opens_incident_and_stores_url(self):
-        """
-        GHI-S6: body.event='verify.escalate', ctx.escalated_reason='verifier-decision-escalate' →
-        - open_incident awaited exactly once with req_id + reason matching input
-        - req_state.update_context called with gh_incident_url + gh_incident_opened_at
-        - bkd.merge_tags_and_update 'add' contains 'escalated', 'reason:verifier-decision-escalate',
-          AND 'github-incident'
-        """
+
+class TestEscalateRealEscalateGHIS6:
+    """GHI-S6: real-escalate single involved repo → one POST, ctx.gh_incident_urls populated."""
+
+    async def test_ghi_s6_single_involved_repo_opens_one_incident(self):
         from orchestrator.actions.escalate import escalate
 
         open_incident_calls: list = []
@@ -371,7 +384,7 @@ class TestEscalateRealEscalateGHIS6:
         settings = _make_settings()
         mock_gh, mock_BKDClient, mock_rs, mock_k8s = _make_escalate_mocks(
             open_incident_calls, merge_tags_calls, update_ctx_calls,
-            gh_return_url="https://github.com/phona/sisyphus/issues/42",
+            gh_return="https://github.com/phona/sisyphus/issues/42",
         )
 
         body = _make_body("verify.escalate")
@@ -379,76 +392,55 @@ class TestEscalateRealEscalateGHIS6:
             "escalated_reason": "verifier-decision-escalate",
             "escalated_source_issue_id": "fail-issue-ghi",
             "auto_retry_count": 5,
+            "involved_repos": ["phona/sisyphus"],
         }
 
         patches = _escalate_patches(settings, mock_gh, mock_BKDClient, mock_rs, mock_k8s)
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
-            try:
-                await escalate(
-                    body=body,
-                    req_id="REQ-test-ghi",
-                    tags=["REQ-test-ghi", "verifier"],
-                    ctx=ctx,
-                )
-            except Exception as exc:
-                pytest.fail(
-                    f"escalate raised unexpectedly in real_escalate path: "
-                    f"{type(exc).__name__}: {exc}"
-                )
+            await escalate(
+                body=body,
+                req_id="REQ-test-ghi",
+                tags=["REQ-test-ghi", "verifier"],
+                ctx=ctx,
+            )
 
-        # Contract 1: open_incident called exactly once
         assert len(open_incident_calls) == 1, (
-            f"gh_incident.open_incident MUST be awaited exactly once in real_escalate; "
-            f"called {len(open_incident_calls)} time(s). Calls: {open_incident_calls!r}"
+            f"open_incident MUST be awaited exactly once for a single involved repo; "
+            f"got {len(open_incident_calls)} calls: {open_incident_calls!r}"
         )
         call = open_incident_calls[0]
-        assert call.get("req_id") == "REQ-test-ghi", (
-            f"open_incident must be called with req_id='REQ-test-ghi'; got call: {call!r}"
+        assert call.get("repo") == "phona/sisyphus", (
+            f"open_incident must be called with repo='phona/sisyphus'; got {call!r}"
         )
-        assert call.get("reason") == "verifier-decision-escalate", (
-            f"open_incident must be called with reason='verifier-decision-escalate'; "
-            f"got call: {call!r}"
+        assert call.get("req_id") == "REQ-test-ghi"
+        assert call.get("reason") == "verifier-decision-escalate"
+
+        u = _last_url_update(update_ctx_calls)
+        assert u is not None, (
+            f"update_context MUST be called with gh_incident_urls; "
+            f"all updates: {update_ctx_calls!r}"
+        )
+        assert u.get("gh_incident_urls") == {
+            "phona/sisyphus": "https://github.com/phona/sisyphus/issues/42",
+        }, f"gh_incident_urls dict mismatch: {u!r}"
+        assert u.get("gh_incident_url") == "https://github.com/phona/sisyphus/issues/42", (
+            f"legacy gh_incident_url must equal the first URL: {u!r}"
+        )
+        assert u.get("gh_incident_opened_at"), (
+            f"gh_incident_opened_at MUST be non-empty: {u!r}"
         )
 
-        # Contract 2: update_context includes gh_incident_url + gh_incident_opened_at
-        url_updates = [u for u in update_ctx_calls if "gh_incident_url" in u]
-        assert url_updates, (
-            f"req_state.update_context MUST be called with gh_incident_url; "
-            f"all captured updates: {update_ctx_calls!r}"
-        )
-        url_update = url_updates[-1]
-        assert url_update["gh_incident_url"] == "https://github.com/phona/sisyphus/issues/42", (
-            f"gh_incident_url must equal the URL returned by open_incident; "
-            f"got {url_update['gh_incident_url']!r}"
-        )
-        assert url_update.get("gh_incident_opened_at"), (
-            f"update_context MUST include non-empty gh_incident_opened_at; "
-            f"got update: {url_update!r}"
-        )
-
-        # Contract 3: bkd.merge_tags_and_update add list contains github-incident
-        assert merge_tags_calls, (
-            "bkd.merge_tags_and_update MUST be called in the real_escalate branch"
-        )
+        assert merge_tags_calls
         add_list = _get_add_list(merge_tags_calls[-1])
-        assert "github-incident" in add_list, (
-            f"bkd.merge_tags_and_update 'add' list MUST contain 'github-incident'; "
-            f"got add={add_list!r}, full call: {merge_tags_calls[-1]!r}"
-        )
-        assert "escalated" in add_list, (
-            f"bkd.merge_tags_and_update 'add' list MUST still contain 'escalated'; "
-            f"got add={add_list!r}"
-        )
+        assert "github-incident" in add_list
+        assert "escalated" in add_list
+        assert "reason:verifier-decision-escalate" in add_list
 
 
 class TestEscalateIdempotentGHIS7:
-    """GHI-S7: ctx.gh_incident_url already set → open_incident NOT called (resume cycle safe)."""
+    """GHI-S7: ctx.gh_incident_urls already covers the involved repo → no POST."""
 
-    async def test_ghi_s7_skips_open_incident_when_url_already_in_ctx(self):
-        """
-        GHI-S7: ctx.gh_incident_url is pre-set →
-        open_incident MUST NOT be awaited (idempotent under resume cycles).
-        """
+    async def test_ghi_s7_idempotent_when_urls_dict_covers_all(self):
         from orchestrator.actions.escalate import escalate
 
         open_incident_calls: list = []
@@ -458,7 +450,7 @@ class TestEscalateIdempotentGHIS7:
         settings = _make_settings()
         mock_gh, mock_BKDClient, mock_rs, mock_k8s = _make_escalate_mocks(
             open_incident_calls, merge_tags_calls, update_ctx_calls,
-            gh_return_url="https://github.com/phona/sisyphus/issues/42",
+            gh_return="https://example/should/not/be/called",
         )
 
         body = _make_body("verify.escalate")
@@ -466,37 +458,34 @@ class TestEscalateIdempotentGHIS7:
             "escalated_reason": "verifier-decision-escalate",
             "escalated_source_issue_id": "fail-issue-ghi",
             "auto_retry_count": 5,
-            "gh_incident_url": "https://github.com/phona/sisyphus/issues/42",  # pre-set
+            "involved_repos": ["phona/sisyphus"],
+            "gh_incident_urls": {
+                "phona/sisyphus": "https://github.com/phona/sisyphus/issues/42",
+            },
         }
 
         patches = _escalate_patches(settings, mock_gh, mock_BKDClient, mock_rs, mock_k8s)
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
-            try:
-                await escalate(
-                    body=body,
-                    req_id="REQ-test-ghi",
-                    tags=["REQ-test-ghi", "verifier"],
-                    ctx=ctx,
-                )
-            except Exception as exc:
-                pytest.fail(
-                    f"escalate raised unexpectedly: {type(exc).__name__}: {exc}"
-                )
+            await escalate(
+                body=body,
+                req_id="REQ-test-ghi",
+                tags=["REQ-test-ghi", "verifier"],
+                ctx=ctx,
+            )
 
         assert len(open_incident_calls) == 0, (
-            f"gh_incident.open_incident MUST NOT be called when ctx.gh_incident_url is already set; "
-            f"was called {len(open_incident_calls)} time(s): {open_incident_calls!r}"
+            f"open_incident MUST NOT be called when ctx.gh_incident_urls covers "
+            f"every involved repo; got {open_incident_calls!r}"
         )
+        # github-incident tag still emitted (existing URLs justify it)
+        add_list = _get_add_list(merge_tags_calls[-1])
+        assert "github-incident" in add_list
 
 
 class TestEscalateAutoResumeGHIS8:
-    """GHI-S8: auto-resume branch (transient + budget remaining) → open_incident NOT called."""
+    """GHI-S8: auto-resume branch → no POST."""
 
     async def test_ghi_s8_auto_resume_does_not_call_open_incident(self):
-        """
-        GHI-S8: body.event='session.failed' (transient), auto_retry_count=0 (budget left) →
-        open_incident MUST NOT be called; auto-resume follow-up proceeds normally.
-        """
         from orchestrator.actions.escalate import escalate
 
         open_incident_calls: list = []
@@ -506,47 +495,34 @@ class TestEscalateAutoResumeGHIS8:
         settings = _make_settings()
         mock_gh, mock_BKDClient, mock_rs, mock_k8s = _make_escalate_mocks(
             open_incident_calls, merge_tags_calls, update_ctx_calls,
-            gh_return_url="https://github.com/phona/sisyphus/issues/99",
+            gh_return="https://example/should/not/be/called",
         )
 
         body = _make_body("session.failed")
         ctx = {
-            "escalated_reason": "session-failed",  # transient reason
-            "auto_retry_count": 0,  # budget remaining (0 < _MAX_AUTO_RETRY=2)
+            "escalated_reason": "session-failed",
+            "auto_retry_count": 0,  # budget remaining
+            "involved_repos": ["phona/sisyphus"],
         }
 
         patches = _escalate_patches(settings, mock_gh, mock_BKDClient, mock_rs, mock_k8s)
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
-            try:
-                await escalate(
-                    body=body,
-                    req_id="REQ-test-ghi",
-                    tags=["REQ-test-ghi"],
-                    ctx=ctx,
-                )
-            except Exception as exc:
-                pytest.fail(
-                    f"escalate raised unexpectedly in auto-resume path: "
-                    f"{type(exc).__name__}: {exc}"
-                )
+            await escalate(
+                body=body,
+                req_id="REQ-test-ghi",
+                tags=["REQ-test-ghi"],
+                ctx=ctx,
+            )
 
         assert len(open_incident_calls) == 0, (
-            f"gh_incident.open_incident MUST NOT be called in the auto-resume branch "
-            f"(transient signal with budget remaining); "
-            f"was called {len(open_incident_calls)} time(s): {open_incident_calls!r}"
+            f"open_incident MUST NOT be called in auto-resume; got {open_incident_calls!r}"
         )
 
 
 class TestEscalateGHFailureGHIS9:
-    """GHI-S9: GH failure (open_incident→None) does NOT abort the escalate flow."""
+    """GHI-S9: GH outage → open_incident returns None; flow continues, no tag, no URL ctx fields."""
 
     async def test_ghi_s9_gh_failure_does_not_abort_escalate(self):
-        """
-        GHI-S9: open_incident returns None (GH outage) →
-        - bkd.merge_tags_and_update MUST still be called
-        - action MUST NOT raise
-        - ctx MUST NOT receive gh_incident_url
-        """
         from orchestrator.actions.escalate import escalate
 
         open_incident_calls: list = []
@@ -556,7 +532,7 @@ class TestEscalateGHFailureGHIS9:
         settings = _make_settings()
         mock_gh, mock_BKDClient, mock_rs, mock_k8s = _make_escalate_mocks(
             open_incident_calls, merge_tags_calls, update_ctx_calls,
-            gh_return_url=None,  # GH outage → open_incident returns None
+            gh_return=None,  # outage
         )
 
         body = _make_body("verify.escalate")
@@ -564,65 +540,51 @@ class TestEscalateGHFailureGHIS9:
             "escalated_reason": "verifier-decision-escalate",
             "escalated_source_issue_id": "fail-issue-ghi",
             "auto_retry_count": 5,
+            "involved_repos": ["phona/sisyphus"],
         }
 
         result = None
         patches = _escalate_patches(settings, mock_gh, mock_BKDClient, mock_rs, mock_k8s)
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
-            try:
-                result = await escalate(
-                    body=body,
-                    req_id="REQ-test-ghi",
-                    tags=["REQ-test-ghi", "verifier"],
-                    ctx=ctx,
-                )
-            except Exception as exc:
-                pytest.fail(
-                    f"escalate MUST NOT raise when open_incident returns None (GH outage); "
-                    f"got {type(exc).__name__}: {exc}"
-                )
+            result = await escalate(
+                body=body,
+                req_id="REQ-test-ghi",
+                tags=["REQ-test-ghi", "verifier"],
+                ctx=ctx,
+            )
 
-        # Contract 1: bkd.merge_tags_and_update still called
         assert merge_tags_calls, (
             "bkd.merge_tags_and_update MUST still be called even when open_incident returns None"
         )
-
-        # Contract 2: ctx not updated with gh_incident_url
-        url_updates = [u for u in update_ctx_calls if "gh_incident_url" in u]
+        url_updates = [u for u in update_ctx_calls
+                       if u.get("gh_incident_url") or u.get("gh_incident_urls")]
         assert not url_updates, (
-            f"ctx MUST NOT receive gh_incident_url when open_incident returns None; "
+            f"ctx MUST NOT receive gh_incident_url(s) when GH POSTs all returned None; "
             f"found: {url_updates!r}"
         )
-
-        # Contract 3: action returns expected shape (not an error)
+        add_list = _get_add_list(merge_tags_calls[-1])
+        assert "github-incident" not in add_list, (
+            f"'github-incident' tag MUST NOT be added when no URL was opened; "
+            f"got: {add_list!r}"
+        )
         if isinstance(result, dict):
-            assert result.get("escalated") is True, (
-                f"escalate MUST still return {{escalated: True, ...}} even when GH fails; "
-                f"got {result!r}"
-            )
+            assert result.get("escalated") is True
 
 
 class TestEscalateDisabledGHIS10:
-    """GHI-S10: gh_incident_repo='' → escalate proceeds normally, no github-incident tag."""
+    """GHI-S10: no involved_repos and no settings.gh_incident_repo → no POST, no tag."""
 
-    async def test_ghi_s10_disabled_escalate_proceeds_without_github_incident_tag(self):
-        """
-        GHI-S10: settings.gh_incident_repo='' →
-        - escalate does NOT raise
-        - ctx NOT mutated with gh_incident_url
-        - bkd.merge_tags_and_update 'add' does NOT contain 'github-incident'
-        - return value indicates escalated (not an error)
-        """
+    async def test_ghi_s10_disabled_default_keeps_old_behavior(self):
         from orchestrator.actions.escalate import escalate
 
         open_incident_calls: list = []
         merge_tags_calls: list = []
         update_ctx_calls: list = []
 
-        settings = _make_settings(gh_incident_repo="")  # DISABLED
+        settings = _make_settings(gh_incident_repo="")
         mock_gh, mock_BKDClient, mock_rs, mock_k8s = _make_escalate_mocks(
             open_incident_calls, merge_tags_calls, update_ctx_calls,
-            gh_return_url="https://github.com/phona/sisyphus/issues/1",
+            gh_return="https://example/should/not/be/called",
         )
 
         body = _make_body("verify.escalate")
@@ -630,43 +592,273 @@ class TestEscalateDisabledGHIS10:
             "escalated_reason": "verifier-decision-escalate",
             "escalated_source_issue_id": "fail-issue-ghi",
             "auto_retry_count": 5,
+            # NO involved_repos
+        }
+
+        patches = _escalate_patches(settings, mock_gh, mock_BKDClient, mock_rs, mock_k8s)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            result = await escalate(
+                body=body,
+                req_id="REQ-test-ghi",
+                tags=["REQ-test-ghi", "verifier"],
+                ctx=ctx,
+            )
+
+        assert len(open_incident_calls) == 0, (
+            f"open_incident MUST NOT be called when all 5 layers are empty; "
+            f"got: {open_incident_calls!r}"
+        )
+        if merge_tags_calls:
+            add_list = _get_add_list(merge_tags_calls[-1])
+            assert "github-incident" not in add_list, (
+                f"'github-incident' tag MUST NOT appear; got: {add_list!r}"
+            )
+        url_updates = [u for u in update_ctx_calls
+                       if u.get("gh_incident_url") or u.get("gh_incident_urls")]
+        assert not url_updates, (
+            f"ctx MUST NOT receive gh_incident_url(s); found: {url_updates!r}"
+        )
+        if isinstance(result, dict):
+            assert result.get("escalated") is True
+
+
+class TestEscalateMultiRepoGHIS11:
+    """GHI-S11: multi-repo REQ → one POST per involved repo."""
+
+    async def test_ghi_s11_multi_repo_one_incident_per_repo(self):
+        from orchestrator.actions.escalate import escalate
+
+        open_incident_calls: list = []
+        merge_tags_calls: list = []
+        update_ctx_calls: list = []
+
+        settings = _make_settings()
+        gh_table = {
+            "phona/repo-a": "https://github.com/phona/repo-a/issues/7",
+            "phona/repo-b": "https://github.com/phona/repo-b/issues/3",
+        }
+        mock_gh, mock_BKDClient, mock_rs, mock_k8s = _make_escalate_mocks(
+            open_incident_calls, merge_tags_calls, update_ctx_calls,
+            gh_return=gh_table,
+        )
+
+        body = _make_body("verify.escalate")
+        ctx = {
+            "escalated_reason": "verifier-decision-escalate",
+            "auto_retry_count": 5,
+            "involved_repos": ["phona/repo-a", "phona/repo-b"],
+        }
+
+        patches = _escalate_patches(settings, mock_gh, mock_BKDClient, mock_rs, mock_k8s)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            await escalate(
+                body=body,
+                req_id="REQ-test-ghi",
+                tags=["REQ-test-ghi", "verifier"],
+                ctx=ctx,
+            )
+
+        assert len(open_incident_calls) == 2, (
+            f"open_incident MUST be called once per involved repo (2 expected); "
+            f"got: {open_incident_calls!r}"
+        )
+        called_repos = sorted(c["repo"] for c in open_incident_calls)
+        assert called_repos == ["phona/repo-a", "phona/repo-b"]
+
+        u = _last_url_update(update_ctx_calls)
+        assert u is not None
+        assert u["gh_incident_urls"] == gh_table
+
+        add_list = _get_add_list(merge_tags_calls[-1])
+        assert add_list.count("github-incident") == 1
+
+
+class TestEscalatePartialFailureGHIS12:
+    """GHI-S12: partial repo failure isolated; succeeded repo persisted."""
+
+    async def test_ghi_s12_partial_failure_isolated(self):
+        from orchestrator.actions.escalate import escalate
+
+        open_incident_calls: list = []
+        merge_tags_calls: list = []
+        update_ctx_calls: list = []
+
+        settings = _make_settings()
+        gh_table = {
+            "phona/repo-a": None,  # 403 / outage
+            "phona/repo-b": "https://github.com/phona/repo-b/issues/3",
+        }
+        mock_gh, mock_BKDClient, mock_rs, mock_k8s = _make_escalate_mocks(
+            open_incident_calls, merge_tags_calls, update_ctx_calls,
+            gh_return=gh_table,
+        )
+
+        body = _make_body("verify.escalate")
+        ctx = {
+            "escalated_reason": "verifier-decision-escalate",
+            "auto_retry_count": 5,
+            "involved_repos": ["phona/repo-a", "phona/repo-b"],
         }
 
         result = None
         patches = _escalate_patches(settings, mock_gh, mock_BKDClient, mock_rs, mock_k8s)
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
-            try:
-                result = await escalate(
-                    body=body,
-                    req_id="REQ-test-ghi",
-                    tags=["REQ-test-ghi", "verifier"],
-                    ctx=ctx,
-                )
-            except Exception as exc:
-                pytest.fail(
-                    f"escalate MUST NOT raise when gh_incident_repo is empty; "
-                    f"got {type(exc).__name__}: {exc}"
-                )
-
-        # Contract 1: no github-incident tag in the add list
-        if merge_tags_calls:
-            add_list = _get_add_list(merge_tags_calls[-1])
-            assert "github-incident" not in add_list, (
-                f"When gh_incident_repo is empty, 'github-incident' MUST NOT appear "
-                f"in bkd.merge_tags_and_update 'add' list; "
-                f"got: {add_list!r}, full call: {merge_tags_calls[-1]!r}"
+            result = await escalate(
+                body=body,
+                req_id="REQ-test-ghi",
+                tags=["REQ-test-ghi", "verifier"],
+                ctx=ctx,
             )
 
-        # Contract 2: ctx not updated with gh_incident_url
-        url_updates = [u for u in update_ctx_calls if "gh_incident_url" in u]
-        assert not url_updates, (
-            f"ctx MUST NOT receive gh_incident_url when gh_incident_repo is empty; "
-            f"found: {url_updates!r}"
+        if isinstance(result, dict):
+            assert result.get("escalated") is True
+
+        u = _last_url_update(update_ctx_calls)
+        assert u is not None
+        assert u["gh_incident_urls"] == {
+            "phona/repo-b": "https://github.com/phona/repo-b/issues/3",
+        }, f"Only the successful repo MUST be persisted; got {u!r}"
+
+        add_list = _get_add_list(merge_tags_calls[-1])
+        assert "github-incident" in add_list
+
+
+class TestEscalateMultiRepoIdempotentGHIS13:
+    """GHI-S13: re-entry only POSTs the missing repos."""
+
+    async def test_ghi_s13_only_missing_repos_posted_on_reentry(self):
+        from orchestrator.actions.escalate import escalate
+
+        open_incident_calls: list = []
+        merge_tags_calls: list = []
+        update_ctx_calls: list = []
+
+        settings = _make_settings()
+        mock_gh, mock_BKDClient, mock_rs, mock_k8s = _make_escalate_mocks(
+            open_incident_calls, merge_tags_calls, update_ctx_calls,
+            gh_return="https://github.com/phona/repo-b/issues/3",
         )
 
-        # Contract 3: action proceeds (returns expected shape)
-        if isinstance(result, dict):
-            assert result.get("escalated") is True, (
-                f"escalate MUST return {{escalated: True, ...}} even when disabled; "
-                f"got {result!r}"
+        body = _make_body("verify.escalate")
+        ctx = {
+            "escalated_reason": "verifier-decision-escalate",
+            "auto_retry_count": 5,
+            "involved_repos": ["phona/repo-a", "phona/repo-b"],
+            "gh_incident_urls": {
+                "phona/repo-a": "https://github.com/phona/repo-a/issues/7",
+            },
+        }
+
+        patches = _escalate_patches(settings, mock_gh, mock_BKDClient, mock_rs, mock_k8s)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            await escalate(
+                body=body,
+                req_id="REQ-test-ghi",
+                tags=["REQ-test-ghi", "verifier"],
+                ctx=ctx,
             )
+
+        assert len(open_incident_calls) == 1, (
+            f"Only the missing repo MUST be re-POSTed; got: {open_incident_calls!r}"
+        )
+        assert open_incident_calls[0]["repo"] == "phona/repo-b"
+
+        u = _last_url_update(update_ctx_calls)
+        assert u is not None
+        assert u["gh_incident_urls"] == {
+            "phona/repo-a": "https://github.com/phona/repo-a/issues/7",
+            "phona/repo-b": "https://github.com/phona/repo-b/issues/3",
+        }, f"merged urls dict mismatch: {u!r}"
+
+
+class TestEscalateLegacyFallbackGHIS14:
+    """GHI-S14: no involved_repos → fall back to settings.gh_incident_repo."""
+
+    async def test_ghi_s14_falls_back_to_settings_gh_incident_repo(self):
+        from orchestrator.actions.escalate import escalate
+
+        open_incident_calls: list = []
+        merge_tags_calls: list = []
+        update_ctx_calls: list = []
+
+        settings = _make_settings(gh_incident_repo="phona/sisyphus")
+        mock_gh, mock_BKDClient, mock_rs, mock_k8s = _make_escalate_mocks(
+            open_incident_calls, merge_tags_calls, update_ctx_calls,
+            gh_return="https://github.com/phona/sisyphus/issues/99",
+        )
+
+        body = _make_body("verify.escalate")
+        ctx = {
+            "escalated_reason": "verifier-decision-escalate",
+            "auto_retry_count": 5,
+            # No involved_repos / no repo: tags / no default_involved_repos
+        }
+
+        patches = _escalate_patches(settings, mock_gh, mock_BKDClient, mock_rs, mock_k8s)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            await escalate(
+                body=body,
+                req_id="REQ-test-ghi",
+                tags=["REQ-test-ghi", "verifier"],
+                ctx=ctx,
+            )
+
+        assert len(open_incident_calls) == 1, (
+            f"open_incident MUST be called once with the legacy fallback repo; "
+            f"got: {open_incident_calls!r}"
+        )
+        assert open_incident_calls[0]["repo"] == "phona/sisyphus"
+
+        u = _last_url_update(update_ctx_calls)
+        assert u is not None
+        assert u["gh_incident_urls"] == {
+            "phona/sisyphus": "https://github.com/phona/sisyphus/issues/99",
+        }
+        add_list = _get_add_list(merge_tags_calls[-1])
+        assert "github-incident" in add_list
+
+
+class TestEscalateLayerPrecedenceGHIS15:
+    """GHI-S15: layers 1-4 (involved_repos) win over layer 5 (gh_incident_repo)."""
+
+    async def test_ghi_s15_involved_repos_take_precedence(self):
+        from orchestrator.actions.escalate import escalate
+
+        open_incident_calls: list = []
+        merge_tags_calls: list = []
+        update_ctx_calls: list = []
+
+        settings = _make_settings(gh_incident_repo="phona/sisyphus")  # layer 5 also set
+        mock_gh, mock_BKDClient, mock_rs, mock_k8s = _make_escalate_mocks(
+            open_incident_calls, merge_tags_calls, update_ctx_calls,
+            gh_return="https://github.com/phona/repo-a/issues/1",
+        )
+
+        body = _make_body("verify.escalate")
+        ctx = {
+            "escalated_reason": "verifier-decision-escalate",
+            "auto_retry_count": 5,
+            "involved_repos": ["phona/repo-a"],  # layer 2
+        }
+
+        patches = _escalate_patches(settings, mock_gh, mock_BKDClient, mock_rs, mock_k8s)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            await escalate(
+                body=body,
+                req_id="REQ-test-ghi",
+                tags=["REQ-test-ghi", "verifier"],
+                ctx=ctx,
+            )
+
+        assert len(open_incident_calls) == 1, (
+            f"Only the layer-2 repo MUST be POSTed; got: {open_incident_calls!r}"
+        )
+        assert open_incident_calls[0]["repo"] == "phona/repo-a", (
+            f"layer 2 MUST beat layer 5; got repo={open_incident_calls[0]['repo']!r}"
+        )
+
+        u = _last_url_update(update_ctx_calls)
+        assert u is not None
+        assert set(u["gh_incident_urls"].keys()) == {"phona/repo-a"}, (
+            f"Only the layer-2 repo MUST appear in gh_incident_urls; got: {u!r}"
+        )
