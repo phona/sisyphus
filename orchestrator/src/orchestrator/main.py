@@ -60,6 +60,7 @@ async def startup() -> None:
             ready_timeout_sec=settings.runner_ready_timeout_sec,
             ready_attempts=settings.runner_ready_attempts,
             in_cluster=settings.k8s_in_cluster,
+            kvm_enabled=settings.runner_kvm_enabled,
         )
         k8s_runner.set_controller(controller)
         log.info("k8s_runner.initialized", namespace=settings.runner_namespace)

@@ -16,13 +16,17 @@ LABEL org.opencontainers.image.source=https://github.com/phona/sisyphus
 LABEL org.opencontainers.image.description="Sisyphus per-REQ runner: Flutter + Go + Docker DinD + openspec"
 LABEL org.opencontainers.image.licenses=MIT
 
-# ─── 1. 基础工具 + Docker 官方仓库（含 docker-compose-plugin v2） ──────
+# ─── 1. 基础工具 + Docker 官方仓库（含 docker-compose-plugin v2） + KVM userland ──
 # Debian/Ubuntu 自带 docker.io 是 20.10，缺 docker-compose-plugin。
 # 走官方源装 docker-ce + compose plugin + buildx。
+# 同步装 qemu-kvm + cpu-checker：Android emulator 在 KVM 加速下冷启 ~30s（vs 软 CPU
+# 5-10min），需要宿主 /dev/kvm 挂入容器（k8s_runner.py kvm_enabled=true 启用）。
+# cpu-checker 提供 kvm-ok 用于 emulator 启动前自检。
 RUN install -m 0755 -d /etc/apt/keyrings \
     && apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates gnupg curl iptables \
         git gh jq make bash sudo nodejs npm ssh-client \
+        qemu-kvm cpu-checker \
     && curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
         -o /etc/apt/keyrings/docker.asc \
     && chmod a+r /etc/apt/keyrings/docker.asc \
@@ -62,12 +66,33 @@ RUN npm install -g @fission-ai/openspec@latest && openspec --version
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
     && uv --version
 
+# ─── 4c. Android emulator + system image + 默认 AVD ──────────────────────
+# Cirrus flutter base 已带 Android SDK + sdkmanager + platform-tools (adb)，但默认
+# 没装 emulator package 也没装 system-image。这里补齐：
+#   - emulator (QEMU 包装)
+#   - system-images;android-34;google_apis;x86_64 (~1GB)
+#   - 预创建 AVD `sisyphus-default` (跳过运行时 ~10s 部署延迟)
+# 选型理由见 openspec/changes/REQ-runner-android-emulator-1777189159/design.md §2/§4。
+# yes | sdkmanager 自动同意 license；ANDROID_SDK_ROOT 由 cirrus base 设好。
+ARG ANDROID_API_LEVEL=34
+ARG ANDROID_SYSTEM_IMAGE=system-images;android-34;google_apis;x86_64
+RUN yes | sdkmanager --install \
+        "emulator" \
+        "${ANDROID_SYSTEM_IMAGE}" \
+    && echo "no" | avdmanager create avd \
+        --name sisyphus-default \
+        --package "${ANDROID_SYSTEM_IMAGE}" \
+        --device "pixel" \
+        --force \
+    && emulator -list-avds | grep -q sisyphus-default
+
 # ─── 5. sisyphus 合约脚本 ──────────────────
 # build context 必须是 sisyphus repo 根（CI workflow 已配 context: .）
 COPY scripts/check-scenario-refs.sh \
      scripts/check-tasks-section-ownership.sh \
      scripts/pre-commit-acl.sh \
      scripts/sisyphus-clone-repos.sh \
+     scripts/sisyphus-android-emulator.sh \
      /opt/sisyphus/scripts/
 RUN chmod +x /opt/sisyphus/scripts/*.sh
 ENV PATH="/opt/sisyphus/scripts:$PATH"

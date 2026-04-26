@@ -5,6 +5,8 @@
 ## 镜像内容
 
 - Flutter SDK + Android SDK + Java（来自 `cirruslabs/flutter:stable`）
+- Android emulator + system image `android-34;google_apis;x86_64` + AVD `sisyphus-default`（仅 full flavor）
+- KVM userland (`qemu-kvm`, `cpu-checker`) — 配合 orchestrator `runner.kvmEnabled=true` 跑 emulator 硬件加速
 - Go 1.22
 - Node + npm
 - Docker DinD（contract test 跑 docker compose 用）
@@ -46,6 +48,22 @@ docker exec $CONTAINER bash -c "docker compose -f tests/contract/docker-compose.
 | `go` | `runner/go.Dockerfile` | `ghcr.io/phona/sisyphus-runner-go` | ~1GB | Go 项目（如 ubox-crosser），不带 Flutter |
 
 prompt `runner_container.md.j2` 默认用 `:go`。Flutter 项目要切成 `:main`（full flavor）。
+
+## Android emulator (full flavor only)
+
+`runner/Dockerfile` 装了 emulator + 一个 API 34 system image，并预创建 AVD `sisyphus-default`。
+业务 Makefile 一行起：
+
+```bash
+/opt/sisyphus/scripts/sisyphus-android-emulator.sh boot --timeout 300   # headless 启动并等 boot_completed=1
+/opt/sisyphus/scripts/sisyphus-android-emulator.sh halt                  # 停掉
+```
+
+硬件加速依赖宿主 `/dev/kvm` 挂入 pod（orchestrator helm value `runner.kvmEnabled=true`，
+默认 false）。没 KVM 时 emulator 退回软 CPU 仍能跑但慢 5-10x；脚本会打 warning 不 fail。
+
+`go.Dockerfile` 没装 emulator/avdmanager（保持 ~1GB 体积），调用脚本会立即报
+`emulator: command not found`——业务 Makefile 该切到 `:main` 标签。
 
 ## 构建
 

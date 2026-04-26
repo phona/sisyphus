@@ -90,6 +90,7 @@ class RunnerController:
         ready_timeout_sec: int = 120,
         ready_attempts: int = 3,
         in_cluster: bool = True,
+        kvm_enabled: bool = False,
         core_v1: client.CoreV1Api | None = None,
     ):
         self.namespace = namespace
@@ -104,6 +105,10 @@ class RunnerController:
         # M9：Pod Ready 外层 attempts（每次等 ready_timeout_sec）。超全部 attempts 抛
         # TimeoutError，让 engine.step 的 retry policy 接手决策 retry/escalate。
         self.ready_attempts = max(1, ready_attempts)
+        # KVM device passthrough — 启用后 build_pod 会挂宿主 /dev/kvm 进 runner pod，
+        # 给 Android emulator 走硬件加速（冷启 ~30s vs 软 CPU 5-10min）。默认 off
+        # 兼容没暴露 /dev/kvm 的节点（嵌套虚拟化里跑的 K8s）。
+        self.kvm_enabled = kvm_enabled
 
         if core_v1 is not None:
             # 测试注入 mock client
@@ -216,6 +221,21 @@ class RunnerController:
                 ),
             ),
         ]
+
+        # /dev/kvm passthrough（Android emulator 硬件加速）—— 见 __init__ kvm_enabled
+        # 注释。仅在 operator 显式 opt-in 时挂；missing 时不动 spec，保持现有部署兼容。
+        if self.kvm_enabled:
+            volume_mounts.append(
+                client.V1VolumeMount(name="kvm", mount_path="/dev/kvm"),
+            )
+            volumes.append(
+                client.V1Volume(
+                    name="kvm",
+                    host_path=client.V1HostPathVolumeSource(
+                        path="/dev/kvm", type="CharDevice",
+                    ),
+                ),
+            )
 
         container = client.V1Container(
             name="runner",

@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     runner_secret_name: str = "sisyphus-runner-secrets"
     runner_image_pull_secrets: list[str] = Field(default_factory=list)
     runner_ready_timeout_sec: int = 120
+    # 把宿主 /dev/kvm 挂入 runner pod，给 Android emulator 走硬件加速。默认 false
+    # 兼容没暴露 /dev/kvm 的部署（嵌套虚拟化 / 普通 dev 环境）。开启前操作员需在
+    # 节点上跑 `kvm-ok` 确认 /dev/kvm 存在，否则 Pod 创建会卡 MountVolume.SetUp failed。
+    runner_kvm_enabled: bool = False
 
     # in-cluster = orchestrator 跑在 K8s pod 里，load_incluster_config()
     # False = 本地调试，load_kube_config() 读 ~/.kube/config

@@ -65,10 +65,14 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/b
     && uv --version
 
 # ─── 4. sisyphus 合约脚本 ──────────────────
+# sisyphus-android-emulator.sh 也 COPY 进来：Go runner 缺 emulator/avdmanager 二进制，
+# 调用立即报 "emulator: command not found" 是预期行为（业务 Makefile 该切到 full 镜像）。
+# 路径统一比 PATH 不一致更省疑惑。
 COPY scripts/check-scenario-refs.sh \
      scripts/check-tasks-section-ownership.sh \
      scripts/pre-commit-acl.sh \
      scripts/sisyphus-clone-repos.sh \
+     scripts/sisyphus-android-emulator.sh \
      /opt/sisyphus/scripts/
 RUN chmod +x /opt/sisyphus/scripts/*.sh
 ENV PATH="/opt/sisyphus/scripts:$PATH"

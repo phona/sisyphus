@@ -112,6 +112,62 @@ def test_build_pod_with_image_pull_secrets():
     assert pod.spec.image_pull_secrets[0].name == "ghcr-creds"
 
 
+def test_build_pod_no_kvm_mount_by_default():
+    """默认 kvm_enabled=False：Pod spec 不含 /dev/kvm 卷或挂载（兼容老部署）。"""
+    rc = _make_controller()
+    pod = rc.build_pod("REQ-1")
+    c = pod.spec.containers[0]
+    mount_paths = [m.mount_path for m in c.volume_mounts]
+    assert "/dev/kvm" not in mount_paths
+    volume_names = [v.name for v in pod.spec.volumes]
+    assert "kvm" not in volume_names
+
+
+def _make_controller_with_kvm() -> RunnerController:
+    return RunnerController(
+        namespace="sisyphus-runners",
+        runner_image="ghcr.io/phona/sisyphus-runner:main",
+        runner_sa="sisyphus-runner-sa",
+        storage_class="local-path",
+        workspace_size="10Gi",
+        runner_secret_name="sisyphus-runner-secrets",
+        image_pull_secrets=[],
+        ready_timeout_sec=5,
+        kvm_enabled=True,
+        core_v1=MagicMock(),
+    )
+
+
+def test_build_pod_mounts_kvm_when_enabled():
+    """kvm_enabled=True：挂宿主 /dev/kvm CharDevice 进 runner pod（emulator 硬件加速）。"""
+    rc = _make_controller_with_kvm()
+    pod = rc.build_pod("REQ-1")
+    c = pod.spec.containers[0]
+
+    mount_paths = [m.mount_path for m in c.volume_mounts]
+    assert "/dev/kvm" in mount_paths
+
+    kvm_vol = next(v for v in pod.spec.volumes if v.name == "kvm")
+    assert kvm_vol.host_path is not None
+    assert kvm_vol.host_path.path == "/dev/kvm"
+    assert kvm_vol.host_path.type == "CharDevice"
+
+
+def test_build_pod_existing_mounts_unchanged_with_kvm_enabled():
+    """开启 kvm 不能影响 /workspace, /dev/fuse, /root/.kube 三个老挂载。"""
+    rc = _make_controller_with_kvm()
+    pod = rc.build_pod("REQ-1")
+    c = pod.spec.containers[0]
+    mount_paths = [m.mount_path for m in c.volume_mounts]
+    assert "/workspace" in mount_paths
+    assert "/dev/fuse" in mount_paths
+    assert "/root/.kube" in mount_paths
+
+    # fuse hostPath 仍指向 /dev/fuse，没被 kvm 覆盖
+    fuse_vol = next(v for v in pod.spec.volumes if v.name == "fuse")
+    assert fuse_vol.host_path.path == "/dev/fuse"
+
+
 def test_kubeconfig_mounts_from_same_secret():
     """verify kubeconfig is mounted from the same runner_secret_name (not a separate secret)。"""
     rc = _make_controller()
