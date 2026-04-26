@@ -1,30 +1,36 @@
 """Resolve where `make accept-env-{up,down}` should run inside the runner pod.
 
-Background (REQ-self-accept-stage-1777121797): the historical accept stage assumed
-a separate integration repo cloned into `/workspace/integration/<basename>` (the
-`phona/ttpos-arch-lab` model). Sisyphus self-dogfood — and any single-repo
-deployment — has no such standalone integration repo: the source repo IS the
-integration repo (top-level Makefile carries `accept-env-up:`).
+Background: the original resolver (REQ-self-accept-stage-1777121797) was
+written when `/workspace/integration/<basename>` was treated as the canonical
+accept-env home and `/workspace/source/*` was a self-host afterthought. By
+M15→M17 the picture flipped — `scripts/sisyphus-clone-repos.sh` only ever
+populates `/workspace/source/*`, and the `/workspace/integration/*` slot is
+practically always empty. REQ-flip-integration-resolver-source-1777195860
+inverted the priority so the resolver's primary scan target matches what
+the workspace actually contains.
 
 This helper centralizes resolution so create_accept and teardown_accept_env stay
 in sync:
 
-    1. If any /workspace/integration/<name>/Makefile carries `accept-env-up:`
-       → use it (multi-repo / external-integration-repo path; preserves prior
-       behavior).
-    2. Else if EXACTLY ONE /workspace/source/<name>/Makefile carries
-       `accept-env-up:` → use it (self-host fallback).
+    1. If EXACTLY ONE /workspace/source/<name>/Makefile carries
+       `accept-env-up:` → use that source dir (canonical path).
+    2. Else fall back to /workspace/integration/<name>/Makefile when present
+       (legacy / explicit-tiebreaker path: handles a manually-staged lab
+       repo and disambiguates the rare multi-source-with-target case).
     3. Else → return ResolveResult(dir=None, reason=...) so the caller can
        emit a friendly accept-env-up.fail (no shell glob explosion on empty
        /workspace/integration/*).
 
-Multiple source candidates → no fallback (refuse to silently pick a leader);
-the caller must surface the error and the human must explicitly stage an
-integration repo.
+Multiple source candidates with NO explicit integration dir → refuse to
+silently pick a leader; the caller surfaces the error and the human must
+either resolve the ambiguity in source repos or explicitly stage an
+integration dir.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from pathlib import Path
 
 import structlog
 
@@ -80,27 +86,65 @@ def _parse_scan(stdout: str) -> tuple[list[str], list[str]]:
 
 
 def _decide(integ: list[str], src: list[str]) -> ResolveResult:
-    """Apply the resolution policy to scanned candidates."""
-    if integ:
-        # 多个 integration 候选时取首个（M16 不强假设；和原 `cd /workspace/integration/*`
-        # glob 行为等价 —— shell 也按字典序拿一个）
-        return ResolveResult(dir=integ[0])
+    """Apply the resolution policy to scanned candidates.
+
+    Source-first (REQ-flip-integration-resolver-source-1777195860): a single
+    unambiguous source candidate is the canonical answer because that is the
+    only path `sisyphus-clone-repos.sh` populates. /workspace/integration is
+    consulted only when source resolution is unusable.
+    """
     if len(src) == 1:
         return ResolveResult(dir=src[0])
+    if integ:
+        # 显式 staged 的 integration repo：要么 source 全空、要么 source 多义
+        # （多个 source 都带 accept-env-up），都靠它兜底。多个 integration 候选
+        # 时取首个（和原 `cd /workspace/integration/*` glob 字典序行为等价）。
+        return ResolveResult(dir=integ[0])
     if len(src) == 0:
         return ResolveResult(
             dir=None,
-            reason="no integration dir resolvable: /workspace/integration/* and "
-            "/workspace/source/*/Makefile both lack accept-env-up target",
+            reason="no integration dir resolvable: /workspace/source/*/Makefile "
+            "and /workspace/integration/* both lack accept-env-up target",
         )
     return ResolveResult(
         dir=None,
         reason=(
             f"no integration dir resolvable: multiple source candidates carry "
             f"accept-env-up target ({', '.join(src)}); refuse to pick one — "
-            "stage an explicit integration repo under /workspace/integration/"
+            "stage an explicit integration repo under /workspace/integration/ "
+            "to break the tie"
         ),
     )
+
+
+def _resolve_integration_dir(workspace_root: Path | str) -> Path | None:
+    """Sync resolver for local/test use: scan workspace_root filesystem directly.
+
+    Equivalent to the async resolve_integration_dir but without kubectl exec —
+    reads Makefile content directly and applies the same _decide policy.
+
+    Returns the Path to run `make accept-env-{up,down}` from, or None.
+    """
+    root = Path(workspace_root)
+
+    def _has_target(makefile: Path) -> bool:
+        try:
+            return bool(re.search(r"^accept-env-up:", makefile.read_text(), re.MULTILINE))
+        except OSError:
+            return False
+
+    def _scan(subdir: str) -> list[str]:
+        d = root / subdir
+        if not d.is_dir():
+            return []
+        return [
+            str(child)
+            for child in sorted(d.iterdir())
+            if child.is_dir() and _has_target(child / "Makefile")
+        ]
+
+    result = _decide(integ=_scan("integration"), src=_scan("source"))
+    return Path(result.dir) if result.dir is not None else None
 
 
 async def resolve_integration_dir(rc, req_id: str) -> ResolveResult:
