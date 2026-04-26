@@ -45,6 +45,77 @@ clone 用 sisyphus 提供的 helper（不要手写 `git clone`）：
 helper 行为：clone 到约定路径、用 `$GH_TOKEN` 做 auth、idempotent
 （已存在则 `git fetch && git checkout main`）、shallow + 按需 unshallow。
 
+## 1c. Runner GitHub PAT（**只读**）
+
+> **设计契约**：runner pod 只用 `$GH_TOKEN` 做 `git clone`（读私有仓）。
+> 所有 `git push` / `gh pr create` / `gh pr merge` 都在 BKD Coder workspace
+> （"开发机"）里跑，用 Coder 自己注入的 gh auth，**跟这个 PAT 无关**。
+> 详见 [architecture.md §8](./architecture.md#8-runnerk8s-pod--pvcper-req)。
+
+### 1c.1 PAT 选型（按推荐度）
+
+| 类型 | scope / 权限 | 跨 org? | 推荐度 |
+|---|---|---|---|
+| **Fine-grained PAT**（org 内生成） | Repository: 选具体仓；Permissions → **Contents: Read-only**（+ Packages: Read-only 如需拉 ghcr 私有镜像） | 限 1 org | ⭐⭐⭐ 最干净 |
+| **Fine-grained PAT**（user 生成 + org 授权） | 同上，但 resource owner 选 org | 同左 | ⭐⭐ |
+| **Classic PAT** | 必勾 `repo`（GitHub 不细分；含 r+w，runner 不会用 write 那部分） + `read:org`（看 org 成员关系，debug 用） + `read:packages`（如需） | 跨 org，scope 范围大 | ⭐ 临时凑合，过期短一些 |
+
+### 1c.2 验证 playbook（patch K8s secret 之前必跑）
+
+GitHub 对私有仓返 403/404 时文案有歧义（"Write access not granted" 实际可能是 read 也没权限），
+patch secret 前必须**先用 API 探一遍**：
+
+```bash
+PAT='ghp_xxx'   # 千万别 echo 进 transcript / commit 进代码
+
+# 1. PAT 能 auth + 实际 scope 是什么
+curl -sS -D - -o /dev/null -H "Authorization: token $PAT" https://api.github.com/user \
+  | grep -iE "^(x-oauth-scopes|github-authentication-token-expiration)"
+# 期望：x-oauth-scopes 含 "repo"（classic）或为空但 fine-grained permissions 配对了
+#       expiration 还没过
+
+# 2. PAT user 加入了哪些 org
+curl -sS -H "Authorization: token $PAT" https://api.github.com/user/orgs \
+  | python3 -c "import json,sys; print([o['login'] for o in json.load(sys.stdin)])"
+# 期望：含目标 org（如 ZonEaseTech）；空 [] 八成是 user 不在 org 里 OR 没勾 read:org
+
+# 3. PAT 能看到目标私有仓
+curl -sS -o /tmp/r -w "HTTP=%{http_code}\n" -H "Authorization: token $PAT" \
+  https://api.github.com/repos/<org>/<repo>
+python3 -c "import json; d=json.load(open('/tmp/r')); \
+  print(d.get('message') or f\"OK private={d.get('private')} permissions={d.get('permissions')}\")"
+# 期望：HTTP=200，permissions.pull=true（push 不需要也无害）
+# HTTP=404 = PAT 不可见该仓（user 不在 org / 没访问权限 / scope 不够）
+
+# 4. git 实测（runner 视角）
+git ls-remote https://x-access-token:$PAT@github.com/<org>/<repo>.git HEAD
+# 期望：返 SHA + HEAD；返 fatal/403 = 还有问题
+```
+
+四步全过才 patch K8s secret：
+
+```bash
+TOKEN='ghp_xxx'
+kubectl -n sisyphus-runners patch secret sisyphus-runner-secrets --type=merge \
+  -p "{\"stringData\":{\"gh_token\":\"$TOKEN\",\"ghcr_token\":\"$TOKEN\"}}"
+unset TOKEN
+```
+
+### 1c.3 常见误诊
+
+| 报错 | 实际意思 |
+|---|---|
+| `git clone ... 403: Write access to repository not granted` | GitHub 通用文案，**不一定**是写权限不够；可能是 PAT 完全没读权限（scope 没勾 / user 不在 org） |
+| `repos/<org>/<repo>` 返 404（仓真实存在） | PAT 没有 `repo` scope OR user 不在 org；GitHub 隐藏私有仓存在 |
+| `/user/orgs` 返 `[]` | (a) user 真没 org，OR (b) classic PAT 没勾 `read:org` —— 加 scope 重测 |
+| PAT patch 后 runner 仍 403 | runner pod 是 patch **之前**起的，env 不会回传；删 pod 让新 pod 拿新 secret，或派新 REQ |
+
+### 1c.4 patch 完用 dogfood REQ 验
+
+派一个 `intent:analyze` + `repo:<org>/<target-repo>` tag 的 BKD issue，
+看 orch 日志 `clone.exec` → `clone.done`（成功）或 `clone.failed`（失败原因）。
+**不要直接 helm rollout** —— 部分 cluster `--reuse-values` 模式下 secret patch 不需要 rollout。
+
 ## 2. Makefile target 契约（硬约束）
 
 ### 2.1 source repo 必须有
