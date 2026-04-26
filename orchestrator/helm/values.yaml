@@ -124,6 +124,12 @@ runner:
   readyTimeoutSec: 120        # ensure_runner 等 Pod Ready 的超时
   retainOnEscalateDays: 7     # escalated REQ 的 PVC 保留天数，过期 GC 清
   gcIntervalSec: 3600         # orphan PVC/Pod 回收扫描周期
+  # 把宿主 /dev/kvm 挂入 runner pod，给 Android emulator 跑硬件加速（冷启 ~30s vs
+  # 软 CPU 5-10min）。默认 false 兼容没暴露 /dev/kvm 的节点。开启前在每台 runner-
+  # 候选节点上跑 `kvm-ok` 确认；否则 Pod 创建会卡 MountVolume.SetUp failed。
+  # 仅 full Flutter runner image (`ghcr.io/phona/sisyphus-runner:main`) 内有 emulator
+  # 二进制；Go-only runner 不消费这个挂载。
+  kvmEnabled: false
 
   imagePullSecrets: []        # 如果 runner image 私有需要填
 
