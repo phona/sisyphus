@@ -54,6 +54,16 @@ RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/ins
     | sh -s -- -b /usr/local/bin v1.62.2 \
     && golangci-lint --version
 
+# ─── 3c. uv（sisyphus 自 dogfood + 任何 Python 业务仓 Makefile 用 uv run） ──────
+# 实证 2026-04-26 REQ-impl-gh-incident-open-1777173133 dev_cross_check stderr：
+#   /bin/sh: 12: uv: not found
+#   make: *** [Makefile:27: ci-lint] Error 127
+# sisyphus 自身 Makefile ci-lint 跑 `cd orchestrator && uv run ruff check`，runner
+# 镜像没 uv → 所有 sisyphus 自 dogfood 在 dev_cross_check 必失败。Python 业务仓也常
+# 用 uv（Astral 推 Python 包管），同步装上避免重蹈 golangci-lint 覆辙。
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
+    && uv --version
+
 # ─── 4. sisyphus 合约脚本 ──────────────────
 COPY scripts/check-scenario-refs.sh \
      scripts/check-tasks-section-ownership.sh \
