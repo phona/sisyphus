@@ -66,6 +66,148 @@ async def test_force_escalate_404_when_not_found(monkeypatch):
     assert ei.value.status_code == 404
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# /admin/req/{req_id}/escalate runner-cleanup tests
+# (REQ-cleanup-runner-zombie-1777170378)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_force_escalate_marks_escalated_and_triggers_cleanup(monkeypatch):
+    """FRE-S1 happy path: force_escalate 改 state=escalated + schedule
+    cleanup_runner_on_terminal(ReqState.ESCALATED) fire-and-forget.
+
+    所有走 transition 进 ESCALATED 的路径都被 engine 自动清；force_escalate 是
+    raw SQL UPDATE 绕开 engine，必须自己起 cleanup task — 否则 Pod 以 zombie
+    存活整个 PVC retention 期。
+    """
+    from dataclasses import dataclass
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from orchestrator import admin as admin_mod
+
+    @dataclass
+    class _Row:
+        req_id: str
+        project_id: str
+        state: ReqState
+        context: dict
+        history: list
+        created_at: _dt
+        updated_at: _dt
+
+    monkeypatch.setattr(admin_mod, "_verify_token", lambda x: None)
+
+    row = _Row(
+        req_id="REQ-X", project_id="p", state=ReqState.ANALYZING,
+        context={}, history=[],
+        created_at=_dt.now(UTC), updated_at=_dt.now(UTC),
+    )
+
+    async def _get(_pool, _req_id):
+        return row
+    monkeypatch.setattr("orchestrator.admin.req_state.get", _get)
+
+    executed: list[tuple] = []
+
+    class FakePool:
+        async def execute(self, sql, *args):
+            executed.append((sql, args))
+            return "UPDATE 1"
+
+    pool = FakePool()
+    monkeypatch.setattr("orchestrator.admin.db.get_pool", lambda: pool)
+
+    cleanup_calls: list[tuple] = []
+
+    async def _fake_cleanup(req_id, terminal_state):
+        cleanup_calls.append((req_id, terminal_state))
+
+    monkeypatch.setattr(
+        "orchestrator.admin.engine._cleanup_runner_on_terminal", _fake_cleanup,
+    )
+
+    result = await force_escalate("REQ-X", authorization="Bearer x")
+
+    assert result == {"action": "force_escalated", "from_state": "analyzing"}
+    # SQL UPDATE 跑了一次
+    assert len(executed) == 1
+    sql, _args = executed[0]
+    assert "UPDATE req_state" in sql
+    assert "state='escalated'" in sql
+    # cleanup task 已 schedule，跑一帧让它执行
+    await asyncio.sleep(0)
+    assert cleanup_calls == [("REQ-X", ReqState.ESCALATED)], (
+        "force_escalate must schedule _cleanup_runner_on_terminal with "
+        "ReqState.ESCALATED so the runner Pod is deleted (PVC retained for "
+        "human debug); without this, Pod stays alive for the entire PVC "
+        "retention window as a zombie."
+    )
+
+
+@pytest.mark.asyncio
+async def test_force_escalate_noop_when_already_escalated_no_cleanup(monkeypatch):
+    """FRE-S2 noop: state=escalated → 200 noop, 没 SQL UPDATE 没 cleanup task.
+
+    幂等：第二次 force_escalate 不该重复起 cleanup（POD 早已被首次 cleanup 删过；
+    重起一轮纯浪费 K8s API + 多一行 warning 日志）。
+    """
+    from dataclasses import dataclass
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from orchestrator import admin as admin_mod
+
+    @dataclass
+    class _Row:
+        req_id: str
+        project_id: str
+        state: ReqState
+        context: dict
+        history: list
+        created_at: _dt
+        updated_at: _dt
+
+    monkeypatch.setattr(admin_mod, "_verify_token", lambda x: None)
+
+    row = _Row(
+        req_id="REQ-X", project_id="p", state=ReqState.ESCALATED,
+        context={}, history=[],
+        created_at=_dt.now(UTC), updated_at=_dt.now(UTC),
+    )
+
+    async def _get(_pool, _req_id):
+        return row
+    monkeypatch.setattr("orchestrator.admin.req_state.get", _get)
+
+    executed: list = []
+
+    class FakePool:
+        async def execute(self, sql, *args):
+            executed.append((sql, args))
+            return "UPDATE 1"
+
+    monkeypatch.setattr("orchestrator.admin.db.get_pool", lambda: FakePool())
+
+    cleanup_calls: list = []
+
+    async def _fake_cleanup(req_id, terminal_state):
+        cleanup_calls.append((req_id, terminal_state))
+
+    monkeypatch.setattr(
+        "orchestrator.admin.engine._cleanup_runner_on_terminal", _fake_cleanup,
+    )
+
+    result = await force_escalate("REQ-X", authorization="Bearer x")
+
+    assert result == {"action": "noop", "state": "already escalated"}
+    assert executed == []
+    # 跑一帧确认没起 cleanup task
+    await asyncio.sleep(0)
+    assert cleanup_calls == []
+
+
 @pytest.mark.asyncio
 async def test_get_req_404(monkeypatch):
     from orchestrator import admin as admin_mod
