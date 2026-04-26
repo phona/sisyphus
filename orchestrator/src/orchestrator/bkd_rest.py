@@ -15,6 +15,10 @@ from .bkd import Issue, _to_issue
 
 log = structlog.get_logger(__name__)
 
+# Pipeline-identity tag — auto-injected into every BKD issue created by sisyphus
+# orchestrator code. Lets dashboards / humans filter `WHERE 'sisyphus' = ANY(tags)`.
+SISYPHUS_TAG = "sisyphus"
+
 
 class BKDRestClient:
     """REST 客户端。无 session，每次请求带 Coder-Session-Token header。"""
@@ -60,7 +64,7 @@ class BKDRestClient:
             "title": title,
             "statusId": status_id,
             "useWorktree": use_worktree,
-            "tags": tags,
+            "tags": _ensure_sisyphus_tag(tags),
         }
         if engine_type:
             body["engineType"] = engine_type
@@ -204,6 +208,13 @@ class BKDRestClient:
     async def _patch(self, path: str, body: dict) -> dict | list:
         r = await self._http.patch(f"{self.base_url}{path}", headers=self._headers(), json=body)
         return _unwrap(r)
+
+
+def _ensure_sisyphus_tag(tags: list[str]) -> list[str]:
+    """Prepend `sisyphus` to tags unless caller already includes it. Idempotent."""
+    if SISYPHUS_TAG in tags:
+        return list(tags)
+    return [SISYPHUS_TAG, *tags]
 
 
 def _unwrap(r: httpx.Response) -> dict | list:

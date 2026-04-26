@@ -49,12 +49,15 @@ async def start_intake(*, body, req_id, tags, ctx):
         log.info("start_intake.runner_ready", req_id=req_id, pod=pod_name)
 
     # 2-4. BKD 调度 intake-agent
+    # NB: intent issue itself is opened by the user (not via create_issue), so the
+    # `sisyphus` pipeline-identity tag is added explicitly here. All other sisyphus
+    # issues get it auto-injected inside BKDRestClient.create_issue.
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         await bkd.update_issue(
             project_id=proj,
             issue_id=issue_id,
             title=f"[{req_id}] [INTAKE]{short_title(ctx)}",
-            tags=["intake", req_id],
+            tags=["sisyphus", "intake", req_id],
         )
         prompt = render(
             "intake.md.j2",
