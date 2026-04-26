@@ -43,6 +43,11 @@ def _assert_for_each_repo_cmd(cmd: str) -> None:
     # log 文件名 split unit / int
     assert "$name-unit.log" in cmd
     assert "$name-int.log" in cmd
+    # fetch err 暴露（regression：之前 git fetch 2>/dev/null 把 auth/network 错全吞）
+    assert "fetch_err=" in cmd
+    assert "git fetch stderr:" in cmd
+    assert "rev-parse --verify" in cmd
+    assert 'git fetch origin "feat/REQ-997" 2>/dev/null' not in cmd
 
 
 # ── pass：验 cmd 是 for-each-repo 并行版 ─────────────────────────────────────

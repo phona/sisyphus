@@ -38,6 +38,13 @@ def _assert_for_each_repo_cmd(cmd: str) -> None:
     assert "fail=0" in cmd
     assert "fail=1" in cmd
     assert "[ $fail -eq 0 ]" in cmd  # 不能用 `exit $fail`：orch 包装的 exit-marker echo 不再跑
+    # fetch err 暴露（regression：之前 git fetch 2>/dev/null 把 auth/network 错全吞）
+    assert "fetch_err=" in cmd  # 捕到 stderr 不再丢
+    assert "git fetch stderr:" in cmd  # 失败 message 带真原因
+    assert "rev-parse --verify" in cmd  # 单独验 origin ref 在不在
+    assert 'git fetch origin "feat/' in cmd
+    # 不应再出现把 fetch stderr 全吞的写法
+    assert 'git fetch origin "feat/REQ-997" 2>/dev/null' not in cmd
 
 
 # ── pass ──────────────────────────────────────────────────────────────────
