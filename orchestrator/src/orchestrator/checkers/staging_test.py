@@ -92,6 +92,9 @@ def _build_cmd(req_id: str) -> str:
         # 实证：ttpos v8 dev_cross_check 同款卡，根因 make exit 非零。
         '  if [ -f "$repo/Makefile" ] && (cd "$repo" && (make -p -n 2>/dev/null || true) | grep -qE \'^ci-unit-test:\') '
         '       && (cd "$repo" && (make -p -n 2>/dev/null || true) | grep -qE \'^ci-integration-test:\'); then '
+        # 先 ci-setup 拉 deps，跟 dev_cross_check / ttpos-ci ci-go.yml 流对齐。
+        '    echo "=== staging_test (ci-setup): $name ==="; '
+        '    (cd "$repo" && make ci-setup) || true; '
         "    ( "
         '      echo "=== staging_test (unit): $name ==="; '
         '      cd "$repo" && make ci-unit-test > "/tmp/staging-test-logs/$name-unit.log" 2>&1 '
