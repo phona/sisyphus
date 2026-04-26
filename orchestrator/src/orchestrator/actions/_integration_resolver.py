@@ -40,14 +40,14 @@ set +e
 for d in /workspace/integration/*/; do
   [ -d "$d" ] || continue
   [ -f "${d}Makefile" ] || continue
-  if (cd "$d" && make -p -n 2>/dev/null | grep -qE '^accept-env-up:'); then
+  if (cd "$d" && (make -p -n 2>/dev/null || true) | grep -qE '^accept-env-up:'); then
     printf 'I:%s\n' "${d%/}"
   fi
 done
 for d in /workspace/source/*/; do
   [ -d "$d" ] || continue
   [ -f "${d}Makefile" ] || continue
-  if (cd "$d" && make -p -n 2>/dev/null | grep -qE '^accept-env-up:'); then
+  if (cd "$d" && (make -p -n 2>/dev/null || true) | grep -qE '^accept-env-up:'); then
     printf 'S:%s\n' "${d%/}"
   fi
 done
