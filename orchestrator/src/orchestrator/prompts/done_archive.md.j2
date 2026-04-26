@@ -49,16 +49,17 @@ done
 - 多仓部署到同一环境：先 merge 不会破环境的（library / additive change），
   后 merge breaking change
 
-### Step 2: Merge 每个 PR
+### Step 2: 通报 PR ready-for-review（**绝不自合**）
 
-```bash
-# 按上面决定的顺序，在 runner pod 里
-for pr in "owner1/repo-a#123" "owner2/repo-b#456"; do
-  gh pr merge "$pr" --squash --delete-branch --auto
-done
-```
+**硬契约**：archive 阶段**永远不调 `gh pr merge` / `gh pr merge --auto` / `gh api PUT pulls/<n>/merge`**。
+sisyphus 跑通转测前全链（dev_cross_check / staging_test / pr_ci 全 pass）只代表机械层面的
+ready-to-merge，**最终是否合是 human 决策**，sisyphus 不抢。任何 repo 都一样（包括 sisyphus 自身）。
 
-`--auto` 会等分支保护要求的 check 全绿才 merge（如果 repo 配了保护）。
+通报形式按本 repo 已有惯例（label / comment / 不动），sisyphus 不预设具体标签名或评论模板。
+最简：什么都不做，让 PR 留在 mergeable 状态等人 review。
+
+如果想留个标记方便人识别"这是 sisyphus 跑完的 PR"，可以给 PR 加个 comment 总结
+跑了哪些 stage、产出在哪、走 verifier 几次 —— 但**别**调 `gh pr merge`。
 
 ### Step 3: 每仓 openspec apply
 
@@ -66,12 +67,16 @@ done
 这把该仓的 `openspec/changes/{{ req_id }}/specs/` 里的 ADDED / MODIFIED 块
 合并到 `openspec/specs/` 下，然后删掉 changes/{{ req_id }}/。
 
+**硬契约**：不要 `git push origin main`（或任何默认分支）。具体怎么落库（开 PR / 留 working tree / 让 humans 来 commit）按本 repo 已有 git 工作流决定，sisyphus 不预设。
+
 ```bash
 for repo_path in /workspace/source/*/; do
   cd "$repo_path"
   if [ -d "openspec/changes/{{ req_id }}" ]; then
     openspec apply {{ req_id }}
-    git push origin main || echo "push 失败（分支保护？转 PR）"
+    git add openspec/
+    git commit -m "chore(openspec): archive {{ req_id }}" || echo "no changes to commit"
+    # 不 push main。如需把 archive 落库，按 repo 工作流另行处理。
   else
     echo "$(basename $repo_path) 无 openspec/changes/{{ req_id }}，跳过"
   fi
