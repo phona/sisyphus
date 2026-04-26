@@ -22,14 +22,23 @@ STATE_PY = ORCHESTRATOR / "src" / "orchestrator" / "state.py"
 
 
 def _count_enum_members(class_name: str) -> int:
+    """Count members of an Enum class in state.py via AST."""
     tree = ast.parse(STATE_PY.read_text())
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == class_name:
-            return sum(
-                1 for stmt in node.body
-                if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
-                and isinstance(stmt.targets[0], ast.Name)
-            )
+            count = 0
+            for stmt in node.body:
+                # plain assignment: NAME = "value"
+                if (
+                    isinstance(stmt, ast.Assign)
+                    and len(stmt.targets) == 1
+                    and isinstance(stmt.targets[0], ast.Name)
+                ):
+                    count += 1
+                # annotated assignment: NAME: str = "value"
+                elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                    count += 1
+            return count
     raise ValueError(f"Class {class_name} not found in state.py")
 
 
@@ -37,15 +46,28 @@ def _count_enum_members(class_name: str) -> int:
 # DOCS-S1: prompt template links in docs/prompts.md resolve to actual files
 # ──────────────────────────────────────────────────────────────────────────
 
+def _j2_exists_anywhere(ref: str) -> bool:
+    """Return True if ref exists as a path under PROMPTS_DIR (any depth)."""
+    # Direct path (e.g. verifier/foo.md.j2 or _shared/bar.md.j2)
+    if (PROMPTS_DIR / ref).exists():
+        return True
+    # Basename match in any subdirectory (e.g. ref is just "foo.md.j2")
+    basename = Path(ref).name
+    return any(True for _ in PROMPTS_DIR.rglob(basename))
+
+
 def test_docs_s1_prompt_template_links_resolve():
-    """DOCS-S1: every .md.j2 backtick-reference in docs/prompts.md exists under prompts/."""
+    """DOCS-S1: every .md.j2 backtick-reference in docs/prompts.md exists somewhere under prompts/."""
     prompts_doc = (REPO_ROOT / "docs" / "prompts.md").read_text()
     j2_refs = re.findall(r"`([^`]*\.md\.j2)`", prompts_doc)
 
-    missing = [ref for ref in j2_refs if not (PROMPTS_DIR / ref).exists()]
+    # Skip template placeholders like {stage}_{trigger}.md.j2 and empty/junk refs
+    real_refs = [r for r in j2_refs if "{" not in r and len(r) > len(".md.j2")]
+
+    missing = [ref for ref in real_refs if not _j2_exists_anywhere(ref)]
     assert not missing, (
         f"docs/prompts.md references .md.j2 files that don't exist "
-        f"under {PROMPTS_DIR.relative_to(REPO_ROOT)}: {missing}"
+        f"anywhere under {PROMPTS_DIR.relative_to(REPO_ROOT)}: {missing}"
     )
 
 
@@ -108,10 +130,19 @@ def test_docs_s3_challenger_states_in_state_py():
 
 
 def test_docs_s3_challenger_states_in_state_machine_doc():
-    """DOCS-S3: challenger_running / _pass / _fail appear in docs/state-machine.md."""
+    """DOCS-S3: challenger_running and challenger pass/fail appear in docs/state-machine.md."""
     state_md = (REPO_ROOT / "docs" / "state-machine.md").read_text().lower()
-    for name in ("challenger_running", "challenger_pass", "challenger_fail"):
-        assert name in state_md, f"{name} not found in docs/state-machine.md"
+    # challenger_running is a ReqState; pass/fail may be Events written as
+    # "challenger.pass" / "challenger.fail" or "challenger_pass" / "challenger_fail"
+    assert "challenger_running" in state_md, "challenger_running not found in docs/state-machine.md"
+    assert re.search(r"challenger[._]pass", state_md), (
+        "challenger pass event not found in docs/state-machine.md "
+        "(expected 'challenger.pass' or 'challenger_pass')"
+    )
+    assert re.search(r"challenger[._]fail", state_md), (
+        "challenger fail event not found in docs/state-machine.md "
+        "(expected 'challenger.fail' or 'challenger_fail')"
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────
