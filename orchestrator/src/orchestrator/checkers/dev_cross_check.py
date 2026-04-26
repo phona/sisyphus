@@ -84,6 +84,11 @@ def _build_cmd(req_id: str) -> str:
         '              || git merge-base HEAD origin/develop 2>/dev/null '
         '              || git merge-base HEAD origin/dev 2>/dev/null '
         '              || echo "")); '
+        # 先跑 ci-setup 拉 deps（per ttpos-ci 契约，对齐 ci-go.yml 流：ci-setup → ci-lint）。
+        # 实证 ttpos v9：ci-lint 第一次跑触发 go mod download 大量 alibabacloud SDK，
+        # 没 ci-setup 预热 → 5min timeout (-1)。`|| true` 不让 setup 失败拦 lint。
+        '    echo "=== dev_cross_check (ci-setup): $name ==="; '
+        '    (cd "$repo" && make ci-setup) || true; '
         '    echo "=== dev_cross_check (ci-lint): $name (BASE_REV=$base_rev) ==="; '
         '    if ! (cd "$repo" && BASE_REV="$base_rev" make ci-lint); then '
         '      echo "=== FAIL: $name ===" >&2; '
@@ -105,7 +110,7 @@ def _build_cmd(req_id: str) -> str:
 async def run_dev_cross_check(
     req_id: str,
     *,
-    timeout_sec: int = 300,
+    timeout_sec: int = 900,
 ) -> CheckResult:
     """kubectl exec runner -- <for-each-repo make ci-lint>。"""
     rc = k8s_runner.get_controller()
