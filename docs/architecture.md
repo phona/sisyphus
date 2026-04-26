@@ -5,6 +5,77 @@
 > **不抢 AI 决定权**。内容质量、bug 该不该修、怎么改 —— 永远是 agent 的事。
 > sisyphus 跑硬指标 / 路由 / 兜底 / 度量。
 
+## 0. 仓角色 + 全景图（2026-04-26 同步）
+
+> 这一节是看 sisyphus 跟相邻仓**怎么协作**的最快入口。后续 §1-§13 是 sisyphus 自身机制详解。新接入业务仓 / 新维护者读 §0 就能不跑偏。
+
+### 0.1 三类仓 + 各自暴露什么
+
+| 仓类型 | 例子 | 暴露给 sisyphus 的接口 | 关键约束 |
+|---|---|---|---|
+| **source repo** (业务源码仓) | `ZonEaseTech/ttpos-server-go`、`ZonEaseTech/ttpos-flutter`、`phona/ubox-crosser`、`phona/sisyphus`（自己也算） | `Makefile` 暴 7 个 target：`ci-env`/`ci-setup`/`ci-lint`/`ci-unit-test`/`ci-integration-test`/`ci-build` (有 `ci-` 前缀，对齐 ttpos-ci 标准) **+** `accept-env-up`/`accept-env-down` (无 `ci-` 前缀，**不要**变体如 `accept-mobile-up`) | sisyphus 只调 `make <target>`，target body 自决定怎么实现 lab / 跑 test |
+| **asset repo** (验收环境资产仓，过渡期角色) | `ZonEaseTech/ttpos-arch-lab` | **不暴 Makefile target**，仅放 `compose/*.yml` / `helm/*/Chart.yaml` 给业务仓引用 | source repo 的 `accept-env-up` body 通过 `git clone --depth=1` / `submodule` / `curl raw` 引用这里的资产 |
+| **central CI orchestrator** (静态仓，业务约定) | `phona/ttpos-ci` | 提供 `workflows/ci-go.yml` / `workflows/ci-flutter.yml` 等可复用 GHA workflow | 业务仓 `.github/workflows/dispatch.yml` `repository_dispatch` 触发 |
+
+**演进**：未来云原生 chart 完全成熟后，asset repo 的 chart 直接 vendor 进 source repo 自身，asset repo 退役。架构上 sisyphus 不感知这变化（始终调 source repo 的 `accept-env-up`）。
+
+### 0.2 流水线全景
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  user / PM 在 BKD UI 提需求（intent:analyze tag）                  │
+└──────────────────────────────────────────────────────────────────┘
+                             ↓ webhook
+┌──────────────────────────────────────────────────────────────────┐
+│  sisyphus orchestrator (vm-node04 K8s)                             │
+│    state machine + router + watchdog + GC                          │
+│    per-REQ runner pod (sisyphus-runners ns)                        │
+│                                                                    │
+│   ┌────────────────────────────────────────────────────────┐       │
+│   │ runner pod = 只读 checker（硬契约）                     │       │
+│   │ • git clone source repos                              │       │
+│   │ • make ci-setup → make ci-lint/ci-unit-test/...       │       │
+│   │ • make accept-env-up/down (源仓 target，不是 arch-lab)│       │
+│   │ • kubectl exec / docker DinD                           │       │
+│   │ ❌ 不 push / 不 PR / 不 merge 任何 GH 状态              │       │
+│   └────────────────────────────────────────────────────────┘       │
+└──────────────────────────────────────────────────────────────────┘
+        ↓（BKD agent 跨 SSH 进 K8s runner / 自带 Coder gh auth）
+┌──────────────────────────────────────────────────────────────────┐
+│  BKD Agents (跑在 Coder workspace, gh auth 不依赖 sisyphus secret) │
+│  • analyze / spec / challenger / dev / accept / done_archive       │
+│  • verifier (3 路决策)                                             │
+│  • fixer (dev / spec)                                              │
+│  ✅ 在 Coder workspace 里 git push feat/REQ-* + gh pr create       │
+│  ❌ done_archive 永远不调 gh pr merge — 任何 PR 等人 review + 人合│
+└──────────────────────────────────────────────────────────────────┘
+                             ↓
+┌──────────────────────────────────────────────────────────────────┐
+│  GitHub                                                            │
+│  • source repo: feat/REQ-* branch + PR opened by sisyphus        │
+│  • PR's GHA: dispatch.yml → ttpos-ci ci-go.yml 跑全套 lint+test    │
+│  • 人 review + 人 click merge                                      │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### 0.3 五条硬契约（违反 = 设计 bug，不是 feature）
+
+| 契约 | 出自 | 意思 |
+|---|---|---|
+| **runner = 只读 checker** | PR #112 | runner pod 永远不写任何 GH 状态。push/PR/merge 全在 BKD Coder workspace |
+| **archive 不自合** | PR #124 | done_archive prompt 没 `gh pr merge` / 没 `git push origin main`。任何代码进 main 前必须人 review |
+| **prompt repo-agnostic** | PR #128 + memory | orch prompts 不写死 GitHub label / branch 命名 / commit message / org 名。保持跨 org 跨业务可用 |
+| **Makefile target 命名统一** | user 2026-04-25 + 04-26 多次 | source repo 暴 7 个 target，`ci-*` 系有 `ci-` 前缀 / `accept-env-*` 系**无**前缀；**不要** `accept-mobile-up` / `ci-accept-env-up` 等变体 |
+| **业务源仓暴 accept-env target，asset 仓不暴** | user 2026-04-26 | source repo Makefile 的 `accept-env-up` body **引用** asset repo 资产（git clone / submodule / curl raw），不是 asset repo 自己暴 target。`_integration_resolver.py` scan 优先级也应 source > integration |
+
+### 0.4 IMPROVER agent (我) 的 push / merge 权限
+
+| 仓 | 我能 push | 我能合 PR |
+|---|---|---|
+| `phona/sisyphus` (sisyphus 自身) | feat/* | ✅ dogfood / chore-archive PR (CI 全绿) |
+| `ZonEaseTech/*` (业务源仓 / asset 仓) | `feat/develop-hwt`、`feat/REQ-*` | ❌ 必须人合 |
+| `phona/ttpos-ci` (中心 CI 仓) | feat/* | ❌ 必须人合 |
+
 ## 1. 哲学
 
 | 原则 | 含义 | 体现在哪 |
