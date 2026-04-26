@@ -36,7 +36,7 @@ class BKDMcpClient:
         await self.initialize()
         return self
 
-    async def __aexit__(self, *exc) -> None:
+    async def __aexit__(self, *_exc) -> None:
         await self._http.aclose()
 
     async def initialize(self) -> None:

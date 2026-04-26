@@ -209,7 +209,7 @@ def extract_intake_finalized_intent(text: str | None) -> dict | None:
     return None
 
 
-def derive_event(event_type: str, tags: Iterable[str], result_tags_only: bool = False) -> Event | None:
+def derive_event(event_type: str, tags: Iterable[str]) -> Event | None:
     """根据 (event_type, tags) 推 Event 枚举。
 
     event_type: BKD webhook 的 event 字段（issue.updated / session.completed / session.failed）
