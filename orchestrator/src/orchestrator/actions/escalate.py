@@ -172,6 +172,8 @@ async def escalate(*, body, req_id, tags, ctx):
     existing_gh_url = (ctx or {}).get("gh_incident_url")
     if existing_gh_url:
         gh_url = existing_gh_url  # resume 后再 escalate，复用旧 URL
+    elif not settings.gh_incident_repo:
+        gh_url = None  # feature disabled; skip open_incident entirely
     else:
         # 取当前 state 给 issue body（best-effort，None 也能继续）
         try:
