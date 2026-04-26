@@ -99,6 +99,13 @@ async def start_analyze(*, body, req_id, tags, ctx):
         await bkd.follow_up_issue(project_id=proj, issue_id=issue_id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue_id, status_id="working")
 
+    # stash analyze_issue_id 进 ctx：让后续 pr_links.ensure_pr_links_in_ctx 第一次
+    # discover 成功时能 backfill 这条 analyze issue 的 pr:* tag
+    # （REQ-issue-link-pr-quality-base-1777218242）
+    await req_state.update_context(db.get_pool(), req_id, {
+        "analyze_issue_id": issue_id,
+    })
+
     log.info("start_analyze.done", req_id=req_id, issue_id=issue_id,
              cloned_repos=cloned_repos)
     return {"issue_id": issue_id, "req_id": req_id, "cloned_repos": cloned_repos}

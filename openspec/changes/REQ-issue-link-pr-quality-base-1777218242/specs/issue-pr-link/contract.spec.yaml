@@ -1,0 +1,96 @@
+spec: issue-pr-link
+version: 1
+description: >-
+  Every BKD issue sisyphus creates for a REQ MUST carry a `pr:<owner>/<repo>#<N>`
+  tag (one per repo PR) so that humans viewing the issue in BKD UI can navigate
+  directly to the GitHub PR. Discovery is lazy + cached in req_state.context;
+  the analyze issue (created before PRs exist) is backfilled the first time PRs
+  are discovered.
+
+inputs:
+  - name: req_id
+    type: string
+    description: REQ identifier; branch convention is feat/{req_id}
+  - name: branch
+    type: string
+    description: feat/{req_id} normally; callers MAY pass override
+  - name: ctx
+    type: object
+    description: req_state.context jsonb — read pr_links cache, stashed sisyphus issue ids
+  - name: project_id
+    type: string
+    description: BKD project id, needed for backfill tag PATCHes
+  - name: github_token
+    type: string
+    description: settings.github_token. Empty token MUST NOT block; helper sends unauthenticated GH requests (low rate cap, but fallback is empty list — same effect as no token)
+
+side_effects_on_first_discovery:
+  - context_patch_keys:
+      - pr_links             # value MUST be list[{repo, number, url}]
+  - bkd_issue_tags_added_via_backfill:
+      # Iterate over known issue ids in ctx (analyze_issue_id, staging_test_issue_id,
+      # pr_ci_watch_issue_id, accept_issue_id, archive_issue_id) and PATCH each with
+      # `pr:owner/repo#N` for every found PR.
+      - "pr:<owner>/<repo>#<N>"
+
+side_effects_on_cache_hit:
+  - "no GH HTTP request"
+  - "no ctx update"
+  - "no BKD PATCH (callers receive cached PrLink list and inject tags into freshly-created issues themselves)"
+
+discovery_logic:
+  - cached := from_ctx(ctx)
+  - if cached: return cached  # O(1) cache hit, no GH call
+  - repos := _discover_repos_via_runner(req_id)
+      command: `for d in /workspace/source/*/; do [ -d "$d/.git" ] && git -C "$d" remote get-url origin; done`
+      filter: parse owner/repo from `git@github.com:OWNER/REPO(.git)?` or `https://github.com/OWNER/REPO(.git)?`
+      on RuntimeError / exec error: return []
+  - if no repos: return []
+  - for repo in repos:
+      GET /repos/{repo}/pulls?head={owner}:{branch}&state=open
+      on httpx error: log warning + skip this repo
+      else if first PR exists: links.append(PrLink(repo, pr.number, pr.html_url))
+  - if not links: return []
+  - update_context(req_id, {pr_links: [l.to_dict() for l in links]})
+  - backfill known sisyphus issue ids in ctx via bkd.merge_tags_and_update
+  - return links
+
+tag_format:
+  - PrLink(repo="phona/sisyphus", number=42).tag() == "pr:phona/sisyphus#42"
+  - pr_link_tags([l1, l2, ...]) == ["pr:.../#N1", "pr:.../#N2", ...]
+
+callsite_obligations:
+  # Each action that invokes bkd.create_issue for a sisyphus-managed REQ issue
+  # MUST call ensure_pr_links_in_ctx and concat pr_link_tags(...) into its
+  # base tags list.
+  required_actions:
+    - actions/_verifier.invoke_verifier
+    - actions/_verifier.start_fixer
+    - actions/create_staging_test._dispatch_bkd_agent
+    - actions/create_pr_ci_watch._dispatch_bkd_agent
+    - actions/create_accept (BKD agent dispatch, phase 2)
+    - actions/done_archive
+    - actions/start_challenger
+  # actions/start_analyze and start_analyze_with_finalized_intent do NOT call
+  # ensure_pr_links_in_ctx (PRs do not exist yet at create time), but MUST
+  # stash analyze_issue_id into ctx so backfill can find the analyze issue
+  # later.
+
+failure_modes:
+  - runner controller not available -> _discover_repos_via_runner returns [] -> ensure returns [] -> caller proceeds without pr:* tags (issue creation NOT blocked)
+  - runner exec error -> same as above
+  - GH API HTTP error per repo -> log warning, that repo skipped, others still tagged
+  - 0 open PR for any repo -> ensure returns [] -> ctx NOT updated, retry next callsite
+  - BKD merge_tags_and_update error during backfill -> log warning, continue (other backfill ids attempted)
+
+idempotency:
+  - Cache hit returns cached list verbatim; no side effects
+  - Backfill uses bkd.merge_tags_and_update (additive merge); calling twice with
+    same tags is a no-op (existing tag preserved, no duplicate inserted)
+  - First successful discovery writes ctx.pr_links once; subsequent calls skip
+    discovery branch entirely
+
+audit:
+  - ctx.pr_links is the durable record of "what PRs sisyphus knows belong to this REQ"
+    (queryable from observability dashboards; no separate table)
+  - tag `pr:owner/repo#N` is the visible record on each BKD issue

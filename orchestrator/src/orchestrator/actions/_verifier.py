@@ -28,7 +28,7 @@ from typing import Literal
 
 import structlog
 
-from .. import k8s_runner
+from .. import k8s_runner, pr_links
 from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
@@ -103,6 +103,15 @@ async def invoke_verifier(
         project_alias=project_id,
     )
 
+    # PR-link tag 注入（REQ-issue-link-pr-quality-base-1777218242）：
+    # verifier issue 在 dev 之后才创建，PR 已存在 → 第一次成功 discover 时
+    # 同时回填 ctx 里 analyze_issue_id 等已有 sisyphus issue 的 tag。
+    branch = (ctx or {}).get("branch") or f"feat/{req_id}"
+    links = await pr_links.ensure_pr_links_in_ctx(
+        req_id=req_id, branch=branch, ctx=ctx, project_id=project_id,
+    )
+    extra_tags = pr_links.pr_link_tags(links)
+
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
             project_id=project_id,
@@ -112,6 +121,7 @@ async def invoke_verifier(
                 req_id,
                 f"verify:{stage}",
                 f"trigger:{trigger}",
+                *extra_tags,
             ],
             status_id="todo",
             use_worktree=True,   # 并行 verifier 互不抢 working tree
@@ -269,6 +279,13 @@ async def start_fixer(*, body, req_id, tags, ctx):
             "cap": cap,
         }
 
+    # PR-link tag 注入（REQ-issue-link-pr-quality-base-1777218242）
+    branch_for_links = (ctx or {}).get("branch") or f"feat/{req_id}"
+    links = await pr_links.ensure_pr_links_in_ctx(
+        req_id=req_id, branch=branch_for_links, ctx=ctx, project_id=proj,
+    )
+    extra_tags = pr_links.pr_link_tags(links)
+
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
             project_id=proj,
@@ -280,6 +297,7 @@ async def start_fixer(*, body, req_id, tags, ctx):
                 f"parent-stage:{stage}",
                 f"parent-id:{ctx.get('verifier_issue_id', '')}",
                 f"round:{next_round}",
+                *extra_tags,
             ],
             status_id="todo",
             use_worktree=True,

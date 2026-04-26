@@ -26,6 +26,12 @@ def _admit_by_default(monkeypatch):
         AsyncMock(return_value=AdmissionDecision(admit=True)),
     )
     monkeypatch.setattr(start_analyze.db, "get_pool", lambda: object())
+    # REQ-issue-link-pr-quality-base-1777218242: success path stashes
+    # analyze_issue_id via update_context. Fixture pool is dummy object();
+    # patch update_context to no-op so existing tests don't crash.
+    # Tests that want to inspect the call can re-patch.
+    noop = AsyncMock()
+    monkeypatch.setattr(start_analyze.req_state, "update_context", noop)
 
 
 @dataclass

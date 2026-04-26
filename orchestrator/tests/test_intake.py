@@ -233,6 +233,10 @@ async def test_start_analyze_with_finalized_intent_creates_new_issue(monkeypatch
     fake = make_fake_bkd()
     fake.create_issue = AsyncMock(return_value=FakeIssue(id="analyze-new-1"))
     patch_bkd(monkeypatch, "orchestrator.actions.start_analyze_with_finalized_intent.BKDClient", fake)
+    # REQ-issue-link-pr-quality-base-1777218242: success path stashes
+    # analyze_issue_id via update_context.
+    monkeypatch.setattr(mod.req_state, "update_context", AsyncMock())
+    monkeypatch.setattr(mod.db, "get_pool", lambda: object())
 
     ctx = {"intake_finalized_intent": _VALID_INTENT, "intent_title": "加 INTAKING stage"}
     out = await mod.start_analyze_with_finalized_intent(
