@@ -85,9 +85,11 @@ def _build_cmd(req_id: str) -> str:
         "    continue; "
         "  fi; "
         f'  cd "$repo" && git checkout -B "feat/{req_id}" "origin/feat/{req_id}" >/dev/null 2>&1; '
-        '  if [ -f "$repo/Makefile" ] '
-        '       && grep -q \'^ci-unit-test:\' "$repo/Makefile" '
-        '       && grep -q \'^ci-integration-test:\' "$repo/Makefile"; then '
+        # ci-unit-test / ci-integration-test target 检测：解析 Makefile（含 include 子 mk）
+        # 而非 grep 顶层（实证 ttpos-server-go：ci-* 在 ttpos-scripts/lint-ci-test.mk via include
+        # → 顶层 grep 漏判 → "0 source repos eligible" silent fail）。
+        '  if [ -f "$repo/Makefile" ] && (cd "$repo" && make -p -n 2>/dev/null | grep -qE \'^ci-unit-test:\') '
+        '       && (cd "$repo" && make -p -n 2>/dev/null | grep -qE \'^ci-integration-test:\'); then '
         "    ( "
         '      echo "=== staging_test (unit): $name ==="; '
         '      cd "$repo" && make ci-unit-test > "/tmp/staging-test-logs/$name-unit.log" 2>&1 '

@@ -32,20 +32,22 @@ log = structlog.get_logger(__name__)
 
 
 # 单 shell 调用扫两个 root，每个候选 dir 一行，前缀 I:/S: 标识来源。
-# grep -E '^accept-env-up:' 严格匹配开头（避免 doc 注释里出现的字符串误匹配）。
+# 用 `make -p -n` 解析 Makefile + include 子 mk（实证 ttpos-server-go：
+# accept-env-up 在 ttpos-scripts/accept-env.mk via include，顶层 grep 漏判 →
+# resolver 误判"无 integration repo"），跟 dev_cross_check / staging_test 同根因。
 _SCAN_SCRIPT = r"""
 set +e
 for d in /workspace/integration/*/; do
   [ -d "$d" ] || continue
   [ -f "${d}Makefile" ] || continue
-  if grep -qE '^accept-env-up:' "${d}Makefile" 2>/dev/null; then
+  if (cd "$d" && make -p -n 2>/dev/null | grep -qE '^accept-env-up:'); then
     printf 'I:%s\n' "${d%/}"
   fi
 done
 for d in /workspace/source/*/; do
   [ -d "$d" ] || continue
   [ -f "${d}Makefile" ] || continue
-  if grep -qE '^accept-env-up:' "${d}Makefile" 2>/dev/null; then
+  if (cd "$d" && make -p -n 2>/dev/null | grep -qE '^accept-env-up:'); then
     printf 'S:%s\n' "${d%/}"
   fi
 done
