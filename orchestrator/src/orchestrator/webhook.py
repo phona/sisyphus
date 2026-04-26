@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import engine
+from . import engine, links
 from . import observability as obs
 from . import router as router_lib
 from .bkd import BKDClient
@@ -263,12 +263,18 @@ async def webhook(request: Request) -> JSONResponse:
                 break
 
         # 初始化 REQ（默认 INIT 或指定的自定义状态）
+        init_ctx: dict = {
+            "intent_issue_id": body.issueId,
+            "intent_title": (body.title or "").strip(),
+        }
+        # REQ-pr-issue-traceability-1777218612: 把 BKD 前端 URL 一并落库，
+        # 让 gh_incident body / Metabase 看板渲染 clickable 链接，不必每次再算。
+        bkd_url = links.bkd_issue_url(body.projectId, body.issueId)
+        if bkd_url is not None:
+            init_ctx["bkd_intent_url"] = bkd_url
         await req_state.insert_init(
             pool, req_id, body.projectId,
-            context={
-                "intent_issue_id": body.issueId,
-                "intent_title": (body.title or "").strip(),
-            },
+            context=init_ctx,
             state=init_state,
         )
         row = await req_state.get(pool, req_id)

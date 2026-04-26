@@ -363,6 +363,10 @@ async def escalate(*, body, req_id, tags, ctx):
     # intake 阶段失败 pre-clone / 集中三角部署）。
     existing_urls = dict((ctx or {}).get("gh_incident_urls") or {})
     incident_repos = _resolve_incident_repos(ctx, tags)
+    # REQ-pr-issue-traceability-1777218612: thread cross-link kwargs through
+    # so the GH issue body renders clickable BKD intent + PR URLs.
+    bkd_intent_url = (ctx or {}).get("bkd_intent_url")
+    pr_urls = (ctx or {}).get("pr_urls") or None
     new_urls: dict[str, str] = {}
     if incident_repos:
         # 取当前 state 给 issue body（best-effort，None 也能继续）
@@ -383,6 +387,8 @@ async def escalate(*, body, req_id, tags, ctx):
                 failed_issue_id=failed_issue_id,
                 project_id=proj,
                 state=state_str,
+                bkd_intent_url=bkd_intent_url,
+                pr_urls=pr_urls,
             )
             if url:
                 new_urls[incident_repo] = url

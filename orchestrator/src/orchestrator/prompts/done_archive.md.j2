@@ -22,6 +22,16 @@ accept 通过。你现在要：
 
 **别动 runner Pod / PVC**，sisyphus 会自己清（ctrl-loop GC 或 admin 手动）。
 
+{% if pr_urls %}
+## Known PRs
+
+sisyphus 在 pr-ci-watch 阶段已经探到这些 PR，验证 merge 顺序时直接用：
+
+{% for repo, url in pr_urls.items() | sort %}
+- [{{ repo }}{% if "/pull/" in url %}#{{ url.split("/pull/")[-1].split("?")[0].split("/")[0] }}{% endif %}]({{ url }})
+{% endfor %}
+{% endif %}
+
 ---
 
 ## 步骤

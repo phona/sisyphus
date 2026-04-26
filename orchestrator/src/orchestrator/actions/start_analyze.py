@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import structlog
 
-from .. import k8s_runner
+from .. import k8s_runner, links
 from ..admission import check_admission
 from ..bkd import BKDClient
 from ..config import settings
@@ -95,6 +95,9 @@ async def start_analyze(*, body, req_id, tags, ctx):
             project_alias=proj,   # BKD REST 接 id 也接 alias，二者等价
             issue_id=issue_id,
             cloned_repos=cloned_repos,
+            # REQ-pr-issue-traceability-1777218612: lets analyze.md.j2 render
+            # the PR-body cross-link footer with a clickable BKD link.
+            bkd_intent_issue_url=links.bkd_issue_url(proj, issue_id) or "",
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue_id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue_id, status_id="working")

@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 import httpx
 import structlog
 
+from . import links
 from .config import settings
 
 log = structlog.get_logger(__name__)
@@ -36,17 +37,34 @@ def _format_body(
     failed_issue_id: str,
     project_id: str,
     state: str | None,
+    bkd_intent_url: str | None = None,
+    pr_urls: dict[str, str] | None = None,
 ) -> str:
     now = datetime.now(UTC).isoformat(timespec="seconds")
     state_line = state or "(unknown)"
+    intent_url = (bkd_intent_url or "").strip()
+    if intent_url:
+        intent_line = (
+            f"**BKD intent issue**: `{intent_issue_id}` "
+            f"— [BKD intent issue]({intent_url})\n"
+        )
+    else:
+        intent_line = f"**BKD intent issue**: `{intent_issue_id}`\n"
+
+    pr_line = ""
+    pr_inline = links.format_pr_links_inline(pr_urls) if pr_urls else ""
+    if pr_inline:
+        pr_line = f"**PRs**: {pr_inline}\n"
+
     return (
         f"**REQ**: `{req_id}`\n"
         f"**Reason**: `{reason}`\n"
         f"**State at escalate**: `{state_line}`\n"
         f"**Auto-retry count**: {retry_count}\n"
         f"**BKD project**: `{project_id}`\n"
-        f"**BKD intent issue**: `{intent_issue_id}`\n"
+        f"{intent_line}"
         f"**Failed sub-issue**: `{failed_issue_id}`\n"
+        f"{pr_line}"
         f"**Opened**: {now}\n\n"
         "## What to do\n"
         f"1. Inspect the BKD intent issue (`{intent_issue_id}`) for the agent session log.\n"
@@ -67,6 +85,8 @@ async def open_incident(
     failed_issue_id: str,
     project_id: str,
     state: str | None = None,
+    bkd_intent_url: str | None = None,
+    pr_urls: dict[str, str] | None = None,
 ) -> str | None:
     """POST a fresh issue to `repo`. Returns html_url or None.
 
@@ -74,6 +94,11 @@ async def open_incident(
     Returns None on any HTTP error (logged at warning) — never raises, so the
     escalate flow can proceed even if GitHub is unreachable / per-repo PAT scope
     is missing.
+
+    `bkd_intent_url` and `pr_urls` (REQ-pr-issue-traceability-1777218612) are
+    optional cosmetic kwargs. When provided, the issue body gains clickable
+    markdown links to the BKD intent issue and to all known feat/<REQ> PRs;
+    when absent the body is byte-identical to the pre-cross-link format.
     """
     repo = (repo or "").strip()
     token = settings.github_token.strip()
@@ -87,6 +112,7 @@ async def open_incident(
         req_id=req_id, reason=reason, retry_count=retry_count,
         intent_issue_id=intent_issue_id, failed_issue_id=failed_issue_id,
         project_id=project_id, state=state,
+        bkd_intent_url=bkd_intent_url, pr_urls=pr_urls,
     )
     labels = [*settings.gh_incident_labels, f"reason:{reason}"]
     payload = {"title": title, "body": body, "labels": labels}

@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     bkd_token: str = Field(..., description="Coder-Session-Token")
     # transport: 'rest'（BKD ≥0.0.65 默认）/ 'mcp'（老版本，带 /api/mcp 端点）
     bkd_transport: str = "rest"
+    # BKD frontend URL (for cross-link rendering). 留空 → links.bkd_issue_url
+    # 自动从 bkd_base_url 剥 trailing /api 推导。生产 BKD 前后端同源时不必显式设；
+    # 仅当前端跑在跟 /api 不同 host 上时覆盖（例如 BKD reverse-proxy 拆分部署）。
+    bkd_frontend_url: str = ""
 
     # 入站 webhook 共享 token（BKD webhook 配置里加 `Authorization: Bearer <token>` header）
     webhook_token: str = Field(..., description="Bearer token expected in Authorization header on /bkd-events")

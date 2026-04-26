@@ -23,7 +23,7 @@ import re
 
 import structlog
 
-from .. import k8s_runner, pr_links
+from .. import k8s_runner, links, pr_links
 from ..bkd import BKDClient
 from ..checkers import pr_ci_watch as checker
 from ..config import settings
@@ -44,10 +44,46 @@ async def create_pr_ci_watch(*, body, req_id, tags, ctx):
     if rv := skip_if_enabled("pr-ci", Event.PR_CI_PASS, req_id=req_id):
         return rv
 
+    # REQ-pr-issue-traceability-1777218612: capture per-repo PR html_url to
+    # ctx.pr_urls before either dispatch path runs, so downstream gh_incident
+    # bodies + done_archive prompts can render clickable links. Best-effort:
+    # discovery failure / empty result leaves ctx.pr_urls untouched.
+    await _capture_pr_urls(req_id=req_id, ctx=ctx or {})
+
     if settings.checker_pr_ci_watch_enabled:
         return await _run_checker(req_id=req_id, ctx=ctx or {})
 
     return await _dispatch_bkd_agent(body=body, req_id=req_id, ctx=ctx)
+
+
+async def _capture_pr_urls(*, req_id: str, ctx: dict) -> None:
+    """Best-effort GH probe for ``feat/<REQ>`` PR html_urls per involved repo.
+
+    Persists ``ctx.pr_urls`` only when a non-empty dict is discovered. Never
+    raises — the dispatch path that follows depends on no return value.
+    """
+    branch = ctx.get("branch") or f"feat/{req_id}"
+    repos = await _discover_repos_from_runner(req_id)
+    if not repos:
+        finalized = ctx.get("intake_finalized_intent") or {}
+        repos = finalized.get("involved_repos") or ctx.get("involved_repos")
+    if not repos:
+        return
+    try:
+        pr_urls = await links.discover_pr_urls(repos, branch)
+    except Exception as e:  # defence in depth; helper already swallows HTTP errors
+        log.warning("create_pr_ci_watch.pr_urls_discovery_error",
+                    req_id=req_id, error=str(e))
+        return
+    if not pr_urls:
+        return
+    try:
+        await req_state.update_context(db.get_pool(), req_id, {"pr_urls": pr_urls})
+    except Exception as e:
+        log.warning("create_pr_ci_watch.pr_urls_persist_failed",
+                    req_id=req_id, error=str(e))
+        return
+    log.info("create_pr_ci_watch.pr_urls_captured", req_id=req_id, count=len(pr_urls))
 
 
 # ── 新路：sisyphus 自检 ────────────────────────────────────────────────────
