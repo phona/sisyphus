@@ -521,7 +521,47 @@ class RunnerController:
 
         exit_code 用 `; echo __MARKER__:$?` 附在命令末尾，stdout 里 parse。
         (K8s stream client `.returncode` 在不同版本不稳定。)
+
+        race: 偶发 stream `is_open()` 在数据 buffer 之前就 False，loop 立刻退出，
+        stdout/stderr 全空、exit_code=-1。实证 2026-04-26 dev_cross_check checker
+        1.22s silent fail（verifier byxkqvdf 决策诊断为"pod exec 连接层异常"）。
+        防御：内层尝试拿到 marker；若失败 + 极短耗时 + 零输出 → 重试一次（不算重试到底，
+        让真业务报错和 race 区分开）。
         """
+        attempts = 2
+        last_result: ExecResult | None = None
+        for attempt in range(attempts):
+            result = await self._exec_once(
+                req_id, command, env=env, workdir=workdir, timeout_sec=timeout_sec,
+            )
+            last_result = result
+            # marker 拿到（无论成功 0 还是非 0）→ 真业务结果，直接返
+            if result.exit_code != -1:
+                return result
+            # exit_code=-1 但有任何输出 → 不是 race，是真 truncate / timeout，直接返
+            if result.stdout or result.stderr:
+                return result
+            # exit_code=-1 + 全空 + 极短耗时 → 几乎肯定是 stream race
+            # （正常命令至少耗时几百 ms 起步；marker echo 本身需要 fork+exec）
+            if result.duration_sec > 5:
+                return result  # 跑过一阵才 -1，可能是 timeout，不重试
+            if attempt < attempts - 1:
+                log.warning(
+                    "exec_in_runner.stream_race_retry",
+                    req_id=req_id, attempt=attempt + 1,
+                    duration_sec=round(result.duration_sec, 2),
+                )
+                await asyncio.sleep(0.5)
+                continue
+        # 所有重试都 -1+空 → 真异常
+        return last_result  # type: ignore[return-value]
+
+    async def _exec_once(
+        self, req_id: str, command: str,
+        *, env: dict[str, str] | None,
+        workdir: str,
+        timeout_sec: int,
+    ) -> ExecResult:
         pod_name = self.pod_name(req_id)
 
         env_prefix = ""
@@ -548,15 +588,24 @@ class RunnerController:
         deadline = time.monotonic() + timeout_sec
 
         try:
+            # 防 race：第一次 update 给 stream 真的 warm-up 时间。
+            # K8s exec channel 偶发 is_open() 在 buffer 填充前就 False，
+            # 之前 loop 立刻退出导致 stdout/stderr 全空。先 update 一次让
+            # 服务端 SPDY frame 到位，再进 polling loop。
+            resp.update(timeout=2)
+            if resp.peek_stdout():
+                stdout_buf.append(resp.read_stdout())
+            if resp.peek_stderr():
+                stderr_buf.append(resp.read_stderr())
+
             while resp.is_open() and time.monotonic() < deadline:
-                # update 的 timeout 单位是秒（浮点 OK）
                 resp.update(timeout=1)
                 if resp.peek_stdout():
                     stdout_buf.append(resp.read_stdout())
                 if resp.peek_stderr():
                     stderr_buf.append(resp.read_stderr())
                 await asyncio.sleep(0.01)
-            # 最后拉一次残留
+            # 最后拉一次残留（含 stream 关闭后 buffer 里剩的 frame）
             if resp.peek_stdout():
                 stdout_buf.append(resp.read_stdout())
             if resp.peek_stderr():
@@ -569,13 +618,10 @@ class RunnerController:
         stdout = "".join(stdout_buf)
         stderr = "".join(stderr_buf)
 
-        # parse exit code 从 stdout 最后一行
         exit_code = _parse_exit_marker(stdout)
-        # 把 marker 从 stdout 去掉（别污染业务日志）
         if exit_code is not None:
             stdout = _strip_exit_marker(stdout)
         else:
-            # 没找到 marker = 命令被 truncate / timeout
             exit_code = -1
 
         return ExecResult(
