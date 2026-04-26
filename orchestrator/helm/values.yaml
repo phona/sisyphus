@@ -116,15 +116,23 @@ runner:
   imagePullSecrets: []        # 如果 runner image 私有需要填
 
   # 单一 runner secret：所有 runner Pod 要的凭证都在里面（keys 见下）
-  #   gh_token    → env GH_TOKEN              给 agent gh CLI / git clone（**只读 PAT**）
+  #   gh_token    → env GH_TOKEN              **只供 runner 内 git clone 私有仓**
   #   ghcr_user   → env SISYPHUS_GHCR_USER    docker login ghcr.io
   #   ghcr_token  → env SISYPHUS_GHCR_TOKEN   （通常跟 gh_token 同一个只读 PAT）
   #   kubeconfig  → 挂载到 /root/.kube/config  accept 阶段 agent 起 helm 用
   #
-  # ⚠️ Runner PAT 原则：最小权限只读。Fine-grained 首选（Contents Read +
-  # Statuses Read + Packages Read，限定到 sisyphus 涉及的 repo）；fallback 到
-  # classic `repo` + `read:packages` 必须配 branch protection / 90d rotation。
-  # 长远推荐 Deploy Key + read:packages PAT 或 GitHub App。详见 docs/V0.2-PLAN.md。
+  # ⚠️ 设计契约：**runner pod = 只读 checker**。所有 git push / gh pr create /
+  #     gh pr merge 都在 BKD Coder workspace（"开发机"）里跑，用 Coder 自己注入
+  #     的 gh auth，跟这里的 secret **完全无关**。runner 只 clone source、跑
+  #     测试、跑 accept-env-up/down。如果未来需要在 runner 里写 GH 状态
+  #     （如 PR review comment / status check），先回到本注释打回设计——默认拒绝。
+  #
+  # 推荐 PAT 配置（按优先级）：
+  #   1. Fine-grained PAT — 限定 sisyphus 涉及的 repo，权限只勾 **Contents: Read-only**
+  #      （+ Packages: Read-only 如果跨仓拉 ghcr 镜像）
+  #   2. Deploy Key (per-repo) + 单独 read:packages PAT —— 隔离最干净，但配置繁琐
+  #   3. Classic PAT —— GitHub 不细分，只能给整个 `repo` (含 write)。**违背 read-only
+  #      设计契约**，仅 dev 临时用，必须配 branch protection 防 runner 误写。
   #
   # createSecrets=true 时 helm 帮建 secret（用下方 secret 段的值）；
   # 生产建议 createSecrets=false + existingSecretName 指向 SealedSecret / ESO 管的 secret
@@ -132,9 +140,9 @@ runner:
   existingSecretName: ""
   secretName: sisyphus-runner-secrets
   secret:
-    gh_token: ""              # !! 建议填：GitHub PAT，scope=repo+read:packages
+    gh_token: ""              # !! 建议填：fine-grained PAT，**Contents: Read-only**（+ Packages: Read-only），限定 sisyphus 涉及的 repo
     ghcr_user: ""             # GHCR 用户名（通常是 GitHub 用户或 org 名）
-    ghcr_token: ""            # GHCR PAT（可跟 gh_token 同一个）
+    ghcr_token: ""            # GHCR PAT（read:packages 即可；可跟 gh_token 同一个）
     kubeconfig: ""            # kubeconfig 文件内容（accept 阶段 helm install 用）
                               # 生产建议单独放 --set-file runner.secret.kubeconfig=$HOME/.kube/config
 
