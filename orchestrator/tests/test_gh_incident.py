@@ -251,6 +251,7 @@ async def test_escalate_real_path_opens_gh_incident(monkeypatch):
         state = type("S", (), {"value": "executing"})()
     monkeypatch.setattr(rs, "get", AsyncMock(return_value=_Row()))
 
+    monkeypatch.setattr(mod.settings, "gh_incident_repo", "phona/sisyphus")
     open_inc = AsyncMock(return_value="https://github.com/phona/sisyphus/issues/42")
     monkeypatch.setattr(mod.gh_incident, "open_incident", open_inc)
 
