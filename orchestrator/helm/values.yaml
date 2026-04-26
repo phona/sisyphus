@@ -127,12 +127,16 @@ runner:
   #     测试、跑 accept-env-up/down。如果未来需要在 runner 里写 GH 状态
   #     （如 PR review comment / status check），先回到本注释打回设计——默认拒绝。
   #
-  # 推荐 PAT 配置（按优先级）：
-  #   1. Fine-grained PAT — 限定 sisyphus 涉及的 repo，权限只勾 **Contents: Read-only**
-  #      （+ Packages: Read-only 如果跨仓拉 ghcr 镜像）
-  #   2. Deploy Key (per-repo) + 单独 read:packages PAT —— 隔离最干净，但配置繁琐
-  #   3. Classic PAT —— GitHub 不细分，只能给整个 `repo` (含 write)。**违背 read-only
-  #      设计契约**，仅 dev 临时用，必须配 branch protection 防 runner 误写。
+  # PAT 选型 + 4 步验证 playbook 见 docs/integration-contracts.md §1c
+  # 速查（推荐度从高到低）：
+  #   1. Fine-grained PAT (org 内生成) — Contents: Read-only + 限定具体仓。最干净
+  #   2. Deploy Key (per-repo) + read:packages PAT —— 隔离干净，但配置繁琐
+  #   3. Classic PAT —— 必勾 `repo` + `read:org` (+ `read:packages` 如需)
+  #      classic 没有 read-only-repo scope，只能给 r+w；runner 不主动写但属过度授权
+  #
+  # ⚠️ patch secret 之前必跑 4 步 PAT 验证（curl /user 看 scopes / /user/orgs / /repos/x / git ls-remote）
+  #     —— GitHub 私有仓 403 文案 "Write access not granted" 经常误导，跳过验证容易判错根因
+  #     完整命令模板见 docs/integration-contracts.md §1c.2
   #
   # createSecrets=true 时 helm 帮建 secret（用下方 secret 段的值）；
   # 生产建议 createSecrets=false + existingSecretName 指向 SealedSecret / ESO 管的 secret

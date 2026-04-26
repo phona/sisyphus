@@ -304,6 +304,10 @@ wait
 > - 任何 prompt / action 想在 runner 里跑 push/PR 操作，必须先改设计回来这条注释。
 > - 全链需要 GH write 的部分（dev push feat/REQ-* + 开 PR、archive merge PR）由
 >   BKD agent 在 Coder workspace 完成，是 BKD 的事，不是 sisyphus 的事。
+>
+> **PAT 配置 + 验证 playbook**：见 [integration-contracts.md §1c](./integration-contracts.md#1c-runner-github-pat只读)。
+> patch K8s secret 前必跑 4 步 API 探测（curl /user / /user/orgs / /repos/x / git ls-remote），
+> 否则 GitHub "Write access not granted" 错误文案常误导根因判断。
 
 每个 REQ 在 `sisyphus-runners` namespace 起一个：
 - **Pod** `runner-<REQ>` —— privileged + DinD + fuse-overlayfs
