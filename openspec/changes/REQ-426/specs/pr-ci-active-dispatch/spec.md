@@ -2,14 +2,14 @@
 
 ### Requirement: sisyphus actively dispatches repository_dispatch before polling
 
-When the pr-ci-watch checker path is active (`checker_pr_ci_watch_enabled=True`)
-and the `pr_ci_dispatch_enabled` flag is `True`, sisyphus SHALL fire a
-`POST /repos/{owner}/{repo}/dispatches` request for each discovered repo before
-starting the check-run polling loop. The request body MUST contain
-`event_type` equal to `settings.pr_ci_dispatch_event_type` and a
-`client_payload` object with at least the fields `branch` (the `feat/REQ-x`
-branch name) and `req_id`. Dispatch MUST use `settings.github_token` for
-authorization via `Authorization: Bearer` header.
+Sisyphus SHALL fire a `POST /repos/{owner}/{repo}/dispatches` request for each
+discovered repo before starting the check-run polling loop when
+`checker_pr_ci_watch_enabled=True` and `pr_ci_dispatch_enabled=True`.
+The request body MUST contain `event_type` equal to
+`settings.pr_ci_dispatch_event_type` and a `client_payload` object with at
+least the fields `branch` (the `feat/REQ-x` branch name) and `req_id`.
+Dispatch MUST use `settings.github_token` for authorization via
+`Authorization: Bearer` header.
 
 When `pr_ci_dispatch_enabled` is `False` (default), sisyphus MUST NOT make
 any `POST /dispatches` call, and the polling loop MUST proceed as before.
