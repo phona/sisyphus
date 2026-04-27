@@ -68,19 +68,9 @@ def _patch_bkd(monkeypatch, fake: AsyncMock) -> None:
 
 
 def _patch_db(monkeypatch) -> None:
-    class _Conn:
-        async def execute(self, sql, *args):
-            pass
-
-    class _PoolCtx:
-        async def __aenter__(self):
-            return _Conn()
-
-        async def __aexit__(self, *_):
-            pass
-
     pool = MagicMock()
-    pool.acquire.return_value = _PoolCtx()
+    pool.execute = AsyncMock()
+    pool.fetchrow = AsyncMock(return_value=None)
     monkeypatch.setattr("orchestrator.actions.create_accept.db.get_pool", lambda: pool)
 
 
