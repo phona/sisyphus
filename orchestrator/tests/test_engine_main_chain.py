@@ -241,17 +241,19 @@ async def test_mct_s9_accept_pass_to_tearing_down(stub_actions):
 
 
 # ───────────────────────────────────────────────────────────────────────
-# MCT-S10：(ACCEPT_TEARING_DOWN, TEARDOWN_DONE_PASS) → ARCHIVING + done_archive
+# MCT-S10：(ACCEPT_TEARING_DOWN, TEARDOWN_DONE_PASS) → PENDING_USER_REVIEW
+# (REQ-bkd-acceptance-feedback-loop-1777278984)
 # ───────────────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_mct_s10_teardown_done_pass_to_archiving(stub_actions):
-    """Spec MCT-S10: lab 清完 + 上一步 accept.pass → done-archive 起。"""
+    """Spec MCT-S10 (post-REQ-bkd-acceptance-feedback-loop): lab 清完 + 上一步
+    accept.pass → post_acceptance_report 起 → 停在 PENDING_USER_REVIEW 等用户表态。"""
     await _run_single_transition(
         stub_actions=stub_actions,
         cur_state=ReqState.ACCEPT_TEARING_DOWN,
         event=Event.TEARDOWN_DONE_PASS,
-        expected_next_state=ReqState.ARCHIVING,
-        expected_action="done_archive",
+        expected_next_state=ReqState.PENDING_USER_REVIEW,
+        expected_action="post_acceptance_report",
     )
 
 
@@ -277,7 +279,7 @@ async def test_mct_s11_archive_done_to_done(stub_actions):
 async def test_mct_chain_full_main_chain_via_emit(stub_actions):
     """Spec MCT-CHAIN: 10 个 stub action 各 emit 下一事件，单次 engine.step 推完整条主链。
 
-    主链：
+    主链（post-REQ-bkd-acceptance-feedback-loop-1777278984）：
       INIT --INTENT_ANALYZE--> ANALYZING --ANALYZE_DONE-->
       ANALYZE_ARTIFACT_CHECKING --ANALYZE_ARTIFACT_CHECK_PASS-->
       SPEC_LINT_RUNNING --SPEC_LINT_PASS-->
@@ -287,10 +289,12 @@ async def test_mct_chain_full_main_chain_via_emit(stub_actions):
       PR_CI_RUNNING --PR_CI_PASS-->
       ACCEPT_RUNNING --ACCEPT_PASS-->
       ACCEPT_TEARING_DOWN --TEARDOWN_DONE_PASS-->
+      PENDING_USER_REVIEW --USER_REVIEW_PASS-->
       ARCHIVING --ARCHIVE_DONE--> DONE
 
-    10 个 emit 链，加上 ARCHIVING→DONE 这条无 action 的 terminal 跳转 = 11 条
-    transition 全过。
+    11 个 emit 链，加上 ARCHIVING→DONE 这条无 action 的 terminal 跳转 = 12 条
+    transition 全过。post_acceptance_report stub 直接 emit USER_REVIEW_PASS 模拟
+    "用户验收通过"原语（真实生产由用户改 BKD intent statusId 触发）。
     """
     calls: list[str] = []
 
@@ -305,6 +309,7 @@ async def test_mct_chain_full_main_chain_via_emit(stub_actions):
         "create_pr_ci_watch":            Event.PR_CI_PASS,
         "create_accept":                 Event.ACCEPT_PASS,
         "teardown_accept_env":           Event.TEARDOWN_DONE_PASS,
+        "post_acceptance_report":        Event.USER_REVIEW_PASS,
         "done_archive":                  Event.ARCHIVE_DONE,
     }
 

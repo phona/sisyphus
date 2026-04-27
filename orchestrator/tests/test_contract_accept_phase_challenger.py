@@ -98,9 +98,11 @@ async def test_apt_s1_accept_pass_chains_through_teardown_to_archiving(
     monkeypatch,
 ) -> None:
     """
-    APT-S1: (ACCEPT_RUNNING, ACCEPT_PASS) + teardown_accept_env emits teardown-done.pass
-    MUST chain into (ACCEPT_TEARING_DOWN, TEARDOWN_DONE_PASS) → ARCHIVING;
-    done_archive MUST be called exactly once; cleanup_runner MUST NOT be awaited.
+    APT-S1 (post-REQ-bkd-acceptance-feedback-loop-1777278984): (ACCEPT_RUNNING, ACCEPT_PASS)
+    + teardown_accept_env emits teardown-done.pass MUST chain into (ACCEPT_TEARING_DOWN,
+    TEARDOWN_DONE_PASS) → PENDING_USER_REVIEW (post_acceptance_report). post_acceptance_report
+    MUST be called exactly once; chain stops at PENDING_USER_REVIEW (waits for user statusId
+    change to drive USER_REVIEW_PASS / USER_REVIEW_FIX); cleanup_runner MUST NOT be awaited.
     """
     from orchestrator import engine
     from orchestrator.actions import REGISTRY
@@ -109,7 +111,7 @@ async def test_apt_s1_accept_pass_chains_through_teardown_to_archiving(
     _patch_io(monkeypatch)
 
     teardown_calls: list[int] = []
-    archive_calls: list[int] = []
+    post_report_calls: list[int] = []
     controller = _FakeController()
     monkeypatch.setattr(engine.k8s_runner, "get_controller", lambda: controller)
 
@@ -125,12 +127,12 @@ async def test_apt_s1_accept_pass_chains_through_teardown_to_archiving(
         teardown_calls.append(1)
         return {"emit": "teardown-done.pass"}
 
-    async def _archive(**_kw):
-        archive_calls.append(1)
-        return {"ok": True}
+    async def _post_report(**_kw):
+        post_report_calls.append(1)
+        return {"acceptance_reported": True}
 
     REGISTRY["teardown_accept_env"] = _teardown
-    REGISTRY["done_archive"] = _archive
+    REGISTRY["post_acceptance_report"] = _post_report
 
     result = await _step(
         cur_state=ReqState.ACCEPT_RUNNING,
@@ -147,17 +149,17 @@ async def test_apt_s1_accept_pass_chains_through_teardown_to_archiving(
     assert chained is not None, (
         f"APT-S1: result MUST contain 'chained' key for emitted teardown-done.pass; got {result!r}"
     )
-    assert chained.get("action") == "done_archive", (
-        f"APT-S1: chained action MUST be 'done_archive'; got {chained!r}"
+    assert chained.get("action") == "post_acceptance_report", (
+        f"APT-S1: chained action MUST be 'post_acceptance_report'; got {chained!r}"
     )
-    assert chained.get("next_state") == ReqState.ARCHIVING.value, (
-        f"APT-S1: chained next_state MUST be 'archiving'; got {chained!r}"
+    assert chained.get("next_state") == ReqState.PENDING_USER_REVIEW.value, (
+        f"APT-S1: chained next_state MUST be 'pending-user-review'; got {chained!r}"
     )
     assert teardown_calls == [1], (
         f"APT-S1: teardown_accept_env MUST be called exactly once; got {len(teardown_calls)} call(s)"
     )
-    assert archive_calls == [1], (
-        f"APT-S1: done_archive MUST be called exactly once; got {len(archive_calls)} call(s)"
+    assert post_report_calls == [1], (
+        f"APT-S1: post_acceptance_report MUST be called exactly once; got {len(post_report_calls)} call(s)"
     )
     assert controller.cleanup_calls == [], (
         f"APT-S1: cleanup_runner MUST NOT be awaited on non-terminal path; "
@@ -301,8 +303,9 @@ async def test_apt_s4_teardown_done_pass_advances_to_archiving(
     monkeypatch,
 ) -> None:
     """
-    APT-S4: (ACCEPT_TEARING_DOWN, TEARDOWN_DONE_PASS) → ARCHIVING;
-    done_archive MUST be called exactly once; cleanup_runner MUST NOT be awaited.
+    APT-S4 (post-REQ-bkd-acceptance-feedback-loop-1777278984): (ACCEPT_TEARING_DOWN,
+    TEARDOWN_DONE_PASS) → PENDING_USER_REVIEW; post_acceptance_report MUST be called
+    exactly once; cleanup_runner MUST NOT be awaited (PENDING_USER_REVIEW is not terminal).
     """
     from orchestrator import engine
     from orchestrator.actions import REGISTRY
@@ -310,15 +313,15 @@ async def test_apt_s4_teardown_done_pass_advances_to_archiving(
 
     _patch_io(monkeypatch)
 
-    archive_calls: list[int] = []
+    post_report_calls: list[int] = []
     controller = _FakeController()
     monkeypatch.setattr(engine.k8s_runner, "get_controller", lambda: controller)
 
-    async def _archive(**_kw):
-        archive_calls.append(1)
-        return {"ok": True}
+    async def _post_report(**_kw):
+        post_report_calls.append(1)
+        return {"acceptance_reported": True}
 
-    REGISTRY["done_archive"] = _archive
+    REGISTRY["post_acceptance_report"] = _post_report
 
     result = await _step(
         cur_state=ReqState.ACCEPT_TEARING_DOWN,
@@ -327,17 +330,17 @@ async def test_apt_s4_teardown_done_pass_advances_to_archiving(
 
     await asyncio.sleep(0)
 
-    assert result.get("action") == "done_archive", (
-        f"APT-S4: action MUST be 'done_archive'; got {result!r}"
+    assert result.get("action") == "post_acceptance_report", (
+        f"APT-S4: action MUST be 'post_acceptance_report'; got {result!r}"
     )
-    assert result.get("next_state") == ReqState.ARCHIVING.value, (
-        f"APT-S4: next_state MUST be 'archiving'; got {result!r}"
+    assert result.get("next_state") == ReqState.PENDING_USER_REVIEW.value, (
+        f"APT-S4: next_state MUST be 'pending-user-review'; got {result!r}"
     )
-    assert archive_calls == [1], (
-        f"APT-S4: done_archive MUST be called exactly once; got {len(archive_calls)} call(s)"
+    assert post_report_calls == [1], (
+        f"APT-S4: post_acceptance_report MUST be called exactly once; got {len(post_report_calls)} call(s)"
     )
     assert controller.cleanup_calls == [], (
-        f"APT-S4: cleanup_runner MUST NOT be awaited — ARCHIVING is not terminal; "
+        f"APT-S4: cleanup_runner MUST NOT be awaited — PENDING_USER_REVIEW is not terminal; "
         f"got {controller.cleanup_calls}"
     )
 

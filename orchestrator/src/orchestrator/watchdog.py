@@ -75,9 +75,13 @@ _SKIP_STATES = {
 
 # REQ-watchdog-stage-policy-1777269909：human-in-loop stages 完全豁免 watchdog。
 # 这类 stage 的进程靠人推（多轮 chat 等用户回复），机械超时杀掉是错的；人若
-# 觉得真死了走 admin/resume 终止。INTAKING 是当前唯一这类 state。
+# 觉得真死了走 admin/resume 终止。
+# REQ-bkd-acceptance-feedback-loop-1777278984：PENDING_USER_REVIEW 同样 human-in-loop
+# —— 等用户改 BKD intent issue statusId 表态，没 BKD agent 在跑，watchdog 强 escalate
+# 没意义。
 _NO_WATCHDOG_STATES: frozenset[ReqState] = frozenset({
     ReqState.INTAKING,
+    ReqState.PENDING_USER_REVIEW,
 })
 
 

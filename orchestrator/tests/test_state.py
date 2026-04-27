@@ -36,7 +36,11 @@ EXPECTED = [
     (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_ENV_UP_FAIL,  ReqState.ESCALATED,           "escalate"),
     (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_PASS,         ReqState.ACCEPT_TEARING_DOWN, "teardown_accept_env"),
     (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_FAIL,         ReqState.ACCEPT_TEARING_DOWN, "teardown_accept_env"),
-    (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_PASS,  ReqState.ARCHIVING,           "done_archive"),
+    # REQ-bkd-acceptance-feedback-loop-1777278984：teardown 通过后改去 PENDING_USER_REVIEW
+    # 等用户验收，不再直进 ARCHIVING。新增 PENDING_USER_REVIEW 出口 2 条。
+    (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_PASS,  ReqState.PENDING_USER_REVIEW, "post_acceptance_report"),
+    (ReqState.PENDING_USER_REVIEW,  Event.USER_REVIEW_PASS,    ReqState.ARCHIVING,           "done_archive"),
+    (ReqState.PENDING_USER_REVIEW,  Event.USER_REVIEW_FIX,     ReqState.ESCALATED,           "escalate"),
     (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_FAIL,  ReqState.REVIEW_RUNNING,      "invoke_verifier_for_accept_fail"),
     (ReqState.ARCHIVING,            Event.ARCHIVE_DONE,        ReqState.DONE,                None),
     # M14b verifier 子链（3 路：pass / fix / escalate）
@@ -153,6 +157,41 @@ def test_m5_dropped_test_fix_reviewer_states():
     values = {s.value for s in ReqState}
     assert "test-fix-running" not in values
     assert "reviewer-running" not in values
+
+
+# ── REQ-bkd-acceptance-feedback-loop-1777278984 -----------------------------
+
+
+def test_user_review_state_and_events_present():
+    """USR-T0: 新 state / event 枚举齐全（防 typo 改坏 webhook 派发）。"""
+    states = {s.value for s in ReqState}
+    assert "pending-user-review" in states
+    events = {e.value for e in Event}
+    assert "user-review.pass" in events
+    assert "user-review.fix" in events
+
+
+def test_user_review_pending_has_no_session_failed_self_loop():
+    """USR-T4: PENDING_USER_REVIEW 没 BKD agent 在跑，不应有 SESSION_FAILED 入口。"""
+    assert decide(ReqState.PENDING_USER_REVIEW, Event.SESSION_FAILED) is None
+
+
+def test_user_review_pending_illegal_events_return_none():
+    """USR-T4 续：除 USER_REVIEW_PASS / USER_REVIEW_FIX 外其他事件全非法。"""
+    legal = {Event.USER_REVIEW_PASS, Event.USER_REVIEW_FIX}
+    for ev in Event:
+        if ev in legal:
+            continue
+        assert decide(ReqState.PENDING_USER_REVIEW, ev) is None, ev
+
+
+def test_acceptance_teardown_pass_routes_through_pending_not_archiving():
+    """USR-T1: TEARDOWN_DONE_PASS 现在指向 PENDING_USER_REVIEW + post_acceptance_report
+    （而非旧的 ARCHIVING + done_archive 直通）。"""
+    t = decide(ReqState.ACCEPT_TEARING_DOWN, Event.TEARDOWN_DONE_PASS)
+    assert t is not None
+    assert t.next_state == ReqState.PENDING_USER_REVIEW
+    assert t.action == "post_acceptance_report"
 
 
 def test_m5_dropped_test_fix_reviewer_events():

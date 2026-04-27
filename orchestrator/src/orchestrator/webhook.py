@@ -60,6 +60,76 @@ class WebhookBody(BaseModel):
     changes: dict[str, Any] | None = None  # issue.updated 携带
 
 
+# REQ-bkd-acceptance-feedback-loop-1777278984：BKD intent issue statusId → user-review event。
+# 只识别 "done" / "review" / "blocked" 三个明确表态值；其他 statusId 改动 sisyphus 不识别
+# （"working" / "todo" 等 BKD 自己也会改的状态不当作用户表态）。
+_USER_REVIEW_STATUS_TO_EVENT: dict[str, Event] = {
+    "done": Event.USER_REVIEW_PASS,
+    "review": Event.USER_REVIEW_FIX,
+    "blocked": Event.USER_REVIEW_FIX,
+}
+
+
+async def _maybe_derive_user_review_event(
+    *,
+    pool: Any,
+    project_id: str,
+    issue_id: str,
+    tags: list[str],
+    issue_number: int | None,
+) -> Event | None:
+    """PENDING_USER_REVIEW state + issue.updated on intent issue → user-review event.
+
+    None 表示：state 不是 PENDING_USER_REVIEW / issue 不是 intent / statusId 不识别 → skip。
+    返非 None：已经把 ctx.escalated_reason 写好（fix 路径才需要），调用方直接 emit。
+
+    BKD `issue.updated` payload 的 ``changes`` 字段 shape 没契约保证（v0.0.65 实测有
+    ``{"statusId": "done"}`` 也有 ``{"statusId": {"old": ..., "new": ...}}``）；统一通过
+    ``BKDClient.get_issue`` 拿 ground truth 最稳。
+    """
+    req_id = router_lib.extract_req_id(tags, issue_number)
+    if req_id is None:
+        return None
+    row = await req_state.get(pool, req_id)
+    if row is None or row.state != ReqState.PENDING_USER_REVIEW:
+        return None
+    intent_issue_id = (row.context or {}).get("intent_issue_id")
+    if not intent_issue_id or intent_issue_id != issue_id:
+        # 只 honor intent issue 的 statusId 变更；sub-issue 的更新跟用户验收无关
+        return None
+    try:
+        async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+            issue = await bkd.get_issue(project_id, issue_id)
+    except Exception as e:
+        log.warning(
+            "webhook.user_review.fetch_issue_failed",
+            req_id=req_id, issue_id=issue_id, error=str(e),
+        )
+        return None
+    new_status = (issue.status_id or "").lower()
+    new_event = _USER_REVIEW_STATUS_TO_EVENT.get(new_status)
+    if new_event is None:
+        log.debug(
+            "webhook.user_review.statusid_not_actionable",
+            req_id=req_id, issue_id=issue_id, status_id=new_status,
+        )
+        return None
+    if new_event == Event.USER_REVIEW_FIX:
+        # escalate.py 优先级 1: ctx_reason in _HARD_REASONS；这里写 ctx.escalated_reason
+        # 走优先级 3 fallback。reason 串保持 "user-requested-fix" —— escalate.py 没把
+        # 这串列入 _HARD_REASONS / _TRANSIENT_REASONS / _CANONICAL_SIGNALS，自然走非
+        # transient 路径直接 escalate（不 auto-resume，不被 watchdog.stuck 反向毒化）。
+        await req_state.update_context(
+            pool, req_id, {"escalated_reason": "user-requested-fix"},
+        )
+    log.info(
+        "webhook.user_review.derived",
+        req_id=req_id, issue_id=issue_id,
+        status_id=new_status, derived_event=new_event.value,
+    )
+    return new_event
+
+
 async def _push_upstream_status(project_id: str, issue_id: str, status_id: str) -> None:
     """把刚收到 session.completed 的 BKD issue 状态推到目标 statusId。
 
@@ -225,6 +295,24 @@ async def webhook(request: Request) -> JSONResponse:
             log.warning("webhook.intake.no_finalized_intent",
                         issue_id=body.issueId)
             event = Event.INTAKE_FAIL  # 降级：没有有效 finalized intent → escalate
+
+    # REQ-bkd-acceptance-feedback-loop-1777278984: PENDING_USER_REVIEW gate.
+    # router.derive_event 不读 issue.statusId（只看 tag），所以用户改 BKD intent issue
+    # statusId 时 router 返 None。这里 fallback 一下：state=PENDING_USER_REVIEW + issue.updated
+    # 在 intent issue 上 → GET issue 拿当前 statusId 派 USER_REVIEW_PASS / USER_REVIEW_FIX。
+    # **必须在 "if event is None" 早返之前**，否则永远走不到 fallback。
+    if (
+        event is None
+        and body.event == "issue.updated"
+        and router_lib.extract_req_id(tags, body.issueNumber) is not None
+    ):
+        event = await _maybe_derive_user_review_event(
+            pool=pool,
+            project_id=body.projectId,
+            issue_id=body.issueId,
+            tags=tags,
+            issue_number=body.issueNumber,
+        )
 
     if event is None:
         log.debug("webhook.no_event_mapping", tags=tags, event_type=body.event)

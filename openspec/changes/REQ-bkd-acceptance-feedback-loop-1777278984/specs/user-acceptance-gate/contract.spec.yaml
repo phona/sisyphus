@@ -1,0 +1,87 @@
+# Contract: user-acceptance-gate
+# REQ: REQ-bkd-acceptance-feedback-loop-1777278984
+#
+# This contract spec is consumed by:
+# - state machine unit tests (state.py transitions)
+# - webhook unit tests (BKD intent statusId routing)
+# - post_acceptance_report action tests (managed block PATCH semantics)
+# - watchdog tests (skip set membership)
+
+state_machine:
+  new_states:
+    - name: pending-user-review
+      description: |
+        Happy-path post-accept gate. REQ is waiting for the human to set the
+        BKD intent issue's statusId to "done" (approve) or "review"/"blocked"
+        (fix-needed). No BKD agent active in this state.
+      stage_type: human-loop-conversation
+      watchdog: skip
+
+  new_events:
+    - name: user-review.pass
+      description: BKD intent issue statusId == "done" (user approves)
+    - name: user-review.fix
+      description: BKD intent issue statusId in {review, blocked} (user wants fix)
+
+  modified_transitions:
+    - from: accept-tearing-down
+      event: teardown-done.pass
+      previous:
+        next: archiving
+        action: done_archive
+      next: pending-user-review
+      action: post_acceptance_report
+
+  added_transitions:
+    - from: pending-user-review
+      event: user-review.pass
+      next: archiving
+      action: done_archive
+    - from: pending-user-review
+      event: user-review.fix
+      next: escalated
+      action: escalate
+
+webhook:
+  intent_issue_status_routing:
+    state_filter: pending-user-review
+    issue_filter:
+      kind: intent
+      match: body.issueId == ctx.intent_issue_id
+    rules:
+      - status_id: done
+        emit: user-review.pass
+        ctx_patch: {}
+      - status_id: review
+        emit: user-review.fix
+        ctx_patch: {escalated_reason: user-requested-fix}
+      - status_id: blocked
+        emit: user-review.fix
+        ctx_patch: {escalated_reason: user-requested-fix}
+      - status_id: "*"  # any other value (working / todo / unknown)
+        emit: null
+        ctx_patch: {}
+
+actions:
+  post_acceptance_report:
+    idempotent: true
+    inputs_from_ctx:
+      - intent_issue_id (required, else noop)
+      - pr_urls (optional, rendered into block as bullet list)
+    side_effects:
+      - bkd.update_issue:
+          fields_patched: [description]
+          fields_not_patched: [tags, statusId]
+      - ctx.acceptance_reported_at = utcnow().isoformat()
+    body_marker: "<!-- sisyphus:acceptance-status -->"
+    idempotency_strategy: replace_block_by_marker
+
+watchdog:
+  skip_states:
+    must_include:
+      - done
+      - escalated
+      - gh-incident-open
+      - init
+      - intaking
+      - pending-user-review  # new
