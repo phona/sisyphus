@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import traceback
 from typing import Any
 
 import asyncpg
@@ -306,7 +307,11 @@ async def _dispatch_with_retry(
         result = await handler(body=body, req_id=req_id, tags=tags, ctx=ctx)
     except Exception as e:
         duration_ms = int((time.monotonic() - started) * 1000)
-        log.exception("engine.action_failed", action=action_name, error=str(e))
+        log.exception(
+            "engine.action_failed", action=action_name, error=str(e),
+            error_type=type(e).__name__,
+            traceback=traceback.format_exc(),
+        )
         await obs.record_event(
             "action.failed",
             req_id=req_id, issue_id=issue_id, tags=tags,
