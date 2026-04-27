@@ -18,6 +18,8 @@ import structlog
 from . import k8s_runner
 from . import observability as obs
 from .actions import REGISTRY
+from .bkd import BKDClient
+from .config import settings
 from .state import Event, ReqState, decide
 from .store import req_state, stage_runs
 
@@ -27,6 +29,17 @@ log = structlog.get_logger(__name__)
 # 进 terminal state 时立即清 runner（fire-and-forget；runner_gc 仍周期兜底）
 # escalated 保 PVC 给人工 debug，过期由 runner_gc 按 pvc_retain_on_escalate_days 清
 _TERMINAL_STATES = {ReqState.DONE, ReqState.ESCALATED}
+
+# REQ-bkd-hitl-end-to-end-loop-1777273753: 把 sisyphus 终态镜像到 BKD intent issue
+# 的 statusId，让看板"完成 / 待审查"列跟 req_state.state 保持同步。
+#   DONE     → "done"   （BKD 看板"完成"列）
+#   ESCALATED → "review" （BKD 看板"待审查"列；跟 webhook._push_upstream_status
+#               对 verifier-decision-escalate 的处理对齐 —— 让人能在 BKD UI
+#               定位到该 follow-up 哪条 issue）
+_TERMINAL_STATE_TO_BKD_STATUS_ID: dict[ReqState, str] = {
+    ReqState.DONE: "done",
+    ReqState.ESCALATED: "review",
+}
 
 
 # M14e/M15：state → stage 名（用于 stage_runs 表）。
@@ -132,6 +145,41 @@ async def _record_stage_transitions(
 _cleanup_tasks: set[asyncio.Task] = set()
 
 
+async def _sync_intent_status_on_terminal(
+    project_id: str,
+    intent_issue_id: str | None,
+    terminal_state: ReqState,
+    *,
+    req_id: str | None = None,
+) -> None:
+    """REQ-bkd-hitl-end-to-end-loop-1777273753: 终态把 BKD intent issue 推到对的列。
+
+    DONE → "done"；ESCALATED → "review"（让"待审查"列只剩需要人 follow-up 的）。
+    幂等（statusId PATCH 是替换语义）。BKD 不可达不阻塞状态机：异常吞，仅 log
+    warning —— `req_state.state` 是真相，BKD 看板只是 UX 镜像，落后一拍可人工修。
+
+    intent_issue_id 缺失（罕见：测试 / 重放路径未填 ctx）→ no-op skip。
+    """
+    target = _TERMINAL_STATE_TO_BKD_STATUS_ID.get(terminal_state)
+    if not target or not intent_issue_id:
+        return
+    try:
+        async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+            await bkd.update_issue(
+                project_id=project_id,
+                issue_id=intent_issue_id,
+                status_id=target,
+            )
+    except Exception as e:
+        log.warning(
+            "engine.intent_status_sync_failed",
+            req_id=req_id,
+            intent_issue_id=intent_issue_id,
+            target_status_id=target,
+            error=str(e),
+        )
+
+
 async def _cleanup_runner_on_terminal(req_id: str, terminal_state: ReqState) -> None:
     try:
         rc = k8s_runner.get_controller()
@@ -210,6 +258,19 @@ async def step(
         )
         _cleanup_tasks.add(task)
         task.add_done_callback(_cleanup_tasks.discard)
+        # REQ-bkd-hitl-end-to-end-loop-1777273753：同 cleanup 同步起一个
+        # fire-and-forget task 把 BKD intent issue statusId 推到对应列
+        # （DONE→done / ESCALATED→review）。intent_issue_id 由 webhook 在
+        # 第一次见到该 REQ 时落进 ctx；缺失 → helper 自身 no-op skip。
+        intent_issue_id = (ctx or {}).get("intent_issue_id")
+        sync_task = asyncio.create_task(
+            _sync_intent_status_on_terminal(
+                project_id, intent_issue_id, transition.next_state,
+                req_id=req_id,
+            )
+        )
+        _cleanup_tasks.add(sync_task)
+        sync_task.add_done_callback(_cleanup_tasks.discard)
 
     await obs.record_event(
         "router.decision",

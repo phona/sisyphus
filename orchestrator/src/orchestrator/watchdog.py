@@ -6,8 +6,8 @@ M4 retry policy 假设"失败事件总会到"被打破 — watchdog 作为独立
 
 每 N 秒扫一次 req_state，发现某 REQ：
 1. state 在 in-flight（非 done / 非 escalated / 非 init / 非 human-in-loop）
-2. updated_at 距今超过 min(ended_threshold, stuck_threshold)（SQL 预滤）
-3. 关联 BKD issue 的 session_status 不在 'running' 状态
+2. updated_at 距今超过 SQL 预滤阈值（min over 所有 stage policy 的 ended/stuck）
+3. 关联 BKD issue 的 session_status 不在 'running' 状态 OR 触发本 stage 慢车道
 
 → 写一条 artifact_checks 记录 + 通过 engine.step 发 SESSION_FAILED 走 escalate。
 
@@ -19,6 +19,12 @@ in-loop `still_running → return` 无条件 skip，保护长尾真分析。
 REQ-watchdog-stage-policy-1777269909（2026-04-27）：按 stage type 走差异化
 策略 —— `_NO_WATCHDOG_STATES` 收 human-in-loop state（目前仅 INTAKING），
 SQL 预滤直接跳过它们，机械层不杀人在思考的 stage。
+
+REQ-stage-watchdog-policy-full-1777280786（2026-04-27）：把 INTAKING-only
+exempt set 升级成 stage-typed `_STAGE_POLICY` 表，每 stage 两个轴
+（ended_sec / stuck_sec）。`_NO_WATCHDOG_STATES` 退化为派生集合（policy is None
+的 stage）。unmapped state fallback 全局阈值，避免新增 ReqState 漏配时裸奔。
+详见 docs/user-feedback-loop.md §1。
 
 不 restart agent（restart 归 M4 retry policy 管），只 escalate。
 """
@@ -77,16 +83,103 @@ _SKIP_STATES = {
     ReqState.PENDING_USER_REVIEW.value,
 }
 
-# REQ-watchdog-stage-policy-1777269909：human-in-loop stages 完全豁免 watchdog。
-# 这类 stage 的进程靠人推（多轮 chat 等用户回复），机械超时杀掉是错的；人若
-# 觉得真死了走 admin/resume 终止。
-# REQ-bkd-acceptance-feedback-loop-1777278984：PENDING_USER_REVIEW 同样 human-in-loop
-# —— 等用户改 BKD intent issue statusId 表态，没 BKD agent 在跑，watchdog 强 escalate
-# 没意义。
-_NO_WATCHDOG_STATES: frozenset[ReqState] = frozenset({
-    ReqState.INTAKING,
-    ReqState.PENDING_USER_REVIEW,
-})
+@dataclass(frozen=True)
+class _StagePolicy:
+    """REQ-stage-watchdog-policy-full-1777280786：单 stage 的 watchdog 策略。
+
+    两个轴解耦"BKD session 已 ended"和"长尾真死"两种 escalate 触发条件：
+
+    - ended_sec: BKD 报 session_status != "running"（completed/failed/cancelled/
+      issue 不存在）后等多久 escalate。本质是"BKD agent 死了但 webhook 没到"
+      的检测延迟。所有非豁免 stage 必须设。
+    - stuck_sec: 不论 session 状态，stuck 超过该时长一律 escalate。`None` =
+      不开启慢车道（保留"BKD running session 永远不杀"的长尾保护语义）。
+      设具体数值则相当于"哪怕 BKD 还在 running，超时也认账"，目前仅
+      external-poll 的 PR_CI_RUNNING 配 4h 上限。
+    """
+    ended_sec: int
+    stuck_sec: int | None
+
+
+# REQ-stage-watchdog-policy-full-1777280786：per-stage typed policy 表。
+# 默认值依据 docs/user-feedback-loop.md §1 stage type taxonomy：
+# - human-loop-conversation → None（SQL 预过滤）
+# - deterministic-checker   → ended=300, stuck=300（除 STAGING_TEST 见下）
+# - autonomous-bounded      → ended=300, stuck=None（保留不杀长尾，30min hard
+#                             cap 留给运维数据驱动决策；config.py:186 写过
+#                             30min 实测 false-escalate 长尾 sonnet ANALYZING）
+# - external-poll           → ended=300, stuck=14400（4h CI hard cap）
+#
+# STAGING_TEST_RUNNING 名义是 deterministic-checker（kubectl exec），但单/集成
+# 测试整套常跑分钟级，特别归"宽松 deterministic"档（stuck=None），避免误杀。
+#
+# REQ-bkd-acceptance-feedback-loop-1777278984：PENDING_USER_REVIEW 也是
+# human-loop-conversation —— 等用户改 BKD intent statusId 表态，没 BKD agent
+# 在跑，watchdog 强 escalate 没意义。
+_STAGE_POLICY: dict[ReqState, _StagePolicy | None] = {
+    # human-loop-conversation
+    ReqState.INTAKING: None,
+    ReqState.PENDING_USER_REVIEW: None,
+    # deterministic-checker（紧 5min ended + 5min stuck 双线）
+    ReqState.SPEC_LINT_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=300),
+    ReqState.DEV_CROSS_CHECK_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=300),
+    ReqState.ANALYZE_ARTIFACT_CHECKING: _StagePolicy(ended_sec=300, stuck_sec=300),
+    # deterministic-checker（宽松：测试套件常跑长）
+    ReqState.STAGING_TEST_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
+    # autonomous-bounded
+    ReqState.ANALYZING: _StagePolicy(ended_sec=300, stuck_sec=None),
+    ReqState.CHALLENGER_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
+    ReqState.ACCEPT_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
+    ReqState.ACCEPT_TEARING_DOWN: _StagePolicy(ended_sec=300, stuck_sec=None),
+    ReqState.ARCHIVING: _StagePolicy(ended_sec=300, stuck_sec=None),
+    ReqState.FIXER_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
+    ReqState.REVIEW_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
+    # external-poll
+    ReqState.PR_CI_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=14400),
+}
+
+
+# 派生：policy is None 的 stage 集合，SQL 预过滤直接跳过。
+# 其他模块（含测试）可能 import 这个 set，保留导出并保持语义不变。
+_NO_WATCHDOG_STATES: frozenset[ReqState] = frozenset(
+    s for s, p in _STAGE_POLICY.items() if p is None
+)
+
+
+def _resolve_policy(state: ReqState) -> _StagePolicy | None:
+    """REQ-stage-watchdog-policy-full-1777280786：解析 stage 的 watchdog policy。
+
+    - 表里显式列了 → 直接用（含 None / 显式 _StagePolicy）
+    - 表里没列    → 用全局 `watchdog_session_ended_threshold_sec` +
+                    `watchdog_stuck_threshold_sec` 合成 fallback policy。
+                    安全网兜底：新加 ReqState 忘补表也不会裸奔无 watchdog。
+    """
+    if state in _STAGE_POLICY:
+        return _STAGE_POLICY[state]
+    return _StagePolicy(
+        ended_sec=settings.watchdog_session_ended_threshold_sec,
+        stuck_sec=settings.watchdog_stuck_threshold_sec,
+    )
+
+
+def _sql_prefilter_threshold() -> int:
+    """SQL 预过滤的最低 stuck 阈值。
+
+    取 `min(所有非 None policy 的 ended_sec ∪ stuck_sec ∪ 全局 fallback ended/stuck)`。
+    保证任一 stage 的 escalate 触发条件都能让对应 row 进入 SQL 返回集（per-row
+    逻辑再按 stage policy 精判）。
+    """
+    candidates: list[int] = [
+        settings.watchdog_session_ended_threshold_sec,
+        settings.watchdog_stuck_threshold_sec,
+    ]
+    for p in _STAGE_POLICY.values():
+        if p is None:
+            continue
+        candidates.append(p.ended_sec)
+        if p.stuck_sec is not None:
+            candidates.append(p.stuck_sec)
+    return min(candidates)
 
 
 @dataclass
@@ -100,14 +193,7 @@ class _SyntheticBody:
 async def _tick() -> dict:
     """单次扫描 + escalate 卡死 REQ。返回 {checked, escalated}。"""
     pool = db.get_pool()
-    # SQL 预滤用两个阈值的较小值。fast (ended_threshold) 让 BKD 已结束的
-    # session 在 ~5min 内被兜底；slow (stuck_threshold) 是 legacy 上限。
-    # 仍 running 的 session 由 _check_and_escalate 里的 still_running → skip
-    # 无条件保护，不会被 fast lane 误伤。
-    threshold = min(
-        settings.watchdog_session_ended_threshold_sec,
-        settings.watchdog_stuck_threshold_sec,
-    )
+    threshold = _sql_prefilter_threshold()
     # 终态 / 未入链 + human-in-loop 一起塞进 SQL skip 列表
     skip_arr = list(_SKIP_STATES | {s.value for s in _NO_WATCHDOG_STATES})
     # psql 语法：INTERVAL '1 second' * N 把 int 参数转成 interval
@@ -129,7 +215,7 @@ async def _tick() -> dict:
 
 
 async def _check_and_escalate(row) -> bool:
-    """检查一条 stuck row：session 仍 running 就 skip，否则 escalate。返 True = 真 escalate。"""
+    """检查一条 stuck row，按 stage policy 决定 skip / escalate。返 True = 真 escalate。"""
     req_id = row["req_id"]
     project_id = row["project_id"]
     state_str = row["state"]
@@ -142,6 +228,15 @@ async def _check_and_escalate(row) -> bool:
         state = ReqState(state_str)
     except ValueError:
         log.warning("watchdog.unknown_state", req_id=req_id, state=state_str)
+        return False
+
+    policy = _resolve_policy(state)
+    if policy is None:
+        # belt-and-suspenders：SQL 预过滤已排除，这里再保险
+        log.debug(
+            "watchdog.policy_exempt", req_id=req_id, state=state_str,
+            stuck_sec=stuck_sec,
+        )
         return False
 
     issue_key = _STATE_ISSUE_KEY.get(state)
@@ -157,22 +252,36 @@ async def _check_and_escalate(row) -> bool:
                 issue = await bkd.get_issue(project_id, issue_id)
             if issue.session_status == "running":
                 still_running = True
-                log.debug(
-                    "watchdog.still_running",
-                    req_id=req_id, state=state_str,
-                    issue_id=issue_id, stuck_sec=stuck_sec,
-                )
         except Exception as e:
-            # 查不到（issue 删了 / BKD 挂了）→ 保守按 failed 处理，走 escalate
+            # 查不到（issue 删了 / BKD 挂了）→ 保守按 ended 处理（走 ended_sec 阈值）
             log.warning(
                 "watchdog.bkd_get_issue_failed",
                 req_id=req_id, issue_id=issue_id, error=str(e),
             )
 
+    # 2. 按 policy 决定是否 escalate
     if still_running:
-        return False
+        if policy.stuck_sec is None or stuck_sec < policy.stuck_sec:
+            # 慢车道未开启或未到 → 不杀长尾运行 session
+            log.debug(
+                "watchdog.still_running",
+                req_id=req_id, state=state_str,
+                issue_id=issue_id, stuck_sec=stuck_sec,
+                stuck_cap=policy.stuck_sec,
+            )
+            return False
+        # 慢车道触发：BKD running 但已超过 stage 设的 stuck 上限
+    else:
+        # session ended 或无 issue：走 ended_sec 快车道
+        if stuck_sec < policy.ended_sec:
+            log.debug(
+                "watchdog.below_ended_threshold",
+                req_id=req_id, state=state_str,
+                stuck_sec=stuck_sec, ended_cap=policy.ended_sec,
+            )
+            return False
 
-    # 2. 选 body.event：ARCHIVING 用专属 archive.failed，其他通用 watchdog.stuck
+    # 3. 选 body.event：ARCHIVING 用专属 archive.failed，其他通用 watchdog.stuck
     body_event = _STATE_FAILURE_EVENT.get(state, "watchdog.stuck")
     reason = "watchdog_stuck"
     stage_label = f"watchdog:{state_str}"
@@ -196,7 +305,7 @@ async def _check_and_escalate(row) -> bool:
             log.warning("watchdog.fixer_round_cap_tag_failed",
                         req_id=req_id, error=str(e))
 
-    # 3. 写 artifact_checks 记一笔，给 dashboard M7 04-fail-kind-distribution 抓
+    # 4. 写 artifact_checks 记一笔，给 dashboard M7 04-fail-kind-distribution 抓
     check = CheckResult(
         passed=False,
         exit_code=-1,
@@ -211,7 +320,7 @@ async def _check_and_escalate(row) -> bool:
     except Exception as e:
         log.warning("watchdog.artifact_insert_failed", req_id=req_id, error=str(e))
 
-    # 4. 通过 engine.step 发 SESSION_FAILED → 走 escalate transition
+    # 5. 通过 engine.step 发 SESSION_FAILED → 走 escalate transition
     body = _SyntheticBody(
         projectId=project_id,
         issueId=issue_id or ctx.get("intent_issue_id") or "",

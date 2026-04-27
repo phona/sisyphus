@@ -1,0 +1,68 @@
+spec: intent-status-sync
+version: 1
+description: >-
+  When a sisyphus REQ transitions into a terminal state (DONE or ESCALATED),
+  the BKD intent issue's statusId MUST be PATCHed to the column that reflects
+  that terminal state, so the BKD board's "完成" / "待审查" columns stay in
+  sync with req_state.state. The PATCH MUST be best-effort (BKD failure
+  logs a warning but does not block the state transition or runner cleanup).
+
+inputs:
+  - name: req_id
+    type: string
+    description: REQ identifier (workflow tag, e.g. REQ-foo-1234567890)
+  - name: project_id
+    type: string
+    description: BKD project alias / id (same value, BKD accepts either)
+  - name: intent_issue_id
+    type: string
+    description: >-
+      ctx.intent_issue_id — the originating BKD issue id (set by webhook on
+      first webhook delivery for this REQ). MUST be present in ctx for the
+      sync to fire; absent → sync is a no-op.
+  - name: terminal_state
+    type: enum
+    values: [done, escalated]
+    description: ReqState entered via CAS
+
+terminal_state_to_bkd_status_id:
+  done: done
+  escalated: review
+
+side_effects:
+  - http:
+      method: PATCH
+      url: /projects/{project_id}/issues/{intent_issue_id}
+      body:
+        statusId: "{mapping[terminal_state]}"
+      idempotent: true
+      tolerable_failures:
+        - HTTP 5xx
+        - timeout
+        - connection refused
+        - any exception from BKDClient
+  - on_failure:
+      log_level: warning
+      log_event: engine.intent_status_sync_failed
+      block_state_machine: false
+      block_runner_cleanup: false
+
+invocation_sites:
+  - location: orchestrator/src/orchestrator/engine.py::step
+    trigger: cas_transition succeeded AND cur_state not in {DONE, ESCALATED} AND next_state in {DONE, ESCALATED}
+    schedule: fire-and-forget asyncio.Task (alongside _cleanup_runner_on_terminal)
+  - location: orchestrator/src/orchestrator/actions/escalate.py::escalate (SESSION_FAILED self-loop branch)
+    trigger: inner cas_transition to ESCALATED succeeded (advanced=True)
+    schedule: synchronous await (escalate is already awaiting cleanup_runner; failure is logged not raised)
+  - location: orchestrator/src/orchestrator/actions/escalate.py::_apply_pr_merged_done_override
+    trigger: PR-merged shortcut path
+    schedule: NOT a separate call — the existing merge_tags_and_update(... status_id="done") already PATCHes statusId; helper MUST NOT double-PATCH
+
+excluded_paths:
+  - self-loop transitions (cur_state == next_state) — not entering terminal
+  - admin/complete (admin endpoint owns its own statusId PATCH semantics; out of scope here)
+
+non_goals:
+  - retry on BKD PATCH failure
+  - back-fill statusId for pre-existing terminal REQs (use admin tooling)
+  - changing the existing webhook _push_upstream_status semantics (it patches the just-completed session's issue, not the intent issue)
