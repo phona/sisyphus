@@ -17,6 +17,10 @@ v0.2 K8s runner 运维：
   POST /admin/req/{req_id}/runner-resume      → 重建 Pod
   POST /admin/req/{req_id}/rebuild-workspace  → 强拉代码重建 workspace（需 PVC 存在）
   GET  /admin/runners                          → 列所有 runner pod / pvc 状态
+
+runner GC 运维（REQ-430）：
+  POST /admin/runner-gc                        → 立即触发一次 GC pass，返回结果
+  GET  /admin/runner-gc/status                 → 上次 GC 结果（无需 token）
 """
 from __future__ import annotations
 
@@ -29,7 +33,7 @@ import structlog
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from . import engine, k8s_runner
+from . import engine, k8s_runner, runner_gc
 from .state import Event, ReqState
 from .store import db, req_state
 from .webhook import _verify_token
@@ -593,3 +597,26 @@ async def list_runners(
             for r in runners
         ],
     }
+
+
+@admin.post("/runner-gc")
+async def trigger_runner_gc(
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """立即执行一次 runner GC pass，返回结果（REQ-430）。
+
+    无 K8s controller 时返回 {skipped: ...}，不报错。
+    """
+    _verify_token(authorization)
+    result = await runner_gc.gc_once()
+    log.info("admin.runner_gc.triggered", result=result)
+    return result
+
+
+@admin.get("/runner-gc/status")
+async def runner_gc_status() -> dict:
+    """返回上次 runner GC 结果（无需认证，只读）（REQ-430）。
+
+    orchestrator 重启前为 {last: null}。
+    """
+    return {"last": runner_gc.get_last_result()}

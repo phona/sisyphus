@@ -30,6 +30,15 @@ _TERMINAL_STATES = {"done", "escalated"}
 # 重启 orchestrator 会重新探测一次。
 _DISK_CHECK_DISABLED = False
 
+# 上次 gc_once() 的结果（timer loop 和 admin trigger 共用同一槽）。
+# orchestrator 重启后清零。GET /admin/runner-gc/status 读此变量。
+_last_gc_result: dict | None = None
+
+
+def get_last_result() -> dict | None:
+    """返回上次 gc_once() 的结果，包含 ran_at；首次 GC 前为 None。"""
+    return _last_gc_result
+
 
 async def _pod_keep_req_ids() -> set[str]:
     """Pod 保留集 = 仅 non-terminal REQ。
@@ -78,12 +87,19 @@ async def gc_once() -> dict:
 
     磁盘压力 (> threshold) 仅影响 PVC keep set —— Pod keep set 永远不含
     terminal state，跟磁盘无关。
+
+    每次调用（包括 skipped）都更新模块级 _last_gc_result（附 ran_at）。
     """
+    global _last_gc_result
+
     try:
         rc = k8s_runner.get_controller()
     except RuntimeError:
         # dev 环境没 K8s，跳过
-        return {"skipped": "no runner controller"}
+        result: dict = {"skipped": "no runner controller",
+                        "ran_at": datetime.now(UTC).isoformat()}
+        _last_gc_result = result
+        return result
 
     # 检查磁盘压力。压时 escalated PVC 也立即清（不留 retention）。
     # 若上一次因 RBAC 403 已禁用 disk-check，直接跳，不再发请求。
@@ -116,13 +132,16 @@ async def gc_once() -> dict:
     pvc_keep = await _pvc_keep_req_ids(ignore_retention=disk_pressure)
     cleaned_pods = await rc.gc_orphan_pods(pod_keep)
     cleaned_pvcs = await rc.gc_orphan_pvcs(pvc_keep)
-    return {
+    result = {
         "cleaned_pods": cleaned_pods,
         "cleaned_pvcs": cleaned_pvcs,
         "pod_kept": len(pod_keep),
         "pvc_kept": len(pvc_keep),
         "disk_pressure": disk_pressure,
+        "ran_at": datetime.now(UTC).isoformat(),
     }
+    _last_gc_result = result
+    return result
 
 
 async def run_loop() -> None:
