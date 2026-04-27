@@ -197,7 +197,9 @@ async def test_orchn_s4_first_403_logs_info_and_disables(monkeypatch):
     class _FakeController:
         async def node_disk_usage_ratio(self):
             raise ApiException(status=403)
-        async def gc_orphans(self, keep):
+        async def gc_orphan_pods(self, keep):
+            return []
+        async def gc_orphan_pvcs(self, keep):
             return []
 
     monkeypatch.setattr(gc_mod.k8s_runner, "get_controller", lambda: _FakeController())
@@ -261,7 +263,9 @@ async def test_orchn_s5_disabled_skips_node_api(monkeypatch):
         async def node_disk_usage_ratio(self):
             ratio_calls.append(True)
             return 0.0
-        async def gc_orphans(self, keep):
+        async def gc_orphan_pods(self, keep):
+            return []
+        async def gc_orphan_pvcs(self, keep):
             return []
 
     monkeypatch.setattr(gc_mod.k8s_runner, "get_controller", lambda: _FakeController())
@@ -309,7 +313,9 @@ async def test_orchn_s6_non_403_debug_no_disable(monkeypatch):
     class _FakeController:
         async def node_disk_usage_ratio(self):
             raise ApiException(status=500)
-        async def gc_orphans(self, keep):
+        async def gc_orphan_pods(self, keep):
+            return []
+        async def gc_orphan_pvcs(self, keep):
             return []
 
     monkeypatch.setattr(gc_mod.k8s_runner, "get_controller", lambda: _FakeController())
@@ -354,7 +360,9 @@ async def test_orchn_s7_high_ratio_triggers_disk_pressure(monkeypatch):
     class _FakeController:
         async def node_disk_usage_ratio(self):
             return 0.9
-        async def gc_orphans(self, keep):
+        async def gc_orphan_pods(self, keep):
+            return []
+        async def gc_orphan_pvcs(self, keep):
             return []
 
     monkeypatch.setattr(gc_mod.k8s_runner, "get_controller", lambda: _FakeController())
@@ -398,7 +406,9 @@ async def test_orchn_s8_warning_filter_excludes_rbac_denied(monkeypatch):
     class _FakeController:
         async def node_disk_usage_ratio(self):
             raise ApiException(status=403)
-        async def gc_orphans(self, keep):
+        async def gc_orphan_pods(self, keep):
+            return []
+        async def gc_orphan_pvcs(self, keep):
             return []
 
     monkeypatch.setattr(gc_mod.k8s_runner, "get_controller", lambda: _FakeController())

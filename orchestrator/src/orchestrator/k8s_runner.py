@@ -514,13 +514,52 @@ class RunnerController:
                     return max(0.0, min(1.0, used_ratio))
         raise RuntimeError("no node with ephemeral-storage info")
 
-    async def gc_orphans(self, keep_req_ids: set[str]) -> list[str]:
-        """删除 keep_req_ids 之外的所有 runner（pod + pvc）。
+    async def gc_orphan_pods(self, keep_req_ids: set[str]) -> list[str]:
+        """按 sisyphus/role=runner label 列 Pod，删 keep_req_ids 之外的 Pod。
 
-        调用方：orchestrator 启动时 + 周期性 task。
-        keep_req_ids = req_state 里 state not in (done, escalated 过期) 的 req_id 集合。
+        **不动 PVC** —— PVC 由 gc_orphan_pvcs 单独管。Pod 占内存/调度容量，
+        keep set（仅 non-terminal）跟 PVC keep set（含 escalated retention）
+        不同：escalated Pod 没"人 debug"用例，立即可清。
 
-        返回被清理的 req_id 列表。
+        覆盖 _cleanup_runner_on_terminal 漏网的 zombie Pod —— 那条 fire-and-
+        forget 任务在 K8s API blip / orchestrator restart 下可能没跑完。
+
+        404 视为 no-op（Pod 已被别处删）。返已尝试删除的 req_id 列表。
+        """
+        keep_lower = {r.lower() for r in keep_req_ids}
+        cleaned: list[str] = []
+
+        pods = await asyncio.to_thread(
+            self.core_v1.list_namespaced_pod,
+            self.namespace, label_selector="sisyphus/role=runner",
+        )
+        for pod in pods.items:
+            req_label = (pod.metadata.labels or {}).get("sisyphus/req-id", "")
+            if not req_label or req_label in keep_lower:
+                continue
+            req_id = req_label.upper() if req_label.lower().startswith("req-") else req_label
+            try:
+                await asyncio.to_thread(
+                    self.core_v1.delete_namespaced_pod,
+                    self.pod_name(req_id), self.namespace,
+                )
+            except ApiException as e:
+                if e.status != 404:
+                    raise
+            cleaned.append(req_id)
+
+        if cleaned:
+            log.info("runner.gc.pods_cleaned", count=len(cleaned), reqs=cleaned)
+        return cleaned
+
+    async def gc_orphan_pvcs(self, keep_req_ids: set[str]) -> list[str]:
+        """按 sisyphus/role=workspace label 列 PVC，删 keep_req_ids 之外的 PVC。
+
+        **不动 Pod** —— Pod 由 gc_orphan_pods 单独管。如果 PVC 还有 Pod 依附
+        （Pod GC 还没扫到），K8s 把 PVC 标 Terminating 等 Pod 走，下轮 GC
+        重扫即生效，不阻塞。
+
+        404 视为 no-op。返已尝试删除的 req_id 列表。
         """
         keep_lower = {r.lower() for r in keep_req_ids}
         cleaned: list[str] = []
@@ -534,12 +573,18 @@ class RunnerController:
             if not req_label or req_label in keep_lower:
                 continue
             req_id = req_label.upper() if req_label.lower().startswith("req-") else req_label
-            # 兜底 sweep：done 已立即清，escalated 过期才到这；都该硬删 PVC
-            await self.cleanup_runner(req_id, retain_pvc=False)
+            try:
+                await asyncio.to_thread(
+                    self.core_v1.delete_namespaced_persistent_volume_claim,
+                    self.pvc_name(req_id), self.namespace,
+                )
+            except ApiException as e:
+                if e.status != 404:
+                    raise
             cleaned.append(req_id)
 
         if cleaned:
-            log.info("runner.gc.cleaned", count=len(cleaned), reqs=cleaned)
+            log.info("runner.gc.pvcs_cleaned", count=len(cleaned), reqs=cleaned)
         return cleaned
 
     # ── exec ────────────────────────────────────────────────────────────
