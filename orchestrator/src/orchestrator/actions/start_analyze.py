@@ -28,6 +28,7 @@ from .. import k8s_runner, links
 from ..admission import check_admission
 from ..bkd import BKDClient
 from ..config import settings
+from ..intent_tags import filter_propagatable_intent_tags
 from ..prompts import render
 from ..state import Event
 from ..store import db, req_state
@@ -80,12 +81,16 @@ async def start_analyze(*, body, req_id, tags, ctx):
         }
 
     # 3-5. BKD 调度 analyze-agent
+    # REQ-ux-tags-injection-1777257283: forward user hint tags (`repo:`, `ux:`, ...)
+    # so they survive the rename PATCH and stay visible to downstream agents /
+    # dashboards / fallback layers.
+    forwarded = filter_propagatable_intent_tags(tags)
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         await bkd.update_issue(
             project_id=proj,
             issue_id=issue_id,
             title=f"[{req_id}] [ANALYZE]{short_title(ctx)}",
-            tags=["analyze", req_id],
+            tags=["analyze", req_id, *forwarded],
         )
         prompt = render(
             "analyze.md.j2",

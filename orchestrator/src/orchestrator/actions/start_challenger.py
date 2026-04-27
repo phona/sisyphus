@@ -26,6 +26,7 @@ import structlog
 from .. import pr_links
 from ..bkd import BKDClient
 from ..config import settings
+from ..intent_tags import filter_propagatable_intent_tags
 from ..prompts import render
 from ..state import Event
 from . import register, short_title
@@ -48,12 +49,18 @@ async def start_challenger(*, body, req_id, tags, ctx):
         req_id=req_id, branch=branch_for_links, ctx=ctx, project_id=proj,
     )
     extra_tags = pr_links.pr_link_tags(links)
+    # REQ-ux-tags-injection-1777257283: forward user hint tags from the analyze
+    # issue (body.tags) so challenger keeps multi-repo / UX context.
+    forwarded = filter_propagatable_intent_tags(tags)
 
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
             project_id=proj,
             title=f"[{req_id}] [CHALLENGER]{short_title(ctx)}",
-            tags=["challenger", req_id, f"parent-id:{source_issue_id}", *extra_tags],
+            tags=[
+                "challenger", req_id, f"parent-id:{source_issue_id}",
+                *extra_tags, *forwarded,
+            ],
             status_id="todo",
             use_worktree=True,   # 黑盒，不污染主 worktree
             model=settings.agent_model,
