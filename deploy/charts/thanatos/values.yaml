@@ -1,0 +1,44 @@
+# Thanatos helm chart values.
+#
+# driver toggles the deployment topology:
+#   playwright | http  → single container Pod (thanatos)
+#   adb                → two-container Pod (redroid sidecar + thanatos)
+#
+# Anything else fails `helm template` with a clear message.
+
+driver: playwright
+
+image:
+  repository: ghcr.io/phona/thanatos
+  tag: dev
+  pullPolicy: IfNotPresent
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits: {}
+
+service:
+  # Debug only: kubectl port-forward + local mcp client. accept-agent reaches
+  # the pod via `kubectl exec`, so service is not required for the happy path.
+  type: ClusterIP
+  port: 7000
+
+# redroid sidecar settings (only used when driver=adb).
+redroid:
+  image: redroid/redroid:11.0.0-latest
+  port: 5555
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+
+# Pod-level options
+imagePullSecrets: []
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Extra env vars applied to the thanatos container.
+extraEnv: []

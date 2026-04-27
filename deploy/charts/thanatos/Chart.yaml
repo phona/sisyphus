@@ -1,0 +1,13 @@
+apiVersion: v2
+name: thanatos
+description: Sisyphus acceptance harness — MCP stdio server (+ optional redroid sidecar for adb driver)
+type: application
+version: 0.0.1
+appVersion: dev
+keywords:
+  - sisyphus
+  - acceptance
+  - mcp
+home: https://github.com/phona/sisyphus
+maintainers:
+  - name: phona/sisyphus team

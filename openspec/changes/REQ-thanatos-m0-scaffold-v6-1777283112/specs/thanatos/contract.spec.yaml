@@ -1,0 +1,123 @@
+# Thanatos MCP接口契约 — 三个 tool 的 input / output schema。
+#
+# transport: MCP stdio over `kubectl exec` (or `python -m thanatos.server` for
+# local debug). M0 三个 tool 全 stub —— schema 形状是 M0 冻结的契约，下游 caller
+# (accept-agent) 在 M1 接调用链时按此 schema 构造 request 即可。
+
+mcp_server:
+  name: thanatos
+  version: "0.0.1"
+  transport: stdio
+
+tools:
+  - name: run_scenario
+    description: |
+      Run a single scenario from a spec.md against an endpoint. M0 returns
+      pass=false with `failure_hint="M0: thanatos scaffold only, drivers not implemented"`.
+    input:
+      type: object
+      required: [skill_path, spec_path, scenario_id, endpoint]
+      properties:
+        skill_path:
+          type: string
+          description: Absolute path inside runner pod to .thanatos/skill.yaml
+        spec_path:
+          type: string
+          description: Absolute path to the openspec spec.md whose Scenario blocks should be parsed
+        scenario_id:
+          type: string
+          description: First-token id from `#### Scenario: <ID> [— <desc>]`
+        endpoint:
+          type: string
+          description: URL emitted by `make accept-env-up` last-line JSON
+    output:
+      type: object
+      required: [scenario_id, pass, steps, kb_updates]
+      properties:
+        scenario_id: { type: string }
+        pass: { type: boolean }
+        steps:
+          type: array
+          items:
+            type: object
+            required: [step, ok]
+            properties:
+              step: { type: string }
+              ok: { type: boolean }
+              evidence:
+                type: object
+                properties:
+                  dom: { type: string }
+                  network: { type: array }
+                  screenshot: { type: string }
+        kb_updates:
+          type: array
+          items:
+            type: object
+            required: [path, action, content]
+            properties:
+              path: { type: string }
+              action: { enum: [patch, append] }
+              content: { type: string }
+        failure_hint:
+          type: [string, "null"]
+
+  - name: run_all
+    description: |
+      Run every scenario in a spec.md against an endpoint. M0 returns one stub
+      ScenarioResult per parsed scenario.
+    input:
+      type: object
+      required: [skill_path, spec_path, endpoint]
+      properties:
+        skill_path: { type: string }
+        spec_path: { type: string }
+        endpoint: { type: string }
+    output:
+      type: array
+      items:
+        $ref: "#/tools/0/output"
+
+  - name: recall
+    description: |
+      Recall product knowledge fragments matching an intent. M0 always returns
+      an empty list.
+    input:
+      type: object
+      required: [skill_path, intent]
+      properties:
+        skill_path: { type: string }
+        intent: { type: string }
+    output:
+      type: array
+      items:
+        type: object
+        properties:
+          kind: { type: string }
+          snippet: { type: string }
+          freshness: { type: string }
+
+# Skill yaml schema — what `<repo>/.thanatos/skill.yaml` must look like.
+skill_yaml:
+  type: object
+  required: [name, driver, entry]
+  properties:
+    name:
+      type: string
+      description: Non-empty product name
+    driver:
+      enum: [playwright, adb, http]
+    entry:
+      type: string
+      description: '$ENDPOINT placeholder — replaced at run time with accept-env-up endpoint'
+    fixtures:
+      type: object
+      additionalProperties:
+        type: object
+    preflight:
+      type: array
+      items:
+        type: object
+        required: [assert]
+        properties:
+          assert: { type: string }

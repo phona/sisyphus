@@ -1,0 +1,67 @@
+{{- include "thanatos.assertDriver" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "thanatos.fullname" . }}
+  labels:
+    {{- include "thanatos.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "thanatos.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "thanatos.labels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        {{- if eq .Values.driver "adb" }}
+        - name: redroid
+          image: {{ .Values.redroid.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            privileged: true
+          ports:
+            - name: adb
+              containerPort: {{ .Values.redroid.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.redroid.resources | nindent 12 }}
+        {{- end }}
+        - name: thanatos
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # MCP stdio server — accept-agent talks to it via `kubectl exec`,
+          # so we don't expose any TCP listener from the container itself.
+          command: ["python", "-m", "thanatos.server"]
+          stdin: true
+          tty: false
+          env:
+            - name: THANATOS_DRIVER
+              value: {{ .Values.driver | quote }}
+            {{- if eq .Values.driver "adb" }}
+            - name: ADB_SERVER_ADDR
+              value: "localhost:{{ .Values.redroid.port }}"
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

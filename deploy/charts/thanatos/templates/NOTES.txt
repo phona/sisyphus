@@ -1,0 +1,21 @@
+Thanatos {{ .Chart.AppVersion }} is now installed in namespace {{ .Release.Namespace }}.
+
+Driver: {{ .Values.driver }}
+
+Driver topology:
+{{- if eq .Values.driver "adb" }}
+  - Pod: 2 containers ({{ include "thanatos.fullname" . }} runs `redroid` + `thanatos` as a sidecar pair).
+  - thanatos talks to redroid over localhost:{{ .Values.redroid.port }} (ADB_SERVER_ADDR is wired up automatically).
+{{- else }}
+  - Pod: 1 container ({{ include "thanatos.fullname" . }} runs `thanatos` only).
+{{- end }}
+
+Reach the MCP server (accept-agent does this; this is here for debug):
+
+  kubectl -n {{ .Release.Namespace }} exec -i \
+      $(kubectl -n {{ .Release.Namespace }} get pod -l app.kubernetes.io/name={{ include "thanatos.name" . }} -o name | head -1) \
+      -c thanatos -- python -m thanatos.server
+
+For port-forwarded debug:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "thanatos.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
