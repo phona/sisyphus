@@ -26,6 +26,7 @@ class ReqState(StrEnum):
     INIT = "init"                               # 还没 analyze / 待初始化
     INTAKING = "intaking"                       # intake-agent 在跑（多轮 BKD chat 澄清 + 写 finalized intent）
     ANALYZING = "analyzing"                     # analyze-agent 在跑
+    ANALYZE_ARTIFACT_CHECKING = "analyze-artifact-checking"  # 机械校 analyze 产物（proposal/tasks/spec.md 存在 + 非空）
     SPEC_LINT_RUNNING = "spec-lint-running"     # openspec validate 检查（sisyphus 下发 runner 任务）
     CHALLENGER_RUNNING = "challenger-running"   # M18：challenger-agent 读 spec 写 contract test（黑盒，不看 dev 代码）
     DEV_CROSS_CHECK_RUNNING = "dev-cross-check-running"  # 开发交叉验证（sisyphus 下发 runner 任务）
@@ -48,6 +49,8 @@ class Event(StrEnum):
     INTAKE_FAIL = "intake.fail"                     # intake-agent 异常 / 用户放弃
     INTENT_ANALYZE = "intent.analyze"               # 人在 BKD 打 intent:analyze tag（旧入口，现支持 init:STATE）
     ANALYZE_DONE = "analyze.done"                   # analyze-agent 完成
+    ANALYZE_ARTIFACT_CHECK_PASS = "analyze-artifact-check.pass"   # 机械校 analyze 产物（proposal/tasks/spec.md）通过
+    ANALYZE_ARTIFACT_CHECK_FAIL = "analyze-artifact-check.fail"   # 机械校 analyze 产物失败 → verifier
     SPEC_LINT_PASS = "spec-lint.pass"               # openspec validate 通过
     SPEC_LINT_FAIL = "spec-lint.fail"               # openspec validate 失败 → verifier
     CHALLENGER_PASS = "challenger.pass"             # M18：challenger 写完 contract test 推 feat 分支
@@ -114,8 +117,19 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
         Transition(ReqState.ESCALATED, "escalate",
                    "start_analyze_with_finalized_intent 内部判 escalate"),
 
+    # REQ-analyze-artifact-check-1777254586：analyze done 后先机械校 proposal/tasks/spec.md
+    # 是否真存在 + 非空，再放进 spec_lint。防 agent 自报 pass 但产物全空。
     (ReqState.ANALYZING, Event.ANALYZE_DONE):
-        Transition(ReqState.SPEC_LINT_RUNNING, "create_spec_lint", "下发 openspec validate 任务"),
+        Transition(ReqState.ANALYZE_ARTIFACT_CHECKING, "create_analyze_artifact_check",
+                   "下发 analyze 产物结构性检查（proposal.md / tasks.md / spec.md 存在 + 非空）"),
+
+    (ReqState.ANALYZE_ARTIFACT_CHECKING, Event.ANALYZE_ARTIFACT_CHECK_PASS):
+        Transition(ReqState.SPEC_LINT_RUNNING, "create_spec_lint",
+                   "analyze 产物齐 → 下发 openspec validate 任务"),
+
+    (ReqState.ANALYZE_ARTIFACT_CHECKING, Event.ANALYZE_ARTIFACT_CHECK_FAIL):
+        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_analyze_artifact_check_fail",
+                   "analyze 产物不全 → verifier"),
 
     (ReqState.SPEC_LINT_RUNNING, Event.SPEC_LINT_PASS):
         Transition(ReqState.CHALLENGER_RUNNING, "start_challenger",
@@ -233,7 +247,9 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     **{
         (st, Event.SESSION_FAILED): Transition(st, "escalate", "session crash → auto-resume or escalate")
         for st in [
-            ReqState.INTAKING, ReqState.ANALYZING, ReqState.SPEC_LINT_RUNNING, ReqState.CHALLENGER_RUNNING,
+            ReqState.INTAKING, ReqState.ANALYZING,
+            ReqState.ANALYZE_ARTIFACT_CHECKING,
+            ReqState.SPEC_LINT_RUNNING, ReqState.CHALLENGER_RUNNING,
             ReqState.DEV_CROSS_CHECK_RUNNING,
             ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
             ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,

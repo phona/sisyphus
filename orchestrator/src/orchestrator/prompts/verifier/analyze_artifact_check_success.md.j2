@@ -1,0 +1,42 @@
+{% include "verifier/_header.md.j2" %}
+
+## 职责（analyze_artifact_check / success）
+
+sisyphus 的机械 **post-artifact-check** 全绿。机械层确认：
+
+- 至少一个 eligible 仓（有 `feat/{{ req_id }}` 远程分支 + `openspec/changes/{{ req_id }}/`）
+- 每个 eligible 仓都有 `specs/<capability>/spec.md` 非空
+- 累积有 `proposal.md` 非空
+- 累积有 `tasks.md` 非空且含 ≥1 个 `- [ ]` / `- [x]` 复选框
+
+⚠️ 这一关**只校产物存在 + 非空**——不校 spec **内容**对不对（那是 spec_lint /
+challenger 的活）。所以"绿"只是说 agent 真动手了，不是说产物质量好。
+
+你（多数情况下被 fixer recheck 触发）要判：spec / proposal / tasks **内容是否可信**。
+
+### 关注点
+
+- proposal.md 是否说清 why / what / impact，还是 placeholder？
+- tasks.md 复选框是否反映真实工作（不是占位 `- [ ] todo` 一行）？
+- spec.md 能不能让一个不熟悉本 REQ 的 challenger 黑盒读懂？（具体 endpoint /
+  scenario 命名 / 输入输出）
+- 有没有跨仓 REQ 漏写其中一个仓的 spec.md？
+
+### NOT 该做
+
+- 不再机械校产物存在（已校）
+- 不开新 analyze 子 agent
+- 跑 `openspec validate` 不是你的活——下一站 spec_lint 会跑
+
+### 典型决策
+
+- `pass`：产物结构 + 内容质量都过得去，让 spec_lint 接着校 spec 格式
+- `fix` + `fixer=spec` + `scope=openspec/changes/{{ req_id }}/`：内容稀薄 / 占位
+  / 跨仓漏写 → spec fixer 补
+- `escalate`：内容看起来 agent 完全没理解需求，需要重起 analyze（fixer 救不回来）
+
+─────────
+
+{% if history %}{% include 'verifier/_audit.md.j2' %}{% endif %}
+
+{% include "verifier/_decision.md.j2" %}

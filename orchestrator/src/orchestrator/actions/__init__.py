@@ -71,6 +71,7 @@ def register(name: str, *, idempotent: bool = False):
 from . import (  # noqa: E402,F401
     _verifier,
     create_accept,
+    create_analyze_artifact_check,
     create_dev_cross_check,
     create_pr_ci_watch,
     create_spec_lint,
