@@ -76,7 +76,8 @@
 | `session.failed` | 任意 stage agent session 崩 / watchdog 超时 | escalate |
 | **`verify.pass`** | M14b verifier decision=pass | apply_verify_pass（手工 CAS 推进下一 stage） |
 | **`verify.fix-needed`** | M14b verifier decision=fix | start_fixer |
-| **`verify.escalate`** | M14b decision=escalate / schema invalid（含基础设施 flaky）；start_analyze* 内部 emit (clone 失败等) | escalate |
+| **`verify.escalate`** | M14b decision=escalate / schema invalid；start_analyze* 内部 emit (clone 失败等) | escalate |
+| **`verify.infra-retry`** | **REQ-428** verifier decision=retry（确认 infra-flake，有界重跑）| apply_verify_infra_retry（CAS 回 stage_running，重调 create_*；ctx.infra_retry_count >= verifier_infra_retry_cap → emit verify.escalate） |
 | **`fixer.done`** | fixer agent session.completed | invoke_verifier_after_fix |
 
 ## 4. 完整状态转移图
@@ -123,7 +124,8 @@ stateDiagram-v2
 
     review_running --> review_running: verify.pass\n(action 手工 CAS 推进)
     review_running --> fixer_running: verify.fix-needed
-    review_running --> escalated: verify.escalate\n(含 flaky / 基础设施抖动)
+    review_running --> escalated: verify.escalate\n(不确定 flaky / 基础设施严重问题)
+    review_running --> review_running: verify.infra-retry\n(REQ-428: 确认 infra-flake → 重跑 checker;\n超 cap → escalate)
 
     %% escalated 不是死终态：用户 follow-up 那个 escalate 的 verifier issue → 走原 verifier 同链
     escalated --> escalated: verify.pass\n(apply_verify_pass 内部 CAS 推下一 stage)
@@ -141,10 +143,16 @@ stateDiagram-v2
 
 > mermaid `stateDiagram-v2` 用 `_` 替 `-` 是因为 stateName 不允许 `-`。实际 enum 是 `spec-lint-running` / `dev-cross-check-running` / `staging-test-running` / `pr-ci-running` / `review-running` 等。
 
-## 5. verifier 子链特殊性（M14b/c）
+## 5. verifier 子链特殊性（M14b/c + REQ-428）
 
-3 路决策：**pass / fix / escalate**（retry_checker 已砍 —— 基础设施 flaky 由 verifier 判
-escalate 给人，sisyphus 不机制性兜 retry，避免假阳性 retry 死循环）。
+4 路决策：**pass / fix / escalate / retry**。
+
+- `retry`（REQ-428 新增）：verifier 高度确信是纯 infra-flake（网络/docker/kubectl 抖动）时
+  输出 `action=retry`；sisyphus 自动重跑该 stage 的机械 checker（staging_test /
+  dev_cross_check / spec_lint / pr_ci），有界（`verifier_infra_retry_cap`，默认 2 次），
+  超 cap → 真 escalate 让人介入。仅覆盖机械 checker stage，analyze/accept/challenger
+  输出 retry 会退回 escalate（这些非机械 checker，无法简单重跑）。
+- `escalate`：不确定是否 flaky / infra 问题持续 / retry cap 到顶 / 所有非 retry 场景。
 
 **ESCALATED 可恢复**：用户在 BKD UI follow-up 那条 escalate 的 verifier issue（webhook
 统一推 statusId="review" 让"待审查"列只剩它）→ BKD wake agent → 写新 decision → 走原

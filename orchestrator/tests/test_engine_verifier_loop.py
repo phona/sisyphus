@@ -447,3 +447,33 @@ async def test_vlt_s16_session_failed_on_init_is_dropped(stub_actions):
     assert "no transition init+session.failed" in result["reason"]
     assert pool.rows["REQ-1"].state == ReqState.INIT.value
     assert calls == [], "escalate must NOT be dispatched on INIT + SESSION_FAILED"
+
+
+# ───────────────────────────────────────────────────────────────────────
+# VFR-S1 (REQ-428): REVIEW_RUNNING + VERIFY_INFRA_RETRY → self-loop + apply_verify_infra_retry
+# ───────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_vfr_s1_verify_infra_retry_dispatches_apply(stub_actions):
+    """Spec VFR-S1: REVIEW_RUNNING + VERIFY_INFRA_RETRY → REVIEW_RUNNING self-loop,
+    action=apply_verify_infra_retry。infra-flake 路径，action 内部决定是否真 CAS 推 stage。"""
+    calls: list = []
+    stub_actions["apply_verify_infra_retry"] = _make_recorder("apply_verify_infra_retry", calls)
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.REVIEW_RUNNING.value)})
+    body = _body(issueId="vfy-1", projectId="p", event="session.completed")
+
+    result = await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p",
+        tags=["verifier", "REQ-1", "verify:staging_test"],
+        cur_state=ReqState.REVIEW_RUNNING,
+        ctx={"verifier_stage": "staging_test", "infra_retry_count": 0},
+        event=Event.VERIFY_INFRA_RETRY,
+    )
+
+    assert result["action"] == "apply_verify_infra_retry"
+    # transition 表声明 self-loop（stub 不 CAS；action 内部实际会 CAS 到 staging_test_running）
+    assert result["next_state"] == ReqState.REVIEW_RUNNING.value
+    assert pool.rows["REQ-1"].state == ReqState.REVIEW_RUNNING.value
+    assert len(calls) == 1, "apply_verify_infra_retry must be dispatched once"

@@ -79,6 +79,7 @@ class Event(StrEnum):
     VERIFY_PASS = "verify.pass"                     # decision.action = pass → 推下一 stage
     VERIFY_FIX_NEEDED = "verify.fix-needed"         # decision.action = fix → 起 fixer agent
     VERIFY_ESCALATE = "verify.escalate"             # decision.action = escalate
+    VERIFY_INFRA_RETRY = "verify.infra-retry"       # decision.action = retry → 有界重跑 stage checker（infra flake）
     FIXER_DONE = "fixer.done"                       # fixer agent 跑完 → 回对应 stage 重跑 checker
 
 
@@ -218,8 +219,7 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     # 注意：VERIFY_PASS 的目标 stage 由 ctx.verifier_stage 决定 —— transition 表无法静态表达
     # next_state 随 stage 变化，所以 apply_verify_pass action 内部手工 CAS 到对应 stage_running
     # 再链式 emit 该 stage 的 done/pass 事件（走原主链 transition）。
-    # 3 路决策：pass / fix / escalate（retry_checker 已砍 —— 基础设施 flaky 由 verifier 自己判
-    # escalate 给人，sisyphus 不再机制性兜 retry，避免假阳性 retry 死循环）。
+    # 4 路决策：pass / fix / escalate / retry（infra-flake 有界重跑，超 cap → escalate）
     (ReqState.REVIEW_RUNNING, Event.VERIFY_PASS):
         Transition(ReqState.REVIEW_RUNNING, "apply_verify_pass",
                    "decision=pass → action 读 stage 手动推进"),
@@ -229,6 +229,9 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     (ReqState.REVIEW_RUNNING, Event.VERIFY_ESCALATE):
         Transition(ReqState.ESCALATED, "escalate",
                    "verifier decision=escalate 或 schema invalid"),
+    (ReqState.REVIEW_RUNNING, Event.VERIFY_INFRA_RETRY):
+        Transition(ReqState.REVIEW_RUNNING, "apply_verify_infra_retry",
+                   "decision=retry → 有界重跑 stage checker（infra flake；超 cap → escalate）"),
 
     (ReqState.FIXER_RUNNING, Event.FIXER_DONE):
         Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_after_fix",

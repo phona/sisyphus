@@ -30,6 +30,8 @@ fixer 不用全仓盲扫。
   机械层 bug → `escalate`（人去修 checker 调用参数）
 - acceptance Gherkin parse 错（语法 / 缺 step）→ `fix` + `fixer=spec`
 - sisyphus 自己的 ci 脚本抽风（路径 / 工具链不在 / `/workspace/source/*` 空）→ `escalate`
+- 明确纯 infra 抖动（kubectl exec channel race / 网络 / 工具下载超时）且
+  与 spec 内容**完全无关** → `retry`（confidence=high）
 - 需求本身让 spec 写不出来 → `escalate`
 
 ### NOT 该做

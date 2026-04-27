@@ -27,7 +27,9 @@ fixer 不用全仓盲扫。
 - BASE_REV 为空导致全量 lint 暴露历史告警（跟本次 PR 无关）→ `escalate`（不是 REQ-x 的 bug；指出来让人决定）
 - gh CLI / ghcr / PR 创建失败（token、permission）→ `escalate`（环境层）
 - 工具链不在（make 找不到 / ci-lint target 不存在 / golangci-lint 没装）→ `escalate`（接入层 bug）
-- 任何 flaky / 环境抖动 → `escalate`（sisyphus 不机制性 retry）
+- 明确纯 infra 抖动（网络 / kubectl exec channel race / go-mod 下载超时）且失败与业务逻辑
+  **完全无关** → `retry`（confidence=high, reason="infra flaky: <具体>"）
+- 不确定是否 flaky / 有业务逻辑疑问 → `escalate`
 
 ### NOT 该做
 - 不帮 dev 改代码

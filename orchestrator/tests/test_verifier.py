@@ -36,6 +36,9 @@ from orchestrator.state import Event
     # retry_checker 已砍 → 当 invalid action（unknown enum）
     ({"action": "retry_checker", "fixer": None, "scope": None, "reason": "flaky", "confidence": "low"}, False),
     ({"action": "escalate", "fixer": None, "scope": None, "reason": "need human", "confidence": "high"}, True),
+    # REQ-428: retry action — VFR-S5: valid + invalid cases
+    ({"action": "retry", "fixer": None, "scope": None, "reason": "infra flaky: kubectl", "confidence": "high"}, True),
+    ({"action": "retry", "fixer": "dev", "scope": None, "reason": "x", "confidence": "high"}, False),  # fixer must be null
     # invalid action
     ({"action": "nope", "fixer": None, "scope": None, "reason": "", "confidence": "high"}, False),
     # missing fixer for fix
@@ -59,6 +62,8 @@ def test_decision_to_event_mapping():
     assert decision_to_event({"action": "pass"}) == Event.VERIFY_PASS
     assert decision_to_event({"action": "fix"}) == Event.VERIFY_FIX_NEEDED
     assert decision_to_event({"action": "escalate"}) == Event.VERIFY_ESCALATE
+    # REQ-428 VFR-S6: retry maps to VERIFY_INFRA_RETRY
+    assert decision_to_event({"action": "retry"}) == Event.VERIFY_INFRA_RETRY
 
 
 # ─── 2. extract_decision_from_issue ──────────────────────────────────────
