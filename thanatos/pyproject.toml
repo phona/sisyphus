@@ -24,6 +24,14 @@ dev = [
     "mypy>=1.13",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+    "mypy>=1.13",
+]
+
 [project.scripts]
 thanatos-server = "thanatos.server:main"
 
