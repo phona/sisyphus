@@ -193,5 +193,17 @@ class Settings(BaseSettings):
     # 让人介入。N 默认 5；调高 = 给 fixer 更多机会，调低 = 更早叫人。
     fixer_round_cap: int = 5
 
+    # ─── REQ-checker-infra-flake-retry-1777247423：infra-flake bounded retry ──
+    # 三个 kubectl-exec checker（spec_lint / dev_cross_check / staging_test）一次跑挂时，
+    # 若 stderr/stdout 命中 _flake.INFRA_FLAKE_PATTERNS（DNS / kubectl-channel /
+    # github-fetch / registry-rate-limit 等），同 cmd 重跑 max 次（含原跑共 max+1
+    # attempts），中间隔 backoff_sec。enabled=False = 关闭整套，行为退回 single-shot。
+    # 真业务 fail（generic make Error / exit 137 / unauthorized）**不**触发 retry，
+    # 留给 verifier 主观判 pass / fix / escalate。pr_ci_watch 不走这套（自有 HTTP
+    # retry-until-deadline 模型）。
+    checker_infra_flake_retry_enabled: bool = True
+    checker_infra_flake_retry_max: int = 1            # 0 = no retry, 1 = 1 retry (2 attempts)
+    checker_infra_flake_retry_backoff_sec: int = 15
+
 
 settings = Settings()  # type: ignore[call-arg]

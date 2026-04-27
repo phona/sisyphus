@@ -17,7 +17,11 @@ class CheckResult:
     openspec = openspec CLI 退出码），engine 只看 passed。
 
     reason：可选语义标签，下游用来区分"该失败要不要走常规 fail 路径"。
-    老 checker 不设即 None，兼容。
+    老 checker 不设即 None，兼容。三个 kubectl-exec checker 在 infra-flake retry
+    发生时把 "flake-retry-recovered:<tag>" / "flake-retry-exhausted:<tag>"
+    写到这里（REQ-checker-infra-flake-retry-1777247423）。
+
+    attempts：总 exec 次数（含首次）。无 retry = 1；retry 触发 ≥ 2。
     """
     passed: bool
     exit_code: int
@@ -26,3 +30,4 @@ class CheckResult:
     duration_sec: float
     cmd: str
     reason: str | None = None
+    attempts: int = 1
