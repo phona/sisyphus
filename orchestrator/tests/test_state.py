@@ -16,7 +16,10 @@ EXPECTED = [
     # 内部 emit verify.escalate 路径（clone_involved_repos 失败等）
     (ReqState.ANALYZING,            Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
     (ReqState.INTAKING,             Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
-    (ReqState.ANALYZING,            Event.ANALYZE_DONE,        ReqState.SPEC_LINT_RUNNING,   "create_spec_lint"),
+    # REQ-analyze-artifact-check-1777254586：analyze done 走 artifact check 再到 spec_lint
+    (ReqState.ANALYZING,            Event.ANALYZE_DONE,                 ReqState.ANALYZE_ARTIFACT_CHECKING, "create_analyze_artifact_check"),
+    (ReqState.ANALYZE_ARTIFACT_CHECKING, Event.ANALYZE_ARTIFACT_CHECK_PASS, ReqState.SPEC_LINT_RUNNING, "create_spec_lint"),
+    (ReqState.ANALYZE_ARTIFACT_CHECKING, Event.ANALYZE_ARTIFACT_CHECK_FAIL, ReqState.REVIEW_RUNNING,    "invoke_verifier_for_analyze_artifact_check_fail"),
     (ReqState.SPEC_LINT_RUNNING,    Event.SPEC_LINT_PASS,      ReqState.CHALLENGER_RUNNING,  "start_challenger"),
     (ReqState.SPEC_LINT_RUNNING,    Event.SPEC_LINT_FAIL,      ReqState.REVIEW_RUNNING,      "invoke_verifier_for_spec_lint_fail"),
     # M18: challenger between spec_lint and dev_cross_check
@@ -62,7 +65,9 @@ def test_session_failed_routes_to_escalate_action_all_running_states():
     所以这里只验 action 名 + transition 存在，不再要求 next_state == ESCALATED。
     """
     running = [
-        ReqState.INTAKING, ReqState.ANALYZING, ReqState.SPEC_LINT_RUNNING, ReqState.DEV_CROSS_CHECK_RUNNING,
+        ReqState.INTAKING, ReqState.ANALYZING,
+        ReqState.ANALYZE_ARTIFACT_CHECKING,
+        ReqState.SPEC_LINT_RUNNING, ReqState.DEV_CROSS_CHECK_RUNNING,
         ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
         ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
         # M14b：verifier / fixer running state 也必须 escalate

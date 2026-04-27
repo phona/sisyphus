@@ -50,6 +50,7 @@ _INTAKE_NO_RESULT_REASON: str = "intake-no-result-tag"
 _STATE_ISSUE_KEY: dict[ReqState, str | None] = {
     ReqState.INTAKING: "intent_issue_id",        # intake-agent 复用 intent issue
     ReqState.ANALYZING: "intent_issue_id",
+    ReqState.ANALYZE_ARTIFACT_CHECKING: None,    # 客观 checker，由 orchestrator 下发不绑 issue
     ReqState.SPEC_LINT_RUNNING: None,            # M15: 客观 checker，由 orchestrator 下发不绑 issue
     ReqState.DEV_CROSS_CHECK_RUNNING: None,      # M15: 客观 checker，由 orchestrator 下发不绑 issue
     ReqState.STAGING_TEST_RUNNING: "staging_test_issue_id",

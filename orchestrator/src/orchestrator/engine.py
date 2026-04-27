@@ -31,6 +31,7 @@ _TERMINAL_STATES = {ReqState.DONE, ReqState.ESCALATED}
 # M14e/M15：state → stage 名（用于 stage_runs 表）。
 STATE_TO_STAGE: dict[ReqState, str] = {
     ReqState.ANALYZING:              "analyze",
+    ReqState.ANALYZE_ARTIFACT_CHECKING: "analyze_artifact_check",
     ReqState.SPEC_LINT_RUNNING:      "spec_lint",
     ReqState.DEV_CROSS_CHECK_RUNNING: "dev_cross_check",
     ReqState.STAGING_TEST_RUNNING:   "staging_test",
@@ -49,7 +50,9 @@ AGENT_STAGES: frozenset[str] = frozenset({
 
 # event → stage_runs.outcome 标签。escalate / session.failed 全归 fail。
 _EVENT_TO_OUTCOME: dict[Event, str] = {
-    Event.ANALYZE_DONE:         "pass",
+    Event.ANALYZE_DONE:                "pass",
+    Event.ANALYZE_ARTIFACT_CHECK_PASS: "pass",
+    Event.ANALYZE_ARTIFACT_CHECK_FAIL: "fail",
     Event.SPEC_LINT_PASS:       "pass",
     Event.SPEC_LINT_FAIL:       "fail",
     Event.DEV_CROSS_CHECK_PASS: "pass",

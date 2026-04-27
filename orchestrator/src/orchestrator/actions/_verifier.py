@@ -41,7 +41,10 @@ log = structlog.get_logger(__name__)
 
 # 支持的 stage 名（对应 prompts/verifier/{stage}_{trigger}.md.j2）
 # 包括 agent stage（analyze）和 checker stage（spec_lint / dev_cross_check / staging_test / pr_ci）
-_STAGES = {"analyze", "spec_lint", "challenger", "dev_cross_check", "staging_test", "pr_ci", "accept"}
+_STAGES = {
+    "analyze", "analyze_artifact_check", "spec_lint", "challenger",
+    "dev_cross_check", "staging_test", "pr_ci", "accept",
+}
 
 # Trigger 类型
 Trigger = Literal["success", "fail"]
@@ -50,13 +53,15 @@ Trigger = Literal["success", "fail"]
 # 用于 apply_verify_pass 手工把 state 从 REVIEW_RUNNING 回推到对应 stage_running，
 # 随后链式 emit 该 stage 的 done/pass 事件走原 transition。
 _PASS_ROUTING: dict[str, tuple[ReqState, Event]] = {
-    "analyze":           (ReqState.ANALYZING,                Event.ANALYZE_DONE),
-    "spec_lint":         (ReqState.SPEC_LINT_RUNNING,        Event.SPEC_LINT_PASS),
-    "challenger":        (ReqState.CHALLENGER_RUNNING,       Event.CHALLENGER_PASS),
-    "dev_cross_check":   (ReqState.DEV_CROSS_CHECK_RUNNING,  Event.DEV_CROSS_CHECK_PASS),
-    "staging_test":      (ReqState.STAGING_TEST_RUNNING,     Event.STAGING_TEST_PASS),
-    "pr_ci":             (ReqState.PR_CI_RUNNING,            Event.PR_CI_PASS),
-    "accept":            (ReqState.ACCEPT_RUNNING,           Event.ACCEPT_PASS),
+    "analyze":                 (ReqState.ANALYZING,                Event.ANALYZE_DONE),
+    "analyze_artifact_check":  (ReqState.ANALYZE_ARTIFACT_CHECKING,
+                                Event.ANALYZE_ARTIFACT_CHECK_PASS),
+    "spec_lint":               (ReqState.SPEC_LINT_RUNNING,        Event.SPEC_LINT_PASS),
+    "challenger":              (ReqState.CHALLENGER_RUNNING,       Event.CHALLENGER_PASS),
+    "dev_cross_check":         (ReqState.DEV_CROSS_CHECK_RUNNING,  Event.DEV_CROSS_CHECK_PASS),
+    "staging_test":            (ReqState.STAGING_TEST_RUNNING,     Event.STAGING_TEST_PASS),
+    "pr_ci":                   (ReqState.PR_CI_RUNNING,            Event.PR_CI_PASS),
+    "accept":                  (ReqState.ACCEPT_RUNNING,           Event.ACCEPT_PASS),
 }
 
 # ─── invoke_verifier：起 BKD verifier issue ──────────────────────────────
@@ -426,6 +431,19 @@ async def invoke_verifier_for_dev_cross_check_fail(*, body, req_id, tags, ctx):
     """DEV_CROSS_CHECK_FAIL → 起 verifier-agent(stage=dev_cross_check, trigger=fail)。"""
     return await _invoke_verifier_fail(
         stage="dev_cross_check", body=body, req_id=req_id, ctx=ctx,
+    )
+
+
+@register("invoke_verifier_for_analyze_artifact_check_fail", idempotent=False)
+async def invoke_verifier_for_analyze_artifact_check_fail(*, body, req_id, tags, ctx):
+    """ANALYZE_ARTIFACT_CHECK_FAIL → 起 verifier-agent(stage=analyze_artifact_check, trigger=fail)。
+
+    REQ-analyze-artifact-check-1777254586：analyze 产物结构性校验失败。verifier
+    通常应判 escalate（agent 自报 pass 但产物缺失，是 LLM 抽风类失败），少数
+    情况是 agent 写了 spec 漏了 proposal/tasks → 可判 fix + fixer=spec。
+    """
+    return await _invoke_verifier_fail(
+        stage="analyze_artifact_check", body=body, req_id=req_id, ctx=ctx,
     )
 
 
