@@ -306,7 +306,7 @@ async def test_bis_s8_bkd_raises_swallowed_warning_logged(monkeypatch, caplog):
     _patch_intent_status_bkd(monkeypatch, fake)
 
     with caplog.at_level(logging.WARNING):
-        result = await intent_status.patch_terminal_status(
+        await intent_status.patch_terminal_status(
             project_id="proj-x",
             intent_issue_id="intent-1",
             terminal_state=ReqState.DONE,
@@ -348,7 +348,7 @@ async def test_bis_s9_engine_step_done_transition_calls_patch_terminal_status(mo
 
     monkeypatch.setattr(intent_status, "patch_terminal_status", _fake_patch)
 
-    result = await engine.step(
+    await engine.step(
         pool=_POOL,
         body=_Body(),
         req_id=_REQ_ID,
@@ -412,7 +412,7 @@ async def test_bis_s10_engine_step_escalated_transition_calls_patch_terminal_sta
 
     REGISTRY["escalate"] = _noop_escalate
 
-    result = await engine.step(
+    await engine.step(
         pool=_POOL,
         body=_Body(),
         req_id=_REQ_ID,
@@ -549,8 +549,6 @@ async def test_bis_s12_pr_merged_override_single_merge_no_extra_patch_terminal_s
     monkeypatch.setattr(intent_status, "patch_terminal_status", _fake_patch)
 
     # Mock GitHub PR API to return a merged PR (triggers _apply_pr_merged_done_override)
-    import httpx
-
     class _FakeResponse:
         def __init__(self, payload):
             self._payload = payload
@@ -573,7 +571,7 @@ async def test_bis_s12_pr_merged_override_single_merge_no_extra_patch_terminal_s
     monkeypatch.setattr("orchestrator.actions.escalate.httpx.AsyncClient", _FakeHttpxClient)
 
     body = _make_body(issue_id="src-pr-1", event="session.completed")
-    out = await mod.escalate(
+    await mod.escalate(
         body=body,
         req_id=_REQ_ID,
         tags=["verifier"],
