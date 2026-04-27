@@ -199,6 +199,61 @@ def _deny(reason="inflight-cap-exceeded:10/10"):
 
 
 @pytest.mark.asyncio
+async def test_start_intake_forwards_user_hint_tags(monkeypatch):
+    """REQ-ux-tags-injection: PATCH tags 含 ["sisyphus","intake",req_id] + 转发的 hint。"""
+    from orchestrator.actions import start_intake as mod
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, "orchestrator.actions.start_intake.BKDClient", fake)
+    monkeypatch.setattr(mod, "check_admission",
+                        AsyncMock(return_value=_admit()))
+    monkeypatch.setattr(mod.db, "get_pool", lambda: object())
+
+    out = await mod.start_intake(
+        body=make_body(issue_id="intent-1"),
+        req_id="REQ-9",
+        tags=["intent:intake", "repo:phona/sisyphus", "ux:fast-track"],
+        ctx={},
+    )
+    assert out == {"issue_id": "intent-1", "req_id": "REQ-9"}
+
+    # 第一次 update_issue 是 rename + tags（第二次是 status_id=working）
+    _, kwargs = fake.update_issue.call_args_list[0]
+    tags = kwargs["tags"]
+    assert tags == ["sisyphus", "intake", "REQ-9", "repo:phona/sisyphus", "ux:fast-track"]
+
+
+@pytest.mark.asyncio
+async def test_start_intake_strips_managed_tags_from_forwarded(monkeypatch):
+    """REQ-ux-tags-injection: intent:* / REQ-* / role tag 不再次出现在转发段。"""
+    from orchestrator.actions import start_intake as mod
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, "orchestrator.actions.start_intake.BKDClient", fake)
+    monkeypatch.setattr(mod, "check_admission",
+                        AsyncMock(return_value=_admit()))
+    monkeypatch.setattr(mod.db, "get_pool", lambda: object())
+
+    await mod.start_intake(
+        body=make_body(issue_id="intent-1"),
+        req_id="REQ-9",
+        tags=[
+            "intent:intake", "REQ-9", "intake", "result:pass",
+            "pr:phona/foo#1", "repo:phona/foo",
+        ],
+        ctx={},
+    )
+    _, kwargs = fake.update_issue.call_args_list[0]
+    tags = kwargs["tags"]
+    # 基础三件套 + 仅 repo: hint 转发
+    assert tags == ["sisyphus", "intake", "REQ-9", "repo:phona/foo"]
+    # 没有重复 / 不该出现的 sisyphus-managed
+    assert tags.count("intake") == 1
+    assert tags.count("REQ-9") == 1
+    assert "intent:intake" not in tags
+    assert "result:pass" not in tags
+    assert "pr:phona/foo#1" not in tags
+
+
+@pytest.mark.asyncio
 async def test_start_intake_admission_denied_emits_escalate(monkeypatch):
     """admission deny → emit VERIFY_ESCALATE，不 dispatch BKD agent / 不建 runner。"""
     from orchestrator.actions import start_intake as mod
@@ -253,6 +308,40 @@ async def test_start_analyze_with_finalized_intent_creates_new_issue(monkeypatch
 
     # follow-up が呼ばれること
     fake.follow_up_issue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_analyze_with_finalized_intent_forwards_hint_tags(monkeypatch):
+    """REQ-ux-tags-injection: 创新 analyze issue 时 hint tag 跟着进 tags 数组。"""
+    from orchestrator.actions import start_analyze_with_finalized_intent as mod
+
+    fake = make_fake_bkd()
+    fake.create_issue = AsyncMock(return_value=FakeIssue(id="analyze-new-1"))
+    patch_bkd(monkeypatch, "orchestrator.actions.start_analyze_with_finalized_intent.BKDClient", fake)
+    monkeypatch.setattr(mod.req_state, "update_context", AsyncMock())
+    monkeypatch.setattr(mod.db, "get_pool", lambda: object())
+
+    ctx = {"intake_finalized_intent": _VALID_INTENT}
+    # 模拟 intake completion webhook：tags 含 result:pass + intake role + 用户 hint
+    body_tags = [
+        "sisyphus", "intake", "REQ-9", "result:pass",
+        "repo:phona/foo", "ux:fast-track", "spec_home_repo:phona/foo",
+    ]
+    await mod.start_analyze_with_finalized_intent(
+        body=make_body(issue_id="intake-1"), req_id="REQ-9",
+        tags=body_tags, ctx=ctx,
+    )
+    _, kwargs = fake.create_issue.await_args
+    tags = kwargs["tags"]
+    # 基础 + 转发段
+    assert tags == [
+        "analyze", "REQ-9",
+        "repo:phona/foo", "ux:fast-track", "spec_home_repo:phona/foo",
+    ]
+    # sisyphus-managed 不重复转发
+    assert "intake" not in tags
+    assert "result:pass" not in tags
+    assert "sisyphus" not in tags  # create_issue 自动注入，callsite 不传
 
 
 @pytest.mark.asyncio

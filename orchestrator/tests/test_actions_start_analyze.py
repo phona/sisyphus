@@ -491,6 +491,76 @@ async def test_start_analyze_skip_remains_when_all_layers_empty(monkeypatch):
     assert rv["cloned_repos"] is None
 
 
+# ── REQ-ux-tags-injection-1777257283: hint tag 转发 ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_start_analyze_forwards_user_hint_tags(monkeypatch):
+    """tags 含 repo: + ux: → PATCH 的 tags kwarg 把它们追加到 ['analyze', req_id]。"""
+    exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
+    _patch_runner(monkeypatch, exec_fn=exec_fn)
+    _, update_issue, _ = _patch_bkd_client(
+        monkeypatch, target_module=start_analyze,
+    )
+
+    await start_analyze.start_analyze(
+        body=_make_body(), req_id="REQ-X",
+        tags=["intent:analyze", "repo:phona/sisyphus", "ux:fast-track"],
+        ctx={"intent_title": "with hint tags"},
+    )
+
+    # 第一次 update_issue = rename + tags（第二次是 status_id=working）
+    _, kwargs = update_issue.call_args_list[0]
+    tags = kwargs["tags"]
+    assert tags == ["analyze", "REQ-X", "repo:phona/sisyphus", "ux:fast-track"]
+
+
+@pytest.mark.asyncio
+async def test_start_analyze_strips_sisyphus_managed_tags(monkeypatch):
+    """stale intent:* / result:* / pr:* 不被转发到 PATCH tags。"""
+    exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
+    _patch_runner(monkeypatch, exec_fn=exec_fn)
+    _, update_issue, _ = _patch_bkd_client(
+        monkeypatch, target_module=start_analyze,
+    )
+
+    await start_analyze.start_analyze(
+        body=_make_body(), req_id="REQ-X",
+        tags=[
+            "intent:analyze", "REQ-X", "analyze", "result:pass",
+            "pr:phona/foo#1", "repo:phona/foo", "ux:fast-track",
+        ],
+        ctx={},
+    )
+    _, kwargs = update_issue.call_args_list[0]
+    tags = kwargs["tags"]
+    assert tags == ["analyze", "REQ-X", "repo:phona/foo", "ux:fast-track"]
+    # 不重复 / 不混入 managed
+    assert tags.count("analyze") == 1
+    assert tags.count("REQ-X") == 1
+    assert "intent:analyze" not in tags
+    assert "result:pass" not in tags
+    assert "pr:phona/foo#1" not in tags
+
+
+@pytest.mark.asyncio
+async def test_start_analyze_no_hint_tags_keeps_base_only(monkeypatch):
+    """tags 全是 sisyphus-managed → PATCH 的 tags 只剩 ['analyze', req_id]，向后兼容。"""
+    exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
+    _patch_runner(monkeypatch, exec_fn=exec_fn)
+    _, update_issue, _ = _patch_bkd_client(
+        monkeypatch, target_module=start_analyze,
+    )
+
+    await start_analyze.start_analyze(
+        body=_make_body(), req_id="REQ-X",
+        tags=["intent:analyze"],
+        ctx={},
+    )
+    _, kwargs = update_issue.call_args_list[0]
+    assert kwargs["tags"] == ["analyze", "REQ-X"]
+
+
 # ── REQ-orch-rate-limit-1777202974: admission gate ────────────────────────
 
 

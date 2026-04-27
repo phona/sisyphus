@@ -23,6 +23,7 @@ import structlog
 from .. import k8s_runner
 from ..bkd import BKDClient
 from ..config import settings
+from ..intent_tags import filter_propagatable_intent_tags
 from ..prompts import render
 from ..state import Event
 from ..store import db, req_state
@@ -67,11 +68,15 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
         }
 
     # 3-5. 创建新 BKD analyze issue（不复用 intake issue）
+    # REQ-ux-tags-injection-1777257283: forward user hint tags from the intake
+    # issue so analyze + downstream stages (challenger / verifier / accept) keep
+    # the same context. `sisyphus` is auto-prepended by BKDRestClient.create_issue.
+    forwarded = filter_propagatable_intent_tags(tags)
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
             project_id=proj,
             title=f"[{req_id}] [ANALYZE]{short_title(ctx)}",
-            tags=["analyze", req_id],
+            tags=["analyze", req_id, *forwarded],
             status_id="todo",
             use_worktree=True,
             model=settings.agent_model,

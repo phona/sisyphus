@@ -1,0 +1,107 @@
+capability: intent-tag-propagation
+version: "1.0"
+description: |
+  Forward user-supplied "hint" tags from a BKD intent issue down to every
+  sub-issue and PATCH that sisyphus stage actions perform.
+
+  Sisyphus owns a closed set of "flow-control" tag prefixes (intent:, result:,
+  verify:, decision:, fixer:, parent:, parent-id:, parent-stage:, target:,
+  round-, pr:, pr-ci:, trigger:) plus a small exact set (sisyphus, intake,
+  analyze, challenger, verifier, fixer, accept, staging-test, pr-ci,
+  done-archive) plus the REQ id pattern (^REQ-[\w-]+$). Anything outside that
+  set is treated as a user-defined hint and gets propagated unchanged.
+
+module:
+  path: orchestrator/src/orchestrator/intent_tags.py
+  exports:
+    - SISYPHUS_MANAGED_EXACT
+    - SISYPHUS_MANAGED_PREFIXES
+    - is_sisyphus_managed_tag
+    - filter_propagatable_intent_tags
+
+functions:
+  is_sisyphus_managed_tag:
+    signature: "(tag: str) -> bool"
+    semantics: |
+      Return True iff the tag string is recognised as sisyphus flow-control,
+      pipeline-injected, or REQ identity. False for non-string inputs and
+      everything else. Used to mask out tags before forwarding hint tags.
+
+  filter_propagatable_intent_tags:
+    signature: "(tags: Iterable[str] | None) -> list[str]"
+    semantics: |
+      Filter input tags down to the user-hint subset:
+      1. Drop any tag where is_sisyphus_managed_tag returns True.
+      2. Drop non-string entries silently.
+      3. Drop empty / whitespace-only entries.
+      4. Preserve first-seen order and de-duplicate.
+      Returns [] for None / empty / fully-managed inputs.
+
+constants:
+  SISYPHUS_MANAGED_EXACT:
+    type: "frozenset[str]"
+    members:
+      - sisyphus
+      - intake
+      - analyze
+      - challenger
+      - verifier
+      - fixer
+      - accept
+      - staging-test
+      - pr-ci
+      - done-archive
+
+  SISYPHUS_MANAGED_PREFIXES:
+    type: "tuple[str, ...]"
+    members:
+      - "intent:"
+      - "result:"
+      - "pr-ci:"
+      - "verify:"
+      - "trigger:"
+      - "decision:"
+      - "fixer:"
+      - "parent:"
+      - "parent-id:"
+      - "parent-stage:"
+      - "target:"
+      - "round-"
+      - "pr:"
+    note: |
+      "parent:" is intentionally listed alongside "parent-id:" / "parent-stage:"
+      to mask all three prefixes — startswith comparison naturally subsumes
+      the longer prefixes, but the explicit list documents the contract.
+
+callsites:
+  start_intake:
+    module: orchestrator.actions.start_intake
+    integration: |
+      PATCH intent issue tags = ["sisyphus", "intake", req_id,
+      *filter_propagatable_intent_tags(tags)]. The filter input is the
+      `tags` kwarg of the action (i.e. body.tags from webhook).
+
+  start_analyze:
+    module: orchestrator.actions.start_analyze
+    integration: |
+      PATCH intent issue tags = ["analyze", req_id,
+      *filter_propagatable_intent_tags(tags)].
+
+  start_analyze_with_finalized_intent:
+    module: orchestrator.actions.start_analyze_with_finalized_intent
+    integration: |
+      create_issue tags = ["analyze", req_id,
+      *filter_propagatable_intent_tags(tags)]. BKDRestClient.create_issue
+      auto-prepends `sisyphus` via _ensure_sisyphus_tag.
+
+  start_challenger:
+    module: orchestrator.actions.start_challenger
+    integration: |
+      create_issue tags = ["challenger", req_id, f"parent-id:{src}",
+      *pr_link_tags, *filter_propagatable_intent_tags(tags)].
+
+invariants:
+  - "Filter is pure (no IO, no exceptions) — given the same input it always returns the same output."
+  - "REQ-id tag is never duplicated: each callsite explicitly injects req_id and filter strips REQ-* matches."
+  - "Filter never reorders surviving hint tags relative to first appearance."
+  - "Filter is idempotent: filter(filter(x)) == filter(x)."

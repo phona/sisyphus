@@ -14,6 +14,7 @@ from .. import k8s_runner
 from ..admission import check_admission
 from ..bkd import BKDClient
 from ..config import settings
+from ..intent_tags import filter_propagatable_intent_tags
 from ..prompts import render
 from ..state import Event
 from ..store import db, req_state
@@ -52,12 +53,16 @@ async def start_intake(*, body, req_id, tags, ctx):
     # NB: intent issue itself is opened by the user (not via create_issue), so the
     # `sisyphus` pipeline-identity tag is added explicitly here. All other sisyphus
     # issues get it auto-injected inside BKDRestClient.create_issue.
+    # REQ-ux-tags-injection-1777257283: forward user hint tags (`repo:`, `ux:`, ...)
+    # so they survive the rename PATCH and stay visible to downstream agents /
+    # dashboards / fallback layers.
+    forwarded = filter_propagatable_intent_tags(tags)
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         await bkd.update_issue(
             project_id=proj,
             issue_id=issue_id,
             title=f"[{req_id}] [INTAKE]{short_title(ctx)}",
-            tags=["sisyphus", "intake", req_id],
+            tags=["sisyphus", "intake", req_id, *forwarded],
         )
         prompt = render(
             "intake.md.j2",
