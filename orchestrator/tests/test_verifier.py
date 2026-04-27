@@ -199,6 +199,14 @@ def patch_db(monkeypatch):
     return writes
 
 
+@pytest.fixture(autouse=True)
+def _mock_verifier_dispatch_slugs(monkeypatch):
+    """REQ-427: prevent real DB hits from slug dedup added to _verifier.py."""
+    from orchestrator.actions import _verifier as v
+    monkeypatch.setattr(v.dispatch_slugs, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(v.dispatch_slugs, "put", AsyncMock())
+
+
 @pytest.mark.asyncio
 async def test_invoke_verifier_creates_issue_with_right_tags(monkeypatch):
     from orchestrator.actions import _verifier as v

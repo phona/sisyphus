@@ -8,7 +8,7 @@ from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
 from ..state import Event
-from ..store import db, req_state
+from ..store import db, dispatch_slugs, req_state
 from . import register, short_title
 from ._skip import skip_if_enabled
 
@@ -34,6 +34,12 @@ async def done_archive(*, body, req_id, tags, ctx):
     )
     extra_tags = pr_links.pr_link_tags(links)
 
+    pool = db.get_pool()
+    slug = f"done_archive|{req_id}|{getattr(body, 'executionId', None) or ''}"
+    if hit := await dispatch_slugs.get(pool, slug):
+        log.info("done_archive.slug_hit", req_id=req_id, issue_id=hit)
+        await req_state.update_context(pool, req_id, {"archive_issue_id": hit})
+        return {"archive_issue_id": hit}
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
             project_id=proj,
@@ -53,7 +59,7 @@ async def done_archive(*, body, req_id, tags, ctx):
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")
 
-    pool = db.get_pool()
+    await dispatch_slugs.put(pool, slug, issue.id)
     await req_state.update_context(pool, req_id, {"archive_issue_id": issue.id})
 
     log.info("done_archive.done", req_id=req_id, archive_issue=issue.id)

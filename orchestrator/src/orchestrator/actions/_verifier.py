@@ -33,7 +33,7 @@ from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
 from ..state import Event, ReqState
-from ..store import db, req_state, stage_runs
+from ..store import db, dispatch_slugs, req_state, stage_runs
 from . import register, short_title
 
 log = structlog.get_logger(__name__)
@@ -95,6 +95,18 @@ async def invoke_verifier(
     if trigger not in ("success", "fail"):
         raise ValueError(f"trigger must be 'success' or 'fail', got {trigger!r}")
 
+    fixer_round = (ctx or {}).get("fixer_round", 0)
+    slug = f"verifier|{req_id}|{stage}|{trigger}|r{fixer_round}"
+    pool = db.get_pool()
+    if hit := await dispatch_slugs.get(pool, slug):
+        log.info("invoke_verifier.slug_hit", req_id=req_id, slug=slug, issue_id=hit)
+        await req_state.update_context(pool, req_id, {
+            "verifier_issue_id": hit,
+            "verifier_stage": stage,
+            "verifier_trigger": trigger,
+        })
+        return {"verifier_issue_id": hit, "stage": stage, "trigger": trigger}
+
     template_name = f"verifier/{stage}_{trigger}.md.j2"
     prompt = render(
         template_name,
@@ -135,8 +147,8 @@ async def invoke_verifier(
         await bkd.follow_up_issue(project_id=project_id, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=project_id, issue_id=issue.id, status_id="working")
 
-    # 落 ctx 给 apply_verify_* action 后续查 stage 用
-    pool = db.get_pool()
+    # 落 ctx 给 apply_verify_* action 后续查 stage 用；pool 已在 slug 检查前取得
+    await dispatch_slugs.put(pool, slug, issue.id)
     await req_state.update_context(pool, req_id, {
         "verifier_issue_id": issue.id,
         "verifier_stage": stage,
@@ -284,6 +296,17 @@ async def start_fixer(*, body, req_id, tags, ctx):
             "cap": cap,
         }
 
+    slug = f"fixer|{req_id}|{fixer}|r{next_round}"
+    if hit := await dispatch_slugs.get(pool, slug):
+        log.info("start_fixer.slug_hit", req_id=req_id, slug=slug, issue_id=hit)
+        await req_state.update_context(pool, req_id, {
+            "fixer_issue_id": hit,
+            "fixer_role": fixer,
+            "fixer_scope": scope,
+            "fixer_round": next_round,
+        })
+        return {"fixer_issue_id": hit, "fixer": fixer, "stage": stage, "fixer_round": next_round}
+
     # PR-link tag 注入（REQ-issue-link-pr-quality-base-1777218242）
     branch_for_links = (ctx or {}).get("branch") or f"feat/{req_id}"
     links = await pr_links.ensure_pr_links_in_ctx(
@@ -325,6 +348,7 @@ async def start_fixer(*, body, req_id, tags, ctx):
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")
 
+    await dispatch_slugs.put(pool, slug, issue.id)
     await req_state.update_context(pool, req_id, {
         "fixer_issue_id": issue.id,
         "fixer_role": fixer,
