@@ -1,0 +1,110 @@
+id: mobile-accept-cookbook
+version: "1.0"
+description: >
+  Documentation contract for the ttpos-flutter mobile self-hosted accept-env cookbook
+  (docs/cookbook/ttpos-flutter-mobile-accept-env.md). Defines required sections,
+  required Makefile recipe behavior, required cross-references to existing cookbooks
+  and to docs/integration-contracts.md, and the anti-patterns the cookbook must
+  forbid. This is a docs-only change scoped to the sisyphus repo; no orchestrator
+  or business-repo code is modified.
+
+cookbook:
+  path: docs/cookbook/ttpos-flutter-mobile-accept-env.md
+  required_sections:
+    - id: section-0-tldr
+      heading: "## 0. TL;DR"
+      summary: "Three things the reader must understand before reading on"
+    - id: section-1-decision-tree
+      heading: "## 1. 什么时候需要这份 cookbook（决策树）"
+      summary: "Decision tree distinguishing self-hosted vs arch-lab paths"
+    - id: section-2-repo-layout
+      heading: "## 2. repo 布局（自承 integration repo 后）"
+      summary: "Files added when Flutter repo dual-roles as integration repo"
+    - id: section-3-mock-backend
+      heading: "## 3. mock backend stack：`tests/docker-compose.accept.yml`"
+      summary: "Compose file skeleton with healthcheck + dynamic host port"
+    - id: section-4-makefile
+      heading: "## 4. Makefile：accept-env-up / accept-env-down"
+      summary: "Copyable Makefile template emitting final-line endpoint JSON"
+    - id: section-5-accept-agent-usage
+      heading: "## 5. accept-agent 怎么用这个 endpoint"
+      summary: "Endpoint consumption + scenario limits (no UI flow validation)"
+    - id: section-6-namespace-isolation
+      heading: "## 6. SISYPHUS_NAMESPACE 与并发隔离"
+      summary: "How -p $COMPOSE_PROJECT_NAME + dynamic ports prevent collisions"
+    - id: section-7-cross-cookbook-relationship
+      heading: "## 7. 跟其它 cookbook 的关系"
+      summary: "Three-way comparison table + flow diagrams"
+    - id: section-8-troubleshooting
+      heading: "## 8. 排查清单"
+      summary: "Symptom -> first-thing-to-check table"
+    - id: section-9-anti-patterns
+      heading: "## 9. 不要做的事"
+      summary: "Explicit forbidden patterns (emulator in Flutter repo, etc.)"
+
+makefile_recipe:
+  targets:
+    - name: accept-env-up
+      stdout_contract:
+        last_line_is_json: true
+        required_keys:
+          - endpoint        # contract-required (integration-contracts §3)
+          - namespace       # contract-optional but cookbook recipe always emits
+          - stack           # extension key, value MUST be "flutter-self-hosted"
+        progress_logs_to_stderr: true
+      env:
+        SISYPHUS_NAMESPACE:
+          required: true
+          fallback: accept-default
+          description: >
+            Compose project name + namespace token; required for concurrent
+            REQ isolation (sisyphus injects it).
+      side_effects:
+        - "docker compose -p $SISYPHUS_NAMESPACE -f tests/docker-compose.accept.yml up -d --wait"
+        - "Resolves backend host port via 'docker compose port backend 8080'"
+
+    - name: accept-env-down
+      idempotent: true
+      best_effort: true
+      side_effects:
+        - "docker compose -p $SISYPHUS_NAMESPACE -f tests/docker-compose.accept.yml down --volumes --remove-orphans"
+      notes: >
+        Uses `-` prefix and `|| true` so failures do not block the state
+        machine (integration-contracts §2.3 best-effort semantics).
+
+cross_references:
+  outbound_from_cookbook:
+    - target: docs/cookbook/ttpos-flutter-makefile.md
+      reason: "Source-repo ci-* targets context for the same Flutter repo"
+    - target: docs/cookbook/ttpos-arch-lab-accept-env.md
+      reason: "Heavyweight emulator+APK path when UI validation needed"
+    - target: docs/integration-contracts.md
+      reason: "Authoritative endpoint JSON contract (§3) and accept-env-* contract (§2.3)"
+  inbound_to_cookbook:
+    - source: docs/cookbook/ttpos-flutter-makefile.md
+      sections: ["§4.3", "§9 relationship table"]
+    - source: docs/integration-contracts.md
+      sections: ["§4.2.2 docker-compose integration template"]
+
+scenarios:
+  - id: FMAC-S1
+    description: "cookbook file exists at the published path"
+    spec_ref: specs/mobile-accept-cookbook/spec.md
+  - id: FMAC-S2
+    description: "cookbook is reachable from existing Flutter source-repo cookbook"
+    spec_ref: specs/mobile-accept-cookbook/spec.md
+  - id: FMAC-S3
+    description: "cookbook is reachable from integration-contracts §4.2.2"
+    spec_ref: specs/mobile-accept-cookbook/spec.md
+  - id: FMAC-S4
+    description: "cookbook decision tree distinguishes self-hosted from arch-lab"
+    spec_ref: specs/mobile-accept-cookbook/spec.md
+  - id: FMAC-S5
+    description: "Makefile template emits final-line endpoint JSON with stack key"
+    spec_ref: specs/mobile-accept-cookbook/spec.md
+  - id: FMAC-S6
+    description: "mock backend compose file uses dynamic host port and healthchecks"
+    spec_ref: specs/mobile-accept-cookbook/spec.md
+  - id: FMAC-S7
+    description: "anti-patterns explicitly forbid embedding emulator in Flutter repo"
+    spec_ref: specs/mobile-accept-cookbook/spec.md
