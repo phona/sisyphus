@@ -274,6 +274,10 @@ accept-env-down:
 > 看 [`docs/cookbook/ttpos-arch-lab-accept-env.md`](cookbook/ttpos-arch-lab-accept-env.md) §9 说明。
 > **推荐改用 helm 路径**（见 §4.2 和 cookbook 正文）—— namespace 天然隔离，无 host port 碰撞风险。
 > 这里的 §4.2.2 只是纯后端 stack 的最小骨架，适用于不在 K3s 上的 lab 环境。
+>
+> 想看 **Flutter 源仓自承 integration repo**（不依赖 arch-lab、不起 emulator、纯 HTTP 黑盒）
+> 的完整食谱（决策树、`tests/docker-compose.accept.yml` 设计、accept-agent scenario 限制、
+> 排查清单），看 [`docs/cookbook/ttpos-flutter-mobile-accept-env.md`](cookbook/ttpos-flutter-mobile-accept-env.md)。
 
 ```makefile
 .PHONY: accept-env-up accept-env-down
