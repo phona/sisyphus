@@ -32,6 +32,13 @@ def _admit_by_default(monkeypatch):
     # Tests that want to inspect the call can re-patch.
     noop = AsyncMock()
     monkeypatch.setattr(start_analyze.req_state, "update_context", noop)
+    # REQ-427: dispatch_slugs slug check — no hit by default so create_issue proceeds.
+    monkeypatch.setattr(
+        start_analyze_with_finalized_intent.dispatch_slugs, "get", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        start_analyze_with_finalized_intent.dispatch_slugs, "put", AsyncMock()
+    )
 
 
 @dataclass

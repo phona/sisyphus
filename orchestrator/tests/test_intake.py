@@ -292,6 +292,8 @@ async def test_start_analyze_with_finalized_intent_creates_new_issue(monkeypatch
     # analyze_issue_id via update_context.
     monkeypatch.setattr(mod.req_state, "update_context", AsyncMock())
     monkeypatch.setattr(mod.db, "get_pool", lambda: object())
+    monkeypatch.setattr(mod.dispatch_slugs, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(mod.dispatch_slugs, "put", AsyncMock())
 
     ctx = {"intake_finalized_intent": _VALID_INTENT, "intent_title": "加 INTAKING stage"}
     out = await mod.start_analyze_with_finalized_intent(
@@ -320,6 +322,8 @@ async def test_start_analyze_with_finalized_intent_forwards_hint_tags(monkeypatc
     patch_bkd(monkeypatch, "orchestrator.actions.start_analyze_with_finalized_intent.BKDClient", fake)
     monkeypatch.setattr(mod.req_state, "update_context", AsyncMock())
     monkeypatch.setattr(mod.db, "get_pool", lambda: object())
+    monkeypatch.setattr(mod.dispatch_slugs, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(mod.dispatch_slugs, "put", AsyncMock())
 
     ctx = {"intake_finalized_intent": _VALID_INTENT}
     # 模拟 intake completion webhook：tags 含 result:pass + intake role + 用户 hint

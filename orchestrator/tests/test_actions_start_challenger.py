@@ -9,11 +9,19 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from orchestrator.actions import start_challenger
+
+
+@pytest.fixture(autouse=True)
+def _mock_dispatch_slugs(monkeypatch):
+    """Prevent real DB calls introduced by REQ-427 slug dedup."""
+    monkeypatch.setattr(start_challenger.db, "get_pool", MagicMock(return_value=object()))
+    monkeypatch.setattr(start_challenger.dispatch_slugs, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(start_challenger.dispatch_slugs, "put", AsyncMock())
 
 
 @dataclass

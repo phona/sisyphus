@@ -27,7 +27,7 @@ from ..intent_tags import filter_propagatable_intent_tags
 from ..prompts import render
 from ..prompts.status_block import build_status_block_ctx
 from ..state import Event
-from ..store import db, req_state
+from ..store import db, dispatch_slugs, req_state
 from . import register, short_title
 from ._clone import clone_involved_repos_into_runner
 
@@ -73,6 +73,12 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
     # issue so analyze + downstream stages (challenger / verifier / accept) keep
     # the same context. `sisyphus` is auto-prepended by BKDRestClient.create_issue.
     forwarded = filter_propagatable_intent_tags(tags)
+    pool = db.get_pool()
+    slug = f"analyze|{req_id}|{getattr(body, 'executionId', None) or ''}"
+    if hit := await dispatch_slugs.get(pool, slug):
+        log.info("start_analyze_with_finalized_intent.slug_hit", req_id=req_id, issue_id=hit)
+        await req_state.update_context(pool, req_id, {"analyze_issue_id": hit})
+        return {"analyze_issue_id": hit, "cloned_repos": cloned_repos}
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
             project_id=proj,
@@ -111,7 +117,8 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
     # stash analyze_issue_id 进 ctx：让 pr_links.ensure_pr_links_in_ctx 第一次
     # discover 成功时能 backfill 这条 analyze issue 的 pr:* tag
     # （REQ-issue-link-pr-quality-base-1777218242）
-    await req_state.update_context(db.get_pool(), req_id, {
+    await dispatch_slugs.put(pool, slug, issue.id)
+    await req_state.update_context(pool, req_id, {
         "analyze_issue_id": issue.id,
     })
 

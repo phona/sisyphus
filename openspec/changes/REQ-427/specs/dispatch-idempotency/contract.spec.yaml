@@ -1,0 +1,14 @@
+id: dispatch-idempotency
+title: BKD Dispatch Idempotency by Slug
+version: "1.0"
+scenarios:
+  - id: DISP-S1
+    description: slug hit returns cached issue_id without calling BKD
+  - id: DISP-S2
+    description: no slug hit proceeds with create_issue and stores slug
+  - id: DISP-S3
+    description: get returns None for absent slug
+  - id: DISP-S4
+    description: put stores slug and is idempotent on conflict
+  - id: DISP-S5
+    description: round-aware slug distinguishes fixer rounds
