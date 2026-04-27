@@ -4,9 +4,9 @@
 
 ### Requirement: Watchdog SQL prefilter MUST use the smaller of the fast and slow stuck thresholds
 
-The watchdog `_tick` SQL query that selects candidate `req_state` rows
-SHALL prefilter on `updated_at < NOW() - INTERVAL '1 second' * T` where
-`T` is `min(settings.watchdog_session_ended_threshold_sec,
+The watchdog `_tick` SQL query SHALL prefilter on
+`updated_at < NOW() - INTERVAL '1 second' * T` where `T` is
+`min(settings.watchdog_session_ended_threshold_sec,
 settings.watchdog_stuck_threshold_sec)`. The watchdog MUST NOT inline
 either threshold value as a hard-coded constant. The SQL MUST continue
 to exclude rows whose `state` is in the existing `_SKIP_STATES` set
@@ -31,10 +31,10 @@ to exclude rows whose `state` is in the existing `_SKIP_STATES` set
 
 ### Requirement: Watchdog MUST escalate ended sessions once stuck_sec reaches the fast threshold
 
-When `_check_and_escalate` evaluates a row whose associated BKD issue has
-`session_status` not equal to `"running"` (i.e., the session ended without
-a webhook reaching sisyphus), the watchdog MUST treat the row as eligible
-for escalation as soon as `stuck_sec >= settings.watchdog_session_ended_threshold_sec`.
+The watchdog MUST treat any row whose BKD issue has `session_status` not
+equal to `"running"` (i.e., the session ended without a webhook reaching
+sisyphus) as eligible for escalation as soon as
+`stuck_sec >= settings.watchdog_session_ended_threshold_sec`.
 The watchdog SHALL NOT require `stuck_sec` to also exceed
 `settings.watchdog_stuck_threshold_sec` for ended sessions.
 
@@ -70,12 +70,12 @@ remain unchanged.
 
 ### Requirement: Watchdog MUST continue to skip sessions reported as running regardless of stuck_sec
 
-When `_check_and_escalate` evaluates a row whose associated BKD issue has
-`session_status == "running"`, the watchdog MUST skip the row. The skip
-MUST NOT depend on the value of `stuck_sec`, and MUST hold whether
-`stuck_sec` is just above the fast threshold or far above the slow
-threshold. The skip MUST emit a `watchdog.still_running` debug log line
-and return without writing `artifact_checks` or invoking `engine.step`.
+The watchdog MUST skip any row whose BKD issue has
+`session_status == "running"`. The skip MUST NOT depend on the value of
+`stuck_sec`, and MUST hold whether `stuck_sec` is just above the fast
+threshold or far above the slow threshold. The skip MUST emit a
+`watchdog.still_running` debug log line and return without writing
+`artifact_checks` or invoking `engine.step`.
 
 #### Scenario: WFD-S5 running session at 5000s remains skipped
 
