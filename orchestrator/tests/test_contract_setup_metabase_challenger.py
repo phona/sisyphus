@@ -34,7 +34,7 @@ _OBS_DIR = _REPO_ROOT / "observability"
 if str(_OBS_DIR) not in sys.path:
     sys.path.insert(0, str(_OBS_DIR))
 
-import setup_metabase as sm  # noqa: E402
+import setup_metabase as sm  # noqa: E402, I001
 
 
 # ── HTTP stub that records method, path, body AND token ───────────────────────
@@ -76,7 +76,7 @@ def test_s1_load_sql_returns_nonempty_content(q: sm.QuestionSpec):
 # ── MBS-S2: login stores token AND subsequent calls include it ─────────────────
 
 def test_s2_login_stores_token():
-    client, rec = _client({("POST", "/api/session"): {"id": "my-session-token"}})
+    client, _rec = _client({("POST", "/api/session"): {"id": "my-session-token"}})
     client.login("admin@example.com", "s3cr3t")
     assert client._token == "my-session-token"
 
