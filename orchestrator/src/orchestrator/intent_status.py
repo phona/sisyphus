@@ -50,7 +50,7 @@ async def patch_terminal_status(
 
     生产代码不需要看返回值——失败已 log warning，不抛任何异常。
     """
-    if not intent_issue_id:
+    if not intent_issue_id or not intent_issue_id.strip():
         log.debug(
             "intent_status.skip_no_intent_id",
             project_id=project_id,
