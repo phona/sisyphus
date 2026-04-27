@@ -65,12 +65,16 @@ _STATE_FAILURE_EVENT: dict[ReqState, str] = {
     ReqState.ARCHIVING: "archive.failed",
 }
 
-# 排除：终态 + 等人态 + 未入链
+# 排除：终态 + 等人态（human-in-loop）+ 未入链
+# human-in-loop states 同时存于 _NO_WATCHDOG_STATES（ReqState 对象）和此处（string value），
+# 使 _SKIP_STATES 成为 canonical container（spec USER-S12 / watchdog skip 查询均引用此集合）。
 _SKIP_STATES = {
     ReqState.DONE.value,
     ReqState.ESCALATED.value,
     ReqState.GH_INCIDENT_OPEN.value,
     ReqState.INIT.value,
+    ReqState.INTAKING.value,
+    ReqState.PENDING_USER_REVIEW.value,
 }
 
 # REQ-watchdog-stage-policy-1777269909：human-in-loop stages 完全豁免 watchdog。

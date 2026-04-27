@@ -81,6 +81,7 @@ class BKDRestClient:
         status_id: str | None = None,
         tags: list[str] | None = None,
         title: str | None = None,
+        description: str | None = None,
     ) -> Issue:
         body: dict = {}
         if status_id is not None:
@@ -89,6 +90,8 @@ class BKDRestClient:
             body["tags"] = tags
         if title is not None:
             body["title"] = title
+        if description is not None:
+            body["description"] = description
         if not body:
             # 没东西要改，直接 get 返回当前
             return await self.get_issue(project_id, issue_id)
