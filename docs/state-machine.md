@@ -195,6 +195,8 @@ watchdog (M8) 把"BKD session 卡 N 秒不动"翻译成 SESSION_FAILED 喂回状
 - 选 in-flight state + `updated_at > threshold`
 - 查关联 BKD issue 的 session 状态：不在 running → emit SESSION_FAILED
 
+**未来 watchdog 按 stage type 分策略**（详见 [user-feedback-loop.md §1](user-feedback-loop.md)）：`INTAKING` / `PENDING_USER_PR_REVIEW`（新）等 human-loop-conversation 类 state **不 watchdog**（仅事件驱动），其它 stage 按 autonomous-bounded / deterministic-checker / external-poll 不同 timeout。落地见 dogfood `REQ-watchdog-stage-policy`。
+
 ## 8a. PR-merged shortcut（escalate 入口）
 
 `actions/escalate.py` 在所有路径（auto-resume / GH incident / 真 ESCALATED CAS）之前
