@@ -1,0 +1,20 @@
+{{- include "thanatos.assertDriver" . -}}
+# Service is debug-only: kubectl port-forward + a local MCP client.
+# accept-agent reaches the pod via `kubectl exec` and does not depend on this
+# Service. Kept in the chart so devs can `kubectl port-forward svc/thanatos`
+# without inventing extra YAML.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "thanatos.fullname" . }}
+  labels:
+    {{- include "thanatos.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: mcp-debug
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.port }}
+      protocol: TCP
+  selector:
+    {{- include "thanatos.selectorLabels" . | nindent 4 }}

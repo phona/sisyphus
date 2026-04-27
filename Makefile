@@ -27,32 +27,42 @@ ci-lint: ## ruff lint；BASE_REV 非空 → 仅 lint 变更 *.py
 	@if [ -z "$$BASE_REV" ]; then \
 		echo "ci-lint: full scan (BASE_REV empty)"; \
 		cd orchestrator && uv run ruff check src/ tests/; \
+		cd $(SCRIPT_DIR)/thanatos && uv run ruff check src/ tests/; \
 	else \
-		files=$$(git diff --name-only --diff-filter=ACMR "$$BASE_REV"...HEAD -- 'orchestrator/src/**.py' 'orchestrator/tests/**.py' 2>/dev/null || true); \
-		if [ -z "$$files" ]; then \
+		orch_files=$$(git diff --name-only --diff-filter=ACMR "$$BASE_REV"...HEAD -- 'orchestrator/src/**.py' 'orchestrator/tests/**.py' 2>/dev/null || true); \
+		thanatos_files=$$(git diff --name-only --diff-filter=ACMR "$$BASE_REV"...HEAD -- 'thanatos/src/**.py' 'thanatos/tests/**.py' 2>/dev/null || true); \
+		if [ -z "$$orch_files" ] && [ -z "$$thanatos_files" ]; then \
 			echo "ci-lint: no Python files changed in scope (BASE_REV=$$BASE_REV)"; \
 			exit 0; \
 		fi; \
-		echo "ci-lint: scoped to $$(echo "$$files" | wc -l) file(s) (BASE_REV=$$BASE_REV)"; \
-		rel=$$(echo "$$files" | sed 's|^orchestrator/||'); \
-		cd orchestrator && uv run ruff check $$rel; \
+		if [ -n "$$orch_files" ]; then \
+			echo "ci-lint(orchestrator): scoped to $$(echo "$$orch_files" | wc -l) file(s) (BASE_REV=$$BASE_REV)"; \
+			rel=$$(echo "$$orch_files" | sed 's|^orchestrator/||'); \
+			(cd orchestrator && uv run ruff check $$rel); \
+		fi; \
+		if [ -n "$$thanatos_files" ]; then \
+			echo "ci-lint(thanatos): scoped to $$(echo "$$thanatos_files" | wc -l) file(s) (BASE_REV=$$BASE_REV)"; \
+			rel=$$(echo "$$thanatos_files" | sed 's|^thanatos/||'); \
+			(cd thanatos && uv run ruff check $$rel); \
+		fi; \
 	fi
 
 ci-unit-test: ## pytest 单测套件（排除 integration marker）
 	cd orchestrator && uv run pytest -m "not integration"
+	cd $(SCRIPT_DIR)/thanatos && uv run pytest -m "not integration"
 
 ci-integration-test: ## pytest 集成测试（integration marker；零收集视为 pass）
 	@if ! python3 -c 'import socket,os,re; dsn=os.environ.get("SISYPHUS_PG_DSN","postgresql://test:test@localhost/test"); m=re.search(r"@([^:/]+):?(\d+)?/",dsn); s=socket.create_connection((m.group(1),int(m.group(2) or 5432)),timeout=2); s.close()' 2>/dev/null; then \
-		echo "ci-integration-test: no integration tests collected (exit 5 → pass) — PostgreSQL not reachable"; \
-		exit 0; \
-	fi; \
-	cd orchestrator && set +e; uv run pytest -m integration; rc=$$?; \
-	if [ $$rc -eq 0 ] || [ $$rc -eq 5 ]; then \
-		[ $$rc -eq 5 ] && echo "ci-integration-test: no integration tests collected (exit 5 → pass)"; \
-		exit 0; \
+		echo "ci-integration-test(orchestrator): no integration tests collected (exit 5 → pass) — PostgreSQL not reachable"; \
 	else \
-		exit $$rc; \
+		cd orchestrator && set +e; uv run pytest -m integration; rc=$$?; \
+		if [ $$rc -ne 0 ] && [ $$rc -ne 5 ]; then exit $$rc; fi; \
+		[ $$rc -eq 5 ] && echo "ci-integration-test(orchestrator): no integration tests collected (exit 5 → pass)"; \
 	fi
+	@cd $(SCRIPT_DIR)/thanatos && set +e; uv run pytest -m integration; rc=$$?; \
+	if [ $$rc -ne 0 ] && [ $$rc -ne 5 ]; then exit $$rc; fi; \
+	[ $$rc -eq 5 ] && echo "ci-integration-test(thanatos): no integration tests collected (exit 5 → pass)"; \
+	exit 0
 
 # ========== ttpos-ci accept env target（self-dogfood; integration repo 契约） ==========
 # REQ-self-accept-stage-1777121797: sisyphus 自己同时充当 source repo 和 integration repo
