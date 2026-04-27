@@ -447,6 +447,28 @@ async def escalate(*, body, req_id, tags, ctx):
                 except Exception as e:
                     log.warning("escalate.runner_cleanup_failed",
                                 req_id=req_id, error=str(e))
+                # REQ-bkd-hitl-end-to-end-loop-1777273753：engine.step 看本次
+                # transition 是 self-loop（cur=cur），不会触发它的终态 sync
+                # block；所以这条 self-loop 路径要 escalate 自己 PATCH BKD
+                # intent issue 的 statusId="review"。同模式 await（escalate
+                # 已 await cleanup_runner，多一行简单清晰）。
+                try:
+                    async with BKDClient(
+                        settings.bkd_base_url, settings.bkd_token,
+                    ) as bkd:
+                        await bkd.update_issue(
+                            project_id=proj,
+                            issue_id=intent_issue_id,
+                            status_id="review",
+                        )
+                except Exception as e:
+                    log.warning(
+                        "escalate.intent_status_sync_failed",
+                        req_id=req_id,
+                        intent_issue_id=intent_issue_id,
+                        target_status_id="review",
+                        error=str(e),
+                    )
 
     log.warning("escalate.final",
                 req_id=req_id, reason=final_reason,
