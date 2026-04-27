@@ -1,11 +1,14 @@
-"""Contract tests for REQ-analyze-artifact-check-1777254586.
+"""Challenger contract tests for REQ-analyze-artifact-check-1777254586.
 
 Black-box contracts derived exclusively from:
   openspec/changes/REQ-analyze-artifact-check-1777254586/specs/analyze-artifact-check/spec.md
 
+Written by: challenger-agent (M18 — independent of dev implementation)
+
 Scenarios covered:
   AAC-S1  ANALYZING/ANALYZE_DONE → ANALYZE_ARTIFACT_CHECKING + create_analyze_artifact_check
           AND ANALYZE_ARTIFACT_CHECKING/PASS → SPEC_LINT_RUNNING + create_spec_lint
+          AND create_analyze_artifact_check is callable via actions REGISTRY
   AAC-S2  ANALYZE_ARTIFACT_CHECKING/FAIL → REVIEW_RUNNING + invoke_verifier_for_analyze_artifact_check_fail
           + verifier _STAGES contains "analyze_artifact_check"
   AAC-S3  ANALYZE_ARTIFACT_CHECKING in SESSION_FAILED self-loop
@@ -58,6 +61,15 @@ def test_aac_s1_analyze_done_routes_to_artifact_check_then_spec_lint() -> None:
     assert t2.action == "create_spec_lint", (
         "AAC-S1: ANALYZE_ARTIFACT_CHECK_PASS action MUST be 'create_spec_lint'. "
         f"Got {t2.action!r}"
+    )
+
+    # The orchestrator dispatches actions by name via REGISTRY; if
+    # create_analyze_artifact_check is not registered, the state machine
+    # would fail at runtime even though the transition is defined.
+    from orchestrator.actions import REGISTRY
+    assert "create_analyze_artifact_check" in REGISTRY, (
+        "AAC-S1: 'create_analyze_artifact_check' MUST be registered in actions.REGISTRY "
+        "so the orchestrator can dispatch it when ANALYZE_DONE fires"
     )
 
 
