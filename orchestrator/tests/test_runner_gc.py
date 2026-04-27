@@ -202,3 +202,48 @@ async def test_gc_once_returns_split_cleaned_lists(monkeypatch, mock_controller)
     assert result["cleaned_pvcs"] == ["REQ-zombie-pvc"]
     assert result["pod_kept"] == 1
     assert result["pvc_kept"] == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# _last_gc_result tracking (REQ-430)
+# ═══════════════════════════════════════════════════════════════════════
+
+@pytest.fixture(autouse=True)
+def _reset_last_gc_result():
+    """每个 test 前后重置 _last_gc_result，防止状态泄漏。"""
+    runner_gc._last_gc_result = None
+    yield
+    runner_gc._last_gc_result = None
+
+
+def test_get_last_result_returns_none_before_any_gc():
+    """RGA-S4 precondition: 首次 GC 前 get_last_result() 返 None。"""
+    assert runner_gc.get_last_result() is None
+
+
+@pytest.mark.asyncio
+async def test_gc_once_updates_last_result_with_ran_at(monkeypatch, mock_controller):
+    """RGA-S5 precondition: gc_once 正常执行后 _last_gc_result 含 ran_at。"""
+    pool = _FakePool([_row("REQ-1", "analyzing")])
+    monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
+
+    await runner_gc.gc_once()
+
+    last = runner_gc.get_last_result()
+    assert last is not None
+    assert "ran_at" in last
+    assert "cleaned_pods" in last
+    assert "cleaned_pvcs" in last
+
+
+@pytest.mark.asyncio
+async def test_gc_once_skipped_also_updates_last_result():
+    """no controller 时 skipped 结果也更新 _last_gc_result（含 ran_at）。"""
+    k8s_runner.set_controller(None)
+
+    await runner_gc.gc_once()
+
+    last = runner_gc.get_last_result()
+    assert last is not None
+    assert "skipped" in last
+    assert "ran_at" in last
