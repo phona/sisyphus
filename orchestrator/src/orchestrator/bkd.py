@@ -28,6 +28,10 @@ class Issue:
     description: str | None = None
     created_at: str | None = None     # BKD ISO timestamp
     updated_at: str | None = None
+    # BKD agent token = Claude Code externalSessionId. 仅 agent issue 有；
+    # session 起来后才被 BKD 填，create_issue 返回时常为 None，需要在
+    # session.completed/failed 时再 get_issue 拿到真值（写进 stage_runs）。
+    external_session_id: str | None = None
 
 
 def _to_issue(d: dict) -> Issue:
@@ -43,6 +47,7 @@ def _to_issue(d: dict) -> Issue:
         description=d.get("description"),
         created_at=d.get("createdAt"),
         updated_at=d.get("updatedAt") or d.get("statusUpdatedAt"),
+        external_session_id=d.get("externalSessionId"),
     )
 
 

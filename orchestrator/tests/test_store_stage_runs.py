@@ -107,3 +107,64 @@ async def test_update_stage_run_allows_partial_update():
     assert args[3] is None   # fail_reason 不动
     assert args[4] == 100
     assert args[5] is None
+
+
+# ─── stamp_bkd_session_id（REQ-stage-runs-token-tracking）────────────────────
+
+
+@pytest.mark.asyncio
+async def test_stamp_bkd_session_id_writes_token_to_latest_open_row():
+    """正常路径：UPDATE 命中最新 ended_at IS NULL 的 (req, stage) 行，写 token。"""
+    pool = CapturePool(ret={"id": 99})
+
+    row_id = await sr.stamp_bkd_session_id(
+        pool, "REQ-7", "analyze", "sess-abc-123",
+    )
+
+    assert row_id == 99
+    assert len(pool.fetchrow_calls) == 1
+    sql, args = pool.fetchrow_calls[0]
+    assert "UPDATE stage_runs" in sql
+    assert "bkd_session_id = $3" in sql
+    # WHERE 子句必须同时限 ended_at IS NULL + bkd_session_id IS NULL
+    # 才能避免覆盖已写的 token，避免抢已经 close 的旧行
+    assert "ended_at IS NULL" in sql
+    assert "bkd_session_id IS NULL" in sql
+    assert "RETURNING id" in sql
+    assert args == ("REQ-7", "analyze", "sess-abc-123")
+
+
+@pytest.mark.asyncio
+async def test_stamp_bkd_session_id_returns_none_when_no_open_row_matched():
+    """没找到目标行（subquery 返 0 行 → UPDATE 0 行 → RETURNING 空）→ None。"""
+    pool = CapturePool(ret=None)
+
+    row_id = await sr.stamp_bkd_session_id(
+        pool, "REQ-99", "verifier", "sess-xyz",
+    )
+
+    assert row_id is None
+    assert len(pool.fetchrow_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_stamp_bkd_session_id_skips_empty_token():
+    """token 是空串/None 不发 SQL；BKD session 还没起来时 externalSessionId 是 None，
+    没必要往 DB 打无意义 UPDATE。"""
+    pool = CapturePool(ret={"id": 1})
+
+    assert await sr.stamp_bkd_session_id(pool, "REQ-1", "analyze", "") is None
+    assert await sr.stamp_bkd_session_id(pool, "REQ-1", "analyze", None) is None  # type: ignore[arg-type]
+    assert pool.fetchrow_calls == []
+
+
+@pytest.mark.asyncio
+async def test_insert_stage_run_does_not_write_bkd_session_id_inline():
+    """insert 路径不带 bkd_session_id —— action handler 起 BKD issue 时
+    externalSessionId 通常还没分配，留 NULL 由后续 stamp 兜。"""
+    pool = CapturePool(ret={"id": 1})
+    await sr.insert_stage_run(pool, "REQ-1", "analyze", agent_type="analyze")
+
+    sql, _args = pool.fetchrow_calls[0]
+    # INSERT 列表不应带 bkd_session_id；migration 给该列默认 NULL
+    assert "bkd_session_id" not in sql

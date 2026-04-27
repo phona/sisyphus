@@ -269,12 +269,12 @@ def test_docs_s6_tag_spec_not_apifox_content():
 # DOCS-S7: migration count 0001–0007 reflected in docs
 # ──────────────────────────────────────────────────────────────────────────
 
-def test_docs_s7_forward_migration_count_is_8():
+def test_docs_s7_forward_migration_count_is_9():
     """DOCS-S7: orchestrator/migrations/ has exactly 8 forward migration files
-    (0001..0007 + 0009; 0008 reserved for parallel REQ-evaluation work)."""
+    (0001..0009 contiguous; 0008 = stage_runs_bkd_session_id, 0009 = artifact_checks_flake)."""
     forward = [f for f in MIGRATIONS_DIR.glob("*.sql") if ".rollback." not in f.name]
-    assert len(forward) == 8, (
-        f"orchestrator/migrations/ has {len(forward)} forward migration(s), expected 8: "
+    assert len(forward) == 9, (
+        f"orchestrator/migrations/ has {len(forward)} forward migration(s), expected 9: "
         f"{sorted(f.name for f in forward)}"
     )
 

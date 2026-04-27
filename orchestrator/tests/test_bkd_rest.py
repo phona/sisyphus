@@ -358,3 +358,56 @@ def test_factory_unknown_transport_raises():
     from orchestrator.bkd import BKDClient
     with pytest.raises(ValueError, match="Unknown BKD transport"):
         BKDClient("https://bkd.example/api", "tok", transport="grpc")
+
+
+# ─── REQ-stage-runs-token-tracking: BKD agent token 解析 ──────────────────
+
+
+def test_to_issue_extracts_external_session_id():
+    """BKD ≥0.0.65 issue payload 带 externalSessionId（Claude Code session UUID）。
+    _to_issue 必须把它取出，让 webhook 能 stamp 进 stage_runs。"""
+    from orchestrator.bkd import _to_issue
+
+    issue = _to_issue({
+        "id": "i1", "projectId": "p", "issueNumber": 1,
+        "title": "t", "statusId": "working", "tags": ["analyze"],
+        "externalSessionId": "a742034b-6fb0-4047-be96-d5431dc1f252",
+    })
+    assert issue.external_session_id == "a742034b-6fb0-4047-be96-d5431dc1f252"
+
+
+def test_to_issue_external_session_id_defaults_none():
+    """create_issue 刚返回时 BKD 还没分配 externalSessionId → 字段 None，
+    不抛 KeyError（_to_issue 用 .get）。"""
+    from orchestrator.bkd import _to_issue
+
+    issue = _to_issue({
+        "id": "i2", "projectId": "p", "issueNumber": 2,
+        "title": "t", "statusId": "todo", "tags": [],
+    })
+    assert issue.external_session_id is None
+
+
+@pytest.mark.asyncio
+async def test_get_issue_returns_external_session_id_via_rest():
+    """端到端：BKD REST GET /issues/{id} 返 externalSessionId → Issue 字段填上。"""
+    class FakeHttp:
+        async def get(self, url, headers=None):
+            payload = {
+                "success": True,
+                "data": {
+                    "id": "i1", "projectId": "p", "issueNumber": 1,
+                    "title": "[REQ-x] [ANALYZE]", "statusId": "working",
+                    "tags": ["analyze", "REQ-x"],
+                    "externalSessionId": "sess-abc",
+                },
+            }
+            return httpx.Response(200, text=json.dumps(payload))
+
+        async def aclose(self):
+            pass
+
+    client = BKDRestClient("https://bkd.example/api", "tok")
+    client._http = FakeHttp()  # type: ignore[assignment]
+    issue = await client.get_issue("p", "i1")
+    assert issue.external_session_id == "sess-abc"
