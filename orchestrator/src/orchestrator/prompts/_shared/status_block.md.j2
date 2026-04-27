@@ -1,0 +1,19 @@
+## REQ Status
+
+| Field | Value |
+|---|---|
+| REQ | `{{ status_block.req_id }}` |
+| Stage | `{{ status_block.stage }}` |
+| Branch | `feat/{{ status_block.req_id }}` |
+| Runner Pod | `runner-{{ status_block.req_id | lower }}` |
+{% if status_block.bkd_intent_issue_url %}
+| BKD intent issue | [open]({{ status_block.bkd_intent_issue_url }}) |
+{% endif %}
+{% if status_block.cloned_repos %}
+| Pre-cloned repos | {{ status_block.cloned_repos | join(", ") }} |
+{% endif %}
+{% if status_block.pr_links_inline %}
+| Linked PRs | {{ status_block.pr_links_inline }} |
+{% endif %}
+
+---

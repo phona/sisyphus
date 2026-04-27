@@ -20,11 +20,12 @@ from __future__ import annotations
 
 import structlog
 
-from .. import k8s_runner
+from .. import k8s_runner, links
 from ..bkd import BKDClient
 from ..config import settings
 from ..intent_tags import filter_propagatable_intent_tags
 from ..prompts import render
+from ..prompts.status_block import build_status_block_ctx
 from ..state import Event
 from ..store import db, req_state
 from . import register, short_title
@@ -81,6 +82,11 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
             use_worktree=True,
             model=settings.agent_model,
         )
+        # REQ-ux-status-block-1777257283: parity with start_analyze direct path —
+        # the cross-link footer block (analyze.md.j2 §B.7) and the new status
+        # block both want the BKD intent issue URL, so resolve it once after
+        # create_issue gives us the new issue id.
+        bkd_intent_issue_url = links.bkd_issue_url(proj, issue.id) or ""
         prompt = render(
             "analyze.md.j2",
             req_id=req_id,
@@ -90,6 +96,14 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
             issue_id=issue.id,
             intake_summary=finalized,
             cloned_repos=cloned_repos,
+            bkd_intent_issue_url=bkd_intent_issue_url,
+            status_block=build_status_block_ctx(
+                req_id=req_id,
+                stage="analyze",
+                bkd_intent_issue_url=bkd_intent_issue_url,
+                cloned_repos=cloned_repos,
+                pr_urls=(ctx or {}).get("pr_urls"),
+            ),
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")

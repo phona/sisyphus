@@ -1,0 +1,104 @@
+# Contract — bkd-intent-status-block partial
+#
+# Renders a markdown "REQ Status" table at the top of BKD intent stage prompts.
+# Defines the dict the orchestrator passes to the partial, the rows the partial
+# emits, and the templates that {% include %} it.
+
+partial:
+  path: orchestrator/src/orchestrator/prompts/_shared/status_block.md.j2
+  context_variable: status_block
+
+context_schema:
+  required:
+    req_id:
+      type: string
+      example: "REQ-ux-status-block-1777257283"
+    stage:
+      type: string
+      example: "analyze"
+      allowed_values: ["intake", "analyze"]
+  optional:
+    bkd_intent_issue_url:
+      type: ["string", "null"]
+      empty_values: ["", null]
+      empty_behaviour: row_omitted
+      example: "https://bkd.example.com/projects/p/issues/iss-1"
+    cloned_repos:
+      type: ["array", "null"]
+      item_type: string
+      empty_values: [[], null]
+      empty_behaviour: row_omitted
+      example: ["phona/sisyphus", "ZonEaseTech/ttpos-server-go"]
+    pr_links_inline:
+      type: ["string", "null"]
+      empty_values: ["", null]
+      empty_behaviour: row_omitted
+      pre_rendered_by: "orchestrator.links.format_pr_links_inline"
+      example: "[phona/sisyphus#42](https://github.com/phona/sisyphus/pull/42)"
+
+builder:
+  module: orchestrator.prompts.status_block
+  function: build_status_block_ctx
+  signature:
+    keyword_only: true
+    parameters:
+      req_id: "str"
+      stage: "str"
+      bkd_intent_issue_url: "str | None"
+      cloned_repos: "list[str] | None"
+      pr_urls: "dict[str, str] | None"
+  behaviour:
+    empty_to_none: true
+    pr_urls_pre_rendered_via: "orchestrator.links.format_pr_links_inline"
+
+output:
+  format: github_flavored_markdown
+  heading: "## REQ Status"
+  table_columns: ["Field", "Value"]
+  row_order:
+    - field: REQ
+      always: true
+      value_template: "`{{ req_id }}`"
+    - field: Stage
+      always: true
+      value_template: "`{{ stage }}`"
+    - field: Branch
+      always: true
+      value_template: "`feat/{{ req_id }}`"
+      derivation: "feat/<req_id>"
+    - field: Runner Pod
+      always: true
+      value_template: "`runner-{{ req_id | lower }}`"
+      derivation: "runner-<req_id_lowercase>"
+    - field: BKD intent issue
+      always: false
+      value_template: "[open]({{ bkd_intent_issue_url }})"
+      condition: "bkd_intent_issue_url truthy"
+    - field: Pre-cloned repos
+      always: false
+      value_template: "{{ cloned_repos | join(\", \") }}"
+      condition: "cloned_repos truthy and non-empty"
+    - field: Linked PRs
+      always: false
+      value_template: "{{ pr_links_inline }}"
+      condition: "pr_links_inline truthy"
+  trailing_separator: "---"
+
+consumers:
+  - template: orchestrator/src/orchestrator/prompts/intake.md.j2
+    inclusion_position: above_tools_whitelist
+    callsite: orchestrator/src/orchestrator/actions/start_intake.py
+  - template: orchestrator/src/orchestrator/prompts/analyze.md.j2
+    inclusion_position: above_tools_whitelist
+    callsites:
+      - orchestrator/src/orchestrator/actions/start_analyze.py
+      - orchestrator/src/orchestrator/actions/start_analyze_with_finalized_intent.py
+
+backwards_compat:
+  unset_kwarg_behaviour: noop_render
+  reason: "{% if status_block %} guard in includer templates suppresses the partial when the caller has not been wired yet"
+
+out_of_scope:
+  - "re-rendering the block when REQ state changes (BKD has no PATCH-able prompt/description field — verified)"
+  - "extending the partial to staging_test / pr_ci_watch / accept / verifier / challenger / fixer / done_archive prompts (sub-issues, not 'intent')"
+  - "posting the block as a separate BKD UI panel (no such surface exists in BKD REST)"
