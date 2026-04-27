@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 
+import httpx
 import structlog
 
 from .. import k8s_runner, links, pr_links
@@ -112,6 +113,35 @@ async def _discover_repos_from_runner(req_id: str) -> list[str]:
     return repos
 
 
+async def _dispatch_ci_trigger(*, repos: list[str], branch: str, req_id: str) -> None:
+    """Best-effort: fire repository_dispatch on each repo to start CI.
+
+    Uses settings.pr_ci_dispatch_event_type as the event_type. Any per-repo
+    HTTP or network failure is logged as a warning — never raises.
+    Caller must check pr_ci_dispatch_enabled before calling.
+    """
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Authorization": f"Bearer {settings.github_token}",
+    }
+    payload = {
+        "event_type": settings.pr_ci_dispatch_event_type,
+        "client_payload": {"branch": branch, "req_id": req_id},
+    }
+    async with httpx.AsyncClient(base_url="https://api.github.com",
+                                  headers=headers, timeout=15.0) as client:
+        for repo in repos:
+            try:
+                r = await client.post(f"/repos/{repo}/dispatches", json=payload)
+                r.raise_for_status()
+                log.info("create_pr_ci_watch.dispatch_ok", req_id=req_id, repo=repo,
+                         event_type=settings.pr_ci_dispatch_event_type)
+            except Exception as e:
+                log.warning("create_pr_ci_watch.dispatch_failed",
+                            req_id=req_id, repo=repo, error=str(e))
+
+
 async def _run_checker(*, req_id: str, ctx: dict) -> dict:
     log.info("create_pr_ci_watch.checker_path", req_id=req_id)
     branch = ctx.get("branch") or f"feat/{req_id}"
@@ -122,6 +152,9 @@ async def _run_checker(*, req_id: str, ctx: dict) -> dict:
     if not repos:
         finalized = ctx.get("intake_finalized_intent") or {}
         repos = finalized.get("involved_repos") or ctx.get("involved_repos")
+
+    if settings.pr_ci_dispatch_enabled and repos:
+        await _dispatch_ci_trigger(repos=repos, branch=branch, req_id=req_id)
 
     try:
         result = await checker.watch_pr_ci(

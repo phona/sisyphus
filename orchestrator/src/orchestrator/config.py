@@ -140,6 +140,13 @@ class Settings(BaseSettings):
     pr_ci_watch_poll_interval_sec: int = 30
     pr_ci_watch_timeout_sec: int = 1800   # 30 min
 
+    # ─── REQ-426 pr-ci-active-dispatch：主动触发 CI ───────────────────
+    # True = 在轮询开始前对每个 repo 发 repository_dispatch 事件，触发 dispatch.yml
+    # False（默认）= 不发，行为与之前一致（dispatch.yml 不依赖 repository_dispatch 的仓不需要开）
+    pr_ci_dispatch_enabled: bool = False
+    # event_type 必须与业务 repo dispatch.yml 的 on.repository_dispatch.types 对齐
+    pr_ci_dispatch_event_type: str = "ci-trigger"
+
     # ─── runner ready 重试 ─────────────────────────────────────────────
     # ensure_runner 等 Pod Ready 的外层 attempts：N × runner_ready_timeout_sec
     # 总等待；最后一次抛 TimeoutError 让 engine 走 escalate。
