@@ -305,6 +305,8 @@ REQ involved_repos: [ZonEaseTech/ttpos-flutter, ZonEaseTech/ttpos-arch-lab]
 
 ## 9. 不要做的事
 
+> 想做 UI / flutter drive 验证？走 [`ttpos-arch-lab-accept-env.md`](./ttpos-arch-lab-accept-env.md) —— Flutter source repo 这层只跑 dart unit / widget test，不背 emulator。
+
 - ❌ **不要在 Flutter 仓里塞 Android emulator** —— emulator 容器要 `privileged:
   true` + 资源大，污染 source repo；UI 验证统一走 arch-lab。
 - ❌ **不要让 `accept-env-up` 等价于 `ci-integration-test`** —— integration-test
