@@ -44,8 +44,10 @@ async def startup() -> None:
     # 2. 起业务 pool + observability pool（obs DSN 空就跳过）
     await db.init_pool(settings.pg_dsn)
     await db.init_obs_pool(settings.obs_pg_dsn)
-    # 3. 起 bkd_snapshot 后台同步 task（interval 0 不起）
-    if settings.snapshot_interval_sec > 0 and settings.obs_pg_dsn:
+    # 3. 起 snapshot 后台同步 task（interval 0 不起）。
+    # 这个 loop 现在两件事：obs UPSERT（依赖 obs pool） + intent:analyze orphan 恢复
+    # （只依赖 main pool）。后者跟 obs DSN 无关，所以 startup gate 不再 require obs_pg_dsn。
+    if settings.snapshot_interval_sec > 0:
         _bg_tasks.append(asyncio.create_task(snapshot.run_loop(), name="snapshot"))
     # 4. 初始化 K8s runner controller（v0.2 actions 调用）
     try:
