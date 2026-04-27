@@ -29,7 +29,7 @@ Module contract under test: orchestrator.engine.step
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -227,7 +227,7 @@ async def test_vlt_s8_verify_fix_needed_enters_fixer_running_with_stage_runs(
     assert result.get("next_state") == ReqState.FIXER_RUNNING.value, (
         f"VLT-S8: next_state MUST be 'fixer-running'; got {result!r}"
     )
-    assert len(calls) == 1, f"VLT-S8: start_fixer MUST be awaited exactly once"
+    assert len(calls) == 1, "VLT-S8: start_fixer MUST be awaited exactly once"
 
     cas_next = cas.call_args.args[3]
     assert cas_next == ReqState.FIXER_RUNNING, (
