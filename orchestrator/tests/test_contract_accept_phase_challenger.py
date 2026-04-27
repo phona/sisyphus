@@ -118,7 +118,7 @@ async def test_apt_s1_accept_pass_chains_through_teardown_to_archiving(
     monkeypatch.setattr(
         engine.req_state,
         "get",
-        AsyncMock(return_value=type("Row", (), {"state": ReqState.ACCEPT_TEARING_DOWN.value, "context": {}})()),
+        AsyncMock(return_value=type("Row", (), {"state": ReqState.ACCEPT_TEARING_DOWN, "context": {}})()),
     )
 
     async def _teardown(**_kw):
@@ -191,7 +191,7 @@ async def test_apt_s2_accept_fail_chains_through_teardown_to_verifier(
     monkeypatch.setattr(
         engine.req_state,
         "get",
-        AsyncMock(return_value=type("Row", (), {"state": ReqState.ACCEPT_TEARING_DOWN.value, "context": {}})()),
+        AsyncMock(return_value=type("Row", (), {"state": ReqState.ACCEPT_TEARING_DOWN, "context": {}})()),
     )
 
     async def _teardown(**_kw):
