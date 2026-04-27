@@ -204,3 +204,81 @@ def test_build_cmd_resolves_default_branch_from_origin_head_first():
 
     # 步骤 4: 全 miss 退空字符串
     assert 'echo ""' in cmd
+
+
+# ── CIFR-S10 infra-flake retry wiring (REQ-checker-infra-flake-retry-1777247423)
+
+
+def _make_seq_controller(*results: ExecResult):
+    seq = list(results)
+
+    class FakeRC:
+        calls = 0
+
+        async def exec_in_runner(self, req_id, command, **kw):
+            FakeRC.calls += 1
+            return seq.pop(0)
+
+    return FakeRC
+
+
+@pytest.mark.asyncio
+async def test_run_dev_cross_check_recovers_from_dns_flake(monkeypatch):
+    """CIFR-S10 (dev_cross_check): DNS flake 一次 → retry pass → attempts=2 reason recovered."""
+    monkeypatch.setattr(
+        "orchestrator.checkers.dev_cross_check.settings.checker_infra_flake_retry_enabled", True,
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.dev_cross_check.settings.checker_infra_flake_retry_max", 1,
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.dev_cross_check.settings.checker_infra_flake_retry_backoff_sec", 0,
+    )
+    FakeRC = _make_seq_controller(
+        ExecResult(
+            exit_code=128, stdout="",
+            stderr="fatal: Could not resolve host github.com", duration_sec=1.0,
+        ),
+        ExecResult(exit_code=0, stdout="lint ok\n", stderr="", duration_sec=2.5),
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.dev_cross_check.k8s_runner.get_controller",
+        lambda: FakeRC(),
+    )
+    result = await run_dev_cross_check("REQ-X")
+    assert result.passed is True
+    assert result.attempts == 2
+    assert result.reason is not None
+    assert "flake-retry-recovered" in result.reason
+    assert FakeRC.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_run_dev_cross_check_does_not_retry_lint_failure(monkeypatch):
+    """ci-lint exit=1 with `--- FAIL` 等真业务输出 → 不重试."""
+    monkeypatch.setattr(
+        "orchestrator.checkers.dev_cross_check.settings.checker_infra_flake_retry_enabled", True,
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.dev_cross_check.settings.checker_infra_flake_retry_max", 2,
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.dev_cross_check.settings.checker_infra_flake_retry_backoff_sec", 0,
+    )
+    FakeRC = _make_seq_controller(
+        ExecResult(
+            exit_code=1,
+            stdout="lint warnings...\n",
+            stderr="=== FAIL: ttpos-server-go ===\n",
+            duration_sec=8.2,
+        ),
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.dev_cross_check.k8s_runner.get_controller",
+        lambda: FakeRC(),
+    )
+    result = await run_dev_cross_check("REQ-X")
+    assert result.passed is False
+    assert result.attempts == 1
+    assert result.reason is None
+    assert FakeRC.calls == 1

@@ -30,6 +30,8 @@ import asyncio
 import structlog
 
 from .. import k8s_runner
+from ..config import settings
+from ._flake import run_with_flake_retry
 from ._types import CheckResult
 
 __all__ = ["CheckResult", "run_staging_test"]
@@ -38,6 +40,7 @@ log = structlog.get_logger(__name__)
 
 _TAIL = 2048
 _DEFAULT_TIMEOUT = 1800
+_STAGE = "staging_test"
 
 
 def _build_cmd(req_id: str) -> str:
@@ -131,7 +134,13 @@ def _build_cmd(req_id: str) -> str:
 
 
 async def run_staging_test(req_id: str) -> CheckResult:
-    """在 runner pod 并行对每个 source repo 跑 ci-unit-test && ci-integration-test，收退出码决定 pass/fail。"""
+    """在 runner pod 并行对每个 source repo 跑 ci-unit-test && ci-integration-test，收退出码决定 pass/fail。
+
+    REQ-checker-infra-flake-retry-1777247423：用 run_with_flake_retry 包 exec，
+    DNS / kubectl-channel / registry-rate-limit / go-mod 等 infra 抖动自动重跑，
+    bounded by settings。retry 时同 cmd 全量重跑（业务仓 ci-* 必须幂等，详见
+    docs/integration-contracts.md）。
+    """
     cmd = _build_cmd(req_id)
     timeout_sec = _DEFAULT_TIMEOUT
 
@@ -141,9 +150,24 @@ async def run_staging_test(req_id: str) -> CheckResult:
         req_id=req_id, timeout=timeout_sec,
     )
 
-    result = await asyncio.wait_for(
-        rc.exec_in_runner(req_id, cmd, timeout_sec=timeout_sec),
-        timeout=timeout_sec + 10,
+    max_retries = (
+        settings.checker_infra_flake_retry_max
+        if settings.checker_infra_flake_retry_enabled
+        else 0
+    )
+
+    async def _run_once():
+        return await asyncio.wait_for(
+            rc.exec_in_runner(req_id, cmd, timeout_sec=timeout_sec),
+            timeout=timeout_sec + 10,
+        )
+
+    result, attempts, flake_reason = await run_with_flake_retry(
+        coro_factory=_run_once,
+        stage=_STAGE,
+        req_id=req_id,
+        max_retries=max_retries,
+        backoff_sec=settings.checker_infra_flake_retry_backoff_sec,
     )
 
     passed = result.exit_code == 0
@@ -151,6 +175,7 @@ async def run_staging_test(req_id: str) -> CheckResult:
         "checker.staging_test.done",
         req_id=req_id, passed=passed, exit_code=result.exit_code,
         duration_sec=round(result.duration_sec, 1),
+        attempts=attempts, flake_reason=flake_reason,
     )
 
     return CheckResult(
@@ -160,4 +185,6 @@ async def run_staging_test(req_id: str) -> CheckResult:
         stderr_tail=result.stderr[-_TAIL:],
         duration_sec=result.duration_sec,
         cmd=cmd,
+        reason=flake_reason,
+        attempts=attempts,
     )

@@ -127,3 +127,94 @@ def test_build_cmd_emits_zero_eligible_guard():
     assert "ran=$((ran+1))" in cmd
     assert '"$ran" -eq 0' in cmd
     assert "0 source repos eligible" in cmd
+
+
+# ── CIFR-S10 infra-flake retry wiring (REQ-checker-infra-flake-retry-1777247423)
+
+
+def _make_seq_controller(*results: ExecResult):
+    seq = list(results)
+
+    class FakeRC:
+        calls = 0
+
+        async def exec_in_runner(self, req_id, command, **kw):
+            FakeRC.calls += 1
+            return seq.pop(0)
+
+    return FakeRC
+
+
+@pytest.mark.asyncio
+async def test_run_spec_lint_recovers_from_dns_flake(monkeypatch):
+    """CIFR-S10 (spec_lint): DNS flake 一次 → retry pass → attempts=2 reason recovered."""
+    monkeypatch.setattr(
+        "orchestrator.checkers.spec_lint.settings.checker_infra_flake_retry_enabled", True,
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.spec_lint.settings.checker_infra_flake_retry_max", 1,
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.spec_lint.settings.checker_infra_flake_retry_backoff_sec", 0,
+    )
+    FakeRC = _make_seq_controller(
+        ExecResult(
+            exit_code=128, stdout="",
+            stderr="fatal: Could not resolve host github.com", duration_sec=1.0,
+        ),
+        ExecResult(exit_code=0, stdout="openspec ok\n", stderr="", duration_sec=2.5),
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.spec_lint.k8s_runner.get_controller",
+        lambda: FakeRC(),
+    )
+    result = await run_spec_lint("REQ-X")
+    assert result.passed is True
+    assert result.attempts == 2
+    assert result.reason is not None
+    assert "flake-retry-recovered" in result.reason
+    assert FakeRC.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_run_spec_lint_does_not_retry_validate_failure(monkeypatch):
+    """openspec validate 真出错 → 不重试."""
+    monkeypatch.setattr(
+        "orchestrator.checkers.spec_lint.settings.checker_infra_flake_retry_enabled", True,
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.spec_lint.settings.checker_infra_flake_retry_max", 2,
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.spec_lint.settings.checker_infra_flake_retry_backoff_sec", 0,
+    )
+    FakeRC = _make_seq_controller(
+        ExecResult(
+            exit_code=1,
+            stdout="",
+            stderr="x [ERROR] capability/spec.md: ADDED 'X' must contain SHALL or MUST\n",
+            duration_sec=0.5,
+        ),
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.spec_lint.k8s_runner.get_controller",
+        lambda: FakeRC(),
+    )
+    result = await run_spec_lint("REQ-X")
+    assert result.passed is False
+    assert result.attempts == 1
+    assert result.reason is None
+    assert FakeRC.calls == 1
+
+
+# ── CIFR-S12: pr_ci_watch is unchanged ─────────────────────────────────
+
+
+def test_pr_ci_watch_does_not_import_flake_module():
+    """CIFR-S12: pr_ci_watch 自有 HTTP retry，不引 _flake / run_with_flake_retry."""
+    from pathlib import Path
+    pr_ci = Path(__file__).parent.parent / "src" / "orchestrator" / "checkers" / "pr_ci_watch.py"
+    src = pr_ci.read_text()
+    assert "from ._flake" not in src
+    assert "import _flake" not in src
+    assert "run_with_flake_retry" not in src

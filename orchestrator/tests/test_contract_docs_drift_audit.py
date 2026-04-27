@@ -269,34 +269,35 @@ def test_docs_s6_tag_spec_not_apifox_content():
 # DOCS-S7: migration count 0001–0007 reflected in docs
 # ──────────────────────────────────────────────────────────────────────────
 
-def test_docs_s7_forward_migration_count_is_7():
-    """DOCS-S7: orchestrator/migrations/ has exactly 7 forward migration files."""
+def test_docs_s7_forward_migration_count_is_8():
+    """DOCS-S7: orchestrator/migrations/ has exactly 8 forward migration files
+    (0001..0007 + 0009; 0008 reserved for parallel REQ-evaluation work)."""
     forward = [f for f in MIGRATIONS_DIR.glob("*.sql") if ".rollback." not in f.name]
-    assert len(forward) == 7, (
-        f"orchestrator/migrations/ has {len(forward)} forward migration(s), expected 7: "
+    assert len(forward) == 8, (
+        f"orchestrator/migrations/ has {len(forward)} forward migration(s), expected 8: "
         f"{sorted(f.name for f in forward)}"
     )
 
 
-def test_docs_s7_readme_migration_range_includes_0007():
-    """DOCS-S7: README.md migration list reaches 0007."""
+def test_docs_s7_readme_migration_range_includes_0009():
+    """DOCS-S7: README.md migration list reaches 0009 (artifact_checks_flake)."""
     readme = (REPO_ROOT / "README.md").read_text()
-    assert re.search(r"0007|000[67]", readme), (
-        "README.md must reference migration 0007"
+    assert re.search(r"0009|000[789]", readme), (
+        "README.md must reference latest migration 0009"
     )
 
 
-def test_docs_s7_claude_migration_range_includes_0007():
-    """DOCS-S7: CLAUDE.md migration list reaches 0007."""
+def test_docs_s7_claude_migration_range_includes_0009():
+    """DOCS-S7: CLAUDE.md migration list reaches 0009."""
     claude = (REPO_ROOT / "CLAUDE.md").read_text()
-    assert re.search(r"0007|000[67]", claude), (
-        "CLAUDE.md must reference migration 0007"
+    assert re.search(r"0009|000[789]", claude), (
+        "CLAUDE.md must reference latest migration 0009"
     )
 
 
 def test_docs_s7_observability_md_migration_range():
-    """DOCS-S7: docs/observability.md states migration range includes 0007."""
+    """DOCS-S7: docs/observability.md states migration range includes 0009."""
     obs_md = (REPO_ROOT / "docs" / "observability.md").read_text()
-    assert re.search(r"0007|0001.{0,15}0007", obs_md), (
-        "docs/observability.md must state migration range goes to 0007"
+    assert re.search(r"0009|0001.{0,15}0009", obs_md), (
+        "docs/observability.md must state migration range goes to 0009"
     )

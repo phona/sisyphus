@@ -160,3 +160,111 @@ def test_build_cmd_emits_zero_eligible_guard():
     assert "ran=$((ran+1))" in cmd
     assert '"$ran" -eq 0' in cmd
     assert "0 source repos eligible" in cmd
+
+
+# ── CIFR-S10/S11 infra-flake retry wiring (REQ-checker-infra-flake-retry-1777247423)
+
+
+def _make_seq_controller(*results: ExecResult):
+    """造一个 fake controller，按 results 顺序逐次返不同 ExecResult。"""
+    seq = list(results)
+
+    class FakeRC:
+        calls = 0
+
+        async def exec_in_runner(self, req_id, command, **kw):
+            FakeRC.calls += 1
+            return seq.pop(0)
+
+    return FakeRC
+
+
+@pytest.mark.asyncio
+async def test_run_staging_test_recovers_from_dns_flake(monkeypatch):
+    """CIFR-S10 (staging_test): 第一次 DNS flake → 第二次 pass → attempts=2 reason 含 recovered."""
+    monkeypatch.setattr(
+        "orchestrator.checkers.staging_test.settings.checker_infra_flake_retry_enabled", True,
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.staging_test.settings.checker_infra_flake_retry_max", 1,
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.staging_test.settings.checker_infra_flake_retry_backoff_sec", 0,
+    )
+    FakeRC = _make_seq_controller(
+        ExecResult(
+            exit_code=128, stdout="",
+            stderr="fatal: Could not resolve host github.com", duration_sec=1.0,
+        ),
+        ExecResult(exit_code=0, stdout="ci-test ok\n", stderr="", duration_sec=2.5),
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.staging_test.k8s_runner.get_controller",
+        lambda: FakeRC(),
+    )
+    result = await run_staging_test("REQ-X")
+    assert result.passed is True
+    assert result.exit_code == 0
+    assert result.attempts == 2
+    assert result.reason is not None
+    assert "flake-retry-recovered" in result.reason
+    assert FakeRC.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_run_staging_test_does_not_retry_real_test_failure(monkeypatch):
+    """CIFR-S11 (staging_test): make Error / TestFoo fail → 不重试，attempts=1, reason=None."""
+    monkeypatch.setattr(
+        "orchestrator.checkers.staging_test.settings.checker_infra_flake_retry_enabled", True,
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.staging_test.settings.checker_infra_flake_retry_max", 2,
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.staging_test.settings.checker_infra_flake_retry_backoff_sec", 0,
+    )
+    FakeRC = _make_seq_controller(
+        ExecResult(
+            exit_code=2, stdout="--- FAIL: TestFoo (0.10s)\n",
+            stderr="make: *** [Makefile:42] Error 1", duration_sec=10.0,
+        ),
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.staging_test.k8s_runner.get_controller",
+        lambda: FakeRC(),
+    )
+    result = await run_staging_test("REQ-X")
+    assert result.passed is False
+    assert result.exit_code == 2
+    assert result.attempts == 1
+    assert result.reason is None
+    assert FakeRC.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_run_staging_test_retry_disabled_when_setting_off(monkeypatch):
+    """settings.checker_infra_flake_retry_enabled=False → 即使 DNS flake 也不重试."""
+    monkeypatch.setattr(
+        "orchestrator.checkers.staging_test.settings.checker_infra_flake_retry_enabled", False,
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.staging_test.settings.checker_infra_flake_retry_max", 5,
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.staging_test.settings.checker_infra_flake_retry_backoff_sec", 0,
+    )
+    FakeRC = _make_seq_controller(
+        ExecResult(
+            exit_code=128, stdout="",
+            stderr="fatal: Could not resolve host github.com", duration_sec=1.0,
+        ),
+    )
+    monkeypatch.setattr(
+        "orchestrator.checkers.staging_test.k8s_runner.get_controller",
+        lambda: FakeRC(),
+    )
+    result = await run_staging_test("REQ-X")
+    assert result.passed is False
+    assert result.attempts == 1
+    assert result.reason is None
+    assert FakeRC.calls == 1

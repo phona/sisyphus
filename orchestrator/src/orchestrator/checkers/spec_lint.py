@@ -14,11 +14,14 @@ import time
 import structlog
 
 from .. import k8s_runner
+from ..config import settings
+from ._flake import run_with_flake_retry
 from ._types import CheckResult
 
 log = structlog.get_logger(__name__)
 
 _TAIL = 2048
+_STAGE = "spec_lint"
 
 
 def _build_cmd(req_id: str) -> str:
@@ -85,7 +88,11 @@ async def run_spec_lint(
     *,
     timeout_sec: int = 120,
 ) -> CheckResult:
-    """kubectl exec runner -- <for-each-repo openspec validate + scenario refs>。"""
+    """kubectl exec runner -- <for-each-repo openspec validate + scenario refs>。
+
+    REQ-checker-infra-flake-retry-1777247423：用 run_with_flake_retry 包 exec，
+    DNS / kubectl-channel / github-fetch 等 infra 抖动自动重跑，bounded by settings。
+    """
     rc = k8s_runner.get_controller()
     cmd = _build_cmd(req_id)
     log.info(
@@ -94,10 +101,25 @@ async def run_spec_lint(
     )
     started = time.monotonic()
 
-    try:
-        exec_result = await asyncio.wait_for(
+    max_retries = (
+        settings.checker_infra_flake_retry_max
+        if settings.checker_infra_flake_retry_enabled
+        else 0
+    )
+
+    async def _run_once():
+        return await asyncio.wait_for(
             rc.exec_in_runner(req_id, cmd, timeout_sec=timeout_sec),
             timeout=timeout_sec + 10,
+        )
+
+    try:
+        exec_result, attempts, flake_reason = await run_with_flake_retry(
+            coro_factory=_run_once,
+            stage=_STAGE,
+            req_id=req_id,
+            max_retries=max_retries,
+            backoff_sec=settings.checker_infra_flake_retry_backoff_sec,
         )
     except TimeoutError:
         log.error(
@@ -107,6 +129,7 @@ async def run_spec_lint(
             passed=False, exit_code=-1,
             stdout_tail="", stderr_tail=f"spec lint 超时 {timeout_sec}s",
             duration_sec=time.monotonic() - started, cmd=cmd,
+            reason="timeout",
         )
 
     passed = exec_result.exit_code == 0
@@ -115,6 +138,7 @@ async def run_spec_lint(
         req_id=req_id,
         passed=passed, exit_code=exec_result.exit_code,
         duration_sec=round(exec_result.duration_sec, 2),
+        attempts=attempts, flake_reason=flake_reason,
     )
     return CheckResult(
         passed=passed,
@@ -123,4 +147,6 @@ async def run_spec_lint(
         stderr_tail=exec_result.stderr[-_TAIL:],
         duration_sec=exec_result.duration_sec,
         cmd=cmd,
+        reason=flake_reason,
+        attempts=attempts,
     )
