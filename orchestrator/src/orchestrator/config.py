@@ -197,6 +197,13 @@ class Settings(BaseSettings):
     # 让人介入。N 默认 5；调高 = 给 fixer 更多机会，调低 = 更早叫人。
     fixer_round_cap: int = 5
 
+    # ─── verifier 判 infra-flake 时的自动重跑次数上限 ────────────────────
+    # verifier decision=retry（基础设施 flaky 判定）时，apply_verify_infra_retry
+    # 从 ctx.infra_retry_count 读已重跑次数；< cap 则重跑 stage checker，
+    # >= cap 则 emit VERIFY_ESCALATE（reason=infra-retry-cap）让人介入。
+    # 默认 2：给 infra flake 2 次自愈机会，超了人工检查基础设施。
+    verifier_infra_retry_cap: int = 2
+
     # ─── REQ-checker-infra-flake-retry-1777247423：infra-flake bounded retry ──
     # 三个 kubectl-exec checker（spec_lint / dev_cross_check / staging_test）一次跑挂时，
     # 若 stderr/stdout 命中 _flake.INFRA_FLAKE_PATTERNS（DNS / kubectl-channel /

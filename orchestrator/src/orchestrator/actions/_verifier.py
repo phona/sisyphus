@@ -49,6 +49,15 @@ _STAGES = {
 # Trigger 类型
 Trigger = Literal["success", "fail"]
 
+# stage → decision=retry 时要 CAS 回的 stage_running state + 重新 dispatch 的 create action 名。
+# 只覆盖机械 checker stage（runner pod kubectl-exec / GHA 轮询），不含 analyze/accept/challenger。
+_RETRY_ROUTING: dict[str, tuple[ReqState, str]] = {
+    "staging_test":    (ReqState.STAGING_TEST_RUNNING,    "create_staging_test"),
+    "dev_cross_check": (ReqState.DEV_CROSS_CHECK_RUNNING, "create_dev_cross_check"),
+    "spec_lint":       (ReqState.SPEC_LINT_RUNNING,       "create_spec_lint"),
+    "pr_ci":           (ReqState.PR_CI_RUNNING,           "create_pr_ci_watch"),
+}
+
 # stage → decision=pass 时要 emit 的原主链 event + 目标 stage_running state
 # 用于 apply_verify_pass 手工把 state 从 REVIEW_RUNNING 回推到对应 stage_running，
 # 随后链式 emit 该 stage 的 done/pass 事件走原 transition。
@@ -481,3 +490,89 @@ async def invoke_verifier_for_challenger_fail(*, body, req_id, tags, ctx):
     return await _invoke_verifier_fail(
         stage="challenger", body=body, req_id=req_id, ctx=ctx,
     )
+
+
+@register("apply_verify_infra_retry", idempotent=True)
+async def apply_verify_infra_retry(*, body, req_id, tags, ctx):
+    """decision=retry：verifier 判定 infra-flake → 有界重跑 stage checker。
+
+    从 ctx.infra_retry_count 读已重跑次数：
+    - < settings.verifier_infra_retry_cap → 递增计数，CAS REVIEW_RUNNING → {stage}_RUNNING，
+      close verifier stage_run，再调对应 create_* action 重跑 checker。
+    - >= cap → emit VERIFY_ESCALATE（reason=infra-retry-cap）让人介入。
+
+    仅覆盖机械 checker stage（staging_test / dev_cross_check / spec_lint / pr_ci）。
+    其他 stage（analyze / accept / challenger）输出 retry 时也走 escalate，并 log warning。
+    """
+    from . import REGISTRY  # 延迟导入避免循环
+
+    stage = _stage_from_tags_or_ctx(tags, ctx)
+    retry_info = _RETRY_ROUTING.get(stage) if stage else None
+
+    if retry_info is None:
+        log.warning(
+            "apply_verify_infra_retry.stage_not_retryable",
+            req_id=req_id, stage=stage,
+        )
+        return {
+            "emit": Event.VERIFY_ESCALATE.value,
+            "reason": f"stage not infra-retryable: {stage!r}",
+        }
+
+    target_state, create_action_name = retry_info
+    ctx = ctx or {}
+    pool = db.get_pool()
+    retry_count = int(ctx.get("infra_retry_count") or 0)
+    cap = settings.verifier_infra_retry_cap
+
+    if retry_count >= cap:
+        await req_state.update_context(pool, req_id, {
+            "escalated_reason": "infra-retry-cap",
+            "infra_retry_cap_hit": cap,
+        })
+        log.warning(
+            "apply_verify_infra_retry.cap_exceeded",
+            req_id=req_id, stage=stage, count=retry_count, cap=cap,
+        )
+        return {
+            "emit": Event.VERIFY_ESCALATE.value,
+            "reason": "infra-retry-cap",
+            "infra_retry_count": retry_count,
+            "cap": cap,
+        }
+
+    # CAS REVIEW_RUNNING → target_state（重回 stage_running 再跑一次 checker）
+    cas_ok = await req_state.cas_transition(
+        pool, req_id, ReqState.REVIEW_RUNNING, target_state,
+        Event.VERIFY_INFRA_RETRY, "apply_verify_infra_retry",
+    )
+    if not cas_ok:
+        log.warning("apply_verify_infra_retry.cas_failed", req_id=req_id, stage=stage)
+        return {"cas_failed": True}
+
+    # close verifier stage_run（同 apply_verify_pass 的模式）
+    try:
+        await stage_runs.close_latest_stage_run(
+            pool, req_id, "verifier", outcome="infra-retry",
+        )
+    except Exception as exc:
+        log.warning("apply_verify_infra_retry.stage_runs.close_failed",
+                    req_id=req_id, error=str(exc))
+
+    # 递增计数（先 CAS 成功再写，避免 cap 计数超发）
+    new_count = retry_count + 1
+    await req_state.update_context(pool, req_id, {"infra_retry_count": new_count})
+
+    # 调对应 create 函数重跑 checker
+    create_fn = REGISTRY.get(create_action_name)
+    if create_fn is None:
+        log.error("apply_verify_infra_retry.missing_create_action",
+                  req_id=req_id, action=create_action_name)
+        return {"emit": Event.VERIFY_ESCALATE.value, "reason": f"missing action: {create_action_name}"}
+
+    log.info(
+        "apply_verify_infra_retry.dispatching",
+        req_id=req_id, stage=stage, new_count=new_count, cap=cap,
+        create_action=create_action_name,
+    )
+    return await create_fn(body=body, req_id=req_id, tags=tags, ctx=ctx)
