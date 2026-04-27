@@ -89,19 +89,6 @@ def _patch_engine(monkeypatch):
     return calls
 
 
-def _patch_req_state(monkeypatch):
-    """捕获 req_state.update_context 调用（intake-no-result 路径会调）。"""
-    calls: list = []
-
-    async def fake_update_context(pool, req_id, patch):
-        calls.append({"req_id": req_id, "patch": dict(patch or {})})
-
-    monkeypatch.setattr(
-        "orchestrator.watchdog.req_state.update_context", fake_update_context,
-    )
-    return calls
-
-
 def _patch_artifact(monkeypatch):
     calls: list = []
 
@@ -266,6 +253,8 @@ async def test_tick_passes_skip_states_and_threshold_to_sql(monkeypatch):
     assert "done" in skip_arr
     assert "escalated" in skip_arr
     assert "init" in skip_arr
+    # REQ-watchdog-stage-policy-1777269909: human-in-loop INTAKING 进 SQL skip
+    assert "intaking" in skip_arr
     # M12：pending-human state 已删，不应出现在 skip 列表
     assert "analyzing-pending-human" not in skip_arr
 
@@ -276,50 +265,6 @@ async def test_loop_disabled_returns_immediately(monkeypatch):
     monkeypatch.setattr("orchestrator.watchdog.settings.watchdog_enabled", False)
     # 无需 mock _tick / asyncio.sleep — 直接 return 不进 while
     await watchdog.run_loop()   # 不应 hang
-
-
-# ─── Case 9a：INTAKING + session.completed 无 result tag → intake-no-result-tag
-@pytest.mark.asyncio
-async def test_intake_no_result_tag_specific_escalation(monkeypatch):
-    """intake-agent session.completed 后忘记 PATCH result:pass/fail tag →
-    watchdog 识别 intake-no-result-tag 路径：写专属 stage_label/reason，
-    body.event=watchdog.intake_no_result_tag，ctx.escalated_reason 预置，
-    engine.step 收到的 ctx 含 escalated_reason='intake-no-result-tag'。"""
-    pool = FakePool(rows=[
-        _row("REQ-INT", ReqState.INTAKING.value,
-             ctx={"intent_issue_id": "intent-int"}),
-    ])
-    _patch_pool(monkeypatch, pool)
-    _patch_bkd(
-        monkeypatch,
-        FakeIssue(
-            session_status="completed",
-            id="intent-int",
-            tags=["intake", "REQ-INT"],  # 缺 result:pass / result:fail
-        ),
-    )
-    step_calls = _patch_engine(monkeypatch)
-    art_calls = _patch_artifact(monkeypatch)
-    rs_calls = _patch_req_state(monkeypatch)
-
-    result = await watchdog._tick()
-
-    assert result == {"checked": 1, "escalated": 1}
-    # artifact_checks 写专属 stage + reason
-    assert len(art_calls) == 1
-    assert art_calls[0]["stage"] == "watchdog:intake-no-result-tag"
-    assert art_calls[0]["result"].reason == "intake-no-result-tag"
-    assert art_calls[0]["result"].cmd == "watchdog:intake-no-result-tag"
-    # ctx 提前落 escalated_reason（escalate.py 会读到）
-    assert len(rs_calls) == 1
-    assert rs_calls[0]["req_id"] == "REQ-INT"
-    assert rs_calls[0]["patch"] == {"escalated_reason": "intake-no-result-tag"}
-    # engine.step 收到 SESSION_FAILED + 专属 body.event + ctx 已 merge
-    assert len(step_calls) == 1
-    assert step_calls[0]["event"] == Event.SESSION_FAILED
-    assert step_calls[0]["body_event"] == "watchdog.intake_no_result_tag"
-    assert step_calls[0]["body_issue"] == "intent-int"
-    assert step_calls[0]["ctx"].get("escalated_reason") == "intake-no-result-tag"
 
 
 # ─── Case ARCHIVING：state==ARCHIVING + session=failed → body.event="archive.failed" ─
@@ -367,142 +312,55 @@ async def test_non_archiving_keeps_generic_watchdog_stuck_event(monkeypatch):
     assert step_calls[0]["body_event"] == "watchdog.stuck"
 
 
-# ─── Case 9b：INTAKING + session.completed + 有 result:pass tag → 走通用 watchdog_stuck
+# ─── REQ-watchdog-stage-policy-1777269909: INTAKING 完全豁免 watchdog ─────────
+# 之前用 intake-no-result-tag 专属路径区分 "agent 忘 tag" vs "用户在思考"；实际
+# 两者从 watchdog 视角不可分（都是 session ended + tags 缺 result:*），现在退化
+# "human-in-loop 不杀"，由 SQL 预过滤直接吞 INTAKING 行。
+
 @pytest.mark.asyncio
-async def test_intake_with_result_tag_falls_through_to_generic_stuck(monkeypatch):
-    """INTAKING 卡住但 result tag 已存在 → 不是 intake-no-result-tag 这个 bug
-    （该是 router 漏 fire 的不同问题，超本 REQ 范围）→ fall through 通用路径。"""
-    pool = FakePool(rows=[
-        _row("REQ-RP", ReqState.INTAKING.value,
-             ctx={"intent_issue_id": "intent-rp"}),
-    ])
-    _patch_pool(monkeypatch, pool)
-    _patch_bkd(
-        monkeypatch,
-        FakeIssue(
-            session_status="completed",
-            id="intent-rp",
-            tags=["intake", "REQ-RP", "result:pass"],
-        ),
-    )
-    step_calls = _patch_engine(monkeypatch)
-    art_calls = _patch_artifact(monkeypatch)
-    rs_calls = _patch_req_state(monkeypatch)
+async def test_intaking_state_excluded_from_sql_fetch(monkeypatch):
+    """WSP-S5：watchdog SQL skip 数组应含 'intaking'，预过滤把 INTAKING 行排除。"""
+    captured: dict = {}
 
-    result = await watchdog._tick()
+    class _CapturingPool:
+        async def fetch(self, sql, *args):
+            captured["args"] = args
+            return []
 
-    assert result == {"checked": 1, "escalated": 1}
-    # 走通用路径：stage=watchdog:intaking, reason=watchdog_stuck
-    assert art_calls[0]["stage"] == "watchdog:intaking"
-    assert art_calls[0]["result"].reason == "watchdog_stuck"
-    # 不预置 ctx.escalated_reason
-    assert rs_calls == []
-    # body.event 仍是 watchdog.stuck（保 auto-resume + canonical 覆盖原有语义）
-    assert step_calls[0]["body_event"] == "watchdog.stuck"
+    _patch_pool(monkeypatch, _CapturingPool())
+
+    await watchdog._tick()
+
+    skip_arr, _threshold = captured["args"]
+    assert "intaking" in skip_arr
+    # 验证 _NO_WATCHDOG_STATES 集合本身
+    assert ReqState.INTAKING in watchdog._NO_WATCHDOG_STATES
 
 
-# ─── Case 9c：INTAKING + session.running → skip（不管有没有 result tag）
-@pytest.mark.asyncio
-async def test_intake_session_running_skips(monkeypatch):
-    """intake session 还在跑（agent 可能等用户回 chat）→ watchdog 不动。"""
-    pool = FakePool(rows=[
-        _row("REQ-IR", ReqState.INTAKING.value,
-             ctx={"intent_issue_id": "intent-ir"}),
-    ])
-    _patch_pool(monkeypatch, pool)
-    _patch_bkd(
-        monkeypatch,
-        FakeIssue(session_status="running", id="intent-ir", tags=["intake"]),
-    )
-    step_calls = _patch_engine(monkeypatch)
-    art_calls = _patch_artifact(monkeypatch)
-    rs_calls = _patch_req_state(monkeypatch)
-
-    result = await watchdog._tick()
-
-    assert result == {"checked": 1, "escalated": 0}
-    assert step_calls == []
-    assert art_calls == []
-    assert rs_calls == []
+def test_no_watchdog_states_set_contains_only_intaking():
+    """_NO_WATCHDOG_STATES 当前只豁免 INTAKING；扩展时记得补本测试 + spec。"""
+    assert watchdog._NO_WATCHDOG_STATES == frozenset({ReqState.INTAKING})
 
 
-# ─── Case 9d：BKD 查 intake issue 失败 → 保守 escalate 走通用 watchdog_stuck
-@pytest.mark.asyncio
-async def test_intake_bkd_lookup_fails_falls_through_to_generic_stuck(monkeypatch):
-    """BKD 查 intake issue 抛异常 → issue=None → 不能确定 result tag 状态
-    → 不走 intake-no-result-tag 专属路径，走通用 watchdog_stuck（保留 auto-resume）。"""
-    pool = FakePool(rows=[
-        _row("REQ-BKD", ReqState.INTAKING.value,
-             ctx={"intent_issue_id": "intent-bkd"}),
-    ])
-    _patch_pool(monkeypatch, pool)
-    _patch_bkd(monkeypatch, None, side_effect=RuntimeError("BKD 504"))
-    step_calls = _patch_engine(monkeypatch)
-    art_calls = _patch_artifact(monkeypatch)
-    rs_calls = _patch_req_state(monkeypatch)
-
-    result = await watchdog._tick()
-
-    assert result == {"checked": 1, "escalated": 1}
-    # BKD 查不到 → issue=None → 不算 intake-no-result-tag → 通用路径
-    assert art_calls[0]["stage"] == "watchdog:intaking"
-    assert art_calls[0]["result"].reason == "watchdog_stuck"
-    assert rs_calls == []
-    assert step_calls[0]["body_event"] == "watchdog.stuck"
+def test_intake_no_result_tag_machinery_removed():
+    """REQ-watchdog-stage-policy-1777269909 删除了 intake-no-result-tag 全部死代码。"""
+    assert not hasattr(watchdog, "_INTAKE_RESULT_TAGS")
+    assert not hasattr(watchdog, "_INTAKE_NO_RESULT_EVENT")
+    assert not hasattr(watchdog, "_INTAKE_NO_RESULT_REASON")
+    assert not hasattr(watchdog, "_is_intake_no_result_tag")
+    # _STATE_ISSUE_KEY 不再 dispatch INTAKING（SQL 已先过滤）
+    assert ReqState.INTAKING not in watchdog._STATE_ISSUE_KEY
 
 
-# ─── Case 9e：纯函数 _is_intake_no_result_tag 单元 case grid
-def test_is_intake_no_result_tag_grid():
-    """纯函数 case grid：state / session_status / tags 三维交叉。"""
-    Issue = type("I", (), {})
+def test_session_end_signals_no_longer_lists_intake_no_result_tag():
+    """WSP-S6：escalate._SESSION_END_SIGNALS 移除 watchdog.intake_no_result_tag
+    死字符串（watchdog 不再 emit 它），其他 canonical 信号保留。"""
+    from orchestrator.actions.escalate import _SESSION_END_SIGNALS
 
-    def _mk(status, tags):
-        i = Issue()
-        i.session_status = status
-        i.tags = tags
-        return i
-
-    # state != INTAKING → False (即使其他条件都满足)
-    assert watchdog._is_intake_no_result_tag(
-        ReqState.ANALYZING, _mk("completed", []),
-    ) is False
-
-    # issue is None → False
-    assert watchdog._is_intake_no_result_tag(ReqState.INTAKING, None) is False
-
-    # session 仍 running → False
-    assert watchdog._is_intake_no_result_tag(
-        ReqState.INTAKING, _mk("running", []),
-    ) is False
-
-    # session ended + 有 result:pass → False
-    assert watchdog._is_intake_no_result_tag(
-        ReqState.INTAKING, _mk("completed", ["intake", "result:pass"]),
-    ) is False
-
-    # session ended + 有 result:fail → False
-    assert watchdog._is_intake_no_result_tag(
-        ReqState.INTAKING, _mk("completed", ["intake", "result:fail"]),
-    ) is False
-
-    # session ended + 无 result tag → True
-    assert watchdog._is_intake_no_result_tag(
-        ReqState.INTAKING, _mk("completed", ["intake", "REQ-x"]),
-    ) is True
-
-    # session=cancelled / failed / None 也算 ended → True（只要无 result tag）
-    for status in ("cancelled", "failed", None):
-        assert watchdog._is_intake_no_result_tag(
-            ReqState.INTAKING, _mk(status, ["intake"]),
-        ) is True
-
-    # tags=None / [] 都视作无 result tag
-    assert watchdog._is_intake_no_result_tag(
-        ReqState.INTAKING, _mk("completed", None),
-    ) is True
-    assert watchdog._is_intake_no_result_tag(
-        ReqState.INTAKING, _mk("completed", []),
-    ) is True
+    assert "watchdog.intake_no_result_tag" not in _SESSION_END_SIGNALS
+    assert "session.failed" in _SESSION_END_SIGNALS
+    assert "watchdog.stuck" in _SESSION_END_SIGNALS
+    assert "archive.failed" in _SESSION_END_SIGNALS
 
 
 # ─── Case 9b：FIXER_RUNNING + fixer_round 已到 cap → 标 escalated_reason=fixer-round-cap ─
