@@ -247,6 +247,24 @@ orchestrator 程序自身开的 BKD issue（analyze / staging-test / pr-ci-watch
 done-archive / verifier / fixer / challenger）由 BKDRestClient.create_issue 自动注入
 `sisyphus` tag，**你只用管自己 fan out 的那批**。
 
+### B.7 PR body 必带的 sisyphus 跨链 footer
+
+每个仓的 `gh pr create` 都**必须**在 PR body 末尾追加下面这块。固定 HTML
+注释 marker 让 sisyphus / Metabase 看板能 string match 识别 sisyphus 管控的 PR。
+
+```markdown
+<!-- sisyphus:cross-link -->
+**sisyphus REQ**: `{{ req_id }}`
+{% if bkd_intent_issue_url %}
+**BKD intent issue**: [BKD intent issue]({{ bkd_intent_issue_url }})
+{% endif %}
+```
+
+固定块怎么用：
+- 把整段（连同 marker 注释）作为 `gh pr create --body` 的尾部段落贴上去
+- REQ id 用上面变量替换；不要硬写别的 REQ
+- 不要乱加 marker 之外的 HTML 注释 —— 会扰乱 string match
+
 ---
 
 ## 完成时

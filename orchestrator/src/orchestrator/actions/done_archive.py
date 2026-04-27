@@ -23,6 +23,10 @@ async def done_archive(*, body, req_id, tags, ctx):
     branch = (ctx or {}).get("branch") or f"feat/{req_id}"
     workdir = (ctx or {}).get("workdir") or f"{settings.workdir_root}/feat-{req_id}"
     accept_issue_id = (ctx or {}).get("accept_issue_id") or body.issueId
+    # REQ-pr-issue-traceability-1777218612: pre-render the known PR list so
+    # the archive-agent has clickable links pinned in its prompt without
+    # re-running `gh pr list` in the runner.
+    pr_urls = (ctx or {}).get("pr_urls") or {}
 
     # PR-link tag 注入（REQ-issue-link-pr-quality-base-1777218242）
     links = await pr_links.ensure_pr_links_in_ctx(
@@ -44,6 +48,7 @@ async def done_archive(*, body, req_id, tags, ctx):
             accept_issue_id=accept_issue_id,
             project_id=proj,
             project_alias=proj,
+            pr_urls=pr_urls,
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")

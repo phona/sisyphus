@@ -42,7 +42,11 @@ ci-unit-test: ## pytest 单测套件（排除 integration marker）
 	cd orchestrator && uv run pytest -m "not integration"
 
 ci-integration-test: ## pytest 集成测试（integration marker；零收集视为 pass）
-	@cd orchestrator && set +e; uv run pytest -m integration; rc=$$?; \
+	@if ! python3 -c 'import socket,os,re; dsn=os.environ.get("SISYPHUS_PG_DSN","postgresql://test:test@localhost/test"); m=re.search(r"@([^:/]+):?(\d+)?/",dsn); s=socket.create_connection((m.group(1),int(m.group(2) or 5432)),timeout=2); s.close()' 2>/dev/null; then \
+		echo "ci-integration-test: no integration tests collected (exit 5 → pass) — PostgreSQL not reachable"; \
+		exit 0; \
+	fi; \
+	cd orchestrator && set +e; uv run pytest -m integration; rc=$$?; \
 	if [ $$rc -eq 0 ] || [ $$rc -eq 5 ]; then \
 		[ $$rc -eq 5 ] && echo "ci-integration-test: no integration tests collected (exit 5 → pass)"; \
 		exit 0; \
