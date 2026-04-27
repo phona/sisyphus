@@ -1,0 +1,36 @@
+🤖 sisyphus — PENDING USER ACCEPT (system note, do not respond)
+
+REQ **`{{ req_id }}`** finished `accept` stage and is awaiting your acceptance.
+
+{% if accept_summary %}
+## Acceptance summary
+
+{{ accept_summary }}
+{% else %}
+## Acceptance summary
+
+Accept-agent reported all scenarios pass. The full chat is in BKD issue
+`{{ accept_issue_id or 'unknown' }}` (linked from the pipeline graph).
+{% endif %}
+
+{% if pr_urls %}
+## PRs ready for review
+
+{% for repo, url in pr_urls.items() %}
+- {{ repo }}: {{ url }}
+{% endfor %}
+{% endif %}
+
+## How to respond
+
+Add **one** of these tags to this BKD issue (`{{ intent_issue_id }}`):
+
+- `acceptance:approve` — sisyphus archives the PRs and finishes the REQ.
+- `acceptance:request-changes` — sisyphus starts a `dev` fixer round.
+  Write the specific feedback as a chat follow-up here; sisyphus picks up
+  the most recent user message as the fixer's brief.
+- `acceptance:reject` — sisyphus aborts the REQ. (Equivalent: close this
+  BKD issue / set status to "done" without an `acceptance:approve` tag.)
+
+You can also leave it sitting — there is no watchdog timeout on this
+state. The REQ waits as long as you need.

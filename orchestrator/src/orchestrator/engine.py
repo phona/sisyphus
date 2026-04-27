@@ -39,6 +39,7 @@ STATE_TO_STAGE: dict[ReqState, str] = {
     ReqState.PR_CI_RUNNING:          "pr_ci",
     ReqState.ACCEPT_RUNNING:         "accept",
     ReqState.ACCEPT_TEARING_DOWN:    "accept_teardown",
+    ReqState.PENDING_USER_ACCEPT:    "pending_user_accept",
     ReqState.REVIEW_RUNNING:         "verifier",
     ReqState.FIXER_RUNNING:          "fixer",
     ReqState.ARCHIVING:              "archive",

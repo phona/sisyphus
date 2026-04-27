@@ -140,6 +140,34 @@ class BKDRestClient:
                     return c
         return None
 
+    async def get_last_user_message(
+        self,
+        project_id: str,
+        issue_id: str,
+    ) -> str | None:
+        """从 BKD session logs 取最后一条 user-authored 消息。
+
+        BAFL Case 2：用户在 BKD intent issue 上 acceptance:request-changes 时
+        把最近一条用户消息塞进 verifier_reason 给 fixer prompt。BKD logs
+        entry 的 entryType 用 'user-message' 标识用户输入。
+        """
+        try:
+            data = await self._get(
+                f"/projects/{project_id}/issues/{issue_id}/logs?limit=200"
+            )
+        except Exception as e:
+            log.warning("bkd.get_logs_failed", issue_id=issue_id, error=str(e))
+            return None
+        if not isinstance(data, dict):
+            return None
+        logs = data.get("logs") or []
+        for e in reversed(logs):
+            if e.get("entryType") == "user-message":
+                c = e.get("content")
+                if isinstance(c, str):
+                    return c
+        return None
+
     async def get_all_assistant_messages_concat(
         self,
         project_id: str,

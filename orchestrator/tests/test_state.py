@@ -36,8 +36,14 @@ EXPECTED = [
     (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_ENV_UP_FAIL,  ReqState.ESCALATED,           "escalate"),
     (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_PASS,         ReqState.ACCEPT_TEARING_DOWN, "teardown_accept_env"),
     (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_FAIL,         ReqState.ACCEPT_TEARING_DOWN, "teardown_accept_env"),
-    (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_PASS,  ReqState.ARCHIVING,           "done_archive"),
+    # BAFL Case 2 (REQ-bkd-acceptance-feedback-loop): teardown 不再直奔 archive，
+    # 先停 PENDING_USER_ACCEPT 让用户在 BKD intent issue acceptance review。
+    (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_PASS,  ReqState.PENDING_USER_ACCEPT, "post_acceptance_report"),
     (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_FAIL,  ReqState.REVIEW_RUNNING,      "invoke_verifier_for_accept_fail"),
+    # PENDING_USER_ACCEPT 出口：approve / request-changes / reject 三路
+    (ReqState.PENDING_USER_ACCEPT,  Event.ACCEPT_USER_APPROVED,        ReqState.ARCHIVING,     "done_archive"),
+    (ReqState.PENDING_USER_ACCEPT,  Event.ACCEPT_USER_REQUEST_CHANGES, ReqState.FIXER_RUNNING, "start_fixer"),
+    (ReqState.PENDING_USER_ACCEPT,  Event.ACCEPT_USER_REJECTED,        ReqState.ESCALATED,     "escalate"),
     (ReqState.ARCHIVING,            Event.ARCHIVE_DONE,        ReqState.DONE,                None),
     # M14b verifier 子链（3 路：pass / fix / escalate）
     (ReqState.REVIEW_RUNNING,       Event.VERIFY_PASS,         ReqState.REVIEW_RUNNING,      "apply_verify_pass"),
@@ -70,6 +76,9 @@ def test_session_failed_routes_to_escalate_action_all_running_states():
         ReqState.SPEC_LINT_RUNNING, ReqState.DEV_CROSS_CHECK_RUNNING,
         ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
         ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
+        # BAFL Case 2 (REQ-bkd-acceptance-feedback-loop): PENDING_USER_ACCEPT
+        # 也需要 SESSION_FAILED 兜底（escalate action 自决是否真 escalate）。
+        ReqState.PENDING_USER_ACCEPT,
         # M14b：verifier / fixer running state 也必须 escalate
         ReqState.REVIEW_RUNNING, ReqState.FIXER_RUNNING,
         ReqState.ARCHIVING,

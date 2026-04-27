@@ -34,6 +34,7 @@ class ReqState(StrEnum):
     PR_CI_RUNNING = "pr-ci-running"             # PR 已开，等 GHA 全套绿
     ACCEPT_RUNNING = "accept-running"           # env-up 完，accept-agent 跑 FEATURE-A*
     ACCEPT_TEARING_DOWN = "accept-tearing-down" # env-down 清 lab，后续按 accept_result 分流
+    PENDING_USER_ACCEPT = "pending-user-accept" # M-bkd-acceptance-feedback-loop：等用户在 BKD intent issue 上 acceptance:approve / request-changes / reject
     GH_INCIDENT_OPEN = "gh-incident-open"       # GitHub issue 已开，等人
     ARCHIVING = "archiving"                     # done-archive agent（合 PR 等）
     # verifier-agent 框架
@@ -67,6 +68,10 @@ class Event(StrEnum):
     ACCEPT_FAIL = "accept.fail"                     # accept-agent 发现 bug → verifier
     TEARDOWN_DONE_PASS = "teardown-done.pass"       # env-down 完（上一个是 accept.pass）
     TEARDOWN_DONE_FAIL = "teardown-done.fail"       # env-down 完（上一个是 accept.fail）→ verifier
+    # M-bkd-acceptance-feedback-loop：用户在 BKD intent issue 上 acceptance:* 标签 / statusId 触发
+    ACCEPT_USER_APPROVED = "accept-user.approved"          # 用户认可 acceptance → ARCHIVING
+    ACCEPT_USER_REQUEST_CHANGES = "accept-user.request-changes"  # 用户要 fix → FIXER_RUNNING (dev)
+    ACCEPT_USER_REJECTED = "accept-user.rejected"          # 用户撤需求 / 关闭 issue → ESCALATED
     ARCHIVE_DONE = "archive.done"
     SESSION_FAILED = "session.failed"
     # verifier-agent 决策事件（webhook.py 从 verifier issue 的 decision JSON 派发）
@@ -184,11 +189,28 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
                    "accept fail → 清 lab 再走 verifier"),
 
     (ReqState.ACCEPT_TEARING_DOWN, Event.TEARDOWN_DONE_PASS):
-        Transition(ReqState.ARCHIVING, "done_archive", "teardown 完 → 归档"),
+        Transition(ReqState.PENDING_USER_ACCEPT, "post_acceptance_report",
+                   "teardown 完 → 用户在 BKD intent issue acceptance review (BAFL Case 2)"),
 
     (ReqState.ACCEPT_TEARING_DOWN, Event.TEARDOWN_DONE_FAIL):
         Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_accept_fail",
                    "accept fail + teardown 完 → verifier"),
+
+    # ─── BAFL Case 2：PENDING_USER_ACCEPT 出口（事件驱动，无 watchdog）──────
+    # 入口：(ACCEPT_TEARING_DOWN, TEARDOWN_DONE_PASS) → PENDING_USER_ACCEPT
+    # 出口由 webhook.py 的 state-aware 路由根据 BKD intent issue tag / statusId 派事件：
+    #   acceptance:approve         → ACCEPT_USER_APPROVED       → ARCHIVING
+    #   acceptance:request-changes → ACCEPT_USER_REQUEST_CHANGES → FIXER_RUNNING (dev fixer)
+    #   acceptance:reject 或 statusId→done → ACCEPT_USER_REJECTED → ESCALATED
+    (ReqState.PENDING_USER_ACCEPT, Event.ACCEPT_USER_APPROVED):
+        Transition(ReqState.ARCHIVING, "done_archive",
+                   "user approved acceptance → 归档"),
+    (ReqState.PENDING_USER_ACCEPT, Event.ACCEPT_USER_REQUEST_CHANGES):
+        Transition(ReqState.FIXER_RUNNING, "start_fixer",
+                   "user requested changes → 起 dev fixer (webhook 已置 ctx.verifier_*)"),
+    (ReqState.PENDING_USER_ACCEPT, Event.ACCEPT_USER_REJECTED):
+        Transition(ReqState.ESCALATED, "escalate",
+                   "user rejected acceptance → escalate (reason=user-rejected-acceptance)"),
 
     # ─── verifier 子链 ─────────────────────────────────────────────────
     # verifier-agent 完成 → webhook 解 decision JSON → emit 对应事件。
@@ -253,6 +275,7 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
             ReqState.DEV_CROSS_CHECK_RUNNING,
             ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
             ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
+            ReqState.PENDING_USER_ACCEPT,   # BAFL Case 2: 等用户 review 时 BKD 漏发 webhook 兜底
             ReqState.REVIEW_RUNNING, ReqState.FIXER_RUNNING,
             ReqState.ARCHIVING,
         ]

@@ -29,6 +29,71 @@ api = APIRouter()
 _BEARER = "bearer "
 
 
+# BAFL Case 2: state-aware acceptance routing helpers ─────────────────────
+# Tag names the user adds to the BKD intent issue while it sits in
+# PENDING_USER_ACCEPT to signal their decision.
+_BAFL_TAG_TO_EVENT: dict[str, Event] = {
+    "acceptance:approve": Event.ACCEPT_USER_APPROVED,
+    "acceptance:request-changes": Event.ACCEPT_USER_REQUEST_CHANGES,
+    "acceptance:reject": Event.ACCEPT_USER_REJECTED,
+}
+
+
+def _derive_pending_user_accept_event(
+    tags: list[str] | None,
+    changes: dict | None,
+) -> Event | None:
+    """Pick an `ACCEPT_USER_*` event from intent-issue tags / statusId change.
+
+    Precedence:
+      1. acceptance:approve            → ACCEPT_USER_APPROVED
+      2. acceptance:request-changes    → ACCEPT_USER_REQUEST_CHANGES
+      3. acceptance:reject             → ACCEPT_USER_REJECTED
+      4. body.changes.statusId == "done" without any acceptance:* tag
+         → ACCEPT_USER_REJECTED (user closed the issue without explicit tag)
+
+    Returns None when none of the conditions match — caller falls through
+    to the regular `derive_event` path.
+    """
+    tagset = set(tags or [])
+    for tag, evt in _BAFL_TAG_TO_EVENT.items():
+        if tag in tagset:
+            return evt
+    if changes and changes.get("statusId") == "done":
+        return Event.ACCEPT_USER_REJECTED
+    return None
+
+
+async def _fetch_latest_user_message(
+    project_id: str, issue_id: str,
+) -> str | None:
+    """Best-effort: pull the most recent **user-authored** chat entry on a
+    BKD issue. Used to populate `ctx.verifier_reason` when routing
+    `ACCEPT_USER_REQUEST_CHANGES`.
+
+    Returns None if BKD is unreachable / the logs API has no user entries.
+    """
+    try:
+        async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+            # The BKD logs endpoint mixes user + assistant messages; we
+            # walk it ourselves rather than relying on
+            # `get_last_assistant_message` (which filters the wrong way).
+            # `get_last_user_message` is added on the REST client below
+            # via duck-typing with hasattr to avoid hard-failing on
+            # MCP transport.
+            if hasattr(bkd, "get_last_user_message"):
+                return await bkd.get_last_user_message(project_id, issue_id)
+            # MCP transport / older REST client: best fallback is the
+            # last assistant message (carries no user words but at least
+            # surfaces the most recent context).
+            if hasattr(bkd, "get_last_assistant_message"):
+                return await bkd.get_last_assistant_message(project_id, issue_id)
+    except Exception as e:
+        log.warning("webhook.bafl.fetch_user_message_failed",
+                    issue_id=issue_id, error=str(e))
+    return None
+
+
 def _verify_token(authorization: str | None) -> None:
     """共享 token 校验：Authorization: Bearer <token>。常量时间比较防 timing。"""
     expected = settings.webhook_token
@@ -226,24 +291,9 @@ async def webhook(request: Request) -> JSONResponse:
                         issue_id=body.issueId)
             event = Event.INTAKE_FAIL  # 降级：没有有效 finalized intent → escalate
 
-    if event is None:
-        log.debug("webhook.no_event_mapping", tags=tags, event_type=body.event)
-        await dedup.mark_processed(pool, eid)
-        return {"action": "skip", "reason": "no event mapping"}
-
-    # ─── 3.5 把上游 BKD issue 推目标 statusId（webhook 已识别为有效完工信号）──────
-    # 默认 "done"。**verifier 判 escalate 例外** → "review"，让 BKD 看板"待审查"列只剩
-    # 用户可 follow-up 续作业的 issue（resume 路径）。其他 (analyze/challenger/fixer/checker
-    # 完成) 全推 done，UI 干净。session.failed 不推（保留人工排查）。
-    if body.event == "session.completed":
-        is_verifier_escalate = (
-            "verifier" in (tags or [])
-            and event == Event.VERIFY_ESCALATE
-        )
-        await _push_upstream_status(
-            body.projectId, body.issueId,
-            "review" if is_verifier_escalate else "done",
-        )
+    # ─── 3.5 不在这里早 skip event=None：BAFL Case 2 的 acceptance:* / statusId
+    # 触发是 state-aware 的（router.derive_event 看不到 cur_state），需要在 fetch
+    # row 之后才能 override。下面在 §5.6 之前再做 final none-skip。
 
     # ─── 4. resolve req_id ─────────────────────────────────────────────────
     req_id = router_lib.extract_req_id(tags, body.issueNumber)
@@ -287,6 +337,60 @@ async def webhook(request: Request) -> JSONResponse:
             return {"action": "error", "reason": "init failed"}
     cur_state = row.state
     ctx = row.context
+
+    # ─── 5.5 BAFL Case 2: state-aware acceptance routing on intent issue ────
+    # router.derive_event 看不到 cur_state；用户在 BKD intent issue 打 acceptance:*
+    # tag / 把 statusId 翻成 done，靠这里识别 + override event。
+    if (
+        body.event == "issue.updated"
+        and cur_state == ReqState.PENDING_USER_ACCEPT
+        and body.issueId == (ctx or {}).get("intent_issue_id", body.issueId)
+    ):
+        bafl_event = _derive_pending_user_accept_event(tags, body.changes)
+        if bafl_event is not None:
+            log.info("webhook.pending_user_accept.routed",
+                     req_id=req_id, evt=bafl_event.value, tags=tags)
+            event = bafl_event
+            # ACCEPT_USER_REQUEST_CHANGES：fetch latest user message from the
+            # intent issue chat → pre-populate ctx.verifier_* so the existing
+            # `start_fixer` action runs unchanged.
+            if bafl_event == Event.ACCEPT_USER_REQUEST_CHANGES:
+                user_feedback = await _fetch_latest_user_message(
+                    body.projectId, body.issueId,
+                )
+                patch = {
+                    "verifier_stage": "accept",
+                    "verifier_fixer": "dev",
+                    "verifier_reason": user_feedback or "",
+                }
+                await req_state.update_context(pool, req_id, patch)
+                ctx = {**ctx, **patch}
+            elif bafl_event == Event.ACCEPT_USER_REJECTED:
+                # Hard reason — escalate.py 不会 auto-resume（不在 _TRANSIENT_REASONS）
+                await req_state.update_context(pool, req_id, {
+                    "escalated_reason": "user-rejected-acceptance",
+                })
+                ctx = {**ctx, "escalated_reason": "user-rejected-acceptance"}
+
+    # ─── 5.55 final none-skip（state-aware override 之后）────────────────────
+    if event is None:
+        log.debug("webhook.no_event_mapping", tags=tags, event_type=body.event)
+        await dedup.mark_processed(pool, eid)
+        return {"action": "skip", "reason": "no event mapping"}
+
+    # ─── 5.56 push BKD upstream status（已识别有效完工信号）──────────────────
+    # 默认 "done"。**verifier 判 escalate 例外** → "review"，让 BKD 看板"待审查"列只剩
+    # 用户可 follow-up 续作业的 issue（resume 路径）。其他 (analyze/challenger/fixer/checker
+    # 完成) 全推 done，UI 干净。session.failed 不推（保留人工排查）。
+    if body.event == "session.completed":
+        is_verifier_escalate = (
+            "verifier" in (tags or [])
+            and event == Event.VERIFY_ESCALATE
+        )
+        await _push_upstream_status(
+            body.projectId, body.issueId,
+            "review" if is_verifier_escalate else "done",
+        )
 
     # ─── 5.6 verifier decision payload 落 ctx（start_fixer 等 action 读）──
     if decision_payload is not None:

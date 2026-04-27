@@ -79,6 +79,15 @@ _SKIP_STATES = {
     ReqState.INIT.value,
 }
 
+# BAFL Case 2 / human-loop-conversation：state 设计上是"等用户在 BKD UI 操作"，
+# 没 BKD agent session 跑、没 timer、没 watchdog；可以等几小时几天。
+# 加进 SQL 预滤的排除集，永远不进 _check_and_escalate。
+# 等 REQ-watchdog-stage-policy（PR #161）合并后这里会跟那边的 _NO_WATCHDOG_STATES
+# 自然 union。
+_NO_WATCHDOG_STATES = {
+    ReqState.PENDING_USER_ACCEPT.value,
+}
+
 
 @dataclass
 class _SyntheticBody:
@@ -123,7 +132,7 @@ async def _tick() -> dict:
          WHERE state <> ALL($1::text[])
            AND updated_at < NOW() - INTERVAL '1 second' * $2
         """,
-        list(_SKIP_STATES), threshold,
+        sorted(_SKIP_STATES | _NO_WATCHDOG_STATES), threshold,
     )
     escalated = 0
     for row in rows:

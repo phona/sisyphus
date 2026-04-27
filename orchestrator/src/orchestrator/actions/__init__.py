@@ -78,6 +78,7 @@ from . import (  # noqa: E402,F401
     create_staging_test,
     done_archive,
     escalate,
+    post_acceptance_report,
     start_analyze,
     start_analyze_with_finalized_intent,
     start_challenger,
