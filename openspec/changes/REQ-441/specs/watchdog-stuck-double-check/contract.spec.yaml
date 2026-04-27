@@ -1,0 +1,33 @@
+spec: watchdog-stuck-double-check
+version: 1
+description: >-
+  The orchestrator watchdog MUST reconcile BKD sessionStatus for ALL autonomous
+  agent stages before deciding they are stuck. CHALLENGER_RUNNING MUST be
+  tracked in _STATE_ISSUE_KEY so that a live challenger session is not
+  erroneously escalated when its session is still running.
+
+invariants:
+  - id: WSD-INV-1
+    statement: >-
+      Every state in _STAGE_POLICY with a non-None policy and a BKD agent issue
+      MUST appear in _STATE_ISSUE_KEY so the watchdog can call bkd.get_issue()
+      before escalating.
+  - id: WSD-INV-2
+    statement: >-
+      _STATE_ISSUE_KEY[ReqState.CHALLENGER_RUNNING] MUST equal the string
+      "challenger_issue_id", which is the key set by start_challenger.py in the
+      REQ context.
+  - id: WSD-INV-3
+    statement: >-
+      When CHALLENGER_RUNNING + BKD session_status="running", watchdog._tick()
+      MUST return escalated=0 for that row and MUST NOT call engine.step or
+      artifact_checks.insert_check.
+  - id: WSD-INV-4
+    statement: >-
+      When CHALLENGER_RUNNING + BKD session_status!="running" + stuck_sec >=
+      ended_sec, watchdog._tick() MUST call engine.step with event=SESSION_FAILED.
+
+scenarios_referenced:
+  - WSD-S1
+  - WSD-S2
+  - WSD-S3
