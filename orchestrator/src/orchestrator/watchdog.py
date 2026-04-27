@@ -6,10 +6,15 @@ M4 retry policy 假设"失败事件总会到"被打破 — watchdog 作为独立
 
 每 N 秒扫一次 req_state，发现某 REQ：
 1. state 在 in-flight（非 done / 非 escalated / 非 init）
-2. updated_at 距今超过 watchdog_stuck_threshold_sec
+2. updated_at 距今超过 min(ended_threshold, stuck_threshold)（SQL 预滤）
 3. 关联 BKD issue 的 session_status 不在 'running' 状态
 
 → 写一条 artifact_checks 记录 + 通过 engine.step 发 SESSION_FAILED 走 escalate。
+
+REQ-bkd-analyze-hang-debug-1777247423（2026-04-27）：拆出 ended-session
+fast lane —— SQL 预滤用 min(ended, stuck) 让 BKD 报已结束的 session 在
+~5min 内被兜底，而不是等满 60min；session_status=='running' 的行仍由
+in-loop `still_running → return` 无条件 skip，保护长尾真分析。
 
 不 restart agent（restart 归 M4 retry policy 管），只 escalate。
 """
@@ -100,7 +105,14 @@ def _is_intake_no_result_tag(state: ReqState, issue) -> bool:
 async def _tick() -> dict:
     """单次扫描 + escalate 卡死 REQ。返回 {checked, escalated}。"""
     pool = db.get_pool()
-    threshold = settings.watchdog_stuck_threshold_sec
+    # SQL 预滤用两个阈值的较小值。fast (ended_threshold) 让 BKD 已结束的
+    # session 在 ~5min 内被兜底；slow (stuck_threshold) 是 legacy 上限。
+    # 仍 running 的 session 由 _check_and_escalate 里的 still_running → skip
+    # 无条件保护，不会被 fast lane 误伤。
+    threshold = min(
+        settings.watchdog_session_ended_threshold_sec,
+        settings.watchdog_stuck_threshold_sec,
+    )
     # psql 语法：INTERVAL '1 second' * N 把 int 参数转成 interval
     rows = await pool.fetch(
         """
