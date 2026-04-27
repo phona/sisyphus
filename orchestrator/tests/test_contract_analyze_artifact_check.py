@@ -22,8 +22,7 @@ from __future__ import annotations
 
 import pytest
 
-from orchestrator.state import Event, ReqState, TRANSITIONS, decide
-
+from orchestrator.state import TRANSITIONS, Event, ReqState, decide
 
 # ─── AAC-S1 ──────────────────────────────────────────────────────────────
 
