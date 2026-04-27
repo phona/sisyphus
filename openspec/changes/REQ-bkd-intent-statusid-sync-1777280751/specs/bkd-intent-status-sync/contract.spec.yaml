@@ -1,0 +1,77 @@
+spec: bkd-intent-status-sync
+version: 1
+description: >-
+  When a sisyphus REQ transitions into a terminal state (DONE or ESCALATED),
+  the BKD intent issue's statusId MUST be PATCH'd to reflect the terminal
+  outcome. DONE -> "done"; ESCALATED -> "review" (the kanban "待审查/review"
+  column is the right human-attention bucket; BKD has no native "escalated"
+  status). The PATCH is best-effort: BKD reachability MUST NOT block state
+  machine progress or runner cleanup.
+
+  Two integration points share one helper module
+  `orchestrator.intent_status`:
+    - engine.step terminal-state branch (covers transitions where
+      next_state in {DONE, ESCALATED} after CAS): ARCHIVING+ARCHIVE_DONE,
+      *+VERIFY_ESCALATE, INTAKE_FAIL, PR_CI_TIMEOUT, ACCEPT_ENV_UP_FAIL.
+    - actions.escalate SESSION_FAILED self-loop inner CAS to ESCALATED:
+      engine sees self-loop (next_state == cur_state) so its terminal hook
+      does NOT fire; escalate's own inner CAS is responsible.
+
+inputs:
+  - name: project_id
+    type: string
+    description: BKD project alias (== body.projectId)
+  - name: intent_issue_id
+    type: string | null
+    description: BKD intent issue id (ctx.intent_issue_id, set at REQ init in webhook)
+  - name: terminal_state
+    type: ReqState
+    description: The terminal state being entered (DONE or ESCALATED)
+  - name: source
+    type: string
+    description: Caller tag for log correlation (e.g. "engine.terminal_hook", "escalate.session_failed")
+
+state_to_status_id_mapping:
+  DONE: done
+  ESCALATED: review
+  # Other states (INIT/INTAKING/ANALYZING/...) MUST return None and skip PATCH.
+
+side_effects_on_terminal_transition:
+  - bkd_call:
+      method: PATCH
+      path: /api/projects/{project_id}/issues/{intent_issue_id}
+      body:
+        statusId: <mapped value>
+  - on_failure:
+      level: warning
+      log_key: intent_status.patch_failed
+      reraise: false
+
+skip_conditions:
+  - intent_issue_id is empty/None  # log debug, return False, skip PATCH
+  - terminal_state is not in mapping  # log debug, return False, skip PATCH
+
+ordering_guarantee:
+  - engine.step MUST `await` patch_terminal_status BEFORE dispatching the
+    transition action handler. This eliminates race with downstream paths
+    (e.g. _apply_pr_merged_done_override) that may issue their own
+    statusId PATCH inside the action body.
+  - actions.escalate SESSION_FAILED inner CAS path MUST `await`
+    patch_terminal_status AFTER the inner cas_transition succeeds; the
+    cleanup_runner call (already present) and patch are independent
+    best-effort calls.
+
+idempotency:
+  - PATCH same statusId multiple times is a BKD no-op. The helper does
+    not read current statusId before writing.
+
+decoupling:
+  - Helper MUST NOT read or modify BKD tags (those are managed elsewhere
+    by escalate.py / done_archive.py). It only PATCHes statusId.
+  - Helper MUST NOT touch the runner pod or DB; it only talks to BKD.
+
+audit:
+  - Successful PATCH logs at INFO level with key `intent_status.patched`,
+    fields {project_id, intent_issue_id, status_id, source}.
+  - Failed PATCH logs at WARNING level with key `intent_status.patch_failed`,
+    fields {project_id, intent_issue_id, status_id, source, error}.

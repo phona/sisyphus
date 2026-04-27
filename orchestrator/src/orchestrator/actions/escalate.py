@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 import httpx
 import structlog
 
-from .. import gh_incident, k8s_runner
+from .. import gh_incident, intent_status, k8s_runner
 from ..bkd import BKDClient
 from ..config import settings
 from ..state import Event, ReqState
@@ -443,6 +443,15 @@ async def escalate(*, body, req_id, tags, ctx):
                 except Exception as e:
                     log.warning("escalate.runner_cleanup_failed",
                                 req_id=req_id, error=str(e))
+                # REQ-bkd-intent-statusid-sync：self-loop transition 让 engine 终态 hook 不
+                # fire，escalate 自己负责 intent statusId → "review"。best-effort（helper 内
+                # 部 catch all）。
+                await intent_status.patch_terminal_status(
+                    project_id=proj,
+                    intent_issue_id=intent_issue_id,
+                    terminal_state=ReqState.ESCALATED,
+                    source="escalate.session_failed",
+                )
 
     log.warning("escalate.final",
                 req_id=req_id, reason=final_reason,

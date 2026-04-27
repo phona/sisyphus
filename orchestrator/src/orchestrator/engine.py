@@ -15,7 +15,7 @@ from typing import Any
 import asyncpg
 import structlog
 
-from . import k8s_runner
+from . import intent_status, k8s_runner
 from . import observability as obs
 from .actions import REGISTRY
 from .state import Event, ReqState, decide
@@ -199,8 +199,8 @@ async def step(
         cur_state=cur_state, next_state=transition.next_state, event=event,
     )
 
-    # M10：转 terminal state 时立即清 runner（fire-and-forget）。
-    # 但跳过 terminal self-loop（cur 已是 terminal）—— 出现在 ESCALATED 接 verifier 续 follow-up
+    # M10：转 terminal state 时立即清 runner（fire-and-forget）+ 同步 BKD intent statusId。
+    # 跳过 terminal self-loop（cur 已是 terminal）—— 出现在 ESCALATED 接 verifier 续 follow-up
     # 的场景：engine 表面 self-loop，apply_verify_pass 内部把 state CAS 推到下游 stage_running
     # 并 ensure_runner；这时再清 pod 会误删 resume 路径刚拉起的 pod。
     if (transition.next_state in _TERMINAL_STATES
@@ -210,6 +210,16 @@ async def step(
         )
         _cleanup_tasks.add(task)
         task.add_done_callback(_cleanup_tasks.discard)
+        # REQ-bkd-intent-statusid-sync：同步 BKD intent kanban 列。await 而非 fire-and-forget
+        # 是为了消除与 escalate._apply_pr_merged_done_override 的 race —— override 在 action
+        # body 内自带 status_id="done" PATCH，await 让 engine hook 先落地（statusId="review"），
+        # override 的 "done" PATCH 后写一次，最终态正确。BKD 单次 localhost PATCH ~30ms 可接受。
+        await intent_status.patch_terminal_status(
+            project_id=project_id,
+            intent_issue_id=(ctx or {}).get("intent_issue_id"),
+            terminal_state=transition.next_state,
+            source="engine.terminal_hook",
+        )
 
     await obs.record_event(
         "router.decision",

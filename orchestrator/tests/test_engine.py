@@ -346,6 +346,152 @@ async def test_cleanup_failure_does_not_block_engine(stub_actions, mock_runner_c
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# REQ-bkd-intent-statusid-sync (BIS-S9 / BIS-S10): engine terminal hook
+# MUST sync BKD intent issue statusId on entry into DONE / ESCALATED.
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def capture_intent_status(monkeypatch):
+    """Replace intent_status.patch_terminal_status with a recorder."""
+    from orchestrator import intent_status as is_mod
+
+    calls: list[dict] = []
+
+    async def _recorder(*, project_id, intent_issue_id, terminal_state, source):
+        calls.append({
+            "project_id": project_id,
+            "intent_issue_id": intent_issue_id,
+            "terminal_state": terminal_state,
+            "source": source,
+        })
+        return True
+
+    monkeypatch.setattr(is_mod, "patch_terminal_status", _recorder)
+    monkeypatch.setattr(engine.intent_status, "patch_terminal_status", _recorder)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_bis_s9_archive_done_patches_intent_status_done(
+    stub_actions, mock_runner_controller, capture_intent_status,
+):
+    """BIS-S9: ARCHIVING + ARCHIVE_DONE → DONE 调 patch_terminal_status(state=DONE)。"""
+    from orchestrator.state import ReqState as RS
+
+    pool = FakePool({"REQ-1": FakeReq(
+        state=RS.ARCHIVING.value, context={"intent_issue_id": "intent-1"},
+    )})
+    body = type("B", (), {"issueId": "archive-1", "projectId": "proj-x",
+                          "event": "session.completed"})()
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="proj-x", tags=[],
+        cur_state=RS.ARCHIVING, ctx={"intent_issue_id": "intent-1"},
+        event=Event.ARCHIVE_DONE,
+    )
+    await _drain_tasks()
+
+    assert pool.rows["REQ-1"].state == RS.DONE.value
+    assert len(capture_intent_status) == 1
+    call = capture_intent_status[0]
+    assert call["intent_issue_id"] == "intent-1"
+    assert call["terminal_state"] == RS.DONE
+    assert call["project_id"] == "proj-x"
+    assert call["source"] == "engine.terminal_hook"
+
+
+@pytest.mark.asyncio
+async def test_bis_s10_pr_ci_timeout_patches_intent_status_review(
+    stub_actions, mock_runner_controller, capture_intent_status,
+):
+    """BIS-S10: PR_CI_RUNNING + PR_CI_TIMEOUT → ESCALATED 调 patch_terminal_status(state=ESCALATED)."""
+    from orchestrator.actions import ACTION_META
+    from orchestrator.state import ReqState as RS
+
+    calls, reg = stub_actions
+
+    async def _escalate_stub(*, body, req_id, tags, ctx):
+        calls.append(("escalate", {"req_id": req_id}))
+        return {"escalated": True}
+
+    reg["escalate"] = _escalate_stub
+    ACTION_META["escalate"] = {"idempotent": True}
+
+    pool = FakePool({"REQ-2": FakeReq(
+        state=RS.PR_CI_RUNNING.value, context={"intent_issue_id": "intent-2"},
+    )})
+    body = type("B", (), {"issueId": "pr-ci-1", "projectId": "proj-y",
+                          "event": "issue.updated"})()
+    await engine.step(
+        pool, body=body, req_id="REQ-2", project_id="proj-y", tags=[],
+        cur_state=RS.PR_CI_RUNNING, ctx={"intent_issue_id": "intent-2"},
+        event=Event.PR_CI_TIMEOUT,
+    )
+    await _drain_tasks()
+
+    assert pool.rows["REQ-2"].state == RS.ESCALATED.value
+    assert len(capture_intent_status) == 1
+    call = capture_intent_status[0]
+    assert call["intent_issue_id"] == "intent-2"
+    assert call["terminal_state"] == RS.ESCALATED
+    assert call["project_id"] == "proj-y"
+    assert call["source"] == "engine.terminal_hook"
+
+
+@pytest.mark.asyncio
+async def test_terminal_hook_skips_when_no_intent_id_in_ctx(
+    stub_actions, mock_runner_controller, capture_intent_status,
+):
+    """ctx 没 intent_issue_id 时 engine 仍调用 helper（参数为 None）；helper 内部跳过 BKD。
+
+    保留这条断言是为了"engine 永远调用 helper，由 helper 负责跳过"——避免 engine 自己
+    多一道前置 if 让逻辑分散。
+    """
+    from orchestrator.state import ReqState as RS
+
+    pool = FakePool({"REQ-3": FakeReq(state=RS.ARCHIVING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    await engine.step(
+        pool, body=body, req_id="REQ-3", project_id="p", tags=[],
+        cur_state=RS.ARCHIVING, ctx={}, event=Event.ARCHIVE_DONE,
+    )
+    await _drain_tasks()
+
+    assert len(capture_intent_status) == 1
+    assert capture_intent_status[0]["intent_issue_id"] is None
+    assert capture_intent_status[0]["terminal_state"] == RS.DONE
+
+
+@pytest.mark.asyncio
+async def test_terminal_hook_does_not_fire_on_non_terminal(
+    stub_actions, mock_runner_controller, capture_intent_status,
+):
+    """非 terminal 转移（如 STAGING_TEST_RUNNING + staging-test.pass → PR_CI_RUNNING）不触发 helper。"""
+    from orchestrator.state import ReqState as RS
+
+    calls, reg = stub_actions
+
+    async def _create_pr_ci_watch(*, body, req_id, tags, ctx):
+        calls.append(("create_pr_ci_watch", {"req_id": req_id}))
+        return {"ok": True}
+
+    reg["create_pr_ci_watch"] = _create_pr_ci_watch
+
+    pool = FakePool({"REQ-4": FakeReq(state=RS.STAGING_TEST_RUNNING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "check.passed"})()
+    await engine.step(
+        pool, body=body, req_id="REQ-4", project_id="p", tags=[],
+        cur_state=RS.STAGING_TEST_RUNNING, ctx={"intent_issue_id": "intent-4"},
+        event=Event.STAGING_TEST_PASS,
+    )
+    await _drain_tasks()
+
+    assert capture_intent_status == [], (
+        "non-terminal transition MUST NOT invoke patch_terminal_status"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # M14c: action handler 抛异常 → SESSION_FAILED → ESCALATED（无自动重试）
 # ═══════════════════════════════════════════════════════════════════════
 
