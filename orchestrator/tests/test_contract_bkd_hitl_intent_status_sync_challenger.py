@@ -24,7 +24,6 @@ from orchestrator import engine, k8s_runner
 from orchestrator.actions import ACTION_META, REGISTRY
 from orchestrator.state import Event, ReqState
 
-
 # ─── Minimal fake database pool ──────────────────────────────────────────────
 
 @dataclass
@@ -371,7 +370,7 @@ async def test_hitl_s5_pr_merged_shortcut_skips_new_sync_helper(
 
     monkeypatch.setattr(esc_mod, "_all_prs_merged_for_req", AsyncMock(return_value=True))
 
-    inst, ui = _bkd_mock()
+    inst, _ui = _bkd_mock()
     inst.merge_tags_and_update = AsyncMock(return_value=None)
     monkeypatch.setattr(esc_mod, "BKDClient", lambda *a, **kw: inst)
     monkeypatch.setattr(esc_mod, "db", MagicMock())
