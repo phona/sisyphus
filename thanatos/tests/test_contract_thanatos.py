@@ -148,8 +148,8 @@ async def test_than_s5_driver_raises_not_implemented(driver_name, method_name):
     import importlib
 
     drivers_mod = importlib.import_module("thanatos.drivers")
-    DriverClass = getattr(drivers_mod, driver_name)
-    instance = DriverClass()
+    driver_class = getattr(drivers_mod, driver_name)
+    instance = driver_class()
     method = getattr(instance, method_name)
 
     if method_name == "preflight":
