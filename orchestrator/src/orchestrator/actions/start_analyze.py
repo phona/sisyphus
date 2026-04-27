@@ -30,6 +30,7 @@ from ..bkd import BKDClient
 from ..config import settings
 from ..intent_tags import filter_propagatable_intent_tags
 from ..prompts import render
+from ..prompts.status_block import build_status_block_ctx
 from ..state import Event
 from ..store import db, req_state
 from . import register, short_title
@@ -85,6 +86,7 @@ async def start_analyze(*, body, req_id, tags, ctx):
     # so they survive the rename PATCH and stay visible to downstream agents /
     # dashboards / fallback layers.
     forwarded = filter_propagatable_intent_tags(tags)
+    bkd_intent_issue_url = links.bkd_issue_url(proj, issue_id) or ""
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         await bkd.update_issue(
             project_id=proj,
@@ -102,7 +104,19 @@ async def start_analyze(*, body, req_id, tags, ctx):
             cloned_repos=cloned_repos,
             # REQ-pr-issue-traceability-1777218612: lets analyze.md.j2 render
             # the PR-body cross-link footer with a clickable BKD link.
-            bkd_intent_issue_url=links.bkd_issue_url(proj, issue_id) or "",
+            bkd_intent_issue_url=bkd_intent_issue_url,
+            # REQ-ux-status-block-1777257283: canonical at-a-glance REQ status
+            # block at the top of the analyze prompt. ctx.pr_urls is populated
+            # by later stages (pr_ci_watch.discover_pr_urls); on first analyze
+            # it is absent so format_pr_links_inline returns "" and the row
+            # is omitted by the partial.
+            status_block=build_status_block_ctx(
+                req_id=req_id,
+                stage="analyze",
+                bkd_intent_issue_url=bkd_intent_issue_url,
+                cloned_repos=cloned_repos,
+                pr_urls=(ctx or {}).get("pr_urls"),
+            ),
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue_id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue_id, status_id="working")
