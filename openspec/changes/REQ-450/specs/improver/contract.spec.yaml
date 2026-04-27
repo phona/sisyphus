@@ -1,0 +1,122 @@
+# Contract: improver-autopilot
+# REQ: REQ-450
+#
+# This contract spec is consumed by:
+# - improver unit tests (rule evaluation, budget/cooldown, tick modes)
+# - store/improver_runs unit tests (DB helpers)
+# - config tests (new fields present)
+
+daemon:
+  module: orchestrator.improver
+  entry_point: run_loop
+  background_task_name: improver
+  startup_condition:
+    settings_enabled: improver_enabled
+    settings_interval_positive: improver_interval_sec
+
+config:
+  new_fields:
+    - name: improver_enabled
+      type: bool
+      default: false
+    - name: improver_interval_sec
+      type: int
+      default: 86400
+    - name: improver_budget_per_window
+      type: int
+      default: 2
+    - name: improver_cooldown_per_rule_days
+      type: int
+      default: 7
+    - name: improver_min_sample_count
+      type: int
+      default: 20
+    - name: improver_bkd_project_id
+      type: str
+      default: ""
+
+migration:
+  file: orchestrator/migrations/0010_improver_runs.sql
+  table: improver_runs
+  columns:
+    - id: bigserial primary key
+    - rule_type: text not null
+    - triggered_at: timestamptz not null default now()
+    - signal_data: jsonb not null
+    - proposed_change: jsonb not null
+    - bkd_issue_id: text nullable
+    - bkd_project_id: text nullable
+    - status: text not null default 'pending'
+    - budget_window: date not null
+    - skip_reason: text nullable
+  indexes:
+    - columns: [rule_type, triggered_at DESC]
+    - columns: [budget_window]
+      where: "status <> 'skipped'"
+
+rules:
+  - name: latency-guard
+    trigger: max stage P95 >= 75% of watchdog_stuck_threshold_sec (7d window)
+    action: raise watchdog_stuck_threshold_sec * 1.25, cap 14400s
+    param: watchdog_stuck_threshold_sec
+    min: null
+    max: 14400
+  - name: loop-cap
+    trigger_up: fixer cap-hit escalation rate >= 30% (7d, min sample)
+    trigger_down: max observed fixer rounds < fixer_round_cap - 2 (14d)
+    param: fixer_round_cap
+    min: 3
+    max: 10
+  - name: flake-tolerance
+    trigger_up: 7d artifact_checks infra flake rate > 25%
+    trigger_down: 14d artifact_checks infra flake rate < 3%
+    param: checker_infra_flake_retry_max
+    min: 0
+    max: 3
+  - name: throughput
+    trigger: inflight-cap-exceeded escalations >= 3 in 7d
+    action: raise inflight_req_cap + 2
+    param: inflight_req_cap
+    min: 5
+    max: 20
+
+budget_cap:
+  per_window: improver_budget_per_window (weekly ISO window, Monday-aligned)
+  per_rule_cooldown_days: improver_cooldown_per_rule_days
+  min_sample_guard: improver_min_sample_count (applies to loop-cap)
+  skip_reasons:
+    - budget-exceeded
+    - cooldown
+
+modes:
+  detect_only:
+    condition: improver_bkd_project_id == ""
+    status_on_pass: pending
+    bkd_call: false
+  autopilot:
+    condition: improver_bkd_project_id != ""
+    status_on_pass: submitted
+    bkd_call: true
+    issue_tags:
+      - intent:analyze
+      - improver-autopilot
+
+scenarios:
+  - id: IMPR-S1
+    description: daemon starts when improver_enabled=True
+  - id: IMPR-S2
+    description: latency-guard triggers when P95 >= 75% of threshold
+  - id: IMPR-S3
+    description: loop-cap raises fixer_round_cap when cap-hit rate > 30%
+  - id: IMPR-S4
+    description: flake-tolerance raises retry_max when 7d flake rate > 25%
+  - id: IMPR-S5
+    description: throughput raises inflight_req_cap when escalations >= 3
+  - id: IMPR-S6
+    description: run skipped with budget-exceeded when weekly budget full
+  - id: IMPR-S7
+    description: run skipped with cooldown when same rule ran recently
+  - id: IMPR-S8
+    description: detect-only tick writes pending without BKD call
+  - id: IMPR-S9
+    description: autopilot tick submits BKD issue and marks submitted

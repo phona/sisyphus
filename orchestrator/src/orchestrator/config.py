@@ -197,6 +197,19 @@ class Settings(BaseSettings):
     # 让人介入。N 默认 5；调高 = 给 fixer 更多机会，调低 = 更早叫人。
     fixer_round_cap: int = 5
 
+    # ─── improver-autopilot（REQ-improver-autopilot）─────────────────────────
+    # 周期扫描 4 类白名单指标，自动触发 BKD improve 任务或仅写 improver_runs 记录。
+    # 默认关闭；生产启用前建议先开 detect-only 模式（improver_bkd_project_id 留空）观察
+    # 几周信号，再填 project_id 切到 autopilot 模式。
+    improver_enabled: bool = False
+    improver_interval_sec: int = 86400      # 每 24h 扫一次
+    improver_budget_per_window: int = 2     # 每 7d 滚动窗口最多提交 N 条（非 skipped）
+    improver_cooldown_per_rule_days: int = 7  # 同 rule_type 两次触发最短间隔（天）
+    improver_min_sample_count: int = 20     # 样本行数不足时跳过（保护新部署）
+    # 留空 → detect-only（仅写 improver_runs，人工跟进）
+    # 填 BKD project id → autopilot（自动创建 intent:analyze issue）
+    improver_bkd_project_id: str = ""
+
     # ─── REQ-checker-infra-flake-retry-1777247423：infra-flake bounded retry ──
     # 三个 kubectl-exec checker（spec_lint / dev_cross_check / staging_test）一次跑挂时，
     # 若 stderr/stdout 命中 _flake.INFRA_FLAKE_PATTERNS（DNS / kubectl-channel /

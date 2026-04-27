@@ -76,7 +76,7 @@ sisyphus/
 │   │   ├── prompts/          # stage agent (intake/analyze/challenger/accept/done_archive/staging_test/pr_ci_watch/bugfix) + verifier/* + _shared/
 │   │   ├── k8s_runner.py / bkd.py / watchdog.py / runner_gc.py
 │   │   └── store/            # req_state CAS / db pool / 各表写入
-│   └── migrations/           # 0001_init / 0002_observability_views / 0003_artifact_checks / 0004_stage_runs / 0005_verifier_decisions / 0006_add_verifier_audit / 0007_add_event_seen_processed_at / 0009_artifact_checks_flake
+│   └── migrations/           # 0001_init / 0002_observability_views / 0003_artifact_checks / 0004_stage_runs / 0005_verifier_decisions / 0006_add_verifier_audit / 0007_add_event_seen_processed_at / 0009_artifact_checks_flake / 0010_improver_runs
 ├── runner/                   # Dockerfile (Flutter) + go.Dockerfile + entrypoint.sh
 ├── scripts/                  # ACL/scenario lint 脚本（runner 镜像挂这些）
 ├── observability/

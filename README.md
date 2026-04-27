@@ -71,7 +71,7 @@ sisyphus/
 │   │   ├── watchdog.py       # M8 卡死兜底
 │   │   ├── runner_gc.py      # M10 即时 cleanup
 │   │   └── store/            # req_state CAS / db pool / verifier_decisions / stage_runs / artifact_checks / dedup
-│   └── migrations/           # Postgres schema (0001_init 至 0009_artifact_checks_flake)
+│   └── migrations/           # Postgres schema (0001_init 至 0010_improver_runs)
 ├── runner/                   # per-REQ runner 镜像
 │   ├── Dockerfile            # Flutter SDK 全家桶（~5GB）
 │   ├── go.Dockerfile         # 纯 Go 精简版

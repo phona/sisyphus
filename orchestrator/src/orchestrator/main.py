@@ -7,7 +7,7 @@ import logging
 import structlog
 from fastapi import FastAPI
 
-from . import k8s_runner, runner_gc, snapshot, watchdog
+from . import improver, k8s_runner, runner_gc, snapshot, watchdog
 from .admin import admin as admin_api
 from .config import settings
 from .migrate import apply_pending
@@ -75,12 +75,16 @@ async def startup() -> None:
     # 6. 起 watchdog 兜底任务（M8：BKD 不发 session.failed 时周期性 escalate 卡死 REQ）
     if settings.watchdog_enabled and settings.watchdog_interval_sec > 0:
         _bg_tasks.append(asyncio.create_task(watchdog.run_loop(), name="watchdog"))
+    # 7. 起 improver-autopilot 后台任务（默认关闭，需 SISYPHUS_IMPROVER_ENABLED=true）
+    if settings.improver_enabled and settings.improver_interval_sec > 0:
+        _bg_tasks.append(asyncio.create_task(improver.run_loop(), name="improver"))
     log.info(
         "startup.ok",
         port=settings.port,
         obs_enabled=bool(settings.obs_pg_dsn),
         snapshot_interval=settings.snapshot_interval_sec,
         watchdog_enabled=settings.watchdog_enabled,
+        improver_enabled=settings.improver_enabled,
     )
 
 
