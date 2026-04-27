@@ -91,13 +91,9 @@ _CANONICAL_SIGNALS = {"session.failed", "watchdog.stuck", "archive.failed"}
 
 # 走 SESSION_FAILED transition 的 body.event 都需要在 escalate 末尾手动 CAS 推到
 # ESCALATED + 清 runner（transition 是 self-loop，engine 不自动清）。
-# watchdog.intake_no_result_tag：watchdog 检测到 intake 完成但忘 PATCH result tag，
-#   这类终止信号必须走 cleanup（session 已 done，绕开 _CANONICAL_SIGNALS 让
-#   escalate.py 优先采用 ctx.escalated_reason="intake-no-result-tag"）。
 _SESSION_END_SIGNALS = {
     "session.failed",
     "watchdog.stuck",
-    "watchdog.intake_no_result_tag",
     "archive.failed",
 }
 

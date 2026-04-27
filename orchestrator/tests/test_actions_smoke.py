@@ -240,53 +240,6 @@ async def test_escalate_canonical_signal_overrides_stale_ctx(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_escalate_intake_no_result_tag_directly_escalates(monkeypatch):
-    """body.event=watchdog.intake_no_result_tag + ctx.escalated_reason='intake-no-result-tag'
-    → 非 canonical → 用 ctx reason；非 transient → 直接真 escalate（不 retry）；
-    body.event 在 _SESSION_END_SIGNALS → 走 cleanup CAS 推 ESCALATED + 清 runner。"""
-    from orchestrator.actions import escalate as mod
-    fake = make_fake_bkd()
-    patch_bkd(monkeypatch, "escalate", fake)
-    patch_db(monkeypatch, "escalate")
-    from unittest.mock import AsyncMock
-
-    from orchestrator import k8s_runner as krunner
-    from orchestrator.store import req_state as rs
-
-    class FakeRow:
-        state = type("S", (), {"value": "intaking"})()
-    monkeypatch.setattr(rs, "get", AsyncMock(return_value=FakeRow()))
-    cas = AsyncMock(return_value=True)
-    monkeypatch.setattr(rs, "cas_transition", cas)
-    cleanup = AsyncMock()
-    monkeypatch.setattr(
-        krunner, "get_controller",
-        lambda: type("C", (), {"cleanup_runner": cleanup})(),
-    )
-
-    body = make_body(issue_id="intent-1", event="watchdog.intake_no_result_tag")
-    out = await mod.escalate(
-        body=body, req_id="REQ-9", tags=["watchdog:intake-no-result-tag"],
-        ctx={
-            "intent_issue_id": "intent-1",
-            "escalated_reason": "intake-no-result-tag",
-        },
-    )
-    assert out["escalated"] is True
-    # ctx.escalated_reason 优先（非 canonical）→ reason 透传
-    assert out["reason"] == "intake-no-result-tag"
-    # 不 retry
-    fake.follow_up_issue.assert_not_awaited()
-    # 真 escalate：在 intent issue 上加 escalated + reason 标签
-    fake.merge_tags_and_update.assert_awaited_once()
-    args, kwargs = fake.merge_tags_and_update.call_args
-    assert "escalated" in kwargs.get("add", []) or "escalated" in (args[2] if len(args) > 2 else [])
-    # CAS 推 ESCALATED + cleanup 跑（_SESSION_END_SIGNALS 包含本 event）
-    cas.assert_awaited_once()
-    cleanup.assert_awaited_once()
-
-
-@pytest.mark.asyncio
 async def test_escalate_archive_failed_from_watchdog(monkeypatch):
     """REQ-archive-failure-watchdog: watchdog 贴 body.event='archive.failed' →
     reason='archive-failed'（不是 generic 'watchdog-stuck'），auto-resume 一次。"""
