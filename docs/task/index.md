@@ -2,6 +2,13 @@
 
 Last updated: 2026-04-27
 
-| ID | Title | Status | Owner |
-|---|---|---|---|
-| [-] | [TASK-001](TASK-001-verifier-infra-flake-auto-retry.md) | in_progress | claude |
+## Active
+
+| ID | Title | Status | Owner | REQ |
+|---|---|---|---|---|
+| [-] | [TASK-001-verifier-infra-flake-auto-retry](TASK-001-verifier-infra-flake-auto-retry.md) | in_progress | claude | REQ-428 |
+| [-] | [TASK-001-ttpos-ci-direct-dispatch](TASK-001.md) | in_progress | claude | REQ-447 |
+
+## Completed
+
+## Closed

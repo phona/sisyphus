@@ -1,0 +1,17 @@
+id: ttpos-ci-direct-dispatch
+version: "1.0"
+description: |
+  Contract for orchestrator proactively dispatching repository_dispatch to a central CI
+  repo before polling PR check-runs.
+
+scenarios:
+  - id: SIS-447-S1
+    description: dispatch is skipped when ci_dispatch_enabled is False
+  - id: SIS-447-S2
+    description: dispatch is skipped when ci_dispatch_repo is empty
+  - id: SIS-447-S3
+    description: one dispatch per source repo when enabled
+  - id: SIS-447-S4
+    description: dispatch HTTP error does not block polling
+  - id: SIS-447-S5
+    description: dispatch is skipped for repos with no open PR

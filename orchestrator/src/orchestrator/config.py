@@ -140,6 +140,15 @@ class Settings(BaseSettings):
     pr_ci_watch_poll_interval_sec: int = 30
     pr_ci_watch_timeout_sec: int = 1800   # 30 min
 
+    # ─── ttpos-ci-direct-dispatch（REQ-447）──────────────────────────────
+    # True = checker 路径进入轮询前主动 POST repository_dispatch 给 ci_dispatch_repo
+    # False（默认）= 不主动 dispatch，依赖 PR webhook 被动触发 GHA
+    ci_dispatch_enabled: bool = False
+    # dispatch 目标仓，如 "phona/ttpos-ci"；空 = 关闭（即使 ci_dispatch_enabled=True）
+    ci_dispatch_repo: str = ""
+    # repository_dispatch event_type；ttpos-ci workflow 监听这个事件名
+    ci_dispatch_event_type: str = "pr-ci-run"
+
     # ─── runner ready 重试 ─────────────────────────────────────────────
     # ensure_runner 等 Pod Ready 的外层 attempts：N × runner_ready_timeout_sec
     # 总等待；最后一次抛 TimeoutError 让 engine 走 escalate。
