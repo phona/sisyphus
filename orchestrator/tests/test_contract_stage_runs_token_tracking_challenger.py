@@ -30,7 +30,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-
 # ─── Minimal FakePool (shared by SQL contract tests) ─────────────────────────
 
 
@@ -140,7 +139,7 @@ async def test_str_s5_stamp_sql_targets_open_and_null_token_row() -> None:
 
     # Return a row with numeric id (asyncpg pg_bigint → int)
     pool = _FakePool(fetchrow_returns=({"id": 42},))
-    row_id = await stamp_bkd_session_id(pool, "REQ-7", "analyze", "new-sess")
+    await stamp_bkd_session_id(pool, "REQ-7", "analyze", "new-sess")
 
     assert len(pool.fetchrow_calls) == 1, (
         f"STR-S5: stamp_bkd_session_id MUST emit exactly 1 SQL call (UPDATE…RETURNING via fetchrow); "
@@ -258,7 +257,6 @@ def _patch_webhook_deps(
 ) -> _FakePool:
     """Monkeypatch all external I/O in the webhook module for a single test."""
     from orchestrator import webhook
-    from orchestrator.state import Event
 
     pool = _FakePool()
 
@@ -348,6 +346,7 @@ async def test_str_s1_stamp_called_before_engine_step(monkeypatch) -> None:
       - The call MUST precede engine.step
     """
     from httpx import ASGITransport, AsyncClient
+
     from orchestrator.main import app
     from orchestrator.state import Event, ReqState
 
@@ -413,6 +412,7 @@ async def test_str_s3_null_external_session_id_skips_stamp(monkeypatch) -> None:
       (no empty/NULL token should be written to the DB)
     """
     from httpx import ASGITransport, AsyncClient
+
     from orchestrator.main import app
     from orchestrator.state import Event, ReqState
 
@@ -464,6 +464,7 @@ async def test_str_s4_session_failed_also_stamps(monkeypatch) -> None:
       - stamp_bkd_session_id MUST be called with the crashed session's externalSessionId
     """
     from httpx import ASGITransport, AsyncClient
+
     from orchestrator.main import app
     from orchestrator.state import Event, ReqState
 
