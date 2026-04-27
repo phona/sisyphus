@@ -10,12 +10,17 @@
 
 ─────────
 
-## 验收 (ACCEPT / AI-QA)  M15
+## 验收 (ACCEPT / AI-QA)  M17 + thanatos M1
 AGENT_ROLE=accept-agent
 REQ={{ req_id }}
 ENDPOINT={{ endpoint }}
 NAMESPACE={{ namespace }}
 SOURCE_ISSUE={{ source_issue_id }}
+{% if thanatos_pod %}
+THANATOS_POD={{ thanatos_pod }}
+THANATOS_NAMESPACE={{ thanatos_namespace }}
+THANATOS_SKILL_REPO={{ thanatos_skill_repo or '<unset>' }}
+{% endif %}
 
 ---
 
@@ -24,14 +29,155 @@ SOURCE_ISSUE={{ source_issue_id }}
 sisyphus 已经：
 - 在 `$NAMESPACE` 跑 `make accept-env-up`，lab 已拉起
 - 拿到 lab endpoint（上面 `$ENDPOINT`）
+{% if thanatos_pod %}
+- 业务仓 `accept-env-up` 起了 thanatos pod（`$THANATOS_POD`，`$THANATOS_NAMESPACE`）
+{% endif %}
 
-你要做的：跑 spec 里定义的 Acceptance Scenario block（spec.md 中所有 `#### Scenario:`
+你要做的：跑 spec.md 里定义的 Acceptance Scenario block（所有 `#### Scenario:`
 开头的 block，scenario id 由 spec 作者自定，sisyphus 不预设前缀）判 pass/fail，
 不管环境。跑完不清，sisyphus 会调 `accept-env-down`。
 
 ---
+{% if thanatos_pod %}
+## 步骤（thanatos MCP 路径）
 
-## 步骤
+> 业务仓 accept-env-up 起了 thanatos pod，**走 MCP**。直 curl 路径只在 thanatos
+> 没起的 fallback 模式跑（见 `{% raw %}{% else %}{% endraw %}` 分支，本 prompt 不渲染）。
+
+### Step 1: 验证 endpoint + thanatos pod 都活
+
+```bash
+POD=runner-{{ req_id | lower }}
+NS=sisyphus-runners
+
+# lab endpoint reachable
+kubectl -n $NS exec $POD -- curl -sf "{{ endpoint }}/healthz" || {
+  echo "FAIL: endpoint {{ endpoint }} unreachable" >&2; exit 1; }
+
+# thanatos pod reachable（直接试 stdio MCP initialize 握手）
+INIT='{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sisyphus","version":"m1"}}}'
+echo "$INIT" | kubectl -n {{ thanatos_namespace }} exec -i {{ thanatos_pod }} -- python -m thanatos.server | head -c 4096 \
+  || { echo "FAIL: thanatos MCP init failed" >&2; exit 1; }
+```
+
+### Step 2: 解析 skill + spec 路径
+
+skill_path / spec_path 都从 `/workspace/source/{{ thanatos_skill_repo }}/` 取，由
+runner pod 上的 git working tree 提供。MCP server 自身在 thanatos pod 内 ——
+`python -m thanatos.server` 进程 cwd 跟 source repo 没关系，需要绝对路径。
+
+> ⚠️ thanatos pod 跟 runner pod 是两个 K8s pod，**不共享 PVC**。所以 thanatos
+> 收到 `skill_path=/workspace/source/...` 时，**需要 thanatos pod 自己挂载源代码 PVC
+> 才读得到**——业务仓 accept-env-up 在 helm install 时把 runner PVC 挂进 thanatos
+> 容器是 M2/M3 真接 driver 时的 chart 升级范围，**M1 只跑 wire-up smoke**：thanatos
+> 收到调用 → 解析 skill / spec → 返回 stub `pass=false + failure_hint="M0: scaffold only"`
+> 即可，对 wire-up 链验证目的来说 path 形式正确就够了。
+
+```bash
+SKILL_PATH=/workspace/source/{{ thanatos_skill_repo }}/.thanatos/skill.yaml
+
+# spec.md 取 thanatos_skill_repo 仓自家 openspec 下的（一仓 = 一 spec_path
+# 即可；多仓 multi-skill 是 v2 范围）
+SPEC_PATH=$(kubectl -n $NS exec $POD -- bash -c \
+  "ls /workspace/source/{{ thanatos_skill_repo }}/openspec/changes/{{ req_id }}/specs/*/spec.md 2>/dev/null | head -1")
+[ -n "$SPEC_PATH" ] || { echo "FAIL: no spec.md under {{ thanatos_skill_repo }}/openspec/changes/{{ req_id }}/specs/" >&2; exit 1; }
+```
+
+### Step 3: 调 thanatos MCP `tools/call run_all`
+
+```bash
+# MCP stdio 协议 = stdin 灌 JSON-RPC，stdout 收 JSON-RPC
+# 一次性两条消息：initialize + tools/call run_all
+read -r -d '' MCP_BODY <<EOF
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sisyphus","version":"m1"}}}
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run_all","arguments":{"skill_path":"$SKILL_PATH","spec_path":"$SPEC_PATH","endpoint":"{{ endpoint }}"}}}
+EOF
+
+MCP_OUT=$(printf '%s\n' "$MCP_BODY" | kubectl -n {{ thanatos_namespace }} exec -i {{ thanatos_pod }} -- python -m thanatos.server)
+
+# 取 id=1 的 response（第二条 JSON line）
+RESULT_JSON=$(echo "$MCP_OUT" | jq -c 'select(.id==1) | .result.content[0].text | fromjson')
+echo "$RESULT_JSON" | jq .
+```
+
+`run_all` 返回 `[ScenarioResult]` array。M0 driver 全 stub，每条
+`pass=false + failure_hint="M0: thanatos scaffold only, drivers not implemented"`
+是预期的 wire-up smoke 结果（M2 接 driver 后才会真 pass）。
+
+### Step 4: 应用 kb_updates 到 source repo + push 到 feat 分支
+
+`run_all` 返回的每条 `ScenarioResult` 都可能有 `kb_updates: [{path, action,
+content}]`。把这些应用到 `/workspace/source/{{ thanatos_skill_repo }}/`（path 是相对仓
+root 的，例如 `.thanatos/anchors.md`）：
+
+```bash
+KB_DIR=/workspace/source/{{ thanatos_skill_repo }}
+
+kubectl -n $NS exec $POD -- bash -c "
+  cd $KB_DIR
+  echo '$RESULT_JSON' | jq -c '.[].kb_updates[]?' | while read -r upd; do
+    path=\$(echo \"\$upd\" | jq -r .path)
+    action=\$(echo \"\$upd\" | jq -r .action)
+    content=\$(echo \"\$upd\" | jq -r .content)
+    mkdir -p \$(dirname \"\$path\")
+    case \"\$action\" in
+      patch)  printf '%s' \"\$content\" > \"\$path\" ;;
+      append) printf '%s' \"\$content\" >> \"\$path\" ;;
+      *) echo \"WARN: unknown kb_updates action: \$action\" >&2 ;;
+    esac
+  done
+
+  # 如果有 kb 文件被改 → commit + push 到 feat 分支
+  if ! git diff --quiet -- .thanatos/ 2>/dev/null; then
+    git add .thanatos/
+    git commit -m \"chore(.thanatos): kb_updates from {{ req_id }} accept run\"
+    git push origin feat/{{ req_id }}
+  fi
+"
+```
+
+M0 stub 阶段 `kb_updates` 永远 `[]`，上面 while loop 跑零次 + git diff 是空 →
+直接走完不报错。M2 driver 上线后 kb_updates 才有真内容。
+
+### Step 5: 报告
+
+汇总每条 `ScenarioResult` 进 BKD follow-up：
+
+```bash
+curl -sS -X POST http://localhost:3000/api/projects/$PROJECT/issues/$MY/follow-up \
+  -H 'content-type: application/json' \
+  -d "$(jq -n --arg result "$RESULT_JSON" '{prompt: ("## Accept Result (thanatos MCP)\n\n" + ($result | fromjson | map("- " + .scenario_id + ": " + (if .pass then "PASS" else "FAIL — " + (.failure_hint // "no hint") end)) | join("\n")))}')"
+```
+
+格式：
+
+```markdown
+## Accept Result (thanatos MCP)
+
+- <scenario-id-1>: PASS
+- <scenario-id-2>: FAIL — <failure_hint>
+```
+
+### Step 6: 贴 tag + move review
+
+```bash
+# 全 pass / 任一 fail
+ALL_PASS=$(echo "$RESULT_JSON" | jq -r 'all(.pass)')
+
+curl -sS -X PATCH http://localhost:3000/api/projects/$PROJECT/issues/$MY \
+  -H 'content-type: application/json' \
+  -d "$(jq -n --arg req {{ req_id }} --arg result "$([ "$ALL_PASS" = "true" ] && echo pass || echo fail)" \
+      '{tags: ["accept", $req, ("result:" + $result)], statusId: "review"}')"
+```
+
+- ✅ 全过：tags = `[accept, {{ req_id }}, result:pass]`, statusId=review
+- ❌ 任一失败：tags = `[accept, {{ req_id }}, result:fail]`, statusId=review
+
+{% else %}
+## 步骤（直 curl 路径 — fallback / sisyphus self-accept）
+
+> 业务仓 accept-env-up 没起 thanatos pod（或 sisyphus 自家 self-accept compose
+> 路径），accept-agent 直接读 spec + curl endpoint 跑 scenario。
 
 ### Step 1: 验证 endpoint
 
@@ -87,6 +233,7 @@ kubectl -n $NS exec $POD -- bash -c \
 
 - ✅ 全过：tags = `[accept, {{ req_id }}, result:pass]`, statusId=review
 - ❌ 任一失败：tags = `[accept, {{ req_id }}, result:fail]`, statusId=review
+{% endif %}
 
 ---
 
@@ -94,6 +241,13 @@ kubectl -n $NS exec $POD -- bash -c \
 
 - **不部署 lab**：sisyphus 搞好的
 - **不清 lab**：sisyphus 会做
-- **不改代码**：只读 + curl
+- **不改业务代码**：只读 + (curl | thanatos MCP)
 - **真实 endpoint**：不 mock
 - **update-issue** 要指本 accept issue（不是 SOURCE_ISSUE）
+{% if thanatos_pod %}
+- **kb_updates 必 push** 到 `feat/{{ req_id }}` 分支（即使是 0 条 update 也要走完命令；
+  thanatos 算的 KB delta 跟 PR 同 review，不绕审批）
+- **M0 stub 期间 result:fail 是预期的** — verifier 看到 `failure_hint="M0:
+  thanatos scaffold only, drivers not implemented"` 就知道是 wire-up smoke
+  跑通而非业务 bug，应该 escalate 让人接 driver
+{% endif %}

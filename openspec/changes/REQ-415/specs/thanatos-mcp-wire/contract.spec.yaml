@@ -1,0 +1,98 @@
+# thanatos M1 wire-up contract — env-up JSON extension + accept.md.j2 render
+# context shape.
+#
+# Producer side: business-repo `make accept-env-up` may include the optional
+#   `thanatos` block in its stdout-tail JSON (when accept-env-up has helm-
+#   installed the thanatos chart from `deploy/charts/thanatos/`).
+# Consumer side: `orchestrator.actions.create_accept.create_accept` reads the
+#   block (or its absence) and plumbs three fields into accept.md.j2 render
+#   ctx; the template branches on `thanatos_pod` truthiness.
+
+env_up_stdout_json:
+  type: object
+  required: [endpoint, namespace]
+  properties:
+    endpoint:
+      type: string
+      description: Lab endpoint URL reachable from runner pod (unchanged from §3).
+    namespace:
+      type: string
+      description: K8s namespace the lab stack lives in (unchanged from §3).
+    thanatos:
+      type: object
+      description: |
+        Optional. When present, signals "this REQ has a thanatos pod helm-
+        installed alongside the lab stack — accept-agent should drive
+        scenarios via thanatos MCP rather than direct curl." Absence
+        triggers the legacy direct-curl fallback in accept.md.j2.
+      required: [pod, skill_repo]
+      properties:
+        pod:
+          type: string
+          description: |
+            Pod name to `kubectl exec` into for stdio MCP. Resolved by the
+            business repo's accept-env-up Makefile (typically via
+            `kubectl -n $NS get pod -l app.kubernetes.io/name=thanatos -o
+            jsonpath='{.items[0].metadata.name}'` after helm install ready).
+        namespace:
+          type: string
+          description: |
+            Optional. Defaults to top-level `namespace` when omitted.
+            Override only when the business repo helm-installed thanatos
+            into a different namespace than the lab stack.
+        skill_repo:
+          type: string
+          description: |
+            basename of the source repo whose `.thanatos/skill.yaml` should
+            be loaded for this REQ. accept-agent reads
+            `/workspace/source/<skill_repo>/.thanatos/skill.yaml` for the
+            `run_all` MCP call's `skill_path` argument and applies kb_updates
+            back into `/workspace/source/<skill_repo>/.thanatos/`.
+
+# What `accept.md.j2` expects from `prompts.render(...)` ctx after M1.
+# `create_accept.py` populates these from the env-up JSON.
+accept_prompt_render_context:
+  type: object
+  required: [req_id, endpoint, namespace, source_issue_id, project_id, project_alias]
+  properties:
+    req_id: { type: string }
+    endpoint: { type: string }
+    namespace: { type: string }
+    source_issue_id: { type: string }
+    accept_env: { type: object, description: full env-up JSON for transparency }
+    project_id: { type: string }
+    project_alias: { type: string }
+    thanatos_pod:
+      type: [string, "null"]
+      description: |
+        When non-empty, accept.md.j2 renders the MCP branch (kubectl exec
+        thanatos pod, MCP tools/call run_all, apply kb_updates, git push).
+        When None / "" / missing, the template renders the legacy
+        SDA-S9 curl branch.
+    thanatos_namespace:
+      type: [string, "null"]
+      description: K8s namespace for the kubectl exec (default = top-level namespace).
+    thanatos_skill_repo:
+      type: [string, "null"]
+      description: source repo basename whose .thanatos/ feeds the MCP call.
+
+# MCP wire format the prompt instructs accept-agent to send when in the
+# thanatos branch. Stdio JSON-RPC, one initialize then one tools/call per
+# scenario sweep. (M1 only invokes `run_all`; `run_scenario` and `recall`
+# are advertised by the M0 server but not wired in M1.)
+mcp_request_run_all:
+  jsonrpc: "2.0"
+  id: 1
+  method: tools/call
+  params:
+    name: run_all
+    arguments:
+      skill_path:
+        type: string
+        description: /workspace/source/<thanatos_skill_repo>/.thanatos/skill.yaml
+      spec_path:
+        type: string
+        description: First spec.md found under /workspace/source/<thanatos_skill_repo>/openspec/changes/<REQ>/specs/*/spec.md
+      endpoint:
+        type: string
+        description: Top-level `endpoint` from env-up JSON

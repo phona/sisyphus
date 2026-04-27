@@ -187,7 +187,33 @@ shell 不展开 flag，等价全量。
 |---|---|---|
 | `endpoint` | ✅ | accept-agent 跑 FEATURE-A* scenarios 时打这个 URL |
 | `namespace` | （可选） | sisyphus 已通过 `SISYPHUS_NAMESPACE` env 传，重复声明也无碍 |
+| `thanatos` | （可选） | thanatos M1 起：业务仓 `accept-env-up` 起了 thanatos pod 时填 |
 | 其他 | （可选） | 任意附加元数据，accept-agent prompt 透传 |
+
+`thanatos` 子 object（thanatos M1 起，[REQ-415](../openspec/changes/REQ-415/proposal.md)）：
+
+| 子字段 | 必需 | 说明 |
+|---|---|---|
+| `pod` | ✅ | accept-agent `kubectl exec` 进它跑 `python -m thanatos.server` 喂 stdio MCP |
+| `namespace` | （可选） | 默认顶层 `namespace`；thanatos 单独装到其他 namespace 才显式覆盖 |
+| `skill_repo` | ✅ | source repo basename，accept-agent 从 `/workspace/source/<skill_repo>/.thanatos/` 取 skill 给 MCP `run_all` 用 |
+
+`thanatos` 缺省 → accept-agent 走老路（直接 curl endpoint 跑 scenario）。sisyphus
+自家 `deploy/accept-compose.yml` 不接 thanatos，自动走 fallback 分支。
+
+带 thanatos block 的 sample：
+
+```json
+{
+  "endpoint": "http://lab.accept-req-415.svc.cluster.local:8080",
+  "namespace": "accept-req-415",
+  "thanatos": {
+    "pod": "thanatos-7d8f8d8f8-abcde",
+    "namespace": "accept-req-415",
+    "skill_repo": "ttpos-flutter"
+  }
+}
+```
 
 实现建议（让 Makefile 容易满足）：
 

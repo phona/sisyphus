@@ -110,6 +110,14 @@ async def create_accept(*, body, req_id, tags, ctx):
             "reason": "env-up JSON missing endpoint",
         }
 
+    # M1: optional thanatos block lets the accept-agent drive scenarios via
+    # thanatos MCP instead of direct curl. Block absent → fallback to legacy
+    # direct-curl branch in accept.md.j2 (sisyphus self-accept compose path).
+    thanatos_block = accept_env.get("thanatos") or {}
+    thanatos_pod = thanatos_block.get("pod") or None
+    thanatos_namespace = thanatos_block.get("namespace") or namespace
+    thanatos_skill_repo = thanatos_block.get("skill_repo") or None
+
     # Phase 2: dispatch accept-agent
     # PR-link tag 注入（REQ-issue-link-pr-quality-base-1777218242）
     branch_for_links = (ctx or {}).get("branch") or f"feat/{req_id}"
@@ -135,6 +143,9 @@ async def create_accept(*, body, req_id, tags, ctx):
             accept_env=accept_env,
             project_id=proj,
             project_alias=proj,
+            thanatos_pod=thanatos_pod,
+            thanatos_namespace=thanatos_namespace,
+            thanatos_skill_repo=thanatos_skill_repo,
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")
