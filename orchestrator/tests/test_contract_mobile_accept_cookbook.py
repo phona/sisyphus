@@ -254,24 +254,32 @@ def test_fmac_s6_compose_skeleton_uses_dynamic_host_port() -> None:
     assert COOKBOOK_NEW.exists(), "ttpos-flutter-mobile-accept-env.md not found"
     text = COOKBOOK_NEW.read_text()
 
-    # Spec says: exposes only `ports: ["8080"]` (container port, no fixed host port)
-    # Look for the dynamic port pattern - either "8080" alone in ports or explanation
+    # Extract §3 section only — the cookbook may reference "8080:8080" elsewhere
+    # (e.g., §9 anti-patterns showing what NOT to do). Only the §3 compose skeleton
+    # is required to use dynamic host-port allocation.
+    m = re.search(r"(#+\s*3\b.+?)(?=^#+\s|\Z)", text, re.DOTALL | re.MULTILINE)
+    assert m, "cookbook must contain a §3 section"
+    section_3 = m.group(0)
+
+    # The §3 YAML code block must show dynamic port ("8080" not "8080:8080")
     has_dynamic_port = (
-        re.search(r'ports:\s*\[?"8080"\]?', text)
-        or re.search(r"- \"8080\"", text)
-        or re.search(r"8080(?!:)", text)  # 8080 without a colon (not 8080:8080)
+        re.search(r'ports:\s*\[?"8080"\]?', section_3)
+        or re.search(r'- "8080"', section_3)
+        or re.search(r"- '8080'", section_3)
+        or re.search(r'"8080"', section_3)
     )
     assert has_dynamic_port, (
-        "cookbook §3 compose skeleton must expose only `ports: [\"8080\"]` "
+        "cookbook §3 compose skeleton must expose `ports: [\"8080\"]` "
         "(container port only, no fixed host port) to allow concurrent REQ isolation"
     )
 
-    # Must NOT show 8080:8080 fixed binding in the compose skeleton
-    # (the spec explicitly forbids fixed host port)
-    assert "8080:8080" not in text, (
-        "cookbook §3 compose skeleton must NOT bind fixed host port 8080:8080; "
-        "use `ports: [\"8080\"]` for dynamic host-port allocation"
-    )
+    # Within the §3 compose YAML blocks, must NOT have a fixed 8080:8080 binding
+    yaml_blocks = re.findall(r"```(?:ya?ml)?\n(.+?)```", section_3, re.DOTALL)
+    for block in yaml_blocks:
+        assert "8080:8080" not in block, (
+            "cookbook §3 compose skeleton YAML must NOT bind fixed host port 8080:8080; "
+            "use `ports: [\"8080\"]` for dynamic host-port allocation"
+        )
 
 
 def test_fmac_s6_compose_skeleton_declares_healthcheck() -> None:
