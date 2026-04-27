@@ -15,8 +15,6 @@ Scenarios covered:
 """
 from __future__ import annotations
 
-import pytest
-
 from orchestrator.prompts import render
 from orchestrator.prompts.status_block import build_status_block_ctx
 
