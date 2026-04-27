@@ -388,6 +388,89 @@ accept-env-down:
 - **`accept-env-down` 全 best-effort**：partial up 失败时（emulator helm 没起来）
   也必须把 backend release + namespace 清掉，每步 `|| true` 保证不因前步失败而短路。
 
+## 6.5 加 thanatos 验收 harness（thanatos M1 起的可选拓扑）
+
+> 启用条件：业务仓有 `.thanatos/skill.yaml`（详见
+> [`docs/integration-contracts.md`](../integration-contracts.md) §10）。
+> **不**启用 → 这一节整段跳过，§6 模板照旧能跑（accept-agent 走 curl fallback）。
+
+启用后业务仓 `accept-env-up` 在装完 lab + emulator 之后**多装一个 thanatos pod**，
+跟 lab 共用 `$SISYPHUS_NAMESPACE`，再把 pod 名吐进 endpoint JSON 的 `thanatos_pod`
+字段，accept-agent 看到这个字段就走 thanatos branch（`kubectl exec <pod> --
+python -m thanatos run-scenario ...`）。
+
+### 6.5.1 chart 来源
+
+thanatos chart 在 sisyphus 仓内 `deploy/charts/thanatos/`。runner pod 已 clone
+sisyphus → 路径 `/workspace/source/sisyphus/deploy/charts/thanatos`。约定 env
+变量 `SISYPHUS_THANATOS_CHART` 给业务仓 Makefile override，默认就是这个路径。
+
+### 6.5.2 完整 Makefile 片段（在 §6 模板基础上 patch 进来）
+
+```makefile
+# §6 顶上原有 vars 之外新增
+SISYPHUS_THANATOS_CHART ?= /workspace/source/sisyphus/deploy/charts/thanatos
+THANATOS_DRIVER ?= adb         # mobile App 用 adb；纯 web 改 playwright，纯 API 改 http
+
+accept-env-up:
+	@# §6 既有 1~6 步保持不变（backend / emulator / boot-wait / APK build / install） ...
+	@# 6.5 NEW：装 thanatos harness（同 namespace，共享 lab pod 网络访问）
+	@echo "[arch-lab] up: thanatos ($(THANATOS_DRIVER))" >&2
+	helm upgrade --install thanatos $(SISYPHUS_THANATOS_CHART) \
+	    --namespace $(SISYPHUS_NAMESPACE) \
+	    --set driver=$(THANATOS_DRIVER) \
+	    --wait --timeout 2m >&2
+	@kubectl -n $(SISYPHUS_NAMESPACE) wait \
+	    --for=condition=ready pod -l app.kubernetes.io/name=thanatos \
+	    --timeout=2m >&2
+	@thanatos_pod=$$(kubectl -n $(SISYPHUS_NAMESPACE) get pod \
+	    -l app.kubernetes.io/name=thanatos \
+	    -o jsonpath='{.items[0].metadata.name}'); \
+	if [ -z "$$thanatos_pod" ]; then \
+	    echo "[arch-lab] FAIL: cannot resolve thanatos pod name" >&2; \
+	    exit 4; \
+	fi; \
+	echo "$$thanatos_pod" > .accept-thanatos-pod
+	@# 7. emit endpoint JSON（**stdout 末行**）—— 在 §6 原 printf 基础上多吐 thanatos_pod
+	@adb_host=$$(cat .accept-adb-host); \
+	thanatos_pod=$$(cat .accept-thanatos-pod); \
+	printf '{"endpoint":"http://lab.%s.svc.cluster.local:8080","adb":"%s:5555","apk_package":"%s","namespace":"%s","thanatos_pod":"%s"}\n' \
+	    "$(SISYPHUS_NAMESPACE)" "$$adb_host" "$(APK_PACKAGE)" "$(SISYPHUS_NAMESPACE)" "$$thanatos_pod"
+
+accept-env-down:
+	-@# §6 既有 cleanup 之前先 uninstall thanatos
+	-helm uninstall thanatos --namespace $(SISYPHUS_NAMESPACE) 2>/dev/null || true
+	-rm -f .accept-thanatos-pod 2>/dev/null || true
+	-@# 然后 §6 既有的 emulator / lab uninstall + ns delete + adb host file rm 照旧
+	# ...
+```
+
+要点：
+
+- **driver=adb 时多容器拓扑**：thanatos chart `_helpers.tpl::assertDriver` 校验
+  driver 必须 ∈ {playwright, adb, http}。adb 模式下 thanatos pod 含 redroid
+  sidecar；这跟你 §3 的 emulator chart **是两回事**（你那个 emulator 是给 mobile
+  App 跑的，thanatos 的 redroid 是给 thanatos 自己探查产品 UI 用的）。
+  仓库强约束：M1 mobile lab 推荐 thanatos 走 `playwright` 或 `http` 驱动 backend
+  HTTP，emulator 仍由你 §3 的 chart 起 —— thanatos M1 driver 全 `NotImplementedError`，
+  现在换哪个 driver 都返同一个 stub-only failure_hint。
+- **wait + label 取 pod name**：thanatos chart helm release name 不固定（这里
+  我们硬编 `thanatos`），通过 label `app.kubernetes.io/name=thanatos` 找；同 chart
+  M0 测试 (`test_contract_thanatos.py::THAN-S6/S7`) 锁了这个 label 形状。
+- **endpoint JSON 字段拼接**：跟 §5 endpoint JSON 多键扩展协议一致 —— accept-agent
+  prompt 透传 `accept_env` 整 dict，多吐字段不会破坏现有行为。
+
+### 6.5.3 不启用 thanatos 时怎么办
+
+直接 **不**改 §6 模板：
+
+- 不 `helm install thanatos`
+- endpoint JSON 不吐 `thanatos_pod`
+- accept-agent 看到 `thanatos_pod` 缺失 → 自动 curl fallback
+
+所以 thanatos opt-in 是真正可选 —— 业务仓不需要先准备 thanatos 才能上 sisyphus
+accept stage。
+
 ## 7. 跟 sisyphus accept-agent 的对接
 
 accept-agent prompt (`orchestrator/src/orchestrator/prompts/accept.md.j2`) 已经会

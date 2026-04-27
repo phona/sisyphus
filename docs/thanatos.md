@@ -67,7 +67,9 @@ phona/<business-repo>/                   # 每个业务仓
 | `http` | 单容器 pod | `thanatos` |
 
 ```
-namespace: req-<REQ_ID>            （accept-env-up 起完，accept-env-down 清完）
+namespace: accept-<req-id>         （accept-env-up 起完，accept-env-down 清完；
+                                     `accept-` 前缀对齐 actions/create_accept.py
+                                     注入的 SISYPHUS_NAMESPACE 实际值）
 ├── lab pod                        （integration repo helm chart 起的 backend stack）
 └── env pod (driver-conditional)
     ├── [driver=adb]       redroid container + thanatos container (sidecar)

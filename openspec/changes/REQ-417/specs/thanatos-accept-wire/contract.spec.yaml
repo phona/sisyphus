@@ -1,0 +1,94 @@
+# REQ-417 thanatos M1: accept-stage wiring contract.
+#
+# Three surfaces:
+#   1. thanatos CLI subcommands (mirror MCP tools, JSON-on-stdout).
+#   2. accept-env-up endpoint JSON extensions (thanatos_pod opt-in field).
+#   3. business-repo .thanatos/ directory shape (re-export of the M0 skill schema).
+
+cli:
+  invocation: "python -m thanatos <subcmd> --..."
+  exit_codes:
+    "0": dispatch succeeded (regardless of scenario pass/fail boolean)
+    "2": argparse / validation error (printed to stderr by argparse)
+    "3": runner raised an exception (parser / skill loader / dispatch)
+  output_streams:
+    stdout: exactly one JSON document followed by a trailing newline
+    stderr: human diagnostics (argparse usage on exit 2, exception class+msg on exit 3)
+  subcommands:
+    - name: run-scenario
+      args:
+        - flag: --skill
+          required: true
+          description: Absolute path to .thanatos/skill.yaml (visible inside the thanatos pod)
+        - flag: --spec
+          required: true
+          description: Absolute path to openspec spec.md
+        - flag: --scenario-id
+          required: true
+          description: First-token id from "#### Scenario: <ID> [— <desc>]"
+        - flag: --endpoint
+          required: true
+          description: URL emitted by `make accept-env-up` last-line JSON
+      stdout_schema:
+        $ref: "../../REQ-thanatos-m0-scaffold-v6-1777283112/specs/thanatos/contract.spec.yaml#/tools/0/output"
+    - name: run-all
+      args:
+        - flag: --skill
+          required: true
+        - flag: --spec
+          required: true
+        - flag: --endpoint
+          required: true
+      stdout_schema:
+        type: array
+        items:
+          $ref: "../../REQ-thanatos-m0-scaffold-v6-1777283112/specs/thanatos/contract.spec.yaml#/tools/0/output"
+    - name: recall
+      args:
+        - flag: --skill
+          required: true
+        - flag: --intent
+          required: true
+      stdout_schema:
+        type: array
+        items:
+          type: object
+          properties:
+            kind: { type: string }
+            snippet: { type: string }
+            freshness: { type: string }
+
+# Endpoint JSON extension: business-repo `make accept-env-up` last-line JSON
+# gains an OPTIONAL `thanatos_pod` field. Absent → accept-agent falls back to
+# the legacy curl path. Present → accept-agent routes scenarios through
+# `kubectl exec <thanatos_pod> -- python -m thanatos run-scenario ...`.
+accept_env_json:
+  required: [endpoint]
+  optional_extensions:
+    thanatos_pod:
+      type: string
+      description: Pod name within the accept namespace running the thanatos container
+    namespace:
+      type: string
+      description: K8s namespace (sisyphus already injects SISYPHUS_NAMESPACE; echoing it back is convenience for the agent)
+
+# Business-repo .thanatos/ directory contract (re-exports M0 skill schema).
+business_repo_thanatos_dir:
+  optional: true
+  description: |
+    Presence opts the repo into thanatos-driven acceptance. Absent → accept
+    stage falls back to the curl path. The directory ships with the source
+    code (same PR) so KB drift can never outpace the code.
+  files:
+    skill.yaml:
+      required_when_dir_present: true
+      schema_ref: "../../REQ-thanatos-m0-scaffold-v6-1777283112/specs/thanatos/contract.spec.yaml#/skill_yaml"
+    anchors.md:
+      required: false
+      description: Free-form markdown — widget semantic anchors (thanatos writes, agent commits)
+    flows.md:
+      required: false
+      description: Free-form markdown — known navigation flows
+    pitfalls.md:
+      required: false
+      description: Free-form markdown — known sharp edges / bug traps
