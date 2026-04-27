@@ -104,7 +104,7 @@ async def test_cifr_s4_single_pass_returns_attempts_1_reason_none() -> None:
         return ok_result
 
     with patch("asyncio.sleep") as mock_sleep:
-        result, attempts, reason = await run_with_flake_retry(
+        _result, attempts, reason = await run_with_flake_retry(
             coro_factory=coro_factory,
             stage="spec_lint",
             req_id="REQ-test",
@@ -136,7 +136,7 @@ async def test_cifr_s5_non_flake_fail_no_retry_no_sleep() -> None:
         return fail_result
 
     with patch("asyncio.sleep") as mock_sleep:
-        result, attempts, reason = await run_with_flake_retry(
+        _result, attempts, reason = await run_with_flake_retry(
             coro_factory=coro_factory,
             stage="dev_cross_check",
             req_id="REQ-test",
@@ -203,7 +203,7 @@ async def test_cifr_s7_flake_fail_both_attempts_exhausted() -> None:
         call_count += 1
         return flake_result
 
-    result, attempts, reason = await run_with_flake_retry(
+    _result, attempts, reason = await run_with_flake_retry(
         coro_factory=coro_factory,
         stage="staging_test",
         req_id="REQ-test",
@@ -235,7 +235,7 @@ async def test_cifr_s8_max_retries_zero_disables_retry() -> None:
         call_count += 1
         return flake_result
 
-    result, attempts, reason = await run_with_flake_retry(
+    _result, attempts, reason = await run_with_flake_retry(
         coro_factory=coro_factory,
         stage="spec_lint",
         req_id="REQ-test",
