@@ -1,0 +1,73 @@
+spec: watchdog-fast-detection
+version: 1
+description: >-
+  The orchestrator watchdog MUST detect ended-session hangs (BKD reports a
+  non-running sessionStatus while sisyphus has received no session.completed /
+  session.failed webhook) within the fast threshold (default 5 minutes),
+  decoupled from the slow stuck threshold (60 minutes) which continues to
+  govern operational guardrails for sessions still reported as running.
+
+config:
+  - name: watchdog_session_ended_threshold_sec
+    type: integer
+    default: 300
+    env: SISYPHUS_WATCHDOG_SESSION_ENDED_THRESHOLD_SEC
+    description: >-
+      Minimum stuck_sec for a row whose BKD session has ended (session_status
+      != "running") to be eligible for escalation. Bounds user-visible hang
+      from lost-webhook bugs. Lower values cut perceived hang at the cost of
+      more frequent BKD GETs per tick.
+  - name: watchdog_stuck_threshold_sec
+    type: integer
+    default: 3600
+    env: SISYPHUS_WATCHDOG_STUCK_THRESHOLD_SEC
+    description: >-
+      Slow-lane threshold preserved for documentation and as the upper bound
+      for any future "running but truly stuck" detection logic. Has no direct
+      effect on the fast-path detection introduced by this contract.
+
+invariants:
+  - id: WFD-INV-1
+    statement: >-
+      The watchdog SQL prefilter MUST use min(fast, slow) as its threshold so
+      that any row eligible by either threshold reaches the Python loop.
+  - id: WFD-INV-2
+    statement: >-
+      A row whose BKD session_status equals "running" MUST be skipped
+      regardless of stuck_sec, both above and below either threshold.
+  - id: WFD-INV-3
+    statement: >-
+      A row whose BKD session_status is anything other than "running" (e.g.,
+      failed, completed, cancelled, None) MUST be escalated as soon as
+      stuck_sec >= watchdog_session_ended_threshold_sec.
+  - id: WFD-INV-4
+    statement: >-
+      If BKD is unreachable (get_issue raises), the existing conservative
+      escalate path MUST fire as today. No new bypass introduced.
+  - id: WFD-INV-5
+    statement: >-
+      Existing escalate.py auto-resume logic MUST be unaffected. The fix
+      changes when the watchdog fires, not how escalate reacts.
+
+side_effects_on_ended_session_detection:
+  - artifact_checks_insert:
+      stage: "watchdog:<state>"
+      passed: false
+      exit_code: -1
+      reason_intake_no_result_tag_path: "intake-no-result-tag"
+      reason_default: "watchdog_stuck"
+  - engine_step:
+      event: SESSION_FAILED
+      body_event_default: "watchdog.stuck"
+      body_event_archiving: "archive.failed"
+      body_event_intake_no_result_tag: "watchdog.intake_no_result_tag"
+
+scenarios_referenced:
+  - WFD-S1
+  - WFD-S2
+  - WFD-S3
+  - WFD-S4
+  - WFD-S5
+  - WFD-S6
+  - WFD-S7
+  - WFD-S8

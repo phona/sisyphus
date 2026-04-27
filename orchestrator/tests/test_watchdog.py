@@ -251,8 +251,12 @@ async def test_tick_passes_skip_states_and_threshold_to_sql(monkeypatch):
             return []
 
     _patch_pool(monkeypatch, _CapturingPool())
+    # 让 fast/slow 都 >=1800 且 fast 是较小值，验 min(fast, slow) 拿 1800
     monkeypatch.setattr(
-        "orchestrator.watchdog.settings.watchdog_stuck_threshold_sec", 1800,
+        "orchestrator.watchdog.settings.watchdog_stuck_threshold_sec", 3600,
+    )
+    monkeypatch.setattr(
+        "orchestrator.watchdog.settings.watchdog_session_ended_threshold_sec", 1800,
     )
 
     await watchdog._tick()
@@ -598,3 +602,164 @@ async def test_engine_step_failure_isolated(monkeypatch):
     assert result["checked"] == 2
     assert result["escalated"] == 1
     assert calls == ["REQ-A", "REQ-B"]
+
+
+# ─── REQ-bkd-analyze-hang-debug-1777247423: ended-session fast lane ─────────
+# 拆出 fast (300s) / slow (3600s) 双阈值后的行为矩阵，对应 spec 场景 WFD-S1..S6。
+
+@pytest.mark.asyncio
+async def test_sql_filter_uses_min_of_fast_and_slow_thresholds(monkeypatch):
+    """WFD-S1：fast=300 / slow=3600 → SQL 用 300。"""
+    captured: dict = {}
+
+    class _CapturingPool:
+        async def fetch(self, sql, *args):
+            captured["args"] = args
+            return []
+
+    _patch_pool(monkeypatch, _CapturingPool())
+    monkeypatch.setattr(
+        "orchestrator.watchdog.settings.watchdog_session_ended_threshold_sec", 300,
+    )
+    monkeypatch.setattr(
+        "orchestrator.watchdog.settings.watchdog_stuck_threshold_sec", 3600,
+    )
+
+    await watchdog._tick()
+
+    _skip_arr, threshold = captured["args"]
+    assert threshold == 300
+
+
+@pytest.mark.asyncio
+async def test_sql_filter_picks_slow_when_smaller(monkeypatch):
+    """WFD-S2：operator 把 fast 调到 1800（>slow=600）→ SQL 仍用较小的 600。
+    保证拆双阈值后旧 helm values（仅设 stuck）行为可控。"""
+    captured: dict = {}
+
+    class _CapturingPool:
+        async def fetch(self, sql, *args):
+            captured["args"] = args
+            return []
+
+    _patch_pool(monkeypatch, _CapturingPool())
+    monkeypatch.setattr(
+        "orchestrator.watchdog.settings.watchdog_session_ended_threshold_sec", 1800,
+    )
+    monkeypatch.setattr(
+        "orchestrator.watchdog.settings.watchdog_stuck_threshold_sec", 600,
+    )
+
+    await watchdog._tick()
+
+    _skip_arr, threshold = captured["args"]
+    assert threshold == 600
+
+
+@pytest.mark.asyncio
+async def test_ended_session_at_fast_threshold_escalates(monkeypatch):
+    """WFD-S3：BKD 报 session=failed + stuck_sec=305（刚过 fast 300） → 立即 escalate。
+    这是本 REQ 的核心 fix —— 旧行为要等 stuck_sec >= 3600 才 escalate。"""
+    pool = FakePool(rows=[
+        _row("REQ-fast", ReqState.ANALYZING.value,
+             ctx={"intent_issue_id": "intent-fast"},
+             stuck_sec=305),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="failed", id="intent-fast"))
+    step_calls = _patch_engine(monkeypatch)
+    art_calls = _patch_artifact(monkeypatch)
+    monkeypatch.setattr(
+        "orchestrator.watchdog.settings.watchdog_session_ended_threshold_sec", 300,
+    )
+    monkeypatch.setattr(
+        "orchestrator.watchdog.settings.watchdog_stuck_threshold_sec", 3600,
+    )
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 1}
+    assert len(step_calls) == 1
+    assert step_calls[0]["event"] == Event.SESSION_FAILED
+    assert step_calls[0]["body_event"] == "watchdog.stuck"
+    assert step_calls[0]["cur_state"] == ReqState.ANALYZING
+    assert len(art_calls) == 1
+    assert art_calls[0]["stage"] == "watchdog:analyzing"
+
+
+@pytest.mark.asyncio
+async def test_running_session_above_fast_threshold_still_skips(monkeypatch):
+    """WFD-S6：BKD 报 session=running + stuck_sec=305 → skip（不受 fast lane 影响）。
+    fast lane 仅对 ended session 生效；in-loop still_running 检查继续保护长尾真分析。"""
+    pool = FakePool(rows=[
+        _row("REQ-run-fast", ReqState.ANALYZING.value,
+             ctx={"intent_issue_id": "intent-run"},
+             stuck_sec=305),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="running", id="intent-run"))
+    step_calls = _patch_engine(monkeypatch)
+    art_calls = _patch_artifact(monkeypatch)
+    monkeypatch.setattr(
+        "orchestrator.watchdog.settings.watchdog_session_ended_threshold_sec", 300,
+    )
+    monkeypatch.setattr(
+        "orchestrator.watchdog.settings.watchdog_stuck_threshold_sec", 3600,
+    )
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 0}
+    assert step_calls == []
+    assert art_calls == []
+
+
+@pytest.mark.asyncio
+async def test_running_session_above_slow_threshold_still_skips(monkeypatch):
+    """WFD-S5：BKD 报 session=running + stuck_sec=5000（远超 slow=3600） → 仍 skip。
+    保留现有行为 —— BKD 报 running 时无条件信任，不主动 kill 长尾分析。"""
+    pool = FakePool(rows=[
+        _row("REQ-long-run", ReqState.ANALYZING.value,
+             ctx={"intent_issue_id": "intent-long"},
+             stuck_sec=5000),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="running", id="intent-long"))
+    step_calls = _patch_engine(monkeypatch)
+    art_calls = _patch_artifact(monkeypatch)
+    monkeypatch.setattr(
+        "orchestrator.watchdog.settings.watchdog_session_ended_threshold_sec", 300,
+    )
+    monkeypatch.setattr(
+        "orchestrator.watchdog.settings.watchdog_stuck_threshold_sec", 3600,
+    )
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 0}
+    assert step_calls == []
+    assert art_calls == []
+
+
+def test_settings_default_session_ended_threshold_is_300():
+    """WFD-S7：settings 默认 watchdog_session_ended_threshold_sec=300（5min）。"""
+    from orchestrator.config import Settings
+
+    s = Settings(
+        bkd_token="x", webhook_token="x", pg_dsn="postgresql://x:x@x/x",  # type: ignore[call-arg]
+    )
+    assert s.watchdog_session_ended_threshold_sec == 300
+    # legacy 阈值默认未变
+    assert s.watchdog_stuck_threshold_sec == 3600
+
+
+def test_settings_session_ended_threshold_env_override(monkeypatch):
+    """WFD-S8：SISYPHUS_WATCHDOG_SESSION_ENDED_THRESHOLD_SEC=120 override 默认。"""
+    from orchestrator.config import Settings
+
+    monkeypatch.setenv("SISYPHUS_WATCHDOG_SESSION_ENDED_THRESHOLD_SEC", "120")
+
+    s = Settings(
+        bkd_token="x", webhook_token="x", pg_dsn="postgresql://x:x@x/x",  # type: ignore[call-arg]
+    )
+    assert s.watchdog_session_ended_threshold_sec == 120
