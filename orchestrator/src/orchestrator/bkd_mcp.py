@@ -121,6 +121,7 @@ class BKDMcpClient:
         status_id: str | None = None,
         tags: list[str] | None = None,
         title: str | None = None,
+        description: str | None = None,
     ) -> Issue:
         args: dict = {"projectId": project_id, "issueId": issue_id}
         if status_id is not None:
@@ -129,6 +130,8 @@ class BKDMcpClient:
             args["tags"] = tags
         if title is not None:
             args["title"] = title
+        if description is not None:
+            args["description"] = description
         data = await self.call("update-issue", args)
         return _to_issue(data)
 

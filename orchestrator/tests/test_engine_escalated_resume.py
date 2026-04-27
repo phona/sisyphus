@@ -442,11 +442,15 @@ async def test_ert_s9_full_transition_sweep(
     )
 
 
-def test_ert_s9_sweep_covers_exactly_47():
-    """Sanity: TRANSITIONS 必须正好 47 条 —— 加 / 减 transition 时这条 fail 提醒
-    review 是否同步加 spec scenario / 文档（state-machine.md / dump_transitions）。"""
-    assert len(state_mod.TRANSITIONS) == 47, (
-        f"expected 47 transitions, got {len(state_mod.TRANSITIONS)}; "
+def test_ert_s9_sweep_covers_exactly_49():
+    """Sanity: TRANSITIONS 必须正好 49 条 —— 加 / 减 transition 时这条 fail 提醒
+    review 是否同步加 spec scenario / 文档（state-machine.md / dump_transitions）。
+
+    REQ-bkd-acceptance-feedback-loop-1777278984 起新增 PENDING_USER_REVIEW 入/出
+    transitions（pr.opened 入站 + acceptance approve/request_changes 出站），从 47
+    增至 49。"""
+    assert len(state_mod.TRANSITIONS) == 49, (
+        f"expected 49 transitions, got {len(state_mod.TRANSITIONS)}; "
         "if you intentionally added/removed a transition, update this assertion "
         "AND add granular ERT/MCT/APT/VLT scenario coverage for it."
     )

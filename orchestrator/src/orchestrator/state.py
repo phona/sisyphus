@@ -34,6 +34,7 @@ class ReqState(StrEnum):
     PR_CI_RUNNING = "pr-ci-running"             # PR 已开，等 GHA 全套绿
     ACCEPT_RUNNING = "accept-running"           # env-up 完，accept-agent 跑 FEATURE-A*
     ACCEPT_TEARING_DOWN = "accept-tearing-down" # env-down 清 lab，后续按 accept_result 分流
+    PENDING_USER_REVIEW = "pending-user-review" # accept 全过 → 等用户验收（statusId 表态，watchdog skip）
     GH_INCIDENT_OPEN = "gh-incident-open"       # GitHub issue 已开，等人
     ARCHIVING = "archiving"                     # done-archive agent（合 PR 等）
     # verifier-agent 框架
@@ -69,6 +70,10 @@ class Event(StrEnum):
     TEARDOWN_DONE_FAIL = "teardown-done.fail"       # env-down 完（上一个是 accept.fail）→ verifier
     ARCHIVE_DONE = "archive.done"
     SESSION_FAILED = "session.failed"
+    # REQ-bkd-acceptance-feedback-loop-1777278984: BKD-native 用户验收 gate（Case 2, 0 黑话纯原语）
+    # 信号通道 = BKD intent issue statusId（webhook 在 PENDING_USER_REVIEW state 收 issue.updated 时派事件）
+    USER_REVIEW_PASS = "user-review.pass"           # statusId → done：用户 approve，发车
+    USER_REVIEW_FIX = "user-review.fix"             # statusId → review/blocked：用户要返工 → escalate
     # verifier-agent 决策事件（webhook.py 从 verifier issue 的 decision JSON 派发）
     # 3 路决策：pass / fix / escalate（retry_checker 已砍 —— flaky/外部抖动直接 escalate）
     VERIFY_PASS = "verify.pass"                     # decision.action = pass → 推下一 stage
@@ -183,12 +188,30 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
         Transition(ReqState.ACCEPT_TEARING_DOWN, "teardown_accept_env",
                    "accept fail → 清 lab 再走 verifier"),
 
+    # REQ-bkd-acceptance-feedback-loop-1777278984 改：原本直进 ARCHIVING，现在先停一手
+    # 等用户验收。post_acceptance_report 把验收报告 PATCH 进 BKD intent issue body，
+    # 用户改 statusId 表态后 webhook 派 USER_REVIEW_PASS / USER_REVIEW_FIX 推下去。
     (ReqState.ACCEPT_TEARING_DOWN, Event.TEARDOWN_DONE_PASS):
-        Transition(ReqState.ARCHIVING, "done_archive", "teardown 完 → 归档"),
+        Transition(ReqState.PENDING_USER_REVIEW, "post_acceptance_report",
+                   "teardown 完 → 等用户 BKD intent issue statusId 表态"),
 
     (ReqState.ACCEPT_TEARING_DOWN, Event.TEARDOWN_DONE_FAIL):
         Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_accept_fail",
                    "accept fail + teardown 完 → verifier"),
+
+    # ─── PENDING_USER_REVIEW 出口（REQ-bkd-acceptance-feedback-loop-1777278984）───
+    # 用户改 BKD intent issue statusId：
+    #   - "done" → USER_REVIEW_PASS → ARCHIVING（发车）
+    #   - "review" / "blocked" → USER_REVIEW_FIX → ESCALATED（reason=user-requested-fix）
+    # 没 SESSION_FAILED self-loop —— 该 state 没 BKD agent 在跑，不会收到 session 事件
+    # （watchdog 也 skip 此 state，见 watchdog._SKIP_STATES）
+    (ReqState.PENDING_USER_REVIEW, Event.USER_REVIEW_PASS):
+        Transition(ReqState.ARCHIVING, "done_archive",
+                   "用户把 BKD intent statusId 改 done → 归档发车"),
+
+    (ReqState.PENDING_USER_REVIEW, Event.USER_REVIEW_FIX):
+        Transition(ReqState.ESCALATED, "escalate",
+                   "用户把 BKD intent statusId 改 review/blocked → 标 user-requested-fix 入 escalated"),
 
     # ─── verifier 子链 ─────────────────────────────────────────────────
     # verifier-agent 完成 → webhook 解 decision JSON → emit 对应事件。

@@ -341,13 +341,39 @@ async def test_intaking_state_excluded_from_sql_fetch(monkeypatch):
     assert ReqState.INTAKING in watchdog._NO_WATCHDOG_STATES
 
 
-def test_no_watchdog_states_set_contains_only_intaking():
-    """_NO_WATCHDOG_STATES 当前只豁免 INTAKING；扩展时记得补本测试 + spec。
+def test_no_watchdog_states_set_membership():
+    """_NO_WATCHDOG_STATES 列表 = 所有 human-in-loop state（无 BKD agent / 等用户）。
+
+    INTAKING（REQ-watchdog-stage-policy-1777269909, 等用户在 BKD chat 多轮澄清）+
+    PENDING_USER_REVIEW（REQ-bkd-acceptance-feedback-loop-1777278984, 等用户改 BKD
+    intent issue statusId 表态验收）。新增同类 state 时记得补本测试 + spec。
 
     REQ-stage-watchdog-policy-full-1777280786 起这个 set 不再硬编码，而是从
     `_STAGE_POLICY` 中 `policy is None` 的 stage 派生；语义和导出名不变。
     """
-    assert watchdog._NO_WATCHDOG_STATES == frozenset({ReqState.INTAKING})
+    assert watchdog._NO_WATCHDOG_STATES == frozenset({
+        ReqState.INTAKING,
+        ReqState.PENDING_USER_REVIEW,
+    })
+
+
+@pytest.mark.asyncio
+async def test_pending_user_review_excluded_from_sql_fetch(monkeypatch):
+    """USR-WD1: watchdog SQL skip 数组含 'pending-user-review'，行不会被 watchdog 扫到。"""
+    captured: dict = {}
+
+    class _CapturingPool:
+        async def fetch(self, sql, *args):
+            captured["args"] = args
+            return []
+
+    _patch_pool(monkeypatch, _CapturingPool())
+
+    await watchdog._tick()
+
+    skip_arr, _threshold = captured["args"]
+    assert "pending-user-review" in skip_arr
+    assert ReqState.PENDING_USER_REVIEW in watchdog._NO_WATCHDOG_STATES
 
 
 def test_intake_no_result_tag_machinery_removed():

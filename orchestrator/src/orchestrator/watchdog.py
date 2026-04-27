@@ -71,14 +71,17 @@ _STATE_FAILURE_EVENT: dict[ReqState, str] = {
     ReqState.ARCHIVING: "archive.failed",
 }
 
-# 排除：终态 + 等人态 + 未入链
+# 排除：终态 + 等人态（human-in-loop）+ 未入链
+# human-in-loop states 同时存于 _NO_WATCHDOG_STATES（ReqState 对象）和此处（string value），
+# 使 _SKIP_STATES 成为 canonical container（spec USER-S12 / watchdog skip 查询均引用此集合）。
 _SKIP_STATES = {
     ReqState.DONE.value,
     ReqState.ESCALATED.value,
     ReqState.GH_INCIDENT_OPEN.value,
     ReqState.INIT.value,
+    ReqState.INTAKING.value,
+    ReqState.PENDING_USER_REVIEW.value,
 }
-
 
 @dataclass(frozen=True)
 class _StagePolicy:
@@ -109,9 +112,14 @@ class _StagePolicy:
 #
 # STAGING_TEST_RUNNING 名义是 deterministic-checker（kubectl exec），但单/集成
 # 测试整套常跑分钟级，特别归"宽松 deterministic"档（stuck=None），避免误杀。
+#
+# REQ-bkd-acceptance-feedback-loop-1777278984：PENDING_USER_REVIEW 也是
+# human-loop-conversation —— 等用户改 BKD intent statusId 表态，没 BKD agent
+# 在跑，watchdog 强 escalate 没意义。
 _STAGE_POLICY: dict[ReqState, _StagePolicy | None] = {
     # human-loop-conversation
     ReqState.INTAKING: None,
+    ReqState.PENDING_USER_REVIEW: None,
     # deterministic-checker（紧 5min ended + 5min stuck 双线）
     ReqState.SPEC_LINT_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=300),
     ReqState.DEV_CROSS_CHECK_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=300),

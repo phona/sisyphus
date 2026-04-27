@@ -61,20 +61,27 @@ def _body(**attrs):
 async def test_apt_s1_accept_pass_advances_through_teardown_to_archiving(
     stub_actions, mock_runner_controller,
 ):
-    """Spec APT-S1: accept.pass → teardown_accept_env → 链式 teardown-done.pass → done_archive。"""
+    """Spec APT-S1 (post-REQ-bkd-acceptance-feedback-loop): accept.pass → teardown_accept_env
+    → 链式 teardown-done.pass → post_acceptance_report → 停在 PENDING_USER_REVIEW
+    等用户改 BKD intent statusId 表态。
+
+    旧行为是 teardown → done_archive 直进 ARCHIVING；新链多了一段 PENDING_USER_REVIEW
+    gate（用户验收回路），下一步 USER_REVIEW_PASS / USER_REVIEW_FIX 由用户驱动，
+    不在本 engine.step 链路里。
+    """
     teardown_calls = {"n": 0}
-    archive_calls = {"n": 0}
+    post_report_calls = {"n": 0}
 
     async def teardown_accept_env(*, body, req_id, tags, ctx):
         teardown_calls["n"] += 1
         return {"emit": Event.TEARDOWN_DONE_PASS.value, "accept_result": "pass"}
 
-    async def done_archive(*, body, req_id, tags, ctx):
-        archive_calls["n"] += 1
-        return {"ok": True}
+    async def post_acceptance_report(*, body, req_id, tags, ctx):
+        post_report_calls["n"] += 1
+        return {"acceptance_reported": True}
 
     stub_actions["teardown_accept_env"] = teardown_accept_env
-    stub_actions["done_archive"] = done_archive
+    stub_actions["post_acceptance_report"] = post_acceptance_report
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.ACCEPT_RUNNING.value)})
     body = _body(
@@ -90,13 +97,13 @@ async def test_apt_s1_accept_pass_advances_through_teardown_to_archiving(
 
     assert result["action"] == "teardown_accept_env"
     assert result["next_state"] == ReqState.ACCEPT_TEARING_DOWN.value
-    assert "chained" in result, "teardown emit teardown-done.pass 应触发链式 done_archive"
-    assert result["chained"]["action"] == "done_archive"
-    assert result["chained"]["next_state"] == ReqState.ARCHIVING.value
-    assert pool.rows["REQ-1"].state == ReqState.ARCHIVING.value
+    assert "chained" in result, "teardown emit teardown-done.pass 应触发链式 post_acceptance_report"
+    assert result["chained"]["action"] == "post_acceptance_report"
+    assert result["chained"]["next_state"] == ReqState.PENDING_USER_REVIEW.value
+    assert pool.rows["REQ-1"].state == ReqState.PENDING_USER_REVIEW.value
     assert teardown_calls["n"] == 1
-    assert archive_calls["n"] == 1
-    # ACCEPT_TEARING_DOWN / ARCHIVING 都不是 terminal → engine 不应清 runner
+    assert post_report_calls["n"] == 1
+    # PENDING_USER_REVIEW 不是 terminal → engine 不应清 runner
     mock_runner_controller.cleanup_runner.assert_not_awaited()
 
 
@@ -190,7 +197,7 @@ async def test_apt_s3_accept_env_up_fail_escalates_and_cleans_up(
 
 
 # ───────────────────────────────────────────────────────────────────────
-# APT-S4：(ACCEPT_TEARING_DOWN, TEARDOWN_DONE_PASS) → ARCHIVING
+# APT-S4：(ACCEPT_TEARING_DOWN, TEARDOWN_DONE_PASS) → PENDING_USER_REVIEW
 # ───────────────────────────────────────────────────────────────────────
 
 
@@ -198,14 +205,15 @@ async def test_apt_s3_accept_env_up_fail_escalates_and_cleans_up(
 async def test_apt_s4_teardown_done_pass_advances_to_archiving(
     stub_actions, mock_runner_controller,
 ):
-    """Spec APT-S4: teardown-done.pass 直接入口（不经 teardown_accept_env emit）→ ARCHIVING。"""
-    archive_calls = {"n": 0}
+    """Spec APT-S4 (post-REQ-bkd-acceptance-feedback-loop): teardown-done.pass 直接入口
+    → PENDING_USER_REVIEW（用户验收 gate），不再直进 ARCHIVING。"""
+    post_report_calls = {"n": 0}
 
-    async def done_archive(*, body, req_id, tags, ctx):
-        archive_calls["n"] += 1
-        return {"ok": True}
+    async def post_acceptance_report(*, body, req_id, tags, ctx):
+        post_report_calls["n"] += 1
+        return {"acceptance_reported": True}
 
-    stub_actions["done_archive"] = done_archive
+    stub_actions["post_acceptance_report"] = post_acceptance_report
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.ACCEPT_TEARING_DOWN.value)})
     body = _body(
@@ -219,11 +227,11 @@ async def test_apt_s4_teardown_done_pass_advances_to_archiving(
     )
     await _drain_tasks()
 
-    assert result["action"] == "done_archive"
-    assert result["next_state"] == ReqState.ARCHIVING.value
-    assert pool.rows["REQ-1"].state == ReqState.ARCHIVING.value
-    assert archive_calls["n"] == 1
-    # ARCHIVING 不是 terminal（DONE 才是）→ 不应清 runner
+    assert result["action"] == "post_acceptance_report"
+    assert result["next_state"] == ReqState.PENDING_USER_REVIEW.value
+    assert pool.rows["REQ-1"].state == ReqState.PENDING_USER_REVIEW.value
+    assert post_report_calls["n"] == 1
+    # PENDING_USER_REVIEW 不是 terminal → 不应清 runner
     mock_runner_controller.cleanup_runner.assert_not_awaited()
 
 
