@@ -659,3 +659,51 @@ def test_settings_session_ended_threshold_env_override(monkeypatch):
         bkd_token="x", webhook_token="x", pg_dsn="postgresql://x:x@x/x",  # type: ignore[call-arg]
     )
     assert s.watchdog_session_ended_threshold_sec == 120
+
+
+# ─── CHALLENGER_RUNNING: reconcile BKD sessionStatus ──────────────────────────
+
+@pytest.mark.asyncio
+async def test_challenger_running_session_skips_when_still_running(monkeypatch):
+    """CHALLENGER_RUNNING + session_status=running → skip（不杀长尾 challenger）。"""
+    pool = FakePool(rows=[
+        _row("REQ-CH", ReqState.CHALLENGER_RUNNING.value,
+             ctx={"challenger_issue_id": "ch-1", "intent_issue_id": "intent-1"},
+             stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="running", id="ch-1"))
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 0}
+    assert step_calls == []
+
+
+@pytest.mark.asyncio
+async def test_challenger_running_session_failed_escalates(monkeypatch):
+    """CHALLENGER_RUNNING + session_status=failed + stuck > ended_sec → escalate。"""
+    pool = FakePool(rows=[
+        _row("REQ-CH2", ReqState.CHALLENGER_RUNNING.value,
+             ctx={"challenger_issue_id": "ch-2", "intent_issue_id": "intent-2"},
+             stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="failed", id="ch-2"))
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 1}
+    assert step_calls[0]["event"] == Event.SESSION_FAILED
+    assert step_calls[0]["cur_state"] == ReqState.CHALLENGER_RUNNING
+    assert step_calls[0]["body_issue"] == "ch-2"
+
+
+def test_challenger_running_in_state_issue_key():
+    """CHALLENGER_RUNNING 必须在 _STATE_ISSUE_KEY 中以便 watchdog 能 reconcile BKD session。"""
+    assert ReqState.CHALLENGER_RUNNING in watchdog._STATE_ISSUE_KEY
+    assert watchdog._STATE_ISSUE_KEY[ReqState.CHALLENGER_RUNNING] == "challenger_issue_id"
