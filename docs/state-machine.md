@@ -20,13 +20,14 @@
   `staging-test-running` 三个 checker stage 内部从单仓变成 for-each-repo 遍历
   （任一仓红 → stage fail）。状态机层面无影响。
 
-## 2. ReqState 枚举（16 个）
+## 2. ReqState 枚举（17 个）
 
 | state | 含义 | 类型 |
 |---|---|---|
 | `init` | 还没 analyze（intent_analyze 之前） | start |
 | `intaking` | **INTAKING** intake-agent 在跑（多轮 BKD chat 澄清 + 写 finalized intent） | in-flight |
 | `analyzing` | analyze-agent 在跑（M17 起全责交付：spec + 业务码 + push + 开 PR 都在 analyze 一段里完成） | in-flight |
+| `analyze-artifact-checking` | **REQ-analyze-artifact-check-1777254586** 机械 post-artifact-check：遍历 `/workspace/source/*` 校 `openspec/changes/<REQ>/` 下 proposal.md / tasks.md / spec.md 存在 + 非空（防 agent 自报 pass 但无产物） | in-flight |
 | `spec-lint-running` | **M15** 客观检查：**for-each-repo** openspec validate + check-scenario-refs.sh（遍历 `/workspace/source/*`） | in-flight |
 | `challenger-running` | **M18** challenger-agent 跑：黑盒读 spec 写 contract test + push feat 分支（不看 dev 代码，避免 prompt 泄露实现） | in-flight |
 | `dev-cross-check-running` | **M15** 客观检查：**for-each-repo** `BASE_REV=$(git merge-base HEAD origin/<default_branch>) make ci-lint`（default_branch 先 resolve `origin/HEAD` 符号引用，再退 main/master/develop/dev；ttpos-ci 标准，仅 lint 变更文件） | in-flight |
@@ -41,7 +42,7 @@
 | **`done`** | REQ 完成 | **terminal** |
 | **`escalated`** | 熔断 / session-failed / 人工止损 | **terminal** |
 
-## 3. Event 枚举（27 个）
+## 3. Event 枚举（29 个）
 
 | event | 来源 | 触发什么 |
 |---|---|---|
@@ -49,7 +50,9 @@
 | **`intake.pass`** | intake-agent PATCH `result:pass` + finalized intent JSON 解析成功 | start_analyze_with_finalized_intent |
 | **`intake.fail`** | intake-agent PATCH `result:fail` / 或 finalized intent JSON 解析失败 | escalate |
 | `intent.analyze` | 人在 BKD 打 `intent:analyze` tag（跳过 intake 直接进 analyze） | start_analyze |
-| `analyze.done` | analyze-agent session.completed | create_spec_lint |
+| `analyze.done` | analyze-agent session.completed | create_analyze_artifact_check |
+| **`analyze-artifact-check.pass`** | **REQ-analyze-artifact-check-1777254586** 产物校验退码 0 | create_spec_lint |
+| **`analyze-artifact-check.fail`** | **REQ-analyze-artifact-check-1777254586** 产物校验退码非 0 / timeout | invoke_verifier_for_analyze_artifact_check_fail |
 | **`spec-lint.pass`** | **M15** spec-lint checker 退码 0 | start_challenger（M18：先起 challenger 写 contract test） |
 | **`spec-lint.fail`** | **M15** spec-lint checker 退码非 0 | invoke_verifier_for_spec_lint_fail |
 | **`challenger.pass`** | **M18** challenger-agent 写完 contract test 推 feat 分支 | create_dev_cross_check |
@@ -85,7 +88,9 @@ stateDiagram-v2
     intaking --> escalated: intake.fail
     intaking --> escalated: verify.escalate\n(start_analyze_with_finalized_intent 内部判 escalate)
     analyzing --> escalated: verify.escalate\n(start_analyze 内部判 escalate, 如 clone failed)
-    analyzing --> spec_lint_running: analyze.done
+    analyzing --> analyze_artifact_checking: analyze.done
+    analyze_artifact_checking --> spec_lint_running: analyze-artifact-check.pass
+    analyze_artifact_checking --> review_running: analyze-artifact-check.fail
     spec_lint_running --> challenger_running: spec-lint.pass
     spec_lint_running --> review_running: spec-lint.fail
 
