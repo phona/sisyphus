@@ -118,8 +118,9 @@ async def _dispatch_ci_trigger(*, repos: list[str], branch: str, req_id: str) ->
 
     Uses settings.pr_ci_dispatch_event_type as the event_type. Any per-repo
     HTTP or network failure is logged as a warning — never raises.
-    Caller must check pr_ci_dispatch_enabled before calling.
     """
+    if not settings.pr_ci_dispatch_enabled:
+        return
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -129,11 +130,12 @@ async def _dispatch_ci_trigger(*, repos: list[str], branch: str, req_id: str) ->
         "event_type": settings.pr_ci_dispatch_event_type,
         "client_payload": {"branch": branch, "req_id": req_id},
     }
-    async with httpx.AsyncClient(base_url="https://api.github.com",
-                                  headers=headers, timeout=15.0) as client:
+    async with httpx.AsyncClient(base_url="https://api.github.com", timeout=15.0) as client:
         for repo in repos:
             try:
-                r = await client.post(f"/repos/{repo}/dispatches", json=payload)
+                r = await client.post(
+                    f"/repos/{repo}/dispatches", json=payload, headers=headers
+                )
                 r.raise_for_status()
                 log.info("create_pr_ci_watch.dispatch_ok", req_id=req_id, repo=repo,
                          event_type=settings.pr_ci_dispatch_event_type)
