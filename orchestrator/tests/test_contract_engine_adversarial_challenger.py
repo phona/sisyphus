@@ -417,7 +417,6 @@ async def test_eat_s10a_depth_12_dispatches_handler(monkeypatch) -> None:
     EAT-S10a: depth=12 is the last valid depth; handler MUST be called exactly once.
     """
     from orchestrator.actions import REGISTRY
-    from orchestrator.state import ReqState
 
     _patch_io(monkeypatch)
     calls: list[int] = []
