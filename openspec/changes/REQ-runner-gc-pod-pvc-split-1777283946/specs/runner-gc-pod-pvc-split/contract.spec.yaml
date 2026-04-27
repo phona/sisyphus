@@ -1,0 +1,123 @@
+capability: runner-gc-pod-pvc-split
+version: "1.0"
+description: |
+  runner_gc 拆 Pod vs PVC retention：Pod keep set 仅 non-terminal REQ
+  （escalated 不再绑 retention，立即可清释放内存），PVC keep set 保留
+  pvc_retain_on_escalate_days 天给人 debug。RunnerController 的
+  gc_orphans 拆成 gc_orphan_pods + gc_orphan_pvcs 两个正交方法：
+  Pod sweep 按 sisyphus/role=runner 列 Pod，PVC sweep 按
+  sisyphus/role=workspace 列 PVC，互不级联。
+
+  跟 REQ-cleanup-runner-zombie-1777170378 配对：那条修
+  force_escalate 漏 schedule cleanup（即时路径）；本 REQ 把
+  GC 兜底也补成 Pod-immediate（周期路径）。两个改动独立但互补。
+
+modules:
+  - orchestrator/src/orchestrator/runner_gc.py
+  - orchestrator/src/orchestrator/k8s_runner.py
+
+api:
+  RunnerController.gc_orphan_pods:
+    signature: "async def gc_orphan_pods(self, keep_req_ids: set[str]) -> list[str]"
+    behavior: |
+      列 self.namespace 下 label_selector="sisyphus/role=runner" 的 Pod。
+      对每个 metadata.labels["sisyphus/req-id"] 不在 keep_req_ids
+      （case-folded 比较）的 Pod，调 delete_namespaced_pod 删之。
+      404 视为 no-op。返已尝试删除的 req_id 列表。
+    side_effects:
+      - "list_namespaced_pod(namespace, label_selector='sisyphus/role=runner')"
+      - "delete_namespaced_pod(pod_name, namespace) for each non-keep Pod"
+    must_not:
+      - "delete or mutate any PVC"
+      - "call cleanup_runner (which would also delete PVC)"
+
+  RunnerController.gc_orphan_pvcs:
+    signature: "async def gc_orphan_pvcs(self, keep_req_ids: set[str]) -> list[str]"
+    behavior: |
+      列 self.namespace 下 label_selector="sisyphus/role=workspace" 的 PVC。
+      对每个 metadata.labels["sisyphus/req-id"] 不在 keep_req_ids
+      （case-folded 比较）的 PVC，调 delete_namespaced_persistent_volume_claim
+      删之。404 视为 no-op。返已尝试删除的 req_id 列表。
+    side_effects:
+      - "list_namespaced_persistent_volume_claim(namespace, label_selector='sisyphus/role=workspace')"
+      - "delete_namespaced_persistent_volume_claim(pvc_name, namespace) for each non-keep PVC"
+    must_not:
+      - "delete or mutate any Pod"
+
+  removed:
+    - "RunnerController.gc_orphans (replaced by the two methods above)"
+
+  runner_gc.gc_once:
+    signature: "async def gc_once() -> dict"
+    keep_set_logic:
+      pod_keep:
+        - "include req if state NOT in {done, escalated}"
+      pvc_keep:
+        - "include req if state NOT in {done, escalated}"
+        - "OR (state == 'escalated' AND not ignore_retention AND now - updated_at < retention)"
+        - "ignore_retention=True iff disk_pressure detected this tick"
+    dispatch_order:
+      - "1. disk-check (probe ratio if not _DISK_CHECK_DISABLED)"
+      - "2. compute pod_keep + pvc_keep from same req_state snapshot"
+      - "3. await rc.gc_orphan_pods(pod_keep)"
+      - "4. await rc.gc_orphan_pvcs(pvc_keep)"
+    return_dict:
+      cleaned_pods: "list[str] returned from gc_orphan_pods"
+      cleaned_pvcs: "list[str] returned from gc_orphan_pvcs"
+      pod_kept: "len(pod_keep)"
+      pvc_kept: "len(pvc_keep)"
+      disk_pressure: "bool (preserved from previous contract)"
+
+invariants:
+  pod_keep_excludes_terminal_states:
+    - "state == 'done' → not in pod_keep"
+    - "state == 'escalated' (any time, any disk pressure) → not in pod_keep"
+    - "rationale: Pod 占内存/调度容量，没有 'human debug' 用例需要保活 Pod"
+
+  pvc_keep_honors_retention:
+    - "state == 'escalated' AND within retention AND not disk_pressure → in pvc_keep"
+    - "state == 'escalated' AND past retention → not in pvc_keep"
+    - "state == 'escalated' AND disk_pressure → not in pvc_keep (紧急疏散)"
+    - "state == 'done' → not in pvc_keep (无 debug 价值)"
+
+  pod_pvc_orthogonality:
+    - "gc_orphan_pods MUST NOT touch PVCs"
+    - "gc_orphan_pvcs MUST NOT touch Pods"
+    - "rationale: K8s 自身处理 PVC-Pod 依赖（Pod 还在 → PVC 进 Terminating），下轮 GC 自然收"
+
+  disk_check_contract_unchanged:
+    - "ORCHN-S4..S8 全过：第一次 403 → INFO 'runner_gc.disk_check_rbac_denied' + flag=True"
+    - "_DISK_CHECK_DISABLED=True → 不再调 node_disk_usage_ratio"
+    - "non-403 → DEBUG 'runner_gc.disk_check_failed'"
+    - "ratio > threshold → WARNING 'runner_gc.disk_pressure' + disk_pressure=True"
+
+interaction_with_engine_cleanup:
+  description: |
+    engine._cleanup_runner_on_terminal 仍是 transition 路径的即时 cleanup
+    （fire-and-forget）。本 REQ 把周期 GC 也补成 Pod-immediate：fire-and-forget
+    失败 → 下个 GC tick 兜底 Pod。两条路径互补，cleanup_runner 本身 404
+    幂等不冲突。
+  redundancy: by design
+
+interaction_with_force_escalate:
+  description: |
+    REQ-cleanup-runner-zombie-1777170378 让 admin.force_escalate 在 SQL
+    UPDATE 后起 fire-and-forget cleanup task；本 REQ 给那条任务再加一道
+    周期兜底网。两个改动独立：force_escalate 走 transition-style 即时
+    cleanup（秒级），runner_gc 是 GC tick 间隔（默认 15min）的周期兜底。
+
+failure_modes:
+  pod_with_no_pvc:
+    cause: "PVC 已被 gc_orphan_pvcs 删，Pod 残留"
+    handler: "gc_orphan_pods 按 Pod label 列，独立扫到，删之"
+    note: "之前 gc_orphans 用 PVC iterate 推 Pod 名，PVC 没了找不到 Pod"
+
+  pvc_terminating_due_to_pod:
+    cause: "PVC 还有 Pod 依附（Pod GC 还没扫到），PVC delete 请求落地后 K8s 标 Terminating"
+    handler: "下一轮 GC tick：gc_orphan_pods 删 Pod → PVC 自动收"
+    note: "K8s 原生处理依赖序，sisyphus 不需要级联控制"
+
+  api_blip_during_pod_delete:
+    cause: "delete_namespaced_pod 抛非-404 ApiException"
+    handler: "传播给 caller（runner_gc.run_loop 的 except Exception 捕获 + log.exception）"
+    note: "下一轮 GC tick 重扫，幂等"

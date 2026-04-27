@@ -1,8 +1,8 @@
 """Runner GC 后台任务（v0.2-S5）。
 
 每 N 秒扫一次：
-- state=done 的 REQ：其 Pod + PVC 立即销（释放磁盘）
-- state=escalated 且 escalated_at > retention 天的：也销
+- Pod GC：terminal REQ 的 Pod 立即清（escalated 不绑 retention，释放内存）
+- PVC GC：done 立即销 PVC；escalated PVC 保留 retention 给人 debug；磁盘压力时全清
 - 完全找不到 req_state 的 runner（孤儿：orchestrator 丢数据 / 手动清了 PG）：也销
 
 不会销正在跑的 REQ 资源（in-flight state）。
@@ -31,37 +31,53 @@ _TERMINAL_STATES = {"done", "escalated"}
 _DISK_CHECK_DISABLED = False
 
 
-async def _active_req_ids(*, ignore_retention: bool = False) -> set[str]:
-    """列出所有 non-terminal REQ 的 req_id；或 terminal 但仍在保留期内的也算 active。
+async def _pod_keep_req_ids() -> set[str]:
+    """Pod 保留集 = 仅 non-terminal REQ。
 
+    done / escalated 都是 terminal —— Pod 立即可清。escalated Pod 占 512Mi
+    内存 request、8Gi limit，retention 是 PVC 给人 debug 用的，不该绑 Pod
+    生命周期。zombie Pod 整段 retention 活着会挤掉别 REQ 的调度容量。
+    """
+    pool = db.get_pool()
+    rows = await pool.fetch("SELECT req_id, state FROM req_state")
+    return {r["req_id"] for r in rows if r["state"] not in _TERMINAL_STATES}
+
+
+async def _pvc_keep_req_ids(*, ignore_retention: bool = False) -> set[str]:
+    """PVC 保留集 = non-terminal + escalated 在 retention 内（除非磁盘压力）。
+
+    done 立即销 PVC（无 debug 价值，磁盘释放优先）。
     ignore_retention=True：磁盘压力下，escalated 也不留 retention，全清。
     """
     pool = db.get_pool()
     rows = await pool.fetch(
         "SELECT req_id, state, updated_at, context FROM req_state",
     )
-    active: set[str] = set()
+    keep: set[str] = set()
     now = datetime.now(UTC)
     retention = timedelta(days=settings.pvc_retain_on_escalate_days)
     for r in rows:
         state = r["state"]
         if state not in _TERMINAL_STATES:
-            active.add(r["req_id"])
+            keep.add(r["req_id"])
             continue
         if state == "done":
-            continue   # done 的 runner 立即销
-        # escalated：看是否还在保留期（磁盘压力时跳过 retention 直接清）
+            continue
         if state == "escalated" and not ignore_retention:
             updated_at = r["updated_at"]
             if updated_at and (now - updated_at) < retention:
-                active.add(r["req_id"])
-    return active
+                keep.add(r["req_id"])
+    return keep
 
 
 async def gc_once() -> dict:
-    """单次 GC pass。返回 {cleaned: [...]}。
+    """单次 GC pass。Pod 和 PVC 各扫一次（保留集不同）。
 
-    磁盘压力 (> threshold) 时：忽略 escalated retention，全清 non-active PVC（紧急疏散）。
+    Pod GC：terminal REQ 的 Pod 立即清（escalated 不再绑 retention，释放内存）。
+    PVC GC：escalated REQ 的 PVC 留 retention 给人 debug；磁盘压力时全清。
+
+    磁盘压力 (> threshold) 仅影响 PVC keep set —— Pod keep set 永远不含
+    terminal state，跟磁盘无关。
     """
     try:
         rc = k8s_runner.get_controller()
@@ -96,11 +112,15 @@ async def gc_once() -> dict:
             # 取不到磁盘指标 → 退回正常 retention 模式
             log.debug("runner_gc.disk_check_failed", error=str(e))
 
-    active = await _active_req_ids(ignore_retention=disk_pressure)
-    cleaned = await rc.gc_orphans(active)
+    pod_keep = await _pod_keep_req_ids()
+    pvc_keep = await _pvc_keep_req_ids(ignore_retention=disk_pressure)
+    cleaned_pods = await rc.gc_orphan_pods(pod_keep)
+    cleaned_pvcs = await rc.gc_orphan_pvcs(pvc_keep)
     return {
-        "cleaned": cleaned,
-        "active_kept": len(active),
+        "cleaned_pods": cleaned_pods,
+        "cleaned_pvcs": cleaned_pvcs,
+        "pod_kept": len(pod_keep),
+        "pvc_kept": len(pvc_keep),
         "disk_pressure": disk_pressure,
     }
 
@@ -112,8 +132,12 @@ async def run_loop() -> None:
     while True:
         try:
             result = await gc_once()
-            if result.get("cleaned"):
-                log.warning("runner_gc.swept", cleaned=result["cleaned"])
+            if result.get("cleaned_pods") or result.get("cleaned_pvcs"):
+                log.warning(
+                    "runner_gc.swept",
+                    pods=result.get("cleaned_pods", []),
+                    pvcs=result.get("cleaned_pvcs", []),
+                )
             else:
                 log.debug("runner_gc.tick", result=result)
         except asyncio.CancelledError:

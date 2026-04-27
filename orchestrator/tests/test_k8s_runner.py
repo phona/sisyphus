@@ -446,11 +446,63 @@ async def test_cleanup_runner_raises_on_other_api_error():
         await rc.cleanup_runner("REQ-1")
 
 
-# ─── gc_orphans ────────────────────────────────────────────────────────
+# ─── gc_orphan_pods / gc_orphan_pvcs ───────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_gc_orphans_removes_not_in_keep_set():
+async def test_gc_orphan_pods_removes_pods_not_in_keep_set_without_touching_pvcs():
+    """RGS-S4: Pod-only sweep 删 keep 之外的 Pod，不动 PVC。"""
+    core = MagicMock()
+
+    def _pod(req_label):
+        return MagicMock(metadata=MagicMock(labels={
+            "sisyphus/req-id": req_label, "sisyphus/role": "runner",
+        }))
+
+    core.list_namespaced_pod = MagicMock(return_value=MagicMock(
+        items=[_pod("req-1"), _pod("req-2"), _pod("req-3")],
+    ))
+    core.delete_namespaced_pod = MagicMock(return_value=None)
+    core.delete_namespaced_persistent_volume_claim = MagicMock(return_value=None)
+    rc = _make_controller(core)
+
+    # keep REQ-1 only；REQ-2 + REQ-3 的 Pod 应被清
+    cleaned = await rc.gc_orphan_pods({"REQ-1"})
+    assert sorted(cleaned) == ["REQ-2", "REQ-3"]
+    assert core.delete_namespaced_pod.call_count == 2
+    # PVC 完全没碰
+    assert core.delete_namespaced_persistent_volume_claim.call_count == 0
+    # list 走的是 Pod label 而非 PVC label
+    core.list_namespaced_pod.assert_called_once()
+    call_kwargs = core.list_namespaced_pod.call_args.kwargs
+    assert call_kwargs.get("label_selector") == "sisyphus/role=runner"
+
+
+@pytest.mark.asyncio
+async def test_gc_orphan_pods_handles_404_idempotent():
+    """delete_namespaced_pod 返 404（Pod 已被别处删）→ 视为成功，不抛。"""
+    core = MagicMock()
+
+    def _pod(req_label):
+        return MagicMock(metadata=MagicMock(labels={
+            "sisyphus/req-id": req_label, "sisyphus/role": "runner",
+        }))
+
+    core.list_namespaced_pod = MagicMock(return_value=MagicMock(
+        items=[_pod("req-2")],
+    ))
+    core.delete_namespaced_pod = MagicMock(
+        side_effect=ApiException(status=404, reason="Not Found"),
+    )
+    rc = _make_controller(core)
+
+    cleaned = await rc.gc_orphan_pods({"REQ-1"})
+    assert cleaned == ["REQ-2"]   # 仍记入 cleaned 列表
+
+
+@pytest.mark.asyncio
+async def test_gc_orphan_pvcs_removes_pvcs_not_in_keep_set_without_touching_pods():
+    """RGS-S5: PVC-only sweep 删 keep 之外的 PVC，不动 Pod。"""
     core = MagicMock()
 
     def _pvc(req_label):
@@ -465,12 +517,37 @@ async def test_gc_orphans_removes_not_in_keep_set():
     core.delete_namespaced_persistent_volume_claim = MagicMock(return_value=None)
     rc = _make_controller(core)
 
-    # keep REQ-1 only；REQ-2 + REQ-3 应被清
-    cleaned = await rc.gc_orphans({"REQ-1"})
+    cleaned = await rc.gc_orphan_pvcs({"REQ-1"})
     assert sorted(cleaned) == ["REQ-2", "REQ-3"]
-    # 两次 destroy = 两次 pod delete + 两次 pvc delete
-    assert core.delete_namespaced_pod.call_count == 2
     assert core.delete_namespaced_persistent_volume_claim.call_count == 2
+    # Pod 完全没碰（gc_orphan_pvcs 拆开后不级联）
+    assert core.delete_namespaced_pod.call_count == 0
+    # list 走的是 PVC label
+    core.list_namespaced_persistent_volume_claim.assert_called_once()
+    call_kwargs = core.list_namespaced_persistent_volume_claim.call_args.kwargs
+    assert call_kwargs.get("label_selector") == "sisyphus/role=workspace"
+
+
+@pytest.mark.asyncio
+async def test_gc_orphan_pvcs_handles_404_idempotent():
+    """delete_namespaced_persistent_volume_claim 404 → 不抛。"""
+    core = MagicMock()
+
+    def _pvc(req_label):
+        return MagicMock(metadata=MagicMock(labels={
+            "sisyphus/req-id": req_label, "sisyphus/role": "workspace",
+        }))
+
+    core.list_namespaced_persistent_volume_claim = MagicMock(return_value=MagicMock(
+        items=[_pvc("req-2")],
+    ))
+    core.delete_namespaced_persistent_volume_claim = MagicMock(
+        side_effect=ApiException(status=404, reason="Not Found"),
+    )
+    rc = _make_controller(core)
+
+    cleaned = await rc.gc_orphan_pvcs({"REQ-1"})
+    assert cleaned == ["REQ-2"]
 
 
 # ─── exec marker parsing ───────────────────────────────────────────────
