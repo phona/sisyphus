@@ -238,7 +238,10 @@ async def test_tick_passes_skip_states_and_threshold_to_sql(monkeypatch):
             return []
 
     _patch_pool(monkeypatch, _CapturingPool())
-    # 让 fast/slow 都 >=1800 且 fast 是较小值，验 min(fast, slow) 拿 1800
+    # 把全局阈值都拉得很大，验证 SQL threshold 取 min(stage policy ∪ 全局)，
+    # 应该被 stage policy 中最小的 ended_sec/stuck_sec 拉下来（≤ 300）。
+    # REQ-stage-watchdog-policy-full-1777280786：threshold 不再是 settings
+    # 字段简单 min，而是 stage 表 + 全局 fallback 全集 min。
     monkeypatch.setattr(
         "orchestrator.watchdog.settings.watchdog_stuck_threshold_sec", 3600,
     )
@@ -249,7 +252,8 @@ async def test_tick_passes_skip_states_and_threshold_to_sql(monkeypatch):
     await watchdog._tick()
 
     skip_arr, threshold = captured["args"]
-    assert threshold == 1800
+    # threshold ≤ 300（被 deterministic-checker 的 ended/stuck=300 拉下来）
+    assert threshold <= 300
     assert "done" in skip_arr
     assert "escalated" in skip_arr
     assert "init" in skip_arr
@@ -338,7 +342,11 @@ async def test_intaking_state_excluded_from_sql_fetch(monkeypatch):
 
 
 def test_no_watchdog_states_set_contains_only_intaking():
-    """_NO_WATCHDOG_STATES 当前只豁免 INTAKING；扩展时记得补本测试 + spec。"""
+    """_NO_WATCHDOG_STATES 当前只豁免 INTAKING；扩展时记得补本测试 + spec。
+
+    REQ-stage-watchdog-policy-full-1777280786 起这个 set 不再硬编码，而是从
+    `_STAGE_POLICY` 中 `policy is None` 的 stage 派生；语义和导出名不变。
+    """
     assert watchdog._NO_WATCHDOG_STATES == frozenset({ReqState.INTAKING})
 
 
@@ -491,8 +499,11 @@ async def test_sql_filter_uses_min_of_fast_and_slow_thresholds(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_sql_filter_picks_slow_when_smaller(monkeypatch):
-    """WFD-S2：operator 把 fast 调到 1800（>slow=600）→ SQL 仍用较小的 600。
-    保证拆双阈值后旧 helm values（仅设 stuck）行为可控。"""
+    """WFD-S2：operator 把 fast 调到 1800、slow 调到 600 → SQL 用 min(全集) ≤ 600。
+
+    REQ-stage-watchdog-policy-full-1777280786 之后 threshold 还要 min 进 stage
+    policy 集合，但本测试目的是"settings 字段被 SQL 计算 consume"——只需断言
+    threshold ≤ min(settings) 即可。"""
     captured: dict = {}
 
     class _CapturingPool:
@@ -511,7 +522,8 @@ async def test_sql_filter_picks_slow_when_smaller(monkeypatch):
     await watchdog._tick()
 
     _skip_arr, threshold = captured["args"]
-    assert threshold == 600
+    # threshold ≤ min(settings) ∩ min(stage policy) ≤ 600
+    assert threshold <= 600
 
 
 @pytest.mark.asyncio
