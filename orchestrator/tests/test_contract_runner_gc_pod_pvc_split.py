@@ -20,11 +20,11 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from kubernetes.client import ApiException
 
 from orchestrator import k8s_runner, runner_gc
 from orchestrator.k8s_runner import RunnerController
-
 
 # ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -67,9 +67,6 @@ def _make_controller(core_v1: MagicMock | None = None) -> RunnerController:
         ready_timeout_sec=5,
         core_v1=core_v1 or MagicMock(),
     )
-
-
-import pytest
 
 
 @pytest.fixture
