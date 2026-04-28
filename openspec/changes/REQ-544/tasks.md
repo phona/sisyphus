@@ -10,5 +10,5 @@
 - [x] Write contract tests preventing regression
 
 ## Stage: PR
-- [ ] git push feat/REQ-544
-- [ ] gh pr create with sisyphus label
+- [x] git push feat/REQ-544
+- [x] gh pr create with sisyphus label
