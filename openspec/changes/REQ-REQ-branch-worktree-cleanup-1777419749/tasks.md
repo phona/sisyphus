@@ -8,5 +8,6 @@
 - [x] add unit tests for git cleanup in `test_engine.py`
 
 ## Stage: PR
-- [ ] git push feat/REQ-REQ-branch-worktree-cleanup-1777419749
-- [ ] gh pr create --label sisyphus
+- [x] git push feat/REQ-REQ-branch-worktree-cleanup-1777419749
+- [x] gh pr create --label sisyphus
+- [x] PR merged to main (#222)
