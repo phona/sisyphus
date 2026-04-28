@@ -152,5 +152,5 @@ def test_TCIF_S4_ci_unit_test_recipe_runs_pytest_in_thanatos_with_not_integratio
     )
     assert any("not integration" in line for line in thanatos_lines), (
         "Expected ci-unit-test recipe to pass -m 'not integration' for thanatos pytest.\n"
-        f"thanatos-related lines:\n" + "\n".join(thanatos_lines)
+        "thanatos-related lines:\n" + "\n".join(thanatos_lines)
     )
