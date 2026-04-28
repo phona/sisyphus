@@ -1,4 +1,4 @@
-"""REQ-accept-m1-lite: unit tests for the v0.3-lite create_accept.
+"""REQ-accept-m1-lite: unit tests for create_accept (thanatos MCP + v0.3-lite fallback).
 
 4 scenarios specified in the REQ:
   AML-S1: cloned_repos 全 OK + 每仓 make 都返 0 → ACCEPT_PASS, ctx accept_result=pass
@@ -11,24 +11,36 @@ from __future__ import annotations
 import pytest
 
 from orchestrator.actions import create_accept as mod
+from orchestrator.actions._integration_resolver import ResolveResult
 from orchestrator.k8s_runner import ExecResult
 from orchestrator.state import Event
 
 # ─── Fakes ────────────────────────────────────────────────────────────────
 
 class _FakeRC:
-    def __init__(self, exit_code: int = 0, stdout: str = "PASS\n", stderr: str = ""):
-        self.exit_code = exit_code
-        self.stdout = stdout
-        self.stderr = stderr
+    """Fake runner controller that discriminates calls by command content."""
+
+    def __init__(self, lite_exit_code: int = 0, lite_stdout: str = "PASS\n", lite_stderr: str = ""):
+        self.lite_exit_code = lite_exit_code
+        self.lite_stdout = lite_stdout
+        self.lite_stderr = lite_stderr
         self.calls: list[dict] = []
 
     async def exec_in_runner(self, req_id, command, env=None, timeout_sec=None):
         self.calls.append({"req_id": req_id, "command": command, "env": env})
+        # env-up call
+        if "make accept-env-up" in command:
+            return ExecResult(
+                exit_code=0,
+                stdout='{"endpoint": "http://localhost"}\n',
+                stderr="",
+                duration_sec=0.5,
+            )
+        # lite fallback call (shell script)
         return ExecResult(
-            exit_code=self.exit_code,
-            stdout=self.stdout,
-            stderr=self.stderr,
+            exit_code=self.lite_exit_code,
+            stdout=self.lite_stdout,
+            stderr=self.lite_stderr,
             duration_sec=0.5,
         )
 
@@ -59,6 +71,13 @@ def _patch(monkeypatch, rc: _FakeRC, pool: _FakePool, skip_accept: bool = False)
     monkeypatch.setattr("orchestrator.actions.create_accept.settings.test_mode", False)
     monkeypatch.setattr("orchestrator.actions.create_accept.settings.accept_smoke_delay_sec", 0)
 
+    async def fake_resolve_integration_dir(rc, req_id):
+        return ResolveResult(dir="/workspace/source/test")
+    monkeypatch.setattr(
+        "orchestrator.actions.create_accept.resolve_integration_dir",
+        fake_resolve_integration_dir,
+    )
+
     ctx_updates = pool.ctx_updates
     async def fake_update_ctx(p, req_id, updates):
         ctx_updates.append(updates)
@@ -70,7 +89,7 @@ def _patch(monkeypatch, rc: _FakeRC, pool: _FakePool, skip_accept: bool = False)
 @pytest.mark.asyncio
 async def test_aml_s1_all_repos_pass(monkeypatch):
     """Script exits 0, stdout='PASS' → ACCEPT_PASS, ctx accept_result=pass."""
-    rc = _FakeRC(exit_code=0, stdout="=== accept-env-up: sisyphus ===\nPASS\n")
+    rc = _FakeRC(lite_exit_code=0, lite_stdout="=== accept-env-up: sisyphus ===\nPASS\n")
     pool = _FakePool()
     _patch(monkeypatch, rc, pool)
 
@@ -79,7 +98,8 @@ async def test_aml_s1_all_repos_pass(monkeypatch):
     )
 
     assert out["emit"] == Event.ACCEPT_PASS.value
-    assert len(rc.calls) == 1, "exactly one exec_in_runner call expected"
+    # env-up + lite fallback = 2 calls
+    assert len(rc.calls) == 2, "expected env-up + lite fallback calls"
     assert any(u.get("accept_result") == "pass" for u in pool.ctx_updates), (
         "accept_result='pass' must be stored in ctx"
     )
@@ -91,9 +111,9 @@ async def test_aml_s1_all_repos_pass(monkeypatch):
 async def test_aml_s2_envup_fail_emits_accept_fail(monkeypatch):
     """Script exits 1, stdout ends with FAIL:repo-a → ACCEPT_FAIL, fail_repos in ctx."""
     rc = _FakeRC(
-        exit_code=1,
-        stdout="=== accept-env-up: repo-a ===\n=== FAIL accept-env-up: repo-a ===\nFAIL:repo-a\n",
-        stderr="make: *** [accept-env-up] Error 1",
+        lite_exit_code=1,
+        lite_stdout="=== accept-env-up: repo-a ===\n=== FAIL accept-env-up: repo-a ===\nFAIL:repo-a\n",
+        lite_stderr="make: *** [accept-env-up] Error 1",
     )
     pool = _FakePool()
     _patch(monkeypatch, rc, pool)
@@ -118,7 +138,7 @@ async def test_aml_s3_no_target_skips_repo_not_fail(monkeypatch):
     The exec IS called (Python doesn't short-circuit); the script decides to skip
     the repo and still exits 0 with 'PASS'.
     """
-    rc = _FakeRC(exit_code=0, stdout="PASS\n")  # script internally skipped the repo
+    rc = _FakeRC(lite_exit_code=0, lite_stdout="PASS\n")  # script internally skipped the repo
     pool = _FakePool()
     _patch(monkeypatch, rc, pool)
 
@@ -127,7 +147,8 @@ async def test_aml_s3_no_target_skips_repo_not_fail(monkeypatch):
     )
 
     assert out["emit"] == Event.ACCEPT_PASS.value
-    assert len(rc.calls) == 1, "exec_in_runner must still be called even when target might be absent"
+    # env-up + lite fallback = 2 calls
+    assert len(rc.calls) == 2, "expected env-up + lite fallback calls"
 
 
 # ─── AML-S4: empty cloned_repos → vacuous pass ───────────────────────────
@@ -144,4 +165,5 @@ async def test_aml_s4_empty_cloned_repos_vacuous_pass(monkeypatch):
     )
 
     assert out["emit"] == Event.ACCEPT_PASS.value
-    assert len(rc.calls) == 0, "exec_in_runner must NOT be called when there are no repos"
+    # env-up is still called (integration dir resolved), then lite fallback sees empty repos
+    assert len(rc.calls) == 1, "env-up call expected even when cloned_repos is empty"

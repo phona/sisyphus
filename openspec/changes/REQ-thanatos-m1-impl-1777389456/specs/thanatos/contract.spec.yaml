@@ -1,0 +1,66 @@
+openapi: 3.0.0
+info:
+  title: thanatos MCP contract
+  version: "0.1.0"
+
+paths: {}
+
+components:
+  schemas:
+    ScenarioResult:
+      type: object
+      required: [scenario_id, pass]
+      properties:
+        scenario_id:
+          type: string
+        pass:
+          type: boolean
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/StepResult"
+        kb_updates:
+          type: array
+          items:
+            $ref: "#/components/schemas/KbUpdate"
+        failure_hint:
+          type: string
+          nullable: true
+
+    StepResult:
+      type: object
+      required: [step, ok]
+      properties:
+        step:
+          type: string
+        ok:
+          type: boolean
+        evidence:
+          $ref: "#/components/schemas/Evidence"
+
+    Evidence:
+      type: object
+      properties:
+        dom:
+          type: string
+          nullable: true
+        network:
+          type: array
+          items:
+            type: object
+          nullable: true
+        screenshot:
+          type: string
+          nullable: true
+
+    KbUpdate:
+      type: object
+      required: [path, action, content]
+      properties:
+        path:
+          type: string
+        action:
+          type: string
+          enum: [patch, append]
+        content:
+          type: string

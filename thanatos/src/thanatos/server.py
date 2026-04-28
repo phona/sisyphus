@@ -29,7 +29,7 @@ def _build_server() -> Server:
                 name="run_scenario",
                 description=(
                     "Run a single scenario from a spec.md against an endpoint. "
-                    "M0 returns pass=false with a scaffold-only hint."
+                    "M1 executes driver act/assert steps and returns pass/fail with evidence."
                 ),
                 inputSchema={
                     "type": "object",
@@ -46,7 +46,7 @@ def _build_server() -> Server:
                 name="run_all",
                 description=(
                     "Run every scenario in a spec.md against an endpoint. "
-                    "M0 returns one stub result per scenario."
+                    "M1 executes all scenarios and returns results with evidence."
                 ),
                 inputSchema={
                     "type": "object",
@@ -80,7 +80,7 @@ def _build_server() -> Server:
         import json as _json
 
         if name == "run_scenario":
-            res = _run_scenario(
+            res = await _run_scenario(
                 arguments["skill_path"],
                 arguments["spec_path"],
                 arguments["scenario_id"],
@@ -88,7 +88,7 @@ def _build_server() -> Server:
             )
             return [TextContent(type="text", text=_json.dumps(res.to_dict()))]
         if name == "run_all":
-            results = _run_all(
+            results = await _run_all(
                 arguments["skill_path"],
                 arguments["spec_path"],
                 arguments["endpoint"],

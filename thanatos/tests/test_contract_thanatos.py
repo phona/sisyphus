@@ -135,21 +135,18 @@ def test_than_s4_mixed_format_raises():
     )
 
 
-# ─── THAN-S5: every M0 driver method raises NotImplementedError ──────────────
+# ─── THAN-S5: AdbDriver remains M0 stub; Http/Playwright drivers are M1 ──────
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("driver_name", ["PlaywrightDriver", "AdbDriver", "HttpDriver"])
 @pytest.mark.parametrize(
     "method_name", ["preflight", "observe", "act", "assert_", "capture_evidence"]
 )
-async def test_than_s5_driver_raises_not_implemented(driver_name, method_name):
-    """THAN-S5: every M0 driver method raises NotImplementedError('M0: scaffold only')."""
-    import importlib
+async def test_than_s5_adb_driver_raises_not_implemented(method_name):
+    """THAN-S5: AdbDriver is still M0 scaffold — every method raises NotImplementedError."""
+    from thanatos.drivers import AdbDriver
 
-    drivers_mod = importlib.import_module("thanatos.drivers")
-    driver_class = getattr(drivers_mod, driver_name)
-    instance = driver_class()
+    instance = AdbDriver()
     method = getattr(instance, method_name)
 
     if method_name == "preflight":
@@ -162,8 +159,27 @@ async def test_than_s5_driver_raises_not_implemented(driver_name, method_name):
     with pytest.raises(NotImplementedError) as exc_info:
         await coro
     assert str(exc_info.value) == "M0: scaffold only", (
-        f"{driver_name}.{method_name}: got '{exc_info.value}'"
+        f"AdbDriver.{method_name}: got '{exc_info.value}'"
     )
+
+
+@pytest.mark.integration
+async def test_than_s5b_http_driver_no_longer_stub():
+    """THAN-S5b: HttpDriver M1 preflight returns a PreflightResult, not NotImplementedError."""
+    from thanatos.drivers import HttpDriver
+    from thanatos.drivers.base import PreflightResult
+
+    driver = HttpDriver()
+    # preflight hits network; mock it via overriding _client
+    import httpx
+    mock_client = httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(200)))
+    driver._client = mock_client
+    try:
+        result = await driver.preflight("http://localhost")
+        assert isinstance(result, PreflightResult)
+        assert result.ok is True
+    finally:
+        await mock_client.aclose()
 
 
 # ─── THAN-S6: driver=adb → two-container Pod (redroid + thanatos) ─────────────
