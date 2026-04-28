@@ -1,14 +1,14 @@
-"""bkd_snapshot 同步 + intent:analyze orphan 恢复。
+"""bkd_snapshot 同步 + intent:analyze / intent:intake orphan 恢复。
 
 两件事跑在同一个 5min 后台 task：
 
 1. **bkd_snapshot UPSERT**（观测系数据）：定时拉每个已知 project 的 BKD list-issues，
    写到 `sisyphus_obs.bkd_snapshot`。这块只在 obs pool 配置时跑。
 
-2. **intent:analyze orphan 恢复**（恢复路径）：webhook 是 INTENT_ANALYZE 的唯一入口；
-   如果用户打 `intent:analyze` tag 那一发 webhook 在 sisyphus 重启 / BKD 抖动时丢了，
-   REQ 就永远卡在没 req_state 行的状态。snapshot 顺手扫一下，发现 BKD 有 intent:analyze
-   tag 但 req_state 没行的 issue，自己合成 webhook body 调 engine.step 把 INTENT_ANALYZE
+2. **orphan 恢复**（恢复路径）：webhook 是 INTENT_ANALYZE / INTENT_INTAKE 的唯一入口；
+   如果用户打 `intent:analyze` 或 `intent:intake` tag 那一发 webhook 在 sisyphus 重启 /
+   BKD 抖动时丢了，REQ 就永远卡在没 req_state 行的状态。snapshot 顺手扫一下，发现 BKD
+   有 intent tag 但 req_state 没行的 issue，自己合成 webhook body 调 engine.step 把事件
    补发出去。这块跟 obs pool 无关，永远跑。
 
 后台 asyncio task，main.py startup 时启动。失败只 log 不挂主流程。
@@ -128,6 +128,72 @@ def _make_recovery_body(issue: Issue, project_id: str) -> Any:
     )
 
 
+async def _trigger_orphan_intent_intake(
+    main_pool, project_id: str, issues: list[Issue],
+) -> int:
+    """对每个 BKD issue：若是 intent:intake 入口但 req_state 还没行 → 起 INTENT_INTAKE。
+
+    返回成功 trigger 的条数。幂等逻辑与 _trigger_orphan_intent_analyze 相同。
+    """
+    triggered = 0
+    for issue in issues:
+        tags = issue.tags or []
+        if "intent:intake" not in tags:
+            continue
+        # 已经被 start_intake rebrand 过，不是 orphan
+        if "intake" in tags:
+            continue
+        # 用户已 close → 不要起死回生
+        if issue.status_id in _BKD_TERMINAL_STATUSES:
+            continue
+        req_id = extract_req_id(tags, issue.issue_number)
+        if req_id is None:
+            continue
+        existing = await req_state.get(main_pool, req_id)
+        if existing is not None:
+            continue
+
+        log.info(
+            "snapshot.orphan_intent_intake.detected",
+            req_id=req_id, issue_id=issue.id, project_id=project_id,
+        )
+        try:
+            await req_state.insert_init(
+                main_pool, req_id, project_id,
+                context={
+                    "intent_issue_id": issue.id,
+                    "intent_title": (issue.title or "").strip(),
+                    "snapshot_recovered": True,
+                },
+            )
+            row = await req_state.get(main_pool, req_id)
+            if row is None:
+                log.warning(
+                    "snapshot.orphan_intent_intake.row_missing_post_insert",
+                    req_id=req_id, issue_id=issue.id,
+                )
+                continue
+            body = _make_recovery_body(issue, project_id)
+            await engine.step(
+                main_pool,
+                body=body,
+                req_id=req_id,
+                project_id=project_id,
+                tags=list(tags),
+                cur_state=row.state,
+                ctx=row.context,
+                event=Event.INTENT_INTAKE,
+            )
+            triggered += 1
+        except Exception as e:
+            log.warning(
+                "snapshot.orphan_intent_intake.failed",
+                req_id=req_id, issue_id=issue.id,
+                project_id=project_id, error=str(e),
+            )
+    return triggered
+
+
 async def _trigger_orphan_intent_analyze(
     main_pool, project_id: str, issues: list[Issue],
 ) -> int:
@@ -235,6 +301,17 @@ async def sync_once() -> int:
                 log.warning("snapshot.list_failed", project_id=project_id, error=str(e))
                 continue
 
+            # ─── orphan intent:intake 恢复（与 obs pool 无关）─────────────
+            try:
+                orphans_triggered += await _trigger_orphan_intent_intake(
+                    main_pool, project_id, issues,
+                )
+            except Exception as e:
+                log.warning(
+                    "snapshot.orphan_intake_pass_failed",
+                    project_id=project_id, error=str(e),
+                )
+
             # ─── orphan intent:analyze 恢复（与 obs pool 无关）─────────────
             try:
                 orphans_triggered += await _trigger_orphan_intent_analyze(
@@ -242,7 +319,7 @@ async def sync_once() -> int:
                 )
             except Exception as e:
                 log.warning(
-                    "snapshot.orphan_pass_failed",
+                    "snapshot.orphan_analyze_pass_failed",
                     project_id=project_id, error=str(e),
                 )
 

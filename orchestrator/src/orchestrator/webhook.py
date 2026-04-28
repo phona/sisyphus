@@ -239,6 +239,38 @@ async def webhook(request: Request) -> JSONResponse:
     # ─── 3. derive event ────────────────────────────────────────────────────
     event = router_lib.derive_event(body.event, tags)
 
+    # 3.1 intake fallback：agent 忘 PATCH result:pass 时从 logs 兜底解析
+    # （derive_event 对 intake 无 result tag 返 None；这里主动捞 logs 避免 pipeline 卡住）
+    intake_fallback_intent: dict | None = None
+    if (
+        event is None
+        and body.event == "session.completed"
+        and "intake" in set(tags)
+        and not any(t.startswith("result:") for t in tags)
+    ):
+        intake_text = None
+        try:
+            async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+                if hasattr(bkd, "get_all_assistant_messages_concat"):
+                    intake_text = await bkd.get_all_assistant_messages_concat(
+                        body.projectId, body.issueId,
+                    )
+                elif hasattr(bkd, "get_last_assistant_message"):
+                    intake_text = await bkd.get_last_assistant_message(
+                        body.projectId, body.issueId,
+                    )
+        except Exception as e:
+            log.warning("webhook.intake.fallback_fetch_failed",
+                        issue_id=body.issueId, error=str(e))
+        intake_fallback_intent = router_lib.extract_intake_finalized_intent(intake_text)
+        if intake_fallback_intent is not None:
+            log.info("webhook.intake.fallback_derived",
+                     issue_id=body.issueId, reason="finalized_intent_found_in_logs")
+            event = Event.INTAKE_PASS
+        else:
+            log.info("webhook.intake.fallback_none",
+                     issue_id=body.issueId, reason="no_finalized_intent_in_logs")
+
     # M14b：verifier-agent session.completed → 解 decision JSON（tag 或 description）
     # router.derive_event 对 `verifier` tag 主动返 None，交给这里 full parse。
     decision_payload: dict | None = None
@@ -272,8 +304,9 @@ async def webhook(request: Request) -> JSONResponse:
     # INTAKE_PASS：扫所有 assistant-messages 找 finalized intent JSON
     # （不像 verifier 严要求 "JSON 必须放最后一条"，intake-agent 常先贴 JSON 再发短消息）
     # 解不到 → 降级为 INTAKE_FAIL 触发 escalate
-    intake_finalized_intent: dict | None = None
-    if event == Event.INTAKE_PASS:
+    # fallback 已命中时复用结果，避免二次 fetch
+    intake_finalized_intent: dict | None = intake_fallback_intent
+    if event == Event.INTAKE_PASS and intake_finalized_intent is None:
         intake_text = None
         try:
             async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
