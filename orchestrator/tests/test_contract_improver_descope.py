@@ -26,7 +26,7 @@ def test_architecture_section_0_4_no_improver_branding():
     """IMPR-S1: docs/architecture.md §0.4 must not contain 'IMPROVER' in the heading."""
     text = DOCS_ARCHITECTURE.read_text()
     lines = text.splitlines()
-    for i, line in enumerate(lines):
+    for line in lines:
         if line.startswith("### 0.4"):
             assert "IMPROVER" not in line, (
                 f"docs/architecture.md §0.4 heading must not contain 'IMPROVER': {line!r}"
