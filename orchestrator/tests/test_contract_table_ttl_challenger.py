@@ -188,7 +188,7 @@ async def test_ttl_s8_disabled_run_loop_returns_immediately(monkeypatch) -> None
 
     try:
         await asyncio.wait_for(mod.run_loop(), timeout=2.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail(
             "TTL-S8: run_loop() MUST return in <2 s when ttl_cleanup_enabled=False; "
             "it appears to be blocking (did not return)"
