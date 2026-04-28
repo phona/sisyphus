@@ -10,6 +10,7 @@ Scenarios:
   NRA-S5  create_pr_ci_watch PR_CI_TIMEOUT (ValueError) → escalated_reason="pr-ci-timeout"
   NRA-S6  create_accept ACCEPT_ENV_UP_FAIL → escalated_reason="accept-env-up-failed"
   NRA-S7  escalate action: early write of escalated_reason before gh_incident.open_incident
+  NRA-S7b escalate action: no pre-set reason → defaults to "unknown" + warning log
   NRA-S8  escalate action: pre-set reason is NOT overwritten by fallback
 """
 from __future__ import annotations
@@ -563,5 +564,72 @@ async def test_nra_s8_escalate_does_not_overwrite_pre_set_reason(monkeypatch):
     # The first write should be the early write with the computed reason
     assert written_reasons[0] == "clone-failed", (
         "Pre-set escalated_reason='clone-failed' MUST NOT be overwritten by fallback. "
+        f"written_reasons={written_reasons}"
+    )
+
+
+# ─── NRA-S7b: escalate defaults to "unknown" when no reason is pre-set ───────
+
+
+async def test_nra_s7b_escalate_defaults_to_unknown_when_no_reason(monkeypatch):
+    """
+    NRA-S7 (no-reason branch): When escalate is called with a non-SESSION_END event and
+    ctx contains NO escalated_reason, the final_reason resolution chain produces an empty
+    string. The action MUST default final_reason to "unknown", MUST emit a warning log
+    (escalate.reason_missing_defaulted), and MUST call req_state.update_context with
+    escalated_reason="unknown" before the GH incident loop.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from orchestrator.actions import escalate as mod
+    from orchestrator.config import settings
+
+    written_reasons: list[str] = []
+
+    async def _capture_update(pool, req_id, patch_dict):
+        if "escalated_reason" in patch_dict:
+            written_reasons.append(patch_dict["escalated_reason"])
+
+    monkeypatch.setattr(mod.req_state, "update_context", _capture_update)
+    monkeypatch.setattr(mod.db, "get_pool", lambda: _FakePool())
+    monkeypatch.setattr(mod.gh_incident, "open_incident", AsyncMock(return_value=None))
+
+    class _FakeBKD:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def merge_tags_and_update(self, *a, **kw):
+            pass
+
+        async def update_issue(self, *a, **kw):
+            pass
+
+    monkeypatch.setattr(mod, "BKDClient", _FakeBKD)
+    monkeypatch.setattr(settings, "gh_incident_repo", "")
+    monkeypatch.setattr(settings, "github_token", "")
+
+    body = SimpleNamespace(
+        projectId="proj-x", issueId="issue-x", event="",
+    )
+    # ctx intentionally has NO escalated_reason and event is blank so the
+    # resolution chain cannot derive any non-empty reason — triggers "unknown" fallback
+    ctx = {"intent_issue_id": "issue-x"}
+
+    await mod.escalate(body=body, req_id="REQ-nra7b", tags=[], ctx=ctx)
+
+    assert written_reasons, (
+        "escalate MUST write escalated_reason to DB even when none was pre-set. "
+        f"written_reasons={written_reasons}"
+    )
+    assert written_reasons[0] == "unknown", (
+        "When no escalated_reason is in ctx and event produces no derived reason, "
+        "escalate MUST default final_reason to 'unknown'. "
         f"written_reasons={written_reasons}"
     )
