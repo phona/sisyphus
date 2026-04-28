@@ -285,7 +285,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     print(f"Project={args.project} | matched={len(issues)} (status={args.status or '*'})")
     for i in issues:
         print(
-            f"  {i['id']} | {i.get('statusId','?'):<8} | {i.get('sessionStatus','-'):<10} "
+            f"  {i['id']} | {i.get('statusId','?'):<8} | {(i.get('sessionStatus') or '-'):<10} "
             f"| {i['title'][:90]}"
         )
     return 0
