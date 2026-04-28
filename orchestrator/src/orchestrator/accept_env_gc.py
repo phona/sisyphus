@@ -25,6 +25,8 @@ from .store import db
 
 log = structlog.get_logger(__name__)
 
+_sleep = asyncio.sleep
+
 _TERMINAL_STATES = {"done", "escalated"}
 
 # 上次 gc_once() 的结果（timer loop 和 admin trigger 共用同一槽）。
@@ -126,5 +128,5 @@ async def run_loop() -> None:
             log.info("accept_env_gc.loop.stopped")
             raise
         except Exception as e:
-            log.exception("accept_env_gc.loop.error", error=str(e))
-        await asyncio.sleep(interval)
+            log.error("accept_env_gc.loop.error", error=str(e))
+        await _sleep(interval)

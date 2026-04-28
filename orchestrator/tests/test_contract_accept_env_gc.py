@@ -31,10 +31,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-from fastapi import HTTPException
 from kubernetes.client.exceptions import ApiException
-
 
 # ─── Shared fakes ───────────────────────────────────────────────────────────
 
