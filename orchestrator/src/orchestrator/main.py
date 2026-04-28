@@ -12,6 +12,7 @@ from .admin import admin as admin_api
 from .config import settings
 from .maintenance import table_ttl
 from .migrate import apply_pending
+from .obs_schema import apply_obs_schema
 from .store import db
 from .webhook import api as webhook_api
 
@@ -45,6 +46,8 @@ async def startup() -> None:
     # 2. 起业务 pool + observability pool（obs DSN 空就跳过）
     await db.init_pool(settings.pg_dsn)
     await db.init_obs_pool(settings.obs_pg_dsn)
+    # 2b. 自动 apply observability schema（幂等，失败不阻断）
+    await apply_obs_schema()
     # 3. 起 snapshot 后台同步 task（interval 0 不起）。
     # 这个 loop 现在两件事：obs UPSERT（依赖 obs pool） + intent:analyze orphan 恢复
     # （只依赖 main pool）。后者跟 obs DSN 无关，所以 startup gate 不再 require obs_pg_dsn。
