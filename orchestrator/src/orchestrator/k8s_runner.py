@@ -603,6 +603,51 @@ class RunnerController:
             log.info("runner.gc.pvcs_cleaned", count=len(cleaned), reqs=cleaned)
         return cleaned
 
+    # ── accept env namespace GC ───────────────────────────────────────
+
+    async def list_accept_env_namespaces(self) -> list[str]:
+        """列所有 `accept-req-*` 命名空间名（仅名，不含全对象）。
+
+        用 label_selector 过滤 `sisyphus/role=accept-env`；若环境没打 label，
+        fallback 到 name prefix `accept-req-` 过滤。
+        """
+        ns_list: list[str] = []
+        try:
+            namespaces = await self._k8s(
+                self.core_v1.list_namespace,
+                label_selector="sisyphus/role=accept-env",
+            )
+            ns_list = [ns.metadata.name for ns in namespaces.items if ns.metadata.name]
+        except ApiException as e:
+            log.debug("runner.list_accept_env_ns.label_failed", error=str(e), status=e.status)
+
+        if ns_list:
+            return ns_list
+
+        # fallback：没 label 或 label 过滤失败，按 name prefix 扫
+        try:
+            namespaces = await self._k8s(self.core_v1.list_namespace)
+            ns_list = [
+                ns.metadata.name for ns in namespaces.items
+                if ns.metadata.name and ns.metadata.name.lower().startswith("accept-req-")
+            ]
+        except ApiException as e:
+            log.warning("runner.list_accept_env_ns.failed", error=str(e), status=e.status)
+
+        return ns_list
+
+    async def delete_namespace(self, name: str) -> None:
+        """删命名空间。幂等：404 = no-op。"""
+        try:
+            await self._k8s(
+                self.core_v1.delete_namespace,
+                name,
+            )
+            log.info("runner.namespace.deleted", namespace=name)
+        except ApiException as e:
+            if e.status != 404:
+                raise
+
     # ── exec ────────────────────────────────────────────────────────────
 
     async def exec_in_runner(

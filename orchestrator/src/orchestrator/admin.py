@@ -36,7 +36,7 @@ import structlog
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from . import engine, k8s_runner, runner_gc
+from . import accept_env_gc, engine, k8s_runner, runner_gc
 from .bkd import BKDClient
 from .config import settings
 from .state import Event, ReqState
@@ -754,3 +754,31 @@ async def runner_gc_status() -> dict:
     orchestrator 重启前为 {last: null}。
     """
     return {"last": runner_gc.get_last_result()}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# accept env GC 运维（REQ-accept-env-gc-1777377950）
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@admin.post("/accept-env-gc")
+async def trigger_accept_env_gc(
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """立即执行一次 accept env GC pass，返回结果。
+
+    无 K8s controller 时返回 {skipped: ...}，不报错。
+    """
+    _verify_token(authorization)
+    result = await accept_env_gc.gc_once()
+    log.info("admin.accept_env_gc.triggered", result=result)
+    return result
+
+
+@admin.get("/accept-env-gc/status")
+async def accept_env_gc_status() -> dict:
+    """返回上次 accept env GC 结果（无需认证，只读）。
+
+    orchestrator 重启前为 {last: null}。
+    """
+    return {"last": accept_env_gc.get_last_result()}
