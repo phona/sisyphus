@@ -50,6 +50,12 @@ EXPECTED = [
     (ReqState.FIXER_RUNNING,        Event.FIXER_DONE,          ReqState.REVIEW_RUNNING,      "invoke_verifier_after_fix"),
     # fixer round cap：start_fixer 自检超 cap → 链 emit verify.escalate 走 escalate
     (ReqState.FIXER_RUNNING,        Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
+    # PR merged hook：人手合 PR 后 GHA 触发，跳 gate 直归档
+    (ReqState.PENDING_USER_REVIEW,  Event.PR_MERGED,           ReqState.ARCHIVING,           "done_archive"),
+    (ReqState.REVIEW_RUNNING,       Event.PR_MERGED,           ReqState.ARCHIVING,           "done_archive"),
+    (ReqState.PR_CI_RUNNING,        Event.PR_MERGED,           ReqState.ARCHIVING,           "done_archive"),
+    # verifier infra-flake 有界重试
+    (ReqState.REVIEW_RUNNING,       Event.VERIFY_INFRA_RETRY,  ReqState.REVIEW_RUNNING,      "apply_verify_infra_retry"),
 ]
 
 
