@@ -229,10 +229,7 @@ def cmd_yaml(args: argparse.Namespace) -> int:
     project_id = args.project or cfg.get("project", DEFAULT_PROJECT)
     base_url = args.base_url or cfg.get("base_url", DEFAULT_BASE_URL)
 
-    existing = {
-        i["title"].split("]")[0] if "[" in i["title"] else i["title"]
-        for i in list_issues(base_url, project_id)
-    }
+    existing = {i["title"] for i in list_issues(base_url, project_id)}
 
     definitions = cfg.get("issues", [])
     if not definitions:
@@ -251,7 +248,7 @@ def cmd_yaml(args: argparse.Namespace) -> int:
         should_trigger = bool(args.trigger or d.get("trigger"))
         intent_tag = f"intent:{d.get('intent', args.intent)}" if should_trigger else None
 
-        if title in existing:
+        if any(title in e for e in existing):
             print(f"SKIP [{idx}]: dup — {title[:60]}")
             continue
         if args.dry_run:
