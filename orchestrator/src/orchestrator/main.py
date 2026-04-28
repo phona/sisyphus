@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from . import k8s_runner, runner_gc, snapshot, watchdog
 from .admin import admin as admin_api
 from .config import settings
+from .maintenance import table_ttl
 from .migrate import apply_pending
 from .store import db
 from .webhook import api as webhook_api
@@ -75,6 +76,9 @@ async def startup() -> None:
     # 6. 起 watchdog 兜底任务（M8：BKD 不发 session.failed 时周期性 escalate 卡死 REQ）
     if settings.watchdog_enabled and settings.watchdog_interval_sec > 0:
         _bg_tasks.append(asyncio.create_task(watchdog.run_loop(), name="watchdog"))
+    # 7. 起 TTL 清理后台任务（event_seen / dispatch_slugs / verifier_decisions / stage_runs）
+    if settings.ttl_cleanup_enabled and settings.ttl_cleanup_interval_sec > 0:
+        _bg_tasks.append(asyncio.create_task(table_ttl.run_loop(), name="table_ttl"))
     log.info(
         "startup.ok",
         port=settings.port,
