@@ -17,6 +17,8 @@ from __future__ import annotations
 from typing import ClassVar
 from unittest.mock import AsyncMock
 
+import pytest
+
 # ─── Shared helpers ───────────────────────────────────────────────────────────
 
 
@@ -139,6 +141,7 @@ def _find_escalated_reason(update_ctx_calls: list) -> str | None:
 # ─── RSCA-S1: INTAKE_FAIL → escalated_reason = "intake-fail" ────────────────
 
 
+@pytest.mark.asyncio
 async def test_rsca_s1_intake_fail_sets_escalated_reason(monkeypatch):
     """
     RSCA-S1: session.completed with tags ["intake", "REQ-x", "result:fail"] routes to
@@ -166,6 +169,7 @@ async def test_rsca_s1_intake_fail_sets_escalated_reason(monkeypatch):
 # ─── RSCA-S2: PR_CI_TIMEOUT → escalated_reason = "pr-ci-timeout" ────────────
 
 
+@pytest.mark.asyncio
 async def test_rsca_s2_pr_ci_timeout_sets_escalated_reason(monkeypatch):
     """
     RSCA-S2: session.completed with tags ["pr-ci", "REQ-x", "pr-ci:timeout"] routes to
@@ -192,6 +196,7 @@ async def test_rsca_s2_pr_ci_timeout_sets_escalated_reason(monkeypatch):
 # ─── RSCA-S3: VERIFY_ESCALATE → must NOT overwrite with "session-completed" ──
 
 
+@pytest.mark.asyncio
 async def test_rsca_s3_verify_escalate_does_not_produce_session_completed(monkeypatch):
     """
     RSCA-S3: session.completed routed to VERIFY_ESCALATE must retain
