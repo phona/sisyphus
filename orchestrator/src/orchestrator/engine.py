@@ -180,6 +180,47 @@ async def _sync_intent_status_on_terminal(
         )
 
 
+async def _tag_intent_pr_ready(
+    project_id: str,
+    intent_issue_id: str | None,
+    pr_urls: dict | None,
+    *,
+    req_id: str | None = None,
+) -> None:
+    """REQ-pr-ready-for-review-notify: REVIEW_RUNNING 进入时给 BKD intent issue 打 pr-ready tag.
+
+    pr_urls 空或缺失 → no-op（PR 还没开，跳过标记）。
+    intent_issue_id 缺失 → no-op。
+    BKD 不可达 → log warning，不阻塞状态机。
+    """
+    if not intent_issue_id or not pr_urls:
+        return
+    add_tags = ["pr-ready"]
+    for repo, url in pr_urls.items():
+        # url 形如 https://github.com/owner/repo/pull/123 → tag pr:owner/repo#123
+        try:
+            pr_num = url.rstrip("/").split("/")[-1]
+            tag = f"pr:{repo}#{pr_num}"
+            if tag not in add_tags:
+                add_tags.append(tag)
+        except (AttributeError, IndexError):
+            log.warning("engine.pr_ready.url_parse_failed", url=url, req_id=req_id)
+    try:
+        async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+            await bkd.merge_tags_and_update(
+                project_id=project_id,
+                issue_id=intent_issue_id,
+                add=add_tags,
+            )
+    except Exception as e:
+        log.warning(
+            "engine.pr_ready_tag_failed",
+            req_id=req_id,
+            intent_issue_id=intent_issue_id,
+            error=str(e),
+        )
+
+
 async def _cleanup_runner_on_terminal(req_id: str, terminal_state: ReqState) -> None:
     try:
         rc = k8s_runner.get_controller()
@@ -271,6 +312,19 @@ async def step(
         )
         _cleanup_tasks.add(sync_task)
         sync_task.add_done_callback(_cleanup_tasks.discard)
+
+    # REQ-pr-ready-for-review-notify: REVIEW_RUNNING 进入时给 BKD intent issue 打 pr-ready tag
+    if transition.next_state == ReqState.REVIEW_RUNNING:
+        intent_issue_id = (ctx or {}).get("intent_issue_id")
+        pr_urls = (ctx or {}).get("pr_urls")
+        pr_ready_task = asyncio.create_task(
+            _tag_intent_pr_ready(
+                project_id, intent_issue_id, pr_urls,
+                req_id=req_id,
+            )
+        )
+        _cleanup_tasks.add(pr_ready_task)
+        pr_ready_task.add_done_callback(_cleanup_tasks.discard)
 
     await obs.record_event(
         "router.decision",

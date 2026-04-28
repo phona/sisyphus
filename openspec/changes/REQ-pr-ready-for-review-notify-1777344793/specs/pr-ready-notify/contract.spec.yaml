@@ -1,0 +1,18 @@
+id: pr-ready-notify
+version: "1.0"
+description: >
+  REVIEW_RUNNING 진입 시 BKD intent issue pr-ready 태그 계약.
+  orchestrator engine이 REVIEW_RUNNING 전환 시 ctx.pr_urls 비어있지 않으면
+  BKD intent issue에 pr-ready 태그를 추가해야 한다.
+
+scenarios:
+  - id: PRN-S1
+    description: REVIEW_RUNNING + pr_urls 비어있지 않음 → pr-ready 태그 추가
+  - id: PRN-S2
+    description: pr_urls 빈 dict → BKD PATCH 없음
+  - id: PRN-S3
+    description: pr_urls 없음(None) → BKD PATCH 없음
+  - id: PRN-S4
+    description: BKD PATCH 5xx → warning 로그 + 상태 전이 불차단
+  - id: PRN-S5
+    description: intent_issue_id 없음 → no-op
