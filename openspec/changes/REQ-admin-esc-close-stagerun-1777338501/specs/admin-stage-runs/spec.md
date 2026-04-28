@@ -1,14 +1,14 @@
 ## ADDED Requirements
 
-### Requirement: force_escalate closes in-flight stage_run before state change
+### Requirement: force_escalate MUST close in-flight stage_run before state change
 
-When `POST /admin/req/{req_id}/escalate` is called on a REQ whose current state
-maps to a running stage (via `STATE_TO_STAGE`), the system SHALL call
-`close_latest_stage_run` with `outcome='escalated'` and
-`fail_reason='admin-force-escalate'` **before** performing the raw SQL state update.
-This MUST happen to prevent `ended_at IS NULL` long-tail rows from accumulating in
-`stage_runs` and polluting `stage_stats` metrics. Failure to close MUST only emit a
-warning log, not abort the escalate operation.
+The system SHALL call `close_latest_stage_run` with `outcome='escalated'` and
+`fail_reason='admin-force-escalate'` **before** performing the raw SQL state update
+when `POST /admin/req/{req_id}/escalate` is called on a REQ whose current state
+maps to a running stage (via `STATE_TO_STAGE`). This MUST happen to prevent
+`ended_at IS NULL` long-tail rows from accumulating in `stage_runs` and polluting
+`stage_stats` metrics. Failure to close MUST only emit a warning log, not abort the
+escalate operation.
 
 When the current state has no corresponding stage in `STATE_TO_STAGE` (e.g. INIT,
 DONE, ESCALATED), the system SHALL skip the close call and proceed directly to the
