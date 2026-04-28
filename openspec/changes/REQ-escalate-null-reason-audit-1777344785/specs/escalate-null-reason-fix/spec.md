@@ -1,12 +1,16 @@
 ## ADDED Requirements
 
-### Requirement: Actions MUST set escalated_reason before emitting ESCALATED-bound events
+### Requirement: escalated_reason MUST be persisted before ESCALATED-bound events and GH side effects
 
-Any orchestrator action that emits an event whose transition leads to `ESCALATED`
-(i.e., `VERIFY_ESCALATE`, `PR_CI_TIMEOUT`, `ACCEPT_ENV_UP_FAIL`) MUST call
-`req_state.update_context` to persist `escalated_reason` to the database
-**before** returning the emit dict. This SHALL ensure that the `escalated_reason`
-field is never null in the `req_state` context when the row's state is `escalated`.
+Every orchestrator action MUST call `req_state.update_context` to persist
+`escalated_reason` before returning any emit dict whose event routes the
+row into `ESCALATED` (`VERIFY_ESCALATE`, `PR_CI_TIMEOUT`,
+`ACCEPT_ENV_UP_FAIL`). Additionally, the `escalate` action itself MUST
+write the resolved `escalated_reason` to the database before executing
+any side-effectful operations (GH incident creation, BKD tag updates), so
+that a crash mid-handler cannot leave `escalated_reason` null. When the
+resolution chain produces no non-empty reason string, the `escalate`
+action SHALL default to the string `"unknown"` and emit a warning log.
 
 #### Scenario: NRA-S1 start_analyze clone-failed writes reason before emit
 
@@ -37,16 +41,6 @@ field is never null in the `req_state` context when the row's state is `escalate
 - **GIVEN** `create_accept` is called and `resolve_integration_dir` returns `dir=None`
 - **WHEN** the no-integration-dir branch is taken
 - **THEN** the action MUST call `req_state.update_context` with `escalated_reason="accept-env-up-failed"` and MUST return `emit=ACCEPT_ENV_UP_FAIL`
-
-### Requirement: escalate action MUST write escalated_reason to DB before side effects
-
-The `escalate` action MUST persist the resolved `escalated_reason` to the database
-via `req_state.update_context` **before** executing any side-effectful operations
-(GH incident creation, BKD tag updates). This SHALL guarantee that even if a
-side-effect step raises an exception mid-handler, the `escalated_reason` field in
-the database is not null. Additionally, if `final_reason` is empty or falsy after
-the resolution priority chain, it SHALL default to the string `"unknown"` and
-emit a warning log entry.
 
 #### Scenario: NRA-S7 escalate defaults reason to unknown when none is pre-set
 
