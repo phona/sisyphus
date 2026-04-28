@@ -31,11 +31,12 @@ async def teardown_accept_env(*, body, req_id, tags, ctx):
     if rv := skip_if_enabled("accept", Event.TEARDOWN_DONE_PASS, req_id=req_id):
         return rv
 
-    # 1. 从 tags 推 accept_result：result:pass / result:fail 肯定有一个
-    tagset = set(tags or [])
-    accept_result = "fail"
-    if "result:pass" in tagset:
-        accept_result = "pass"
+    # 1. accept_result 优先从 ctx 读（v0.3-lite create_accept 在 emit 前已写入）；
+    #    回退到 tags（旧 BKD-agent 路径：agent 在 accept issue 上打 result:pass/fail tag）
+    accept_result = (ctx or {}).get("accept_result")
+    if not accept_result:
+        tagset = set(tags or [])
+        accept_result = "pass" if "result:pass" in tagset else "fail"
 
     # 2. 把 accept_result 写 ctx（provenance）
     pool = db.get_pool()
