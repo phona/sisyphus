@@ -11,5 +11,5 @@
 - [x] 全 orchestrator unit tests 通过（1899 passed，9 pre-existing failure 与本次无关）
 
 ## Stage: PR
-- [ ] git push feat/REQ-529
-- [ ] gh pr create --label sisyphus
+- [x] git push feat/REQ-529
+- [x] gh pr create --label sisyphus → https://github.com/phona/sisyphus/pull/208
