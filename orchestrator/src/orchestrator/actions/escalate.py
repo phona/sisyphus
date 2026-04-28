@@ -37,6 +37,8 @@ from ..store import db, req_state
 from . import register
 from ._clone import resolve_repos
 
+_OPENSPEC_CLEANUP_TIMEOUT_SEC = 60
+
 log = structlog.get_logger(__name__)
 
 _MAX_AUTO_RETRY = 2
@@ -230,6 +232,47 @@ async def _apply_pr_merged_done_override(
 # 持引用防 fire-and-forget cleanup task 被 GC（done_callback 自清）。
 # 跟 admin._complete_cleanup_tasks 同模式，独立 set 便于测试 introspect。
 _pr_merged_cleanup_tasks: set[asyncio.Task] = set()
+
+
+async def _cleanup_openspec_changes_in_runner(req_id: str, repos: list[str]) -> None:
+    """Runner pod 内删 openspec/changes/REQ-XXX/ 并 commit。fail-open。
+
+    escalate 终态时调用，防止 escalated PR 带着孤儿 changes/ 合入 main。
+    任何异常只 log warning，不阻塞 escalate transition。
+    """
+    if not repos:
+        return
+    try:
+        rc = k8s_runner.get_controller()
+    except RuntimeError as e:
+        log.warning("escalate.openspec_cleanup.no_runner", req_id=req_id, error=str(e))
+        return
+    for repo in repos:
+        basename = repo.rsplit("/", 1)[-1] if "/" in repo else repo
+        script = (
+            f"cd /workspace/source/{basename} 2>/dev/null || exit 0; "
+            f"[ -d 'openspec/changes/{req_id}' ] || exit 0; "
+            f"rm -rf 'openspec/changes/{req_id}/' && "
+            f"git add openspec/ && "
+            f"git commit -m 'chore(openspec): cleanup escalated {req_id}'"
+        )
+        try:
+            result = await rc.exec_in_runner(
+                req_id, script, timeout_sec=_OPENSPEC_CLEANUP_TIMEOUT_SEC
+            )
+            if result.exit_code != 0:
+                log.warning(
+                    "escalate.openspec_cleanup.failed",
+                    req_id=req_id, repo=repo, exit_code=result.exit_code,
+                    stderr=(result.stderr or "")[-256:],
+                )
+            else:
+                log.info("escalate.openspec_cleanup.done", req_id=req_id, repo=repo)
+        except Exception as e:
+            log.warning(
+                "escalate.openspec_cleanup.exec_error",
+                req_id=req_id, repo=repo, error=str(e),
+            )
 
 
 def _resolve_incident_repos(ctx: dict | None, tags) -> list[str]:
@@ -465,6 +508,11 @@ async def escalate(*, body, req_id, tags, ctx):
                         target_status_id="review",
                         error=str(e),
                     )
+
+    # ─── openspec/changes cleanup（fail-open） ───────────────────────────────
+    # 从 PR 分支删孤儿 openspec/changes/REQ-XXX/，防止 escalated PR 被人手 merge 后
+    # 遗留未 apply 的 spec changes 进 main。cleanup 失败不阻塞 escalate。
+    await _cleanup_openspec_changes_in_runner(req_id, involved_repos)
 
     log.warning("escalate.final",
                 req_id=req_id, reason=final_reason,
