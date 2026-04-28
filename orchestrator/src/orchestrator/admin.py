@@ -35,7 +35,7 @@ from pydantic import BaseModel
 
 from . import engine, k8s_runner, runner_gc
 from .state import Event, ReqState
-from .store import db, req_state
+from .store import db, req_state, stage_runs
 from .webhook import _verify_token
 
 log = structlog.get_logger(__name__)
@@ -120,6 +120,21 @@ async def force_escalate(
 
     if row.state == ReqState.ESCALATED:
         return {"action": "noop", "state": "already escalated"}
+
+    # force_escalate 绕过 engine._record_stage_transitions：如果当前 state 对应一个
+    # 正在跑的 stage，先关闭它的 stage_run，防 ended_at IS NULL 长尾污染 stage_stats。
+    # best-effort（与 _record_stage_transitions 同模式）：失败只 log，不阻塞止损。
+    cur_stage = engine.STATE_TO_STAGE.get(row.state)
+    if cur_stage:
+        try:
+            await stage_runs.close_latest_stage_run(
+                pool, req_id, cur_stage,
+                outcome="escalated",
+                fail_reason="admin-force-escalate",
+            )
+        except Exception as e:
+            log.warning("admin.force_escalate.stage_run_close_failed",
+                        req_id=req_id, stage=cur_stage, error=str(e))
 
     # 直接 SQL 强推（不走 CAS / engine，因为可能是任意 state）
     await pool.execute(
