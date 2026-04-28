@@ -12,4 +12,4 @@
 
 ## Stage: PR
 - [x] git push feat/REQ-accept-env-gc-1777377950
-- [ ] gh pr create --label sisyphus
+- [x] gh pr create --label sisyphus
