@@ -102,7 +102,7 @@ async def test_fesc_s1_analyzing_closes_analyze_stage_run_before_sql_update(monk
     async def _noop_cleanup(*_args, **_kw):
         pass
 
-    monkeypatch.setattr(admin_mod, "_cleanup_runner_on_terminal", _noop_cleanup)
+    monkeypatch.setattr("orchestrator.engine._cleanup_runner_on_terminal", _noop_cleanup)
 
     result = await admin_mod.force_escalate(
         "REQ-fesc-s1-test", authorization="Bearer test-token"
@@ -196,7 +196,7 @@ async def test_fesc_s2_init_state_skips_stage_run_close(monkeypatch):
     async def _noop_cleanup(*_args, **_kw):
         pass
 
-    monkeypatch.setattr(admin_mod, "_cleanup_runner_on_terminal", _noop_cleanup)
+    monkeypatch.setattr("orchestrator.engine._cleanup_runner_on_terminal", _noop_cleanup)
 
     result = await admin_mod.force_escalate(
         "REQ-fesc-s2-test", authorization="Bearer test-token"
