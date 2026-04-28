@@ -1,6 +1,6 @@
 """create_accept (v0.3-lite): per-repo accept-env-up + sleep + accept-smoke + accept-env-down.
 
-纯 shell accept，不依赖 agent dispatch：
+不接 thanatos MCP（descope）：
 1. 读 ctx.cloned_repos，对 /workspace/source/<name>/ 下每仓跑三段 make：
    env-up → smoke-delay → accept-smoke → env-down（best-effort）
 2. accept-env-up / accept-smoke target 缺失 → fail-open skip 该仓 + warn
