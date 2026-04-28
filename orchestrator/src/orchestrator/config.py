@@ -225,5 +225,15 @@ class Settings(BaseSettings):
     checker_infra_flake_retry_max: int = 1            # 0 = no retry, 1 = 1 retry (2 attempts)
     checker_infra_flake_retry_backoff_sec: int = 15
 
+    # ─── 周期 TTL 清理（增长表防膨胀） ───────────────────────────────────
+    # event_seen / dispatch_slugs / verifier_decisions / stage_runs(closed) 只增不减；
+    # 后台任务按 interval 周期删过期行。False = 关闭（dev / 单测可不跑）。
+    ttl_cleanup_enabled: bool = True
+    ttl_cleanup_interval_sec: int = 86400         # 24h
+    ttl_event_seen_days: int = 30                 # webhook dedup：7 天 4000+ 行，30 天足矣
+    ttl_dispatch_slugs_days: int = 90             # slug 幂等映射：低频写，保 90 天
+    ttl_verifier_decisions_days: int = 90         # verifier 判决审计：90 天
+    ttl_stage_runs_closed_days: int = 90          # stage_runs ended_at IS NOT NULL：90 天
+
 
 settings = Settings()  # type: ignore[call-arg]
