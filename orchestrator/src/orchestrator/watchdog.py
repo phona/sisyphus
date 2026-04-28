@@ -260,16 +260,37 @@ async def _check_and_escalate(row) -> bool:
                 req_id=req_id, issue_id=issue_id, error=str(e),
             )
 
-    # 2. defensive: stage expects a BKD issue (issue_key set) but issue_id is
+    # 2. 防 verifier↔fixer 死循环兜底：FIXER_RUNNING 卡住且 fixer_round 已达 cap →
+    # 显式标 escalated_reason=fixer-round-cap，escalate.py 识别为 hard reason 直接终止。
+    # 此检查必须在 defensive issue_id 检查之前，因为 fixer cap 是独立终止条件，不依赖 BKD session。
+    fx_round = int(ctx.get("fixer_round") or 0)
+    cap = settings.fixer_round_cap
+    pool = db.get_pool()
+    if state == ReqState.FIXER_RUNNING and fx_round >= cap:
+        try:
+            await req_state.update_context(pool, req_id, {
+                "escalated_reason": "fixer-round-cap",
+                "fixer_round_cap_hit": cap,
+            })
+            ctx["escalated_reason"] = "fixer-round-cap"
+            log.warning("watchdog.fixer_round_cap_hit",
+                        req_id=req_id, fixer_round=fx_round, cap=cap)
+        except Exception as e:
+            log.warning("watchdog.fixer_round_cap_tag_failed",
+                        req_id=req_id, error=str(e))
+        # fall through to escalate — 不 return，继续走下面的 escalate 路径
+
+    # 3. defensive: stage expects a BKD issue (issue_key set) but issue_id is
     # missing from ctx on an autonomous-bounded stage (stuck_sec=None).
     # Treat as "session may still be running" and skip, rather than blindly
     # treating absent issue_id as "session ended" and escalating prematurely.
     # Defense-in-depth even when actions forget to call update_context.
-    if issue_id is None and policy.stuck_sec is None:
+    # 排除 fixer-round-cap 场景（该场景已在上一步处理，不依赖 issue_id）。
+    if issue_id is None and policy.stuck_sec is None and ctx.get("escalated_reason") != "fixer-round-cap":
         log.warning("watchdog.missing_issue_id", req_id=req_id, state=state.value)
         return False
 
-    # 3. 按 policy 决定是否 escalate
+    # 4. 按 policy 决定是否 escalate
     if still_running:
         if policy.stuck_sec is None or stuck_sec < policy.stuck_sec:
             # 慢车道未开启或未到 → 不杀长尾运行 session
@@ -296,24 +317,6 @@ async def _check_and_escalate(row) -> bool:
     reason = "watchdog_stuck"
     stage_label = f"watchdog:{state_str}"
     stderr_tail = f"stuck for {stuck_sec}s in state {state_str}"
-
-    # 防 verifier↔fixer 死循环兜底：FIXER_RUNNING 卡住且 fixer_round 已达 cap →
-    # 显式标 escalated_reason=fixer-round-cap，escalate.py 识别为 hard reason 直接终止。
-    fx_round = int(ctx.get("fixer_round") or 0)
-    cap = settings.fixer_round_cap
-    pool = db.get_pool()
-    if state == ReqState.FIXER_RUNNING and fx_round >= cap:
-        try:
-            await req_state.update_context(pool, req_id, {
-                "escalated_reason": "fixer-round-cap",
-                "fixer_round_cap_hit": cap,
-            })
-            ctx["escalated_reason"] = "fixer-round-cap"
-            log.warning("watchdog.fixer_round_cap_hit",
-                        req_id=req_id, fixer_round=fx_round, cap=cap)
-        except Exception as e:
-            log.warning("watchdog.fixer_round_cap_tag_failed",
-                        req_id=req_id, error=str(e))
 
     # 5. 写 artifact_checks 记一笔，给 dashboard M7 04-fail-kind-distribution 抓
     check = CheckResult(
