@@ -371,14 +371,14 @@ class MetabaseClient:
 
         cards = [
             {
-                "id": None,
+                "id": -1 - idx,
                 "card_id": card_id_map[q_num],
                 "row": row,
                 "col": col,
                 "size_x": size_x,
                 "size_y": size_y,
             }
-            for q_num, row, col, size_x, size_y in layout
+            for idx, (q_num, row, col, size_x, size_y) in enumerate(layout)
             if q_num in card_id_map
         ]
         if cards:

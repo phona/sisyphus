@@ -4,7 +4,7 @@
 # chart 源：https://github.com/pmint93/helm-charts/tree/master/charts/metabase
 
 image:
-  tag: v0.50.0  # LTS
+  tag: v0.50.36  # LTS，实际可用标签
 
 replicaCount: 1
 
@@ -22,12 +22,12 @@ resources:
 #   CREATE DATABASE metabase OWNER sisyphus;
 database:
   type: postgres
-  host: sisyphus-pg-postgresql.sisyphus.svc.cluster.local
+  host: sisyphus-postgresql.sisyphus.svc.cluster.local
   port: 5432
   dbname: metabase
   username: sisyphus
-  existingSecret: sisyphus-pg-postgresql
-  existingSecretKey: password
+  existingSecret: sisyphus-postgresql
+  existingSecretPasswordKey: password
 
 service:
   type: ClusterIP
@@ -35,34 +35,36 @@ service:
 
 ingress:
   enabled: true
-  ingressClassName: traefik
+  className: traefik
   hosts:
-    - host: metabase.43.239.84.24.nip.io
-      paths:
-        - path: /
-          pathType: Prefix
+    - metabase.43.239.84.24.nip.io
+  path: /
+  pathType: Prefix
 
 persistence:
   enabled: false  # 状态全在元数据库，Pod 无本地状态
 
-# 环境变量：设置 JVM 内存 + 站点 URL
-env:
-  MB_SITE_URL: "http://metabase.43.239.84.24.nip.io"
-  MB_JETTY_PORT: "3000"
-  JAVA_OPTS: "-Xmx768m -XX:+UseG1GC"
-  # 禁用匿名 telemetry
-  MB_ANON_TRACKING_ENABLED: "false"
+# chart 使用 javaOpts（不是 env.JAVA_OPTS）
+javaOpts: "-Xmx768m -XX:+UseG1GC"
+
+# chart 使用 siteUrl（不是 env.MB_SITE_URL）
+siteUrl: "http://metabase.43.239.84.24.nip.io"
+
+# 额外环境变量用 extraEnv 数组
+extraEnv:
+  - name: MB_ANON_TRACKING_ENABLED
+    value: "false"
 
 # 不装 metrics exporter
 serviceMonitor:
   enabled: false
 
-# 部署后手动配置：
-# 1. 首次登录创建 admin 账号
+# 部署后配置：
+# 1. 首次登录创建 admin 账号（或运行 setup_metabase.py --setup）
 # 2. Admin → Databases → Add database
 #    - Engine: PostgreSQL
-#    - Host: sisyphus-pg-postgresql.sisyphus.svc.cluster.local
+#    - Host: sisyphus-postgresql.sisyphus.svc.cluster.local
 #    - Port: 5432
-#    - Database name: sisyphus_obs
+#    - Database name: sisyphus
 #    - Username: sisyphus / Password: 见 postgresql values
-# 3. 按 docs/observability.md 导入 5 个看板 + 4 个 Alert
+# 3. 运行 setup_metabase.py 自动导入 18 条 SQL + 3 个 dashboard
