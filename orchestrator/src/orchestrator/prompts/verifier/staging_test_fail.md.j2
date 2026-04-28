@@ -14,6 +14,18 @@ stderr 里每仓挂了会带 `=== FAIL: <repo> ===` + unit / integration 各自 
 ```
 {% endif %}
 
+### Baseline 差量分析（重要——先看这里）
+
+如果 stderr 开头含 `=== SISYPHUS BASELINE DIFF: ===` 块，说明 sisyphus 已经跑了
+main HEAD baseline，并对比了 PR 引入了哪些新失败。**优先按差量分析判断**：
+
+- `pr_introduced_failures: []`（空列表）→ **PR 没有引入新失败**，main 自己就坏了。
+  这种情况 checker 理应已经 override 到 pass，若仍到达 verifier 则一律判 `pass`。
+- `pr_introduced_failures: [repo-a, ...]`（非空）→ **PR 确实引入了这些仓的新失败**。
+  按下方"关注点"判 fix / escalate。
+- 没有 baseline diff 块 → baseline 无可用数据（infra 异常/obs pool 未配置），
+  按原始 stderr 内容正常判断。
+
 你要判：这失败是 **code bug / spec bug / env bug / flaky** 哪一类，以及能不能修。
 
 ### 关注点

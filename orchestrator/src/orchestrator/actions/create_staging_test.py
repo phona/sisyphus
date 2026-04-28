@@ -81,6 +81,10 @@ async def _run_checker(*, req_id: str, ctx: dict) -> dict:
     log.info("create_staging_test.checker_done", req_id=req_id,
              passed=False, exit_code=result.exit_code,
              duration_sec=round(result.duration_sec, 1))
+    # 保存 stderr_tail（含 baseline diff 上下文）到 ctx，供 verifier prompt 渲染用。
+    await req_state.update_context(pool, req_id, {
+        "staging_test_stderr_tail": result.stderr_tail,
+    })
     return {
         "emit": Event.STAGING_TEST_FAIL.value,
         "passed": False,

@@ -3,6 +3,8 @@
 多仓重构后 + ttpos-ci 契约统一：cmd 遍历 /workspace/source/*，**repo 之间并行**
 对每个含 `ci-unit-test` + `ci-integration-test` target 的仓跑
 `make ci-unit-test && make ci-integration-test`（**单 repo 内串行**）。
+
+REQ-staging-test-baseline-diff-1777343371：两阶段 baseline diff 测试（BD-1~BD-4）。
 """
 from __future__ import annotations
 
@@ -268,3 +270,138 @@ async def test_run_staging_test_retry_disabled_when_setting_off(monkeypatch):
     assert result.attempts == 1
     assert result.reason is None
     assert FakeRC.calls == 1
+
+
+# ── BD-1~BD-4: baseline diff（REQ-staging-test-baseline-diff-1777343371）────────
+
+
+def _patch_baseline_disabled(monkeypatch):
+    """obs_pool = None → 跳过缓存（baseline 每次都跑）。"""
+    monkeypatch.setattr("orchestrator.checkers.staging_test._db.get_obs_pool", lambda: None)
+    # 禁 infra-flake retry，让 PR run 只跑一次
+    monkeypatch.setattr("orchestrator.checkers.staging_test.settings.checker_infra_flake_retry_enabled", False)
+    monkeypatch.setattr("orchestrator.checkers.staging_test.settings.checker_infra_flake_retry_backoff_sec", 0)
+
+
+def _sha_result(sha: str = "a" * 40) -> ExecResult:
+    return ExecResult(exit_code=0, stdout=f"MAIN_SHA: {sha}\n", stderr="", duration_sec=0.1)
+
+
+def _baseline_result(pass_repos: list[str], fail_repos: list[str], sha: str = "a" * 40) -> ExecResult:
+    stdout = "".join(f"=== PASS: {r} ===\n" for r in pass_repos)
+    stdout += f"MAIN_SHA: {sha}\n"
+    stderr = "".join(f"=== FAIL: {r} ===\n" for r in fail_repos)
+    exit_code = 1 if fail_repos else 0
+    return ExecResult(exit_code=exit_code, stdout=stdout, stderr=stderr, duration_sec=2.0)
+
+
+def _pr_result(pass_repos: list[str], fail_repos: list[str]) -> ExecResult:
+    stdout = "".join(f"=== PASS: {r} ===\n" for r in pass_repos)
+    stderr = "".join(f"=== FAIL: {r} ===\n" for r in fail_repos)
+    exit_code = 1 if fail_repos else 0
+    return ExecResult(exit_code=exit_code, stdout=stdout, stderr=stderr, duration_sec=5.0)
+
+
+def _make_phase_controller(*phase_results: ExecResult):
+    """按顺序依次返回 phase_results（sha get → baseline → PR …）。"""
+    seq = list(phase_results)
+
+    class FakeRC:
+        calls = 0
+
+        async def exec_in_runner(self, req_id, command, **kw):
+            FakeRC.calls += 1
+            return seq.pop(0)
+
+    FakeRC.calls = 0
+    return FakeRC
+
+
+@pytest.mark.asyncio
+async def test_bd1_baseline_all_pass_pr_all_pass(monkeypatch):
+    """BD-1: baseline 全 pass + PR 全 pass → staging-test.pass（老逻辑走，exit_code=0）。"""
+    _patch_baseline_disabled(monkeypatch)
+    FakeRC = _make_phase_controller(
+        _sha_result(),
+        _baseline_result(pass_repos=["repo-a"], fail_repos=[]),
+        _pr_result(pass_repos=["repo-a"], fail_repos=[]),
+    )
+    monkeypatch.setattr("orchestrator.checkers.staging_test.k8s_runner.get_controller", lambda: FakeRC())
+
+    result = await run_staging_test("REQ-X")
+
+    assert result.passed is True
+    assert result.exit_code == 0
+    # 3 exec calls: sha + baseline + PR
+    assert FakeRC.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_bd2_baseline_n_fail_pr_same_n_fail_pass(monkeypatch):
+    """BD-2: baseline N 个 fail + PR 同 N 个 fail（相同 set）→ staging-test.pass（差量为空）。"""
+    _patch_baseline_disabled(monkeypatch)
+    FakeRC = _make_phase_controller(
+        _sha_result(),
+        _baseline_result(pass_repos=["repo-b"], fail_repos=["repo-a"]),
+        _pr_result(pass_repos=["repo-b"], fail_repos=["repo-a"]),
+    )
+    monkeypatch.setattr("orchestrator.checkers.staging_test.k8s_runner.get_controller", lambda: FakeRC())
+
+    result = await run_staging_test("REQ-X")
+
+    assert result.passed is True
+    assert result.exit_code == 0
+    # stdout 应含 baseline diff 上下文
+    assert "SISYPHUS BASELINE DIFF" in result.stdout_tail
+    assert "pr_introduced_failures" in result.stdout_tail
+    assert "[]" in result.stdout_tail
+
+
+@pytest.mark.asyncio
+async def test_bd3_baseline_n_fail_pr_more_fail_staging_fail(monkeypatch):
+    """BD-3: baseline N 个 fail + PR N+1 个 fail（多了 1 个 PR-introduced）→ staging-test.fail，
+    verifier ctx（stderr）里 pr_introduced_failures 含新增的那 1 个。
+    """
+    _patch_baseline_disabled(monkeypatch)
+    FakeRC = _make_phase_controller(
+        _sha_result(),
+        _baseline_result(pass_repos=["repo-b"], fail_repos=["repo-a"]),
+        _pr_result(pass_repos=[], fail_repos=["repo-a", "repo-b"]),
+    )
+    monkeypatch.setattr("orchestrator.checkers.staging_test.k8s_runner.get_controller", lambda: FakeRC())
+
+    result = await run_staging_test("REQ-X")
+
+    assert result.passed is False
+    assert result.exit_code != 0
+    # stderr 应含 diff 上下文，pr_introduced 含 repo-b
+    assert "SISYPHUS BASELINE DIFF" in result.stderr_tail
+    assert "repo-b" in result.stderr_tail
+    assert "pr_introduced_failures" in result.stderr_tail
+
+
+@pytest.mark.asyncio
+async def test_bd4_baseline_phase_exception_fallback_old_logic(monkeypatch):
+    """BD-4: baseline SHA 取失败（exception）→ 退化到老逻辑，PR exit_code=1 → staging-test.fail。"""
+    _patch_baseline_disabled(monkeypatch)
+
+    class ErrorRC:
+        calls = 0
+
+        async def exec_in_runner(self, req_id, command, **kw):
+            ErrorRC.calls += 1
+            if ErrorRC.calls == 1:
+                # SHA 获取阶段 raise（模拟 kubectl channel 断开）
+                raise RuntimeError("kubectl exec channel closed")
+            # PR 阶段正常返回（exit_code=1 → fail）
+            return _pr_result(pass_repos=[], fail_repos=["repo-a"])
+
+    ErrorRC.calls = 0
+    monkeypatch.setattr("orchestrator.checkers.staging_test.k8s_runner.get_controller", lambda: ErrorRC())
+
+    result = await run_staging_test("REQ-X")
+
+    # 退化到老逻辑：PR exit_code=1 → fail
+    assert result.passed is False
+    # 无 baseline diff 块（退化路径不注入）
+    assert "SISYPHUS BASELINE DIFF" not in result.stderr_tail
