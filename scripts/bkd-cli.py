@@ -11,6 +11,7 @@ sisyphus 特定的 PG 查询 / orch admin endpoint 操作请见同目录 ``sisyp
   list             列项目下 issues
   trigger-existing 给已建 issue 补 intent tag（PATCH 触发订阅 issue.updated 的 orchestrator）
   close            批量 PATCH issue statusId=done（清 review 队列等批量收尾）
+  logs             获取 issue 的完整操作日志（agent messages / tool calls / thinking）
 
 历史用法兼容：``python bkd-cli.py example-reqs.yaml`` 自动转 ``yaml example-reqs.yaml``。
 
@@ -48,6 +49,9 @@ Examples
 
     # 给已建 issue 补 intent:intake 触发
     bkd-cli.py trigger-existing weatd05d --intent intake
+
+    # 查看 issue 的 agent 操作日志（排查零产出等）
+    bkd-cli.py logs weatd05d --filter tool-use,assistant-message --truncate 300
 
     # 批量 YAML 派
     bkd-cli.py yaml example-reqs.yaml --trigger
@@ -148,6 +152,14 @@ def patch_issue(
         f"{base_url}/projects/{project_id}/issues/{issue_id}",
         patch,
     )
+
+
+def get_logs(base_url: str, project_id: str, issue_id: str) -> list[dict[str, Any]]:
+    """获取 issue 的完整操作日志（agent messages / tool calls / thinking）。"""
+    resp = _req("GET", f"{base_url}/projects/{project_id}/issues/{issue_id}/logs")
+    if not resp.get("success"):
+        raise RuntimeError(resp.get("error", "unknown"))
+    return resp.get("data", {}).get("logs", [])
 
 
 # ─── subcommands ───────────────────────────────────────────────────────────
@@ -329,6 +341,37 @@ def cmd_close(args: argparse.Namespace) -> int:
     return 0 if fail == 0 else 1
 
 
+def cmd_logs(args: argparse.Namespace) -> int:
+    """获取 issue 的完整操作日志（agent messages / tool calls / thinking）。"""
+    try:
+        logs = get_logs(args.base_url, args.project, args.issue_id)
+    except Exception as e:
+        print(f"FAIL: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Issue={args.issue_id} | total logs={len(logs)}")
+    if not logs:
+        return 0
+
+    for i, log in enumerate(logs):
+        entry_type = log.get("entryType", "unknown")
+        ts = log.get("timestamp", "")
+        content = log.get("content", "")
+
+        if args.filter and entry_type not in args.filter.split(","):
+            continue
+
+        # 截断长内容
+        display = content.replace("\n", " ")
+        if len(display) > args.truncate:
+            display = display[: args.truncate] + "..."
+
+        print(f"\n[{i:3d}] [{entry_type:20s}] {ts}")
+        print(f"      {display}")
+
+    return 0
+
+
 # ─── parser ───────────────────────────────────────────────────────────────
 
 
@@ -386,6 +429,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("issue_ids", help="逗号分隔 issue ids")
     sp.add_argument("--to", default="done", choices=["done", "review", "todo", "working"])
     sp.set_defaults(func=cmd_close)
+
+    # logs
+    sp = sub.add_parser("logs", help="获取 issue 的完整操作日志（agent / tool / thinking）")
+    sp.add_argument("issue_id", help="BKD issue id")
+    sp.add_argument("--filter", help="按 entryType 过滤，逗号分隔（如 tool-use,assistant-message）")
+    sp.add_argument("--truncate", type=int, default=200,
+                    help="单条内容截断长度（默认 200）")
+    sp.set_defaults(func=cmd_logs)
 
     return p
 
