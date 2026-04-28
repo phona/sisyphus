@@ -22,9 +22,8 @@ from datetime import UTC, datetime
 import pytest
 from fastapi import HTTPException
 
-from orchestrator.admin import PrMergedBody, _FakeBody, pr_merged
+from orchestrator.admin import PrMergedBody, pr_merged
 from orchestrator.state import Event, ReqState
-
 
 # ─── shared fixtures ──────────────────────────────────────────────────────────
 
@@ -105,7 +104,7 @@ def _setup(monkeypatch, *, state: ReqState, rows: list[_Row] | None = None):
 ])
 async def test_pmh_valid_state_emits_pr_merged(monkeypatch, valid_state):
     """PMH-S1/S2/S3: state ∈ valid set → update_context called + engine.step with PR_MERGED."""
-    pool, update_calls, step_calls = _setup(monkeypatch, state=valid_state)
+    _pool, update_calls, step_calls = _setup(monkeypatch, state=valid_state)
 
     result = await pr_merged("REQ-X", body=_GOOD_BODY, authorization="Bearer tok")
 
@@ -137,7 +136,7 @@ async def test_pmh_valid_state_emits_pr_merged(monkeypatch, valid_state):
 @pytest.mark.parametrize("noop_state", [ReqState.DONE, ReqState.ESCALATED])
 async def test_pmh_noop_for_terminal_states(monkeypatch, noop_state):
     """PMH-S4/S5: state ∈ {done, escalated} → 200 noop, no DB write, no engine.step."""
-    pool, update_calls, step_calls = _setup(monkeypatch, state=noop_state)
+    _pool, update_calls, step_calls = _setup(monkeypatch, state=noop_state)
 
     result = await pr_merged("REQ-X", body=_GOOD_BODY, authorization="Bearer tok")
 
@@ -153,7 +152,7 @@ async def test_pmh_noop_for_terminal_states(monkeypatch, noop_state):
 @pytest.mark.asyncio
 async def test_pmh_409_for_unexpected_state(monkeypatch):
     """PMH-S6: state=analyzing → 409 with valid-states hint."""
-    pool, update_calls, step_calls = _setup(monkeypatch, state=ReqState.ANALYZING)
+    _pool, update_calls, step_calls = _setup(monkeypatch, state=ReqState.ANALYZING)
 
     with pytest.raises(HTTPException) as ei:
         await pr_merged("REQ-X", body=_GOOD_BODY, authorization="Bearer tok")
@@ -221,7 +220,7 @@ async def test_pmh_404_when_req_not_found(monkeypatch):
 @pytest.mark.asyncio
 async def test_pmh_ctx_contains_all_merge_fields(monkeypatch):
     """PMH-S9: context patch contains merged_pr_url, merged_sha, merged_at, pr_merged_trigger."""
-    pool, update_calls, step_calls = _setup(
+    _pool, update_calls, _step_calls = _setup(
         monkeypatch, state=ReqState.PENDING_USER_REVIEW
     )
 
@@ -245,7 +244,8 @@ async def test_pmh_ctx_contains_all_merge_fields(monkeypatch):
 
 def test_pmh_route_registered():
     """PMH-S10: /admin/req/{req_id}/pr-merged POST route is registered."""
-    from orchestrator.admin import admin as admin_router, pr_merged as endpoint_fn
+    from orchestrator.admin import admin as admin_router
+    from orchestrator.admin import pr_merged as endpoint_fn
 
     paths_to_endpoint = {
         r.path: r.endpoint
