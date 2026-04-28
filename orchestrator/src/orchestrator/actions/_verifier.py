@@ -429,9 +429,20 @@ async def invoke_verifier_for_staging_test_fail(*, body, req_id, tags, ctx):
     stage 来自 transition table，不从 tags 推。
     （机械 checker 没自己的 BKD issue，webhook tags 来自上游 dev issue，
     以前 sniff tag 会把 staging-test fail 误路成 dev。）
+
+    REQ-staging-test-baseline-diff-1777343371：ctx.staging_test_stderr_tail
+    由 create_staging_test._run_checker 写入，含 baseline diff 上下文；
+    透传给 verifier prompt 让 verifier 区分 "agent 引入的 fail" vs "main 上本来就坏"。
     """
-    return await _invoke_verifier_fail(
-        stage="staging_test", body=body, req_id=req_id, ctx=ctx,
+    ctx = ctx or {}
+    stderr_tail = ctx.get("staging_test_stderr_tail") or ""
+    return await invoke_verifier(
+        stage="staging_test",
+        trigger="fail",
+        req_id=req_id,
+        project_id=body.projectId,
+        stderr_tail=stderr_tail,
+        ctx=ctx,
     )
 
 
