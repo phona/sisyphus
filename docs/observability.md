@@ -251,6 +251,8 @@ Metabase 看板直接读这张表就能看"改进成绩单"。
 
 关键是 **`config_version` 和 `improvement_log`**：把每次改动和每条指标挂钩，让改进行为本身变得可被度量，才谈得上"可持续"。
 
+> **本闭环为人工驱动，无自动化 daemon**：观察、诊断、假设生成、实施、验证的每一步都由人完成。18 条 Metabase SQL 的 consumer 是工程师，不是机器。不存在也不计划任何自动读取 dashboard 并自动改写 prompt / 阈值的 IMPROVER daemon。
+
 ## 容量 / 性能估算
 
 | 表 | 日增 | 年增 | 查询 |
