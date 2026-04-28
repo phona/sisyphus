@@ -2,9 +2,7 @@
 
 ### Requirement: dispatch idempotency challenger test file carries no ruff lint findings
 
-The file `orchestrator/tests/test_contract_dispatch_idempotency_challenger.py`
-MUST be free of all ruff lint findings under the project's existing
-`pyproject.toml` rule selection. Specifically, the import block MUST be
+The file `orchestrator/tests/test_contract_dispatch_idempotency_challenger.py` MUST be free of all ruff lint findings under the project's existing `pyproject.toml` rule selection. Specifically, the import block MUST be
 sorted and formatted in conformance with ruff's isort rules (I001 clean),
 and no local variable SHALL be assigned a value that is never subsequently
 read within the same scope (F841 clean). These constraints SHALL be verified
