@@ -2,9 +2,9 @@
 
 ### Requirement: escalate action cleans up openspec/changes/REQ-XXX/ from runner repos
 
-When the `escalate` action transitions a REQ to the ESCALATED terminal state via the real
-escalate path (not auto-resume, not PR-merged shortcut), the system SHALL attempt to remove
-`openspec/changes/<req_id>/` from each involved repo in the runner pod and commit the removal.
+The escalate action SHALL attempt to remove `openspec/changes/<req_id>/` from each involved
+repo in the runner pod and commit the removal when transitioning a REQ to the ESCALATED
+terminal state via the real escalate path (not auto-resume, not PR-merged shortcut).
 The cleanup MUST be fail-open: any exec failure or runner unavailability MUST NOT block the
 escalate transition from completing and returning `{"escalated": True}`.
 
@@ -30,10 +30,10 @@ escalate transition from completing and returning `{"escalated": True}`.
 
 ### Requirement: start_analyze supersedes stale same-slug openspec/changes dirs
 
-When `start_analyze` dispatches a new analyze run for REQ-XXX-vN (a redispatch), the system
-SHALL scan each cloned repo for `openspec/changes/` directories whose base slug (after stripping
-the `-vN` suffix) matches the current REQ's base slug but is not the current REQ itself. Any
-such stale directory MUST be moved to `openspec/changes/_superseded/<old-dir>/` and committed.
+The system SHALL scan each cloned repo for `openspec/changes/` directories whose base slug
+(after stripping the `-vN` suffix) matches the current REQ's base slug but is not the current
+REQ itself, when `start_analyze` dispatches a new analyze run for REQ-XXX-vN (a redispatch).
+Any such stale directory MUST be moved to `openspec/changes/_superseded/<old-dir>/` and committed.
 The supersede step MUST be fail-open: any failure MUST NOT prevent BKD dispatch from proceeding.
 
 #### Scenario: SUPR-S1 vN redispatch triggers supersede mv and commit
