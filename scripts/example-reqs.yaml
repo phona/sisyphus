@@ -1,0 +1,44 @@
+# Example: dispatch sisyphus gap-analysis issues (dogfood via intent:intake)
+# Usage:
+#   python bkd-cli.py --dry-run example-reqs.yaml          # validate
+#   python bkd-cli.py --trigger example-reqs.yaml           # create + trigger with intent:intake (default)
+#   python bkd-cli.py --trigger --intent analyze example-reqs.yaml  # skip intake, go direct analyze
+
+project: nnvxh8wj
+base_url: http://localhost:3000/api
+
+issues:
+  - title: "【缺口-1】实现 accept_env_gc.py 替换 skeleton（资源泄漏风险）"
+    description: "accept_env_gc.py 当前 gc_once() / run_loop() 直接抛 NotImplementedError，main.py 未启动该服务。accept 环境（临时部署、PVC 等）存在泄漏风险。"
+    priority: p0
+    tags: ["gap-analysis", "accept_env_gc"]
+
+  - title: "【缺口-2】清理 thanatos 死代码（create_accept.py 残留解析块）"
+    description: "thanatos MCP 已 descope，但 create_accept.py 第 167-202 行仍在解析 thanatos_block。测试里还有 176 处 thanatos 引用。"
+    priority: p1
+    tags: ["gap-analysis", "thanatos-cleanup"]
+
+  - title: "【缺口-3】补齐状态机 transition 单测（21% → 80%+）"
+    description: "IMPACT-REPORT.md 自认核心 transition 仅覆盖 9/42 条（约21%）。17 状态 × 27 事件 × 30+ transition 的复杂状态机缺乏兜底测试。"
+    priority: p0
+    tags: ["gap-analysis", "state-machine-tests"]
+
+  - title: "【缺口-4】部署 Metabase + 导入 18 条 SQL 查询"
+    description: "values/metabase.yaml 存在但无运行实例。18 条 Metabase SQL 在 observability/queries/sisyphus/ 里无处可跑。"
+    priority: p1
+    tags: ["gap-analysis", "metabase-deploy"]
+
+  - title: "【缺口-5】descope IMPROVER daemon，文档化人工改进闭环"
+    description: "architecture.md 对 config_version + improvement_log 的描述被误解为 IMPROVER daemon 设计。实际 observability.md 已明确改进闭环为人工驱动（看板→诊断→假设→实施→验证）。决策：不实现自动化 daemon，更新文档消除误解。18 条 Metabase SQL 的消费者是人，不是机器。"
+    priority: p1
+    tags: ["gap-analysis", "improver", "descoped"]
+
+  - title: "【缺口-6】多仓库 M16 端到端合同测试"
+    description: "involved_repos / cloned_repos 代码已 wired（_clone.py 5 层 fallback），但没有合同测试验证 analyze → fix → verify → accept → archive 全链路的多仓行为。"
+    priority: p2
+    tags: ["gap-analysis", "multi-repo-contract"]
+
+  - title: "【缺口-8】observability/schema.sql 自动应用"
+    description: "event_log 表定义在 observability/schema.sql（独立 sisyphus_obs DB），但 orchestrator 启动时不自动应用该 schema。新环境部署需手动建表，易遗漏。"
+    priority: p2
+    tags: ["gap-analysis", "observability-schema"]
