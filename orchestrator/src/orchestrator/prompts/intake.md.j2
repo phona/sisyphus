@@ -40,9 +40,10 @@ REQ={{ req_id }}
 4. 用户答完，**还有疑问继续问**
 5. 满意后发 finalized intent draft 给用户审："我准备这么写下去，OK?"
 6. 用户 chat 回 "go" / "好" / 没补充 → finalize
-7. **finalize 步骤**：
+7. **finalize 步骤（强制执行，不做 = 任务失败）**：
    - 在 BKD chat 最后一条 message 里贴 ```` ```json ``` ```` 块（同 verifier 模式）
-   - 然后 PATCH 本 issue 加 tag `result:pass`
+   - ⚠️ **立即用 Bash curl PATCH 本 issue 加 tag `result:pass`**
+   - **不写 result:pass 会导致 REQ 永远卡在 intake 阶段，视为任务失败。不允许在 PATCH 之前结束 session。**
 
 ### finalized intent JSON schema
 
