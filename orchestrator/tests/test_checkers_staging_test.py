@@ -193,7 +193,10 @@ async def test_run_staging_test_recovers_from_dns_flake(monkeypatch):
     monkeypatch.setattr(
         "orchestrator.checkers.staging_test.settings.checker_infra_flake_retry_backoff_sec", 0,
     )
+    # 第 1 次 exec = SHA get（空 stdout → main_sha=None → 跳过 baseline，退化到老逻辑）
+    # 第 2 次 exec = PR run #1（DNS flake），第 3 次 = PR run #2（pass）
     FakeRC = _make_seq_controller(
+        ExecResult(exit_code=0, stdout="", stderr="", duration_sec=0.1),  # SHA get → no sha → skip baseline
         ExecResult(
             exit_code=128, stdout="",
             stderr="fatal: Could not resolve host github.com", duration_sec=1.0,
@@ -210,7 +213,7 @@ async def test_run_staging_test_recovers_from_dns_flake(monkeypatch):
     assert result.attempts == 2
     assert result.reason is not None
     assert "flake-retry-recovered" in result.reason
-    assert FakeRC.calls == 2
+    assert FakeRC.calls == 3  # SHA get + 2 PR runs
 
 
 @pytest.mark.asyncio
@@ -225,7 +228,9 @@ async def test_run_staging_test_does_not_retry_real_test_failure(monkeypatch):
     monkeypatch.setattr(
         "orchestrator.checkers.staging_test.settings.checker_infra_flake_retry_backoff_sec", 0,
     )
+    # 第 1 次 exec = SHA get（空 stdout → skip baseline）；第 2 次 = PR run（real fail，不重试）
     FakeRC = _make_seq_controller(
+        ExecResult(exit_code=0, stdout="", stderr="", duration_sec=0.1),  # SHA get
         ExecResult(
             exit_code=2, stdout="--- FAIL: TestFoo (0.10s)\n",
             stderr="make: *** [Makefile:42] Error 1", duration_sec=10.0,
@@ -240,7 +245,7 @@ async def test_run_staging_test_does_not_retry_real_test_failure(monkeypatch):
     assert result.exit_code == 2
     assert result.attempts == 1
     assert result.reason is None
-    assert FakeRC.calls == 1
+    assert FakeRC.calls == 2  # SHA get + 1 PR run
 
 
 @pytest.mark.asyncio
@@ -255,7 +260,9 @@ async def test_run_staging_test_retry_disabled_when_setting_off(monkeypatch):
     monkeypatch.setattr(
         "orchestrator.checkers.staging_test.settings.checker_infra_flake_retry_backoff_sec", 0,
     )
+    # 第 1 次 exec = SHA get（空 stdout → skip baseline）；第 2 次 = PR run（DNS flake，不重试）
     FakeRC = _make_seq_controller(
+        ExecResult(exit_code=0, stdout="", stderr="", duration_sec=0.1),  # SHA get
         ExecResult(
             exit_code=128, stdout="",
             stderr="fatal: Could not resolve host github.com", duration_sec=1.0,
@@ -269,7 +276,7 @@ async def test_run_staging_test_retry_disabled_when_setting_off(monkeypatch):
     assert result.passed is False
     assert result.attempts == 1
     assert result.reason is None
-    assert FakeRC.calls == 1
+    assert FakeRC.calls == 2  # SHA get + 1 PR run
 
 
 # ── BD-1~BD-4: baseline diff（REQ-staging-test-baseline-diff-1777343371）────────
