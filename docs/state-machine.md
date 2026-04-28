@@ -43,7 +43,7 @@
 | **`done`** | REQ 完成 | **terminal** |
 | **`escalated`** | 熔断 / session-failed / 人工止损 | **terminal** |
 
-## 3. Event 枚举（32 个）
+## 3. Event 枚举（33 个）
 
 | event | 来源 | 触发什么 |
 |---|---|---|

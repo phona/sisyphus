@@ -178,7 +178,7 @@ def test_user_review_pending_has_no_session_failed_self_loop():
 
 def test_user_review_pending_illegal_events_return_none():
     """USR-T4 续：除 USER_REVIEW_PASS / USER_REVIEW_FIX 外其他事件全非法。"""
-    legal = {Event.USER_REVIEW_PASS, Event.USER_REVIEW_FIX}
+    legal = {Event.USER_REVIEW_PASS, Event.USER_REVIEW_FIX, Event.PR_MERGED}
     for ev in Event:
         if ev in legal:
             continue
