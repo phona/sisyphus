@@ -22,6 +22,7 @@ def _mock_dispatch_slugs(monkeypatch):
     monkeypatch.setattr(start_challenger.db, "get_pool", MagicMock(return_value=object()))
     monkeypatch.setattr(start_challenger.dispatch_slugs, "get", AsyncMock(return_value=None))
     monkeypatch.setattr(start_challenger.dispatch_slugs, "put", AsyncMock())
+    monkeypatch.setattr(start_challenger.req_state, "update_context", AsyncMock())
 
 
 @dataclass
@@ -167,3 +168,53 @@ async def test_start_challenger_no_hint_keeps_base_tags(monkeypatch):
     )
     _, kwargs = fake.create_issue.await_args
     assert kwargs["tags"] == ["challenger", "REQ-X", "parent-id:analyze-1"]
+
+
+# ─── update_context regression (REQ-actions-ctx-persist-v2) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_start_challenger_writes_challenger_issue_id_to_ctx(monkeypatch):
+    """新建 challenger issue → req_state.update_context 以 {challenger_issue_id: id} 调用。
+
+    watchdog._STATE_ISSUE_KEY[CHALLENGER_RUNNING] = "challenger_issue_id"；
+    ctx 里有值 watchdog 才能 reconcile BKD session，缺失会在 5min 后盲 escalate。
+    """
+    _patch_bkd(monkeypatch)
+    _patch_pr_links_empty(monkeypatch)
+
+    out = await start_challenger.start_challenger(
+        body=_make_body(issue_id="analyze-1"),
+        req_id="REQ-CTX",
+        tags=[],
+        ctx={},
+    )
+
+    assert out["challenger_issue_id"] == "ch-new-1"
+    start_challenger.req_state.update_context.assert_awaited_once()
+    _pool, _req_id, patch = start_challenger.req_state.update_context.await_args.args
+    assert _req_id == "REQ-CTX"
+    assert patch == {"challenger_issue_id": "ch-new-1"}
+
+
+@pytest.mark.asyncio
+async def test_start_challenger_slug_hit_writes_ctx(monkeypatch):
+    """slug 命中（重复 dispatch）→ update_context 同样以 hit id 调用，不漏写。"""
+    _patch_bkd(monkeypatch)
+    _patch_pr_links_empty(monkeypatch)
+    monkeypatch.setattr(
+        start_challenger.dispatch_slugs, "get", AsyncMock(return_value="ch-existing-1"),
+    )
+
+    out = await start_challenger.start_challenger(
+        body=_make_body(issue_id="analyze-1"),
+        req_id="REQ-SLUG",
+        tags=[],
+        ctx={},
+    )
+
+    assert out["challenger_issue_id"] == "ch-existing-1"
+    start_challenger.req_state.update_context.assert_awaited_once()
+    _pool, _req_id, patch = start_challenger.req_state.update_context.await_args.args
+    assert _req_id == "REQ-SLUG"
+    assert patch == {"challenger_issue_id": "ch-existing-1"}

@@ -260,7 +260,16 @@ async def _check_and_escalate(row) -> bool:
                 req_id=req_id, issue_id=issue_id, error=str(e),
             )
 
-    # 2. 按 policy 决定是否 escalate
+    # 2. defensive: stage expects a BKD issue (issue_key set) but issue_id is
+    # missing from ctx on an autonomous-bounded stage (stuck_sec=None).
+    # Treat as "session may still be running" and skip, rather than blindly
+    # treating absent issue_id as "session ended" and escalating prematurely.
+    # Defense-in-depth even when actions forget to call update_context.
+    if issue_id is None and policy.stuck_sec is None:
+        log.warning("watchdog.missing_issue_id", req_id=req_id, state=state.value)
+        return False
+
+    # 3. 按 policy 决定是否 escalate
     if still_running:
         if policy.stuck_sec is None or stuck_sec < policy.stuck_sec:
             # 慢车道未开启或未到 → 不杀长尾运行 session
@@ -282,7 +291,7 @@ async def _check_and_escalate(row) -> bool:
             )
             return False
 
-    # 3. 选 body.event：ARCHIVING 用专属 archive.failed，其他通用 watchdog.stuck
+    # 4. 选 body.event：ARCHIVING 用专属 archive.failed，其他通用 watchdog.stuck
     body_event = _STATE_FAILURE_EVENT.get(state, "watchdog.stuck")
     reason = "watchdog_stuck"
     stage_label = f"watchdog:{state_str}"
@@ -306,7 +315,7 @@ async def _check_and_escalate(row) -> bool:
             log.warning("watchdog.fixer_round_cap_tag_failed",
                         req_id=req_id, error=str(e))
 
-    # 4. 写 artifact_checks 记一笔，给 dashboard M7 04-fail-kind-distribution 抓
+    # 5. 写 artifact_checks 记一笔，给 dashboard M7 04-fail-kind-distribution 抓
     check = CheckResult(
         passed=False,
         exit_code=-1,
@@ -321,7 +330,7 @@ async def _check_and_escalate(row) -> bool:
     except Exception as e:
         log.warning("watchdog.artifact_insert_failed", req_id=req_id, error=str(e))
 
-    # 5. 通过 engine.step 发 SESSION_FAILED → 走 escalate transition
+    # 6. 通过 engine.step 发 SESSION_FAILED → 走 escalate transition
     body = _SyntheticBody(
         projectId=project_id,
         issueId=issue_id or ctx.get("intent_issue_id") or "",
