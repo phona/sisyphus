@@ -92,9 +92,9 @@ SELECT
     r.context->>'bkd_intent_url' AS bkd_intent_url,
     pu.pr_urls_md
 FROM req_state r
-LEFT JOIN last_check lc USING (req_id)
+LEFT JOIN last_check lc ON lc.req_id = r.req_id
 LEFT JOIN recent_fail rf
     ON rf.req_id = r.req_id AND rf.stage = lc.last_stage
-LEFT JOIN pr_urls_md pu USING (req_id)
+LEFT JOIN pr_urls_md pu ON pu.req_id = r.req_id
 WHERE r.state NOT IN ('done', 'escalated')
 ORDER BY stuck_min DESC;
