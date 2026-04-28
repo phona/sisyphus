@@ -22,11 +22,11 @@ resources:
 #   CREATE DATABASE metabase OWNER sisyphus;
 database:
   type: postgres
-  host: sisyphus-pg-postgresql.sisyphus.svc.cluster.local
+  host: sisyphus-postgresql.sisyphus.svc.cluster.local
   port: 5432
   dbname: metabase
   username: sisyphus
-  existingSecret: sisyphus-pg-postgresql
+  existingSecret: sisyphus-postgresql
   existingSecretKey: password
 
 service:
@@ -61,7 +61,7 @@ serviceMonitor:
 # 1. 首次登录创建 admin 账号
 # 2. Admin → Databases → Add database
 #    - Engine: PostgreSQL
-#    - Host: sisyphus-pg-postgresql.sisyphus.svc.cluster.local
+#    - Host: sisyphus-postgresql.sisyphus.svc.cluster.local
 #    - Port: 5432
 #    - Database name: sisyphus_obs
 #    - Username: sisyphus / Password: 见 postgresql values
