@@ -450,8 +450,9 @@ async def test_done_archive(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_accept(monkeypatch):
-    """v0.3-lite: per-repo shell script exits 0 → emit accept.pass (no BKD agent)."""
+    """v0.3-lite fallback: per-repo shell script exits 0 → emit accept.pass (no BKD agent)."""
     from orchestrator.actions import create_accept as mod
+    from orchestrator.actions._integration_resolver import ResolveResult
     from orchestrator.k8s_runner import ExecResult
 
     patch_db(monkeypatch, "create_accept")
@@ -461,11 +462,23 @@ async def test_create_accept(monkeypatch):
 
     class FakeRC:
         async def exec_in_runner(self, req_id, command, env=None, timeout_sec=None):
+            if "make accept-env-up" in command:
+                return ExecResult(
+                    exit_code=0, stdout='{"endpoint": "http://localhost"}\n',
+                    stderr="", duration_sec=1.0,
+                )
             return ExecResult(exit_code=0, stdout="PASS\n", stderr="", duration_sec=1.0)
 
     monkeypatch.setattr(
         "orchestrator.actions.create_accept.k8s_runner.get_controller",
         lambda: FakeRC(),
+    )
+
+    async def fake_resolve(rc, req_id):
+        return ResolveResult(dir="/workspace/source/test")
+    monkeypatch.setattr(
+        "orchestrator.actions.create_accept.resolve_integration_dir",
+        fake_resolve,
     )
 
     ctx_updates: list[dict] = []
@@ -485,6 +498,7 @@ async def test_create_accept(monkeypatch):
 async def test_create_accept_env_up_fail(monkeypatch):
     """Shell script exits 1, stdout ends FAIL:repo → emit accept.fail."""
     from orchestrator.actions import create_accept as mod
+    from orchestrator.actions._integration_resolver import ResolveResult
     from orchestrator.k8s_runner import ExecResult
 
     patch_db(monkeypatch, "create_accept")
@@ -494,6 +508,11 @@ async def test_create_accept_env_up_fail(monkeypatch):
 
     class FakeRC:
         async def exec_in_runner(self, req_id, command, env=None, timeout_sec=None):
+            if "make accept-env-up" in command:
+                return ExecResult(
+                    exit_code=0, stdout='{"endpoint": "http://localhost"}\n',
+                    stderr="", duration_sec=1.0,
+                )
             return ExecResult(
                 exit_code=1, stdout="FAIL:repo-a\n",
                 stderr="make: Error 1", duration_sec=3.0,
@@ -502,6 +521,13 @@ async def test_create_accept_env_up_fail(monkeypatch):
     monkeypatch.setattr(
         "orchestrator.actions.create_accept.k8s_runner.get_controller",
         lambda: FakeRC(),
+    )
+
+    async def fake_resolve(rc, req_id):
+        return ResolveResult(dir="/workspace/source/test")
+    monkeypatch.setattr(
+        "orchestrator.actions.create_accept.resolve_integration_dir",
+        fake_resolve,
     )
 
     ctx_updates: list[dict] = []
