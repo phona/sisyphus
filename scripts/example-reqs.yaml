@@ -13,8 +13,8 @@ issues:
     priority: p0
     tags: ["gap-analysis", "accept_env_gc"]
 
-  - title: "【缺口-2】清理 thanatos 死代码（create_accept.py 残留解析块）"
-    description: "thanatos MCP 已 descope，但 create_accept.py 第 167-202 行仍在解析 thanatos_block。测试里还有 176 处 thanatos 引用。"
+  - title: "【缺口-2】清理 thanatos 死代码（descoped 模块全删除）"
+    description: "thanatos MCP 已 descope，需删除 thanatos/ 模块目录、CI workflow、helm chart、docs/thanatos.md、测试引用、Makefile target、未归档 openspec changes 残留。"
     priority: p1
     tags: ["gap-analysis", "thanatos-cleanup"]
 
