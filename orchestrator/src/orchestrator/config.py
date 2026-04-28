@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     pvc_retain_on_escalate_days: int = 1
     # GC 扫描周期 15 min（之前 1h 太松，REQ 频繁时 PVC 堆得快）
     runner_gc_interval_sec: int = 900    # 15min
+    # accept 环境 GC 扫描周期（accept-req-* namespace），0 = 关闭
+    accept_env_gc_interval_sec: int = 900    # 15min
     # 磁盘压力阈值：超过此比例 GC 强清所有非 active PVC（不论 retention）
     runner_gc_disk_pressure_threshold: float = 0.8
 

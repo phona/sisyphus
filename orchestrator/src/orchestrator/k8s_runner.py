@@ -603,6 +603,40 @@ class RunnerController:
             log.info("runner.gc.pvcs_cleaned", count=len(cleaned), reqs=cleaned)
         return cleaned
 
+    async def gc_accept_env_namespaces(self, keep_req_ids: set[str]) -> list[str]:
+        """扫描 `accept-req-*` namespace，删 keep_req_ids 之外的（孤儿资源）。
+
+        accept 环境由 runner pod 内 `make accept-env-up` 创建（helm install 到
+        accept-{req_id} namespace），`make accept-env-down` / teardown 可能漏拆。
+        直接删 namespace 级联清理 Pod/Service/ConfigMap/Deployment 等全部资源。
+
+        404 视为 no-op（namespace 已被别处删）。返已尝试删除的 namespace 列表。
+        """
+        keep_lower = {r.lower() for r in keep_req_ids}
+        cleaned: list[str] = []
+
+        ns_list = await self._k8s(self.core_v1.list_namespace)
+        for ns in ns_list.items:
+            name = ns.metadata.name if ns.metadata else ""
+            if not name.startswith("accept-"):
+                continue
+            req_label = name[len("accept-"):]
+            if not req_label or req_label in keep_lower:
+                continue
+            try:
+                await self._k8s(
+                    self.core_v1.delete_namespace,
+                    name,
+                )
+            except ApiException as e:
+                if e.status != 404:
+                    raise
+            cleaned.append(name)
+
+        if cleaned:
+            log.info("accept_env.gc.namespaces_cleaned", count=len(cleaned), namespaces=cleaned)
+        return cleaned
+
     # ── exec ────────────────────────────────────────────────────────────
 
     async def exec_in_runner(
