@@ -509,6 +509,22 @@ ARCHIVE_DONE → DONE
    - HITL 闭环。
 ```
 
+**设计决策：intent issue 生命周期跟整条 REQ 绑定**
+
+上面的流程图有一个容易被误解的点：intent issue 从 intake 阶段进入 `working` 后，
+会一直留在 `working` 列直到整条 REQ 走完 `ARCHIVE_DONE → DONE`（或 escalate），
+而不是 intake 一完就推 `done`。这是有意为之，不是遗漏。
+
+- intent issue 是**整条 REQ 的总览卡片**，不是某个 stage 的完成标记。
+  它保留在 `working` 列的意义是告诉看板使用者"这条 REQ 还在生命周期里"。
+- 各 stage 的细粒度进展由子 issue（analyze、challenger、verifier 等）
+  在看板各列独立呈现；想看"跑到哪了"的人应该追踪这些子 issue。
+- 如果 intake 完就把 intent issue 推 `done`，后面 analyze → dev → staging-test
+  → archive 全在"已完成"卡片下面跑，反而丢失了 REQ 级聚合视图。
+- 考虑过加 `intake-completed` 中间状态来减少 `working` 列的"脏项"感，
+  但权衡后认为新状态的认知成本大于收益。若未来看板噪声确实干扰工作流，
+  再引入不迟。
+
 **两个补完点的语义**（REQ-bkd-hitl-end-to-end-loop-1777273753）：
 
 1. `engine._sync_intent_status_on_terminal()` —— 从非终态 CAS 进终态时，跟
