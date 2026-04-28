@@ -10,8 +10,8 @@ from fastapi import FastAPI
 from . import k8s_runner, runner_gc, snapshot, watchdog
 from .admin import admin as admin_api
 from .config import settings
-from .maintenance import table_ttl
 from .migrate import apply_pending
+from .obs_schema import apply_obs_schema
 from .store import db
 from .webhook import api as webhook_api
 
@@ -45,6 +45,8 @@ async def startup() -> None:
     # 2. 起业务 pool + observability pool（obs DSN 空就跳过）
     await db.init_pool(settings.pg_dsn)
     await db.init_obs_pool(settings.obs_pg_dsn)
+    # 2b. 自动 apply observability schema（幂等，失败不阻断）
+    await apply_obs_schema()
     # 3. 起 snapshot 后台同步 task（interval 0 不起）。
     # 这个 loop 现在两件事：obs UPSERT（依赖 obs pool） + intent:analyze orphan 恢复
     # （只依赖 main pool）。后者跟 obs DSN 无关，所以 startup gate 不再 require obs_pg_dsn。
@@ -76,9 +78,6 @@ async def startup() -> None:
     # 6. 起 watchdog 兜底任务（M8：BKD 不发 session.failed 时周期性 escalate 卡死 REQ）
     if settings.watchdog_enabled and settings.watchdog_interval_sec > 0:
         _bg_tasks.append(asyncio.create_task(watchdog.run_loop(), name="watchdog"))
-    # 7. 起 TTL 清理后台任务（event_seen / dispatch_slugs / verifier_decisions / stage_runs）
-    if settings.ttl_cleanup_enabled and settings.ttl_cleanup_interval_sec > 0:
-        _bg_tasks.append(asyncio.create_task(table_ttl.run_loop(), name="table_ttl"))
     log.info(
         "startup.ok",
         port=settings.port,
