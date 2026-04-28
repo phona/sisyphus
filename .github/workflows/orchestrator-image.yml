@@ -9,7 +9,7 @@ on:
       - '.github/workflows/orchestrator-image.yml'
 
 env:
-  REGISTRY: ghcr
+  REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/sisyphus-orchestrator
 
 jobs:
