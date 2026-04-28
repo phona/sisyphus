@@ -96,3 +96,19 @@ def test_impact_report_human_hypothesis_framing():
     assert "人工改进假设追踪" in text or "人写假设" in text or "human" in text.lower(), (
         "docs/IMPACT-REPORT.md must frame improvement_log as human-driven hypothesis tracking"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# IMPR-S5: contract tests prevent regression
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_contract_test_file_exists_and_covers_all_scenarios():
+    """IMPR-S5: test_contract_improver_descope.py must exist and cover S1-S5."""
+    test_file = Path(__file__).resolve()
+    assert test_file.exists(), "test_contract_improver_descope.py must exist"
+    text = test_file.read_text()
+    # Must cover all 5 scenarios
+    for scenario in ["IMPR-S1", "IMPR-S2", "IMPR-S3", "IMPR-S4", "IMPR-S5"]:
+        assert scenario in text, (
+            f"test_contract_improver_descope.py must reference {scenario}"
+        )
