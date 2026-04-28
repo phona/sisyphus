@@ -43,7 +43,21 @@ helm install sisyphus-bi pmint/metabase \
   -f values/metabase.yaml
 ```
 
-启动后 UI → **Admin → Databases → Add database**：
+启动后运行 [setup_metabase.py](./setup_metabase.py) 自动配置所有 18 条 Question + 3 个 Dashboard：
+
+```bash
+python observability/setup_metabase.py \
+  --url http://metabase.43.239.84.24.nip.io \
+  --user admin@example.com \
+  --pass <password> \
+  --db-host sisyphus-postgresql.sisyphus.svc.cluster.local \
+  --db-pass <db-password>
+```
+
+首次执行约 30 秒。幂等：重跑会跳过已存在的 Question / Dashboard。
+`--dry-run` 只打印计划，不改 Metabase。`--force` 覆盖已有项。
+
+如需手动创建数据库连接，UI → **Admin → Databases → Add database**：
 
 - Engine: PostgreSQL
 - Host: `sisyphus-postgresql.sisyphus.svc.cluster.local`

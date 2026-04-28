@@ -1,0 +1,40 @@
+id: pr-merged-archive-hook
+title: PR Merged Archive Hook
+description: >
+  POST /admin/req/{req_id}/pr-merged endpoint and PR_MERGED state machine event.
+  Closes the archive loop when a human reviewer merges a sisyphus PR on GitHub.
+
+scenarios:
+  - id: PMH-S1
+    description: state pending-user-review → emit PR_MERGED, call done_archive
+    spec_ref: PMH-S1
+  - id: PMH-S2
+    description: state review-running → emit PR_MERGED
+    spec_ref: PMH-S2
+  - id: PMH-S3
+    description: state pr-ci-running → emit PR_MERGED
+    spec_ref: PMH-S3
+  - id: PMH-S4
+    description: state done → 200 noop
+    spec_ref: PMH-S4
+  - id: PMH-S5
+    description: state escalated → 200 noop
+    spec_ref: PMH-S5
+  - id: PMH-S6
+    description: state analyzing → 409
+    spec_ref: PMH-S6
+  - id: PMH-S7
+    description: missing/bad token → 401
+    spec_ref: PMH-S7
+  - id: PMH-S8
+    description: unknown req_id → 404
+    spec_ref: PMH-S8
+  - id: PMH-S9
+    description: context patch contains all merge fields
+    spec_ref: PMH-S9
+  - id: PMH-S10
+    description: route registered at correct path
+    spec_ref: PMH-S10
+  - id: PMH-SM1
+    description: TRANSITIONS table has PR_MERGED for all three source states
+    spec_ref: PMH-SM1

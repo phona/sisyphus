@@ -1,0 +1,39 @@
+name: thanatos-ci
+
+on:
+  pull_request:
+    paths:
+      - 'thanatos/**'
+      - '.github/workflows/thanatos-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'thanatos/**'
+      - '.github/workflows/thanatos-ci.yml'
+
+defaults:
+  run:
+    working-directory: thanatos
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: '0.5.4'
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install deps
+        run: uv sync --all-groups
+
+      - name: ruff
+        run: uv run ruff check src/ tests/
+
+      - name: pytest
+        run: uv run pytest -v --tb=short -m "not integration"

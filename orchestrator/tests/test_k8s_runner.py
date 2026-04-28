@@ -9,6 +9,9 @@
 """
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -681,3 +684,92 @@ async def test_exec_in_runner_no_retry_when_partial_output(monkeypatch):
     assert calls["n"] == 1
     assert result.exit_code == -1
     assert "partial" in result.stdout
+
+
+# ─── concurrent ensure_runner regression (REQ-k8s-concurrent-runner-race) ──────
+
+
+class _FragileCore:
+    """Simulates thread-unsafe kubernetes client: concurrent calls raise ApiException(status=0).
+
+    kubernetes-python ApiClient is not thread-safe when shared across concurrent
+    asyncio.to_thread calls. Concurrent threads randomly enter ws_client.websocket_call
+    and treat a normal HTTP 200 JSON response as a failed WebSocket handshake.
+    This class reproduces that behaviour: if two threads call any method simultaneously,
+    the second raises ApiException(status=0) — exactly what was observed in production.
+    """
+
+    def __init__(self) -> None:
+        self._active = 0
+        self._mu = threading.Lock()
+
+    def _enter(self) -> None:
+        with self._mu:
+            self._active += 1
+            if self._active > 1:
+                self._active -= 1
+                raise ApiException(
+                    status=0,
+                    reason="Simulated thread-unsafe: Handshake status 200 OK",
+                )
+
+    def _exit(self) -> None:
+        with self._mu:
+            self._active -= 1
+
+    def _call(self, result_fn):
+        self._enter()
+        try:
+            time.sleep(0.02)  # hold long enough for concurrent calls to overlap
+            return result_fn()
+        finally:
+            self._exit()
+
+    def _ready_pod(self):
+        return MagicMock(
+            status=MagicMock(
+                phase="Running",
+                conditions=[MagicMock(type="Ready", status="True")],
+            ),
+            metadata=MagicMock(creation_timestamp=None),
+        )
+
+    def create_namespaced_persistent_volume_claim(self, ns, pvc):
+        return self._call(lambda: None)
+
+    def create_namespaced_pod(self, ns, pod):
+        return self._call(lambda: None)
+
+    def read_namespaced_pod_status(self, name, ns):
+        return self._call(self._ready_pod)
+
+
+@pytest.mark.asyncio
+async def test_ensure_runner_concurrent_no_apiexception_status0():
+    """Regression: 两条 REQ 并发 ensure_runner 不触发 ApiException(status=0)。
+
+    kubernetes-python ApiClient 在多线程共享时随机走 ws_client 路径，把合规
+    HTTP 200 JSON 响应当 WebSocket 握手失败 → ApiException(status=0)。
+    _k8s_api_lock 把所有 core_v1 调用串行，两条 REQ 都正常完成。
+
+    _wait_pod_ready 走真路径（未 monkeypatch），FragileCore 在并发调用时抛
+    ApiException(status=0) 来模拟该 bug；加锁后调用串行，不再并发，测试通过。
+    """
+    rc = RunnerController(
+        namespace="sisyphus-runners",
+        runner_image="img",
+        runner_sa="sa",
+        storage_class="local-path",
+        workspace_size="5Gi",
+        runner_secret_name="s",
+        ready_timeout_sec=5,
+        core_v1=_FragileCore(),
+    )
+
+    pod_a, pod_b = await asyncio.gather(
+        rc.ensure_runner("REQ-A", wait_ready=True),
+        rc.ensure_runner("REQ-B", wait_ready=True),
+    )
+
+    assert pod_a == "runner-req-a"
+    assert pod_b == "runner-req-b"

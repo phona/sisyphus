@@ -14,6 +14,18 @@ stderr 里每仓挂了会带 `=== FAIL: <repo> ===` + unit / integration 各自 
 ```
 {% endif %}
 
+### Baseline 差量分析（重要——先看这里）
+
+如果 stderr 开头含 `=== SISYPHUS BASELINE DIFF: ===` 块，说明 sisyphus 已经跑了
+main HEAD baseline，并对比了 PR 引入了哪些新失败。**优先按差量分析判断**：
+
+- `pr_introduced_failures: []`（空列表）→ **PR 没有引入新失败**，main 自己就坏了。
+  这种情况 checker 理应已经 override 到 pass，若仍到达 verifier 则一律判 `pass`。
+- `pr_introduced_failures: [repo-a, ...]`（非空）→ **PR 确实引入了这些仓的新失败**。
+  按下方"关注点"判 fix / escalate。
+- 没有 baseline diff 块 → baseline 无可用数据（infra 异常/obs pool 未配置），
+  按原始 stderr 内容正常判断。
+
 你要判：这失败是 **code bug / spec bug / env bug / flaky** 哪一类，以及能不能修。
 
 ### 关注点
@@ -21,12 +33,14 @@ stderr 里每仓挂了会带 `=== FAIL: <repo> ===` + unit / integration 各自 
 - 失败 assert 是不是对着**老逻辑**但被新 spec 重新定义了（那 `fix` + `fixer=spec` 或 dev 看情况）
 - 失败发生在 **unit 阶段**（`$name-unit.log`）→ 一般是单元逻辑错；发生在 **integration 阶段**（`$name-int.log`）→ 多半是契约 / 跨服务 / DB / docker compose 起不来
 - 业务 repo 的 `ci-unit-test` / `ci-integration-test` target 本身有问题（依赖没装 / docker compose 起不来 / golangci-lint 没装）→ `escalate`（接入契约层 bug，不是 REQ-x bug）
-- DinD 子容器 OOMKilled（pod cgroup 8 GiB 撑爆，docker compose 起的容器突然死）→ `escalate`（基础设施层；reason 注明）
-- stderr 是 network / docker-pull / kubectl race / 任何 flaky → `escalate`，reason 注明
+- DinD 子容器 OOMKilled（pod cgroup 8 GiB 撑爆，docker compose 起的容器突然死）→ `escalate`（基础设施层；reason 注明，OOM 不是 transient flake）
+- stderr 是 **纯网络抖动 / docker-pull rate-limit / kubectl exec channel race** 且失败原因
+  **完全明确是 infra-flake**（非业务逻辑问题）→ `retry`（confidence=high, reason 注明"infra flaky: <哪个>"）
+- 不确定是否 flaky / OOM / 任何业务逻辑疑问 → `escalate`
 - 失败栈指向 sisyphus runner 本身（kubectl permission / PVC 挂载）→ `escalate`
 
 ### NOT 该做
-- 不 kubectl exec 重跑 test —— flaky 直接 escalate 给人
+- 不 kubectl exec 重跑 test —— 让 `retry` 机制做或 `escalate` 交人
 - 不改代码
 - 不 cancel dev issue
 

@@ -450,74 +450,53 @@ async def test_done_archive(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_accept(monkeypatch):
-    """v0.2：create_accept 先跑 integration-resolver 扫一次，再跑 env-up（k8s_runner.exec_in_runner）
-    拿 endpoint，最后 dispatch BKD accept-agent。
-    REQ-self-accept-stage-1777121797 起：env-up 前会先有一次 scan exec_in_runner。
-    """
+    """v0.3-lite: per-repo shell script exits 0 → emit accept.pass (no BKD agent)."""
     from orchestrator.actions import create_accept as mod
     from orchestrator.k8s_runner import ExecResult
 
-    fake_bkd = make_fake_bkd()
-    fake_bkd.create_issue.return_value = FakeIssue(id="acc-1")
-    patch_bkd(monkeypatch, "create_accept", fake_bkd)
     patch_db(monkeypatch, "create_accept")
     monkeypatch.setattr("orchestrator.actions.create_accept.settings.skip_accept", False)
+    monkeypatch.setattr("orchestrator.actions.create_accept.settings.test_mode", False)
+    monkeypatch.setattr("orchestrator.actions.create_accept.settings.accept_smoke_delay_sec", 0)
 
-    # mock k8s runner controller：第一次 (scan) 返 integration 候选 dir；
-    # 第二次 (env-up) 返 exit_code=0 + stdout 末行 JSON
     class FakeRC:
-        async def exec_in_runner(self, req_id, command, env=None, timeout_sec=600):
-            if env and env.get("SISYPHUS_STAGE") == "accept-resolve":
-                return ExecResult(
-                    exit_code=0, stdout="I:/workspace/integration/lab\n",
-                    stderr="", duration_sec=0.1,
-                )
-            return ExecResult(
-                exit_code=0,
-                stdout='some helm output\n{"endpoint":"http://svc.accept-req-9.svc:8080"}\n',
-                stderr="",
-                duration_sec=5.0,
-            )
+        async def exec_in_runner(self, req_id, command, env=None, timeout_sec=None):
+            return ExecResult(exit_code=0, stdout="PASS\n", stderr="", duration_sec=1.0)
 
     monkeypatch.setattr(
         "orchestrator.actions.create_accept.k8s_runner.get_controller",
         lambda: FakeRC(),
     )
 
+    ctx_updates: list[dict] = []
+    async def fake_update_ctx(p, req_id, updates):
+        ctx_updates.append(updates)
+    monkeypatch.setattr("orchestrator.actions.create_accept.req_state.update_context", fake_update_ctx)
+
     out = await mod.create_accept(
         body=make_body(issue_id="pr-ci-1"), req_id="REQ-9",
-        tags=["pr-ci"], ctx={},
+        tags=["pr-ci"], ctx={"cloned_repos": ["phona/sisyphus"]},
     )
-    assert out["accept_issue_id"] == "acc-1"
-    assert out["endpoint"] == "http://svc.accept-req-9.svc:8080"
-    assert out["namespace"] == "accept-req-9"
+    assert out["emit"] == "accept.pass"
+    assert any(u.get("accept_result") == "pass" for u in ctx_updates)
 
 
 @pytest.mark.asyncio
 async def test_create_accept_env_up_fail(monkeypatch):
-    """env-up exit_code != 0 → emit accept-env-up.fail，不 dispatch agent。
-
-    Resolver 扫描成功定位到 integration dir，env-up 才会真跑；env-up 退码非 0 时
-    出 accept-env-up.fail（reason=exit_code=...，stderr_tail）。
-    """
+    """Shell script exits 1, stdout ends FAIL:repo → emit accept.fail."""
     from orchestrator.actions import create_accept as mod
     from orchestrator.k8s_runner import ExecResult
 
-    fake_bkd = make_fake_bkd()
-    patch_bkd(monkeypatch, "create_accept", fake_bkd)
     patch_db(monkeypatch, "create_accept")
     monkeypatch.setattr("orchestrator.actions.create_accept.settings.skip_accept", False)
+    monkeypatch.setattr("orchestrator.actions.create_accept.settings.test_mode", False)
+    monkeypatch.setattr("orchestrator.actions.create_accept.settings.accept_smoke_delay_sec", 0)
 
     class FakeRC:
-        async def exec_in_runner(self, req_id, command, env=None, timeout_sec=600):
-            if env and env.get("SISYPHUS_STAGE") == "accept-resolve":
-                return ExecResult(
-                    exit_code=0, stdout="I:/workspace/integration/lab\n",
-                    stderr="", duration_sec=0.1,
-                )
+        async def exec_in_runner(self, req_id, command, env=None, timeout_sec=None):
             return ExecResult(
-                exit_code=1, stdout="", stderr="helm install failed",
-                duration_sec=3.0,
+                exit_code=1, stdout="FAIL:repo-a\n",
+                stderr="make: Error 1", duration_sec=3.0,
             )
 
     monkeypatch.setattr(
@@ -525,29 +504,49 @@ async def test_create_accept_env_up_fail(monkeypatch):
         lambda: FakeRC(),
     )
 
+    ctx_updates: list[dict] = []
+    async def fake_update_ctx(p, req_id, updates):
+        ctx_updates.append(updates)
+    monkeypatch.setattr("orchestrator.actions.create_accept.req_state.update_context", fake_update_ctx)
+
     out = await mod.create_accept(
-        body=make_body(issue_id="x"), req_id="REQ-9", tags=["pr-ci"], ctx={},
+        body=make_body(issue_id="x"), req_id="REQ-9",
+        tags=["pr-ci"], ctx={"cloned_repos": ["org/repo-a"]},
     )
-    assert out["emit"] == "accept-env-up.fail"
+    assert out["emit"] == "accept.fail"
     assert out["exit_code"] == 1
-    # 不应 dispatch agent
-    fake_bkd.create_issue.assert_not_awaited()
+    assert "repo-a" in out.get("fail_repos", [])
+    assert any(u.get("accept_result") == "fail" for u in ctx_updates)
 
 
 @pytest.mark.asyncio
 async def test_create_accept_skipped(monkeypatch):
-    """skip_accept=True 直接 emit accept.pass，不调 BKD"""
+    """skip_accept=True → emit accept.pass, exec_in_runner never called."""
     from orchestrator.actions import create_accept as mod
-    fake = make_fake_bkd()
-    patch_bkd(monkeypatch, "create_accept", fake)
+
     patch_db(monkeypatch, "create_accept")
     monkeypatch.setattr("orchestrator.actions.create_accept.settings.skip_accept", True)
+    monkeypatch.setattr("orchestrator.actions.create_accept.settings.test_mode", False)
+
+    class FakeRC:
+        async def exec_in_runner(self, *a, **kw):
+            raise AssertionError("exec_in_runner must NOT be called when skipped")
+
+    monkeypatch.setattr(
+        "orchestrator.actions.create_accept.k8s_runner.get_controller",
+        lambda: FakeRC(),
+    )
+
+    ctx_updates: list[dict] = []
+    async def fake_update_ctx(p, req_id, updates):
+        ctx_updates.append(updates)
+    monkeypatch.setattr("orchestrator.actions.create_accept.req_state.update_context", fake_update_ctx)
+
     out = await mod.create_accept(
         body=make_body(issue_id="ci-int-1"), req_id="REQ-9", tags=["ci"], ctx={},
     )
     assert out["skipped"] is True
     assert out["emit"] == "accept.pass"
-    fake.create_issue.assert_not_called()
 
 
 # ─── create_staging_test ─────────────────────────────────────────────────────

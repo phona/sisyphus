@@ -358,6 +358,52 @@ gh pr list --head feat/REQ-29 --repo phona/ttpos-server-go --json number
 - 至少有一条 `check-run`（哪怕只是 lint）—— 没有 check-run 会 timeout（1800s 默认）
 - 失败的 check `conclusion` 用 `failure` / `cancelled` / `timed_out`（pr-ci-watch 认这些）
 
+### 6b. 主动 dispatch（可选，`ci_dispatch_enabled=True`）
+
+当 `SISYPHUS_CI_DISPATCH_ENABLED=true` 且 `SISYPHUS_CI_DISPATCH_REPO=phona/ttpos-ci` 时，
+sisyphus 在进入 pr-ci-watch 轮询**之前**主动发一次 `repository_dispatch`：
+
+```
+POST /repos/phona/ttpos-ci/dispatches
+{
+  "event_type": "<ci_dispatch_event_type>",   # 默认 "pr-ci-run"
+  "client_payload": {
+    "req_id":      "REQ-447",
+    "source_repo": "phona/ttpos-server-go",
+    "branch":      "feat/REQ-447",
+    "sha":         "<head SHA>",
+    "pr_number":   123
+  }
+}
+```
+
+每个 involved source repo 发一条（多仓 REQ → 多条）。语义是 **best-effort**：
+dispatch 失败只写 warning log，不阻塞后续轮询。
+
+**token 要求**：`SISYPHUS_GITHUB_TOKEN` 必须对 `ci_dispatch_repo` 有写权限
+（classic PAT 勾 `repo`，或 fine-grained PAT `phona/ttpos-ci` `Contents: Read-and-write`）。
+runner pod 只需读权限（§1c），orchestrator 进程用自己的 token 发 dispatch。
+
+**phona/ttpos-ci 侧**：需要配置监听 `repository_dispatch` 的 workflow：
+
+```yaml
+on:
+  repository_dispatch:
+    types: [pr-ci-run]
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.client_payload.source_repo }}
+          ref: ${{ github.event.client_payload.sha }}
+      # ... run ci-lint / ci-unit-test / ci-integration-test via make
+```
+
+check-runs 仍由 pr-ci-watch 在 source repo PR 上轮询（dispatch 后 GHA 会把 check-run
+附在 source repo 对应 PR 的 SHA 上）。
+
 ## 7. tag 契约（agent 报告结果）
 
 stage agent 完成时通过 BKD issue tag 报告结果。详见 [api-tag-management-spec.md](./api-tag-management-spec.md)。常用：

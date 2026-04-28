@@ -26,9 +26,8 @@ SPEC_TAGS = {"spec"}
 # staging-test / pr-ci / accept 都走 result:* tag 判 pass/fail
 
 # ─── M14b verifier decision schema 校验 + 映射 ─────────────────────────────
-# 3 路决策：pass / fix / escalate。砍 retry_checker（基础设施 flaky 直接 escalate
-# 给人介入；sisyphus 不再机制性兜 retry —— "薄编排，不抢 AI 决定权" + 减少假阳性 retry 死循环风险）
-_VALID_ACTIONS = {"pass", "fix", "escalate"}
+# 4 路决策：pass / fix / escalate / retry（infra-flake 有界重跑）
+_VALID_ACTIONS = {"pass", "fix", "escalate", "retry"}
 _VALID_FIXERS = {"dev", "spec", None}
 _VALID_CONFIDENCE = {"high", "low"}
 _VALID_VERDICTS = {"legitimate", "test-hack", "code-lobotomy", "spec-drift", "unclear"}
@@ -49,7 +48,7 @@ def validate_decision(decision: object) -> tuple[bool, str]:
         return False, f"invalid fixer: {fixer!r}"
     if action == "fix" and fixer is None:
         return False, "action=fix requires non-null fixer"
-    if action != "fix" and fixer is not None:
+    if action in ("pass", "escalate", "retry") and fixer is not None:
         return False, f"action={action} must have null fixer"
     conf = decision.get("confidence")
     if conf not in _VALID_CONFIDENCE:
@@ -86,6 +85,8 @@ def decision_to_event(decision: dict) -> Event:
         return Event.VERIFY_PASS
     if action == "fix":
         return Event.VERIFY_FIX_NEEDED
+    if action == "retry":
+        return Event.VERIFY_INFRA_RETRY
     return Event.VERIFY_ESCALATE
 
 

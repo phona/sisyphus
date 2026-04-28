@@ -1,13 +1,12 @@
 """REQ-self-accept-stage-1777121797: self-host integration dir resolution.
 
 Tests for `_integration_resolver.resolve_integration_dir` and how
-`create_accept` / `teardown_accept_env` consume it. Covers four scenarios
-from the spec (SDA-S4 through SDA-S7) plus the create_accept happy + fail
-paths integrated with the resolver.
+`teardown_accept_env` consumes it.  The v0.3-lite rewrite of `create_accept`
+no longer uses `_integration_resolver` (it iterates /workspace/source/*/ via
+shell script), so those integration tests were removed.  Resolver unit tests
+and teardown integration tests remain valid.
 """
 from __future__ import annotations
-
-from contextlib import asynccontextmanager
 
 import pytest
 
@@ -173,7 +172,7 @@ async def test_resolve_only_one_exec_call():
     assert len(rc.calls) == 1
 
 
-# ─── create_accept integrated with resolver ──────────────────────────────
+# ─── helpers for teardown integration tests ──────────────────────────────
 
 def _make_body(issue_id="pr-ci-1", project_id="p"):
     return type("B", (), {
@@ -181,13 +180,6 @@ def _make_body(issue_id="pr-ci-1", project_id="p"):
         "event": "session.completed", "title": "T",
         "tags": [], "issueNumber": None,
     })()
-
-
-def _patch_bkd(monkeypatch, fake):
-    @asynccontextmanager
-    async def _ctx(*a, **kw):
-        yield fake
-    monkeypatch.setattr("orchestrator.actions.create_accept.BKDClient", _ctx)
 
 
 def _patch_db(monkeypatch, target_module: str):
@@ -202,10 +194,9 @@ def _patch_db(monkeypatch, target_module: str):
 
 
 class _RC:
-    """Returns scan output then env-up output across calls."""
+    """Fake runner: returns scan output on accept-resolve call, env-down output otherwise."""
 
-    def __init__(self, scan_stdout: str, env_up_stdout: str = "",
-                 env_up_exit: int = 0):
+    def __init__(self, scan_stdout: str, env_up_stdout: str = "", env_up_exit: int = 0):
         self.scan_stdout = scan_stdout
         self.env_up_stdout = env_up_stdout
         self.env_up_exit = env_up_exit
@@ -213,108 +204,9 @@ class _RC:
 
     async def exec_in_runner(self, req_id, command, env=None, timeout_sec=None):
         self.calls.append({"command": command, "env": env})
-        # Scan call has env={"SISYPHUS_STAGE": "accept-resolve"}
         if env and env.get("SISYPHUS_STAGE") == "accept-resolve":
-            return ExecResult(
-                exit_code=0, stdout=self.scan_stdout,
-                stderr="", duration_sec=0.1,
-            )
-        return ExecResult(
-            exit_code=self.env_up_exit, stdout=self.env_up_stdout,
-            stderr="", duration_sec=1.0,
-        )
-
-
-@pytest.mark.asyncio
-async def test_create_accept_self_host_fallback(monkeypatch):
-    """integration empty + single source repo with target → fallback to source dir."""
-    from test_actions_smoke import FakeIssue, make_fake_bkd
-
-    from orchestrator.actions import create_accept as mod
-
-    fake_bkd = make_fake_bkd()
-    fake_bkd.create_issue.return_value = FakeIssue(id="acc-1")
-    _patch_bkd(monkeypatch, fake_bkd)
-    _patch_db(monkeypatch, "create_accept")
-    monkeypatch.setattr("orchestrator.actions.create_accept.settings.skip_accept", False)
-
-    rc = _RC(
-        scan_stdout="S:/workspace/source/sisyphus\n",
-        env_up_stdout='{"endpoint":"http://localhost:18000","namespace":"accept-req-9"}\n',
-    )
-    monkeypatch.setattr(
-        "orchestrator.actions.create_accept.k8s_runner.get_controller",
-        lambda: rc,
-    )
-
-    out = await mod.create_accept(
-        body=_make_body(), req_id="REQ-9", tags=["pr-ci"], ctx={},
-    )
-
-    assert out["accept_issue_id"] == "acc-1"
-    assert out["endpoint"] == "http://localhost:18000"
-    # Verify the env-up call used the fallback source dir
-    env_up_calls = [c for c in rc.calls if c["env"] and c["env"].get("SISYPHUS_STAGE") == "accept-env-up"]
-    assert len(env_up_calls) == 1
-    assert "cd /workspace/source/sisyphus && make accept-env-up" in env_up_calls[0]["command"]
-
-
-@pytest.mark.asyncio
-async def test_create_accept_no_resolvable_dir_emits_envup_fail(monkeypatch):
-    """integration empty + no source repo with target → emit accept-env-up.fail with reason."""
-    from test_actions_smoke import make_fake_bkd
-
-    from orchestrator.actions import create_accept as mod
-
-    fake_bkd = make_fake_bkd()
-    _patch_bkd(monkeypatch, fake_bkd)
-    _patch_db(monkeypatch, "create_accept")
-    monkeypatch.setattr("orchestrator.actions.create_accept.settings.skip_accept", False)
-
-    rc = _RC(scan_stdout="")
-    monkeypatch.setattr(
-        "orchestrator.actions.create_accept.k8s_runner.get_controller",
-        lambda: rc,
-    )
-
-    out = await mod.create_accept(
-        body=_make_body(), req_id="REQ-9", tags=["pr-ci"], ctx={},
-    )
-
-    assert out["emit"] == "accept-env-up.fail"
-    assert "no integration dir resolvable" in out["reason"]
-    # No env-up call should have been issued (the scan call exists, but no env-up)
-    env_up_calls = [c for c in rc.calls if c["env"] and c["env"].get("SISYPHUS_STAGE") == "accept-env-up"]
-    assert len(env_up_calls) == 0
-    # No BKD agent dispatched
-    fake_bkd.create_issue.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_create_accept_ambiguous_source_emits_envup_fail(monkeypatch):
-    """integration empty + multiple source repos with target → fail (refuse to pick)."""
-    from test_actions_smoke import make_fake_bkd
-
-    from orchestrator.actions import create_accept as mod
-
-    fake_bkd = make_fake_bkd()
-    _patch_bkd(monkeypatch, fake_bkd)
-    _patch_db(monkeypatch, "create_accept")
-    monkeypatch.setattr("orchestrator.actions.create_accept.settings.skip_accept", False)
-
-    rc = _RC(scan_stdout="S:/workspace/source/a\nS:/workspace/source/b\n")
-    monkeypatch.setattr(
-        "orchestrator.actions.create_accept.k8s_runner.get_controller",
-        lambda: rc,
-    )
-
-    out = await mod.create_accept(
-        body=_make_body(), req_id="REQ-9", tags=["pr-ci"], ctx={},
-    )
-
-    assert out["emit"] == "accept-env-up.fail"
-    assert "multiple source candidates" in out["reason"]
-    fake_bkd.create_issue.assert_not_awaited()
+            return ExecResult(exit_code=0, stdout=self.scan_stdout, stderr="", duration_sec=0.1)
+        return ExecResult(exit_code=self.env_up_exit, stdout=self.env_up_stdout, stderr="", duration_sec=1.0)
 
 
 # ─── teardown_accept_env integrated with resolver ─────────────────────────

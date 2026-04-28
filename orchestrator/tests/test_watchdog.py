@@ -190,12 +190,13 @@ async def test_spec_lint_escalates_without_bkd_lookup(monkeypatch):
     assert step_calls[0]["body_issue"] == "intent-4"
 
 
-# ─── Case 5：ctx 里没 issue_id（比如 create_dev 还没落 ctx 就挂了）→ escalate
+# ─── Case 5：ctx 里没 issue_id，stage 有 stuck_sec 设置（非 autonomous-bounded）→ escalate
 @pytest.mark.asyncio
-async def test_missing_issue_id_in_ctx_escalates(monkeypatch):
-    """stage 有 issue_key 但 ctx 里缺少该 issue_id → 无法查 BKD，保守 escalate。"""
+async def test_missing_issue_id_in_ctx_non_autonomous_escalates(monkeypatch):
+    """PR_CI_RUNNING (stuck_sec=14400, not None) + issue_id missing → defensive check
+    doesn't fire → treats as ended → escalates after ended_sec threshold."""
     pool = FakePool(rows=[
-        _row("REQ-5", ReqState.STAGING_TEST_RUNNING.value, ctx={}),
+        _row("REQ-5", ReqState.PR_CI_RUNNING.value, ctx={}),
     ])
     _patch_pool(monkeypatch, pool)
     fake_bkd = _patch_bkd(monkeypatch, FakeIssue(session_status="running"))
@@ -205,9 +206,30 @@ async def test_missing_issue_id_in_ctx_escalates(monkeypatch):
     result = await watchdog._tick()
 
     assert result == {"checked": 1, "escalated": 1}
-    # 无 issue_id 不查
+    # 无 issue_id 不查 BKD
     fake_bkd.get_issue.assert_not_called()
     assert len(step_calls) == 1
+
+
+# ─── Case 5b：ctx 里没 issue_id，autonomous-bounded stage (stuck_sec=None) → skip
+@pytest.mark.asyncio
+async def test_missing_issue_id_in_ctx_autonomous_bounded_skips(monkeypatch):
+    """CHALLENGER_RUNNING (stuck_sec=None) + issue_id missing from ctx →
+    defensive check fires → skip (log warning, no escalate).
+    Defense-in-depth when start_challenger forgets update_context."""
+    pool = FakePool(rows=[
+        _row("REQ-5b", ReqState.CHALLENGER_RUNNING.value, ctx={}, stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    fake_bkd = _patch_bkd(monkeypatch, FakeIssue(session_status="running"))
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 0}
+    fake_bkd.get_issue.assert_not_called()
+    assert step_calls == []
 
 
 # ─── Case 6：SQL 过滤（未到阈值的不返回）由 DB 负责 — 空 rows 直接 0
@@ -659,3 +681,51 @@ def test_settings_session_ended_threshold_env_override(monkeypatch):
         bkd_token="x", webhook_token="x", pg_dsn="postgresql://x:x@x/x",  # type: ignore[call-arg]
     )
     assert s.watchdog_session_ended_threshold_sec == 120
+
+
+# ─── CHALLENGER_RUNNING: reconcile BKD sessionStatus ──────────────────────────
+
+@pytest.mark.asyncio
+async def test_challenger_running_session_skips_when_still_running(monkeypatch):
+    """CHALLENGER_RUNNING + session_status=running → skip（不杀长尾 challenger）。"""
+    pool = FakePool(rows=[
+        _row("REQ-CH", ReqState.CHALLENGER_RUNNING.value,
+             ctx={"challenger_issue_id": "ch-1", "intent_issue_id": "intent-1"},
+             stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="running", id="ch-1"))
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 0}
+    assert step_calls == []
+
+
+@pytest.mark.asyncio
+async def test_challenger_running_session_failed_escalates(monkeypatch):
+    """CHALLENGER_RUNNING + session_status=failed + stuck > ended_sec → escalate。"""
+    pool = FakePool(rows=[
+        _row("REQ-CH2", ReqState.CHALLENGER_RUNNING.value,
+             ctx={"challenger_issue_id": "ch-2", "intent_issue_id": "intent-2"},
+             stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="failed", id="ch-2"))
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 1}
+    assert step_calls[0]["event"] == Event.SESSION_FAILED
+    assert step_calls[0]["cur_state"] == ReqState.CHALLENGER_RUNNING
+    assert step_calls[0]["body_issue"] == "ch-2"
+
+
+def test_challenger_running_in_state_issue_key():
+    """CHALLENGER_RUNNING 必须在 _STATE_ISSUE_KEY 中以便 watchdog 能 reconcile BKD session。"""
+    assert ReqState.CHALLENGER_RUNNING in watchdog._STATE_ISSUE_KEY
+    assert watchdog._STATE_ISSUE_KEY[ReqState.CHALLENGER_RUNNING] == "challenger_issue_id"

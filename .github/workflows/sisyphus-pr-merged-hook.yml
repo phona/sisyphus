@@ -1,0 +1,54 @@
+name: sisyphus-pr-merged-hook
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  notify-orch:
+    # Only fire when PR is actually merged AND has the 'sisyphus' label.
+    # Closed-without-merge events are skipped.
+    if: >
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'sisyphus')
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Extract REQ id from branch name
+        id: extract
+        run: |
+          branch="${{ github.event.pull_request.head.ref }}"
+          # Match first REQ-<slug> token (e.g. feat/REQ-foo-123 → REQ-foo-123)
+          req_id=$(echo "$branch" | grep -oP 'REQ-[A-Za-z0-9_-]+' | head -1)
+          echo "req_id=$req_id" | tee -a "$GITHUB_OUTPUT"
+          if [ -z "$req_id" ]; then
+            echo "No REQ id found in branch '$branch', skipping."
+          fi
+
+      - name: Notify orchestrator of PR merge
+        if: steps.extract.outputs.req_id != ''
+        env:
+          ORCH_ENDPOINT: ${{ secrets.ORCH_ENDPOINT }}
+          SISYPHUS_WEBHOOK_TOKEN: ${{ secrets.SISYPHUS_WEBHOOK_TOKEN }}
+        run: |
+          req_id="${{ steps.extract.outputs.req_id }}"
+          payload=$(jq -n \
+            --arg url "${{ github.event.pull_request.html_url }}" \
+            --arg sha "${{ github.event.pull_request.merge_commit_sha }}" \
+            --arg at  "${{ github.event.pull_request.merged_at }}" \
+            '{merged_pr_url: $url, merged_sha: $sha, merged_at: $at}')
+          echo "Notifying orch for $req_id …"
+          http_status=$(curl -sf -o /dev/null -w "%{http_code}" \
+            -X POST "$ORCH_ENDPOINT/admin/req/$req_id/pr-merged" \
+            -H "Authorization: Bearer $SISYPHUS_WEBHOOK_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$payload")
+          echo "HTTP status: $http_status"
+          # 2xx = success; 409/noop states also acceptable (REQ already done).
+          # Fail loudly only on auth (401) or server error (5xx).
+          if [[ "$http_status" == 4* && "$http_status" != "404" && "$http_status" != "409" ]]; then
+            echo "Unexpected HTTP $http_status — failing workflow."
+            exit 1
+          fi
+          echo "Done."

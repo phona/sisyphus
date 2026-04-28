@@ -9,6 +9,9 @@ State 操作：
   POST /admin/req/{req_id}/resume     body: {"action": "pass"|"fix-needed", "stage"?, "fixer"?, "reason"?}
                                        → state-level resume from ESCALATED
                                        （派 VERIFY_PASS / VERIFY_FIX_NEEDED 走合法 transition）
+  POST /admin/req/{req_id}/pr-merged  body: {"merged_pr_url": "...", "merged_sha": "...", "merged_at": "..."}
+                                       → GHA 钩：人手合 PR 后通知 orch，state 在 pending-user-review /
+                                          review-running / pr-ci-running 时发 PR_MERGED → done_archive
   GET  /admin/metrics
   GET  /admin/req/{req_id}
 
@@ -17,6 +20,10 @@ v0.2 K8s runner 运维：
   POST /admin/req/{req_id}/runner-resume      → 重建 Pod
   POST /admin/req/{req_id}/rebuild-workspace  → 强拉代码重建 workspace（需 PVC 存在）
   GET  /admin/runners                          → 列所有 runner pod / pvc 状态
+
+runner GC 运维（REQ-430）：
+  POST /admin/runner-gc                        → 立即触发一次 GC pass，返回结果
+  GET  /admin/runner-gc/status                 → 上次 GC 结果（无需 token）
 """
 from __future__ import annotations
 
@@ -29,11 +36,11 @@ import structlog
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from . import engine, k8s_runner
+from . import engine, k8s_runner, runner_gc
 from .bkd import BKDClient
 from .config import settings
 from .state import Event, ReqState
-from .store import db, req_state
+from .store import db, req_state, stage_runs
 from .webhook import _verify_token
 
 log = structlog.get_logger(__name__)
@@ -125,6 +132,21 @@ async def force_escalate(
 
     if row.state == ReqState.ESCALATED:
         return {"action": "noop", "state": "already escalated"}
+
+    # force_escalate 绕过 engine._record_stage_transitions：如果当前 state 对应一个
+    # 正在跑的 stage，先关闭它的 stage_run，防 ended_at IS NULL 长尾污染 stage_stats。
+    # best-effort（与 _record_stage_transitions 同模式）：失败只 log，不阻塞止损。
+    cur_stage = engine.STATE_TO_STAGE.get(row.state)
+    if cur_stage:
+        try:
+            await stage_runs.close_latest_stage_run(
+                pool, req_id, cur_stage,
+                outcome="escalated",
+                fail_reason="admin-force-escalate",
+            )
+        except Exception as e:
+            log.warning("admin.force_escalate.stage_run_close_failed",
+                        req_id=req_id, stage=cur_stage, error=str(e))
 
     # 直接 SQL 强推（不走 CAS / engine，因为可能是任意 state）
     await pool.execute(
@@ -619,3 +641,116 @@ async def list_runners(
             for r in runners
         ],
     }
+
+
+class PrMergedBody(BaseModel):
+    """PR merge hook body from GHA workflow."""
+    merged_pr_url: str
+    merged_sha: str
+    merged_at: str
+
+
+# Terminal states where PR_MERGED is a noop (already done or escalated).
+_PR_MERGED_NOOP_STATES = frozenset({ReqState.DONE, ReqState.ESCALATED})
+
+# States that accept PR_MERGED → done_archive transition (via state.py TRANSITIONS).
+_PR_MERGED_VALID_STATES = frozenset({
+    ReqState.PENDING_USER_REVIEW,
+    ReqState.REVIEW_RUNNING,
+    ReqState.PR_CI_RUNNING,
+})
+
+
+@admin.post("/req/{req_id}/pr-merged")
+async def pr_merged(
+    req_id: str,
+    body: PrMergedBody,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """GHA 钩：人手合 PR 后通知 orch 闭环归档（REQ-pr-merge-archive-hook-1777344443）。
+
+    - state ∈ {done, escalated} → 200 noop（幂等，防双触发）
+    - state ∈ {pending-user-review, review-running, pr-ci-running} → 写 merge ctx + emit PR_MERGED
+    - 其他 state → 409（不在预期窗口，需人工 triage）
+    """
+    _verify_token(authorization)
+
+    pool = db.get_pool()
+    row = await req_state.get(pool, req_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"req {req_id} not found")
+
+    if row.state in _PR_MERGED_NOOP_STATES:
+        log.info("admin.pr_merged.noop", req_id=req_id, state=row.state.value)
+        return {"action": "noop", "state": row.state.value}
+
+    if row.state not in _PR_MERGED_VALID_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"req {req_id} is in state {row.state.value!r}; "
+                f"pr-merged hook only applies to "
+                f"{[s.value for s in _PR_MERGED_VALID_STATES]}"
+            ),
+        )
+
+    # 写 merge 元数据入 ctx，让 done_archive action 可读到
+    ctx_patch = {
+        "merged_pr_url": body.merged_pr_url,
+        "merged_sha": body.merged_sha,
+        "merged_at": body.merged_at,
+        "pr_merged_trigger": "gha-hook",
+    }
+    await req_state.update_context(pool, req_id, ctx_patch)
+
+    # 重读 ctx（update_context 后 row.context 未刷新）
+    row = await req_state.get(pool, req_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"req {req_id} not found")
+
+    log.warning(
+        "admin.pr_merged",
+        req_id=req_id,
+        from_state=row.state.value,
+        merged_pr_url=body.merged_pr_url,
+        merged_sha=body.merged_sha,
+    )
+    fake = _FakeBody(req_id, row.project_id)
+    result = await engine.step(
+        pool,
+        body=fake,
+        req_id=req_id,
+        project_id=row.project_id,
+        tags=[],
+        cur_state=row.state,
+        ctx=row.context,
+        event=Event.PR_MERGED,
+    )
+    return {
+        "action": "pr_merged",
+        "from_state": row.state.value,
+        "result": result,
+    }
+
+
+@admin.post("/runner-gc")
+async def trigger_runner_gc(
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """立即执行一次 runner GC pass，返回结果（REQ-430）。
+
+    无 K8s controller 时返回 {skipped: ...}，不报错。
+    """
+    _verify_token(authorization)
+    result = await runner_gc.gc_once()
+    log.info("admin.runner_gc.triggered", result=result)
+    return result
+
+
+@admin.get("/runner-gc/status")
+async def runner_gc_status() -> dict:
+    """返回上次 runner GC 结果（无需认证，只读）（REQ-430）。
+
+    orchestrator 重启前为 {last: null}。
+    """
+    return {"last": runner_gc.get_last_result()}

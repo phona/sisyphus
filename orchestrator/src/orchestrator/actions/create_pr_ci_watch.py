@@ -21,15 +21,17 @@ from __future__ import annotations
 
 import re
 
+import httpx
 import structlog
 
 from .. import k8s_runner, links, pr_links
 from ..bkd import BKDClient
 from ..checkers import pr_ci_watch as checker
+from ..checkers.pr_ci_watch import _get_pr_info
 from ..config import settings
 from ..prompts import render
 from ..state import Event
-from ..store import artifact_checks, db, req_state
+from ..store import artifact_checks, db, dispatch_slugs, req_state
 from . import register, short_title
 from ._skip import skip_if_enabled
 
@@ -112,6 +114,57 @@ async def _discover_repos_from_runner(req_id: str) -> list[str]:
     return repos
 
 
+async def _dispatch_to_ci_repo(*, req_id: str, branch: str, repos: list[str]) -> None:
+    """Best-effort POST repository_dispatch to ci_dispatch_repo for each source repo.
+
+    Skips silently when ci_dispatch_enabled=False or ci_dispatch_repo is empty.
+    HTTP errors and missing PRs are logged as warnings; never raises.
+    """
+    if not settings.ci_dispatch_enabled or not settings.ci_dispatch_repo:
+        return
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if settings.github_token:
+        headers["Authorization"] = f"Bearer {settings.github_token}"
+
+    async with httpx.AsyncClient(
+        base_url="https://api.github.com", headers=headers, timeout=15.0
+    ) as client:
+        for repo in repos:
+            try:
+                pr_number, sha, _ = await _get_pr_info(client, repo, branch)
+            except (httpx.HTTPError, ValueError) as e:
+                log.warning("create_pr_ci_watch.dispatch_pr_lookup_skipped",
+                            req_id=req_id, repo=repo, error=str(e))
+                continue
+
+            payload = {
+                "event_type": settings.ci_dispatch_event_type,
+                "client_payload": {
+                    "req_id": req_id,
+                    "source_repo": repo,
+                    "branch": branch,
+                    "sha": sha,
+                    "pr_number": pr_number,
+                },
+            }
+            try:
+                r = await client.post(
+                    f"/repos/{settings.ci_dispatch_repo}/dispatches", json=payload
+                )
+                r.raise_for_status()
+                log.info("create_pr_ci_watch.dispatch_sent",
+                         req_id=req_id, repo=repo, ci_repo=settings.ci_dispatch_repo,
+                         pr=pr_number, sha=sha[:8])
+            except httpx.HTTPError as e:
+                log.warning("create_pr_ci_watch.dispatch_failed",
+                            req_id=req_id, repo=repo, ci_repo=settings.ci_dispatch_repo,
+                            error=str(e))
+
+
 async def _run_checker(*, req_id: str, ctx: dict) -> dict:
     log.info("create_pr_ci_watch.checker_path", req_id=req_id)
     branch = ctx.get("branch") or f"feat/{req_id}"
@@ -122,6 +175,8 @@ async def _run_checker(*, req_id: str, ctx: dict) -> dict:
     if not repos:
         finalized = ctx.get("intake_finalized_intent") or {}
         repos = finalized.get("involved_repos") or ctx.get("involved_repos")
+
+    await _dispatch_to_ci_repo(req_id=req_id, branch=branch, repos=repos or [])
 
     try:
         result = await checker.watch_pr_ci(
@@ -183,6 +238,12 @@ async def _dispatch_bkd_agent(*, body, req_id: str, ctx: dict) -> dict:
     )
     extra_tags = pr_links.pr_link_tags(links)
 
+    pool = db.get_pool()
+    slug = f"pr_ci_watch|{req_id}|{getattr(body, 'executionId', None) or ''}"
+    if hit := await dispatch_slugs.get(pool, slug):
+        log.info("create_pr_ci_watch.slug_hit", req_id=req_id, issue_id=hit)
+        await req_state.update_context(pool, req_id, {"pr_ci_watch_issue_id": hit})
+        return {"pr_ci_watch_issue_id": hit}
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
             project_id=proj,
@@ -201,7 +262,7 @@ async def _dispatch_bkd_agent(*, body, req_id: str, ctx: dict) -> dict:
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")
 
-    pool = db.get_pool()
+    await dispatch_slugs.put(pool, slug, issue.id)
     await req_state.update_context(pool, req_id, {"pr_ci_watch_issue_id": issue.id})
 
     log.info("create_pr_ci_watch.bkd_agent_dispatched", req_id=req_id, pr_ci_issue=issue.id)

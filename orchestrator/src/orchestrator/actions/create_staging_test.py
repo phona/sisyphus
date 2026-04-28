@@ -19,7 +19,7 @@ from ..checkers import staging_test as checker
 from ..config import settings
 from ..prompts import render
 from ..state import Event
-from ..store import artifact_checks, db, req_state
+from ..store import artifact_checks, db, dispatch_slugs, req_state
 from . import register, short_title
 from ._skip import skip_if_enabled
 
@@ -81,6 +81,10 @@ async def _run_checker(*, req_id: str, ctx: dict) -> dict:
     log.info("create_staging_test.checker_done", req_id=req_id,
              passed=False, exit_code=result.exit_code,
              duration_sec=round(result.duration_sec, 1))
+    # 保存 stderr_tail（含 baseline diff 上下文）到 ctx，供 verifier prompt 渲染用。
+    await req_state.update_context(pool, req_id, {
+        "staging_test_stderr_tail": result.stderr_tail,
+    })
     return {
         "emit": Event.STAGING_TEST_FAIL.value,
         "passed": False,
@@ -103,6 +107,12 @@ async def _dispatch_bkd_agent(*, body, req_id: str, ctx: dict) -> dict:
     )
     extra_tags = pr_links.pr_link_tags(links)
 
+    pool = db.get_pool()
+    slug = f"staging_test|{req_id}|{getattr(body, 'executionId', None) or ''}"
+    if hit := await dispatch_slugs.get(pool, slug):
+        log.info("create_staging_test.slug_hit", req_id=req_id, issue_id=hit)
+        await req_state.update_context(pool, req_id, {"staging_test_issue_id": hit})
+        return {"staging_test_issue_id": hit}
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
             project_id=proj,
@@ -121,7 +131,7 @@ async def _dispatch_bkd_agent(*, body, req_id: str, ctx: dict) -> dict:
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")
 
-    pool = db.get_pool()
+    await dispatch_slugs.put(pool, slug, issue.id)
     await req_state.update_context(pool, req_id, {"staging_test_issue_id": issue.id})
 
     log.info("create_staging_test.bkd_agent_dispatched", req_id=req_id, staging_issue=issue.id)

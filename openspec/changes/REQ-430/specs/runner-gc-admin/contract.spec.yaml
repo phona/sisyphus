@@ -1,0 +1,76 @@
+capability: runner-gc-admin
+version: "1.0"
+description: >
+  Admin endpoints for on-demand runner GC trigger and last-run status.
+  Extends the existing periodic runner_gc with operational control surface.
+
+endpoints:
+  - method: POST
+    path: /admin/runner-gc
+    auth: Bearer webhook_token
+    description: Immediately run gc_once() and return the result.
+    response:
+      200:
+        schema:
+          oneOf:
+            - properties:
+                cleaned_pods: {type: array, items: {type: string}}
+                cleaned_pvcs: {type: array, items: {type: string}}
+                pod_kept: {type: integer}
+                pvc_kept: {type: integer}
+                disk_pressure: {type: boolean}
+                ran_at: {type: string, format: date-time}
+            - properties:
+                skipped: {type: string}
+                ran_at: {type: string, format: date-time}
+      401: {}
+
+  - method: GET
+    path: /admin/runner-gc/status
+    auth: none
+    description: >
+      Return the in-memory last GC result. Null before first pass.
+      Not authenticated — read-only operational status.
+    response:
+      200:
+        schema:
+          properties:
+            last:
+              oneOf:
+                - type: "null"
+                - properties:
+                    ran_at: {type: string, format: date-time}
+                    cleaned_pods: {type: array}
+                    cleaned_pvcs: {type: array}
+                    pod_kept: {type: integer}
+                    pvc_kept: {type: integer}
+                    disk_pressure: {type: boolean}
+
+module_changes:
+  runner_gc:
+    added:
+      - name: _last_gc_result
+        type: "dict | None"
+        description: >
+          Module-level variable. Set by gc_once() after every pass
+          (including skipped). Reset to None on orchestrator restart.
+      - name: get_last_result
+        signature: "() -> dict | None"
+        description: Returns _last_gc_result. Used by GET /admin/runner-gc/status.
+
+invariants:
+  - _last_gc_result is updated atomically within gc_once() before returning
+  - ran_at in result uses UTC ISO-8601 format
+  - Both timer loop and admin trigger share the same _last_gc_result slot
+
+scenarios:
+  - id: RGA-S1
+    file: spec.md
+  - id: RGA-S2
+    file: spec.md
+  - id: RGA-S3
+    file: spec.md
+  - id: RGA-S4
+    file: spec.md
+  - id: RGA-S5
+    file: spec.md

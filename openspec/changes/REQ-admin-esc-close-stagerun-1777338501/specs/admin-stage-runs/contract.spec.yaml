@@ -1,0 +1,8 @@
+id: admin-stage-runs
+title: force_escalate stage_run close contract
+version: "1"
+scenarios:
+  - id: FESC-S1
+    ref: "specs/admin-stage-runs/spec.md#Scenario: FESC-S1 ANALYZING state closes analyze stage_run before escalate"
+  - id: FESC-S2
+    ref: "specs/admin-stage-runs/spec.md#Scenario: FESC-S2 INIT state skips stage_run close"

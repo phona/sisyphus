@@ -32,6 +32,13 @@ def _admit_by_default(monkeypatch):
     # Tests that want to inspect the call can re-patch.
     noop = AsyncMock()
     monkeypatch.setattr(start_analyze.req_state, "update_context", noop)
+    # REQ-427: dispatch_slugs slug check — no hit by default so create_issue proceeds.
+    monkeypatch.setattr(
+        start_analyze_with_finalized_intent.dispatch_slugs, "get", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        start_analyze_with_finalized_intent.dispatch_slugs, "put", AsyncMock()
+    )
 
 
 @dataclass
@@ -107,11 +114,14 @@ async def test_start_analyze_server_side_clones_when_involved_repos_present(monk
     )
 
     # 1) clone 跑过：cmd 含 helper 路径 + 两个仓
-    exec_fn.assert_awaited_once()
-    cmd = exec_fn.await_args.args[1]
-    assert "/opt/sisyphus/scripts/sisyphus-clone-repos.sh" in cmd
-    assert "phona/repo-a" in cmd
-    assert "ZonEaseTech/ttpos-server-go" in cmd
+    # exec_in_runner 现在也被 _supersede_stale_openspec_changes 调用（每仓一次），
+    # 所以 assert_awaited_once() 不再适用；改为从所有调用中找 clone 命令。
+    exec_fn.assert_awaited()
+    all_cmds = [call.args[1] for call in exec_fn.await_args_list]
+    clone_cmd = next((c for c in all_cmds if "sisyphus-clone-repos.sh" in c), None)
+    assert clone_cmd is not None, f"clone cmd not found; got: {all_cmds}"
+    assert "phona/repo-a" in clone_cmd
+    assert "ZonEaseTech/ttpos-server-go" in clone_cmd
 
     # 2) agent 收到 prompt（clone 之后）
     follow_up.assert_awaited_once()
@@ -445,9 +455,11 @@ async def test_start_analyze_passes_repo_tags_and_default_to_clone(monkeypatch):
         tags=["intent:analyze", "repo:phona/sisyphus"],
         ctx={"intent_title": "direct analyze entry"},
     )
-    exec_fn.assert_awaited_once()
-    cmd = exec_fn.await_args.args[1]
-    assert "phona/sisyphus" in cmd
+    exec_fn.assert_awaited()
+    all_cmds = [call.args[1] for call in exec_fn.await_args_list]
+    clone_cmd = next((c for c in all_cmds if "sisyphus-clone-repos.sh" in c), None)
+    assert clone_cmd is not None, f"clone cmd not found; got: {all_cmds}"
+    assert "phona/sisyphus" in clone_cmd
     follow_up.assert_awaited_once()
     assert rv["cloned_repos"] == ["phona/sisyphus"]
     assert "emit" not in rv
@@ -467,9 +479,11 @@ async def test_start_analyze_uses_settings_default_when_no_ctx_no_tags(monkeypat
         tags=["intent:analyze"],
         ctx={"intent_title": "single-repo dogfood"},
     )
-    exec_fn.assert_awaited_once()
-    cmd = exec_fn.await_args.args[1]
-    assert "phona/sisyphus" in cmd
+    exec_fn.assert_awaited()
+    all_cmds = [call.args[1] for call in exec_fn.await_args_list]
+    clone_cmd = next((c for c in all_cmds if "sisyphus-clone-repos.sh" in c), None)
+    assert clone_cmd is not None, f"clone cmd not found; got: {all_cmds}"
+    assert "phona/sisyphus" in clone_cmd
     assert rv["cloned_repos"] == ["phona/sisyphus"]
 
 

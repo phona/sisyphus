@@ -122,6 +122,7 @@ class Settings(BaseSettings):
     skip_staging_test: bool = False   # staging-test.pass（调试环境跑 unit+int）
     skip_pr_ci: bool = False          # pr-ci.pass（PR CI 全套等绿）
     skip_accept: bool = False         # accept.pass (ttpos-arch-lab 接好前默认 true)
+    accept_smoke_delay_sec: int = 30  # env-up 后等服务起齐的 sleep（秒）
     skip_archive: bool = False        # archive.done (跳过真 PR 创建)
 
     # 全部 skip = 状态机几秒走完，验 transition + cleanup，不动 BKD agent
@@ -139,6 +140,15 @@ class Settings(BaseSettings):
     # 轮询参数（仅 checker 模式下用）
     pr_ci_watch_poll_interval_sec: int = 30
     pr_ci_watch_timeout_sec: int = 1800   # 30 min
+
+    # ─── ttpos-ci-direct-dispatch（REQ-447）──────────────────────────────
+    # True = checker 路径进入轮询前主动 POST repository_dispatch 给 ci_dispatch_repo
+    # False（默认）= 不主动 dispatch，依赖 PR webhook 被动触发 GHA
+    ci_dispatch_enabled: bool = False
+    # dispatch 目标仓，如 "phona/ttpos-ci"；空 = 关闭（即使 ci_dispatch_enabled=True）
+    ci_dispatch_repo: str = ""
+    # repository_dispatch event_type；ttpos-ci workflow 监听这个事件名
+    ci_dispatch_event_type: str = "pr-ci-run"
 
     # ─── runner ready 重试 ─────────────────────────────────────────────
     # ensure_runner 等 Pod Ready 的外层 attempts：N × runner_ready_timeout_sec
@@ -197,6 +207,13 @@ class Settings(BaseSettings):
     # 让人介入。N 默认 5；调高 = 给 fixer 更多机会，调低 = 更早叫人。
     fixer_round_cap: int = 5
 
+    # ─── verifier 判 infra-flake 时的自动重跑次数上限 ────────────────────
+    # verifier decision=retry（基础设施 flaky 判定）时，apply_verify_infra_retry
+    # 从 ctx.infra_retry_count 读已重跑次数；< cap 则重跑 stage checker，
+    # >= cap 则 emit VERIFY_ESCALATE（reason=infra-retry-cap）让人介入。
+    # 默认 2：给 infra flake 2 次自愈机会，超了人工检查基础设施。
+    verifier_infra_retry_cap: int = 2
+
     # ─── REQ-checker-infra-flake-retry-1777247423：infra-flake bounded retry ──
     # 三个 kubectl-exec checker（spec_lint / dev_cross_check / staging_test）一次跑挂时，
     # 若 stderr/stdout 命中 _flake.INFRA_FLAKE_PATTERNS（DNS / kubectl-channel /
@@ -208,6 +225,16 @@ class Settings(BaseSettings):
     checker_infra_flake_retry_enabled: bool = True
     checker_infra_flake_retry_max: int = 1            # 0 = no retry, 1 = 1 retry (2 attempts)
     checker_infra_flake_retry_backoff_sec: int = 15
+
+    # ─── 周期 TTL 清理（增长表防膨胀） ───────────────────────────────────
+    # event_seen / dispatch_slugs / verifier_decisions / stage_runs(closed) 只增不减；
+    # 后台任务按 interval 周期删过期行。False = 关闭（dev / 单测可不跑）。
+    ttl_cleanup_enabled: bool = True
+    ttl_cleanup_interval_sec: int = 86400         # 24h
+    ttl_event_seen_days: int = 30                 # webhook dedup：7 天 4000+ 行，30 天足矣
+    ttl_dispatch_slugs_days: int = 90             # slug 幂等映射：低频写，保 90 天
+    ttl_verifier_decisions_days: int = 90         # verifier 判决审计：90 天
+    ttl_stage_runs_closed_days: int = 90          # stage_runs ended_at IS NOT NULL：90 天
 
 
 settings = Settings()  # type: ignore[call-arg]

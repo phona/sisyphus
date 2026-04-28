@@ -31,6 +31,7 @@ SISYPHUS_MANAGED_EXACT: frozenset[str] = frozenset({
     "staging-test",
     "pr-ci",
     "done-archive",
+    "pr-ready",
 })
 
 # Sisyphus 自己管的 tag 前缀。覆盖 §1 入口 / §4 结果 / §5 verifier / §6 fixer /

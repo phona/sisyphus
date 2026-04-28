@@ -22,6 +22,8 @@ ctx 没 involved_repos）也试 multi-layer fallback —— 把 BKD intent issue
 """
 from __future__ import annotations
 
+import re
+
 import structlog
 
 from .. import k8s_runner, links
@@ -38,6 +40,62 @@ from ._clone import clone_involved_repos_into_runner
 from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
+
+_V_SUFFIX_RE = re.compile(r"-v\d+$")
+_SUPERSEDE_TIMEOUT_SEC = 60
+
+
+async def _supersede_stale_openspec_changes(req_id: str, repos: list[str]) -> None:
+    """Runner pod 内把同 slug 的旧 openspec/changes/ 目录移到 _superseded/。fail-open。
+
+    REQ-XXX-v2 重派时，把遗留的 openspec/changes/REQ-XXX/（原版）
+    移走，避免 openspec apply 时混淆或留孤儿。
+    """
+    if not repos:
+        return
+    base_slug = _V_SUFFIX_RE.sub("", req_id)
+    try:
+        rc = k8s_runner.get_controller()
+    except RuntimeError as e:
+        log.warning(
+            "start_analyze.supersede_openspec.no_runner", req_id=req_id, error=str(e)
+        )
+        return
+    for repo in repos:
+        basename = repo.rsplit("/", 1)[-1] if "/" in repo else repo
+        script = (
+            f"cd /workspace/source/{basename} 2>/dev/null || exit 0; "
+            f"[ -d 'openspec/changes' ] || exit 0; "
+            f"base_slug='{base_slug}'; current='{req_id}'; "
+            f"for d in openspec/changes/*/; do "
+            f"  dname=$(basename \"$d\"); "
+            f"  [ \"$dname\" = \"$current\" ] && continue; "
+            f"  [ \"$dname\" = '_superseded' ] && continue; "
+            f"  dbase=$(echo \"$dname\" | sed 's/-v[0-9]*$//'); "
+            f"  [ \"$dbase\" = \"$base_slug\" ] || continue; "
+            f"  mkdir -p openspec/changes/_superseded; "
+            f"  mv \"openspec/changes/$dname\" \"openspec/changes/_superseded/$dname\"; "
+            f"  git add openspec/; "
+            f"  git commit -m \"chore(openspec): supersede $dname (replaced by $current)\"; "
+            f"done"
+        )
+        try:
+            result = await rc.exec_in_runner(
+                req_id, script, timeout_sec=_SUPERSEDE_TIMEOUT_SEC
+            )
+            if result.exit_code != 0:
+                log.warning(
+                    "start_analyze.supersede_openspec.failed",
+                    req_id=req_id, repo=repo, exit_code=result.exit_code,
+                    stderr=(result.stderr or "")[-256:],
+                )
+            else:
+                log.info("start_analyze.supersede_openspec.done", req_id=req_id, repo=repo)
+        except Exception as e:
+            log.warning(
+                "start_analyze.supersede_openspec.exec_error",
+                req_id=req_id, repo=repo, error=str(e),
+            )
 
 
 @register("start_analyze", idempotent=True)
@@ -80,6 +138,10 @@ async def start_analyze(*, body, req_id, tags, ctx):
             "emit": Event.VERIFY_ESCALATE.value,
             "reason": f"clone failed (rc={clone_rc}) for repos={cloned_repos}"[:200],
         }
+
+    # 2b. 同 slug 旧 openspec/changes/ 目录移到 _superseded/（fail-open）
+    # REQ-XXX-v2 重派时，把遗留的 REQ-XXX/ 挪走，避免 openspec apply 混淆。
+    await _supersede_stale_openspec_changes(req_id, cloned_repos or [])
 
     # 3-5. BKD 调度 analyze-agent
     # REQ-ux-tags-injection-1777257283: forward user hint tags (`repo:`, `ux:`, ...)

@@ -120,6 +120,11 @@ async def test_force_escalate_marks_escalated_and_triggers_cleanup(monkeypatch):
     pool = FakePool()
     monkeypatch.setattr("orchestrator.admin.db.get_pool", lambda: pool)
 
+    # ANALYZING は STATE_TO_STAGE に含まれるので close_latest_stage_run が呼ばれる
+    async def _fake_close(_pool, req_id, stage, *, outcome, fail_reason=None):
+        pass
+    monkeypatch.setattr("orchestrator.admin.stage_runs.close_latest_stage_run", _fake_close)
+
     cleanup_calls: list[tuple] = []
 
     async def _fake_cleanup(req_id, terminal_state):
@@ -128,16 +133,6 @@ async def test_force_escalate_marks_escalated_and_triggers_cleanup(monkeypatch):
     monkeypatch.setattr(
         "orchestrator.admin.engine._cleanup_runner_on_terminal", _fake_cleanup,
     )
-
-    # BKD sync は試みるが test では失敗してよい（try/except で飲む）
-    import contextlib
-
-    class _FakeBKD:
-        async def merge_tags_and_update(self, *a, **kw): ...
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): ...
-
-    monkeypatch.setattr("orchestrator.admin.BKDClient", lambda *a, **kw: _FakeBKD())
 
     result = await force_escalate("REQ-X", authorization="Bearer x")
 
@@ -793,7 +788,162 @@ async def test_resume_auth_check_before_db(monkeypatch):
 # ─── runner endpoint rename：路径切到 /runner-pause / /runner-resume ─────
 
 
-# ═══════════════════════════════════════════════════════════════════════
+@pytest.mark.asyncio
+async def test_force_escalate_closes_current_stage_run(monkeypatch):
+    """FRE-S3: force_escalate 在 raw SQL UPDATE 前调 close_latest_stage_run 收尾当前 stage。
+
+    force_escalate 是 raw SQL UPDATE 绕过 engine._record_stage_transitions，
+    正在跑的 stage_run（ended_at IS NULL）永远不会被正常 close 路径关闭，
+    留在 DB 里污染 stage_stats 指标（duration_sec=NULL / outcome=NULL）。
+
+    修复：用 engine.STATE_TO_STAGE.get(row.state) 取当前 stage，
+    调 close_latest_stage_run(outcome='escalated', fail_reason='admin-force-escalate')
+    然后再做 raw SQL UPDATE。
+    """
+    from dataclasses import dataclass
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from orchestrator import admin as admin_mod
+
+    @dataclass
+    class _Row:
+        req_id: str
+        project_id: str
+        state: ReqState
+        context: dict
+        history: list
+        created_at: _dt
+        updated_at: _dt
+
+    monkeypatch.setattr(admin_mod, "_verify_token", lambda x: None)
+
+    row = _Row(
+        req_id="REQ-X", project_id="p", state=ReqState.ANALYZING,
+        context={}, history=[],
+        created_at=_dt.now(UTC), updated_at=_dt.now(UTC),
+    )
+
+    async def _get(_pool, _req_id):
+        return row
+    monkeypatch.setattr("orchestrator.admin.req_state.get", _get)
+
+    close_calls: list[tuple] = []
+
+    async def _fake_close(_pool, req_id, stage, *, outcome, fail_reason=None):
+        close_calls.append((req_id, stage, outcome, fail_reason))
+
+    monkeypatch.setattr(
+        "orchestrator.admin.stage_runs.close_latest_stage_run", _fake_close,
+    )
+
+    call_order: list[str] = []
+
+    class FakePool:
+        async def execute(self, sql, *args):
+            call_order.append("sql_update")
+            return "UPDATE 1"
+
+    monkeypatch.setattr("orchestrator.admin.db.get_pool", lambda: FakePool())
+
+    async def _fake_cleanup(req_id, terminal_state):
+        pass
+    monkeypatch.setattr(
+        "orchestrator.admin.engine._cleanup_runner_on_terminal", _fake_cleanup,
+    )
+
+    # intercept close to track order
+    original_fake_close = _fake_close
+
+    async def _ordered_close(_pool, req_id, stage, *, outcome, fail_reason=None):
+        call_order.append("stage_run_close")
+        await original_fake_close(_pool, req_id, stage, outcome=outcome, fail_reason=fail_reason)
+
+    monkeypatch.setattr(
+        "orchestrator.admin.stage_runs.close_latest_stage_run", _ordered_close,
+    )
+
+    result = await force_escalate("REQ-X", authorization="Bearer x")
+
+    assert result == {"action": "force_escalated", "from_state": "analyzing", "kind": "admin"}
+    # close_latest_stage_run 调了一次：req_id, stage="analyze", outcome="escalated"
+    assert close_calls == [("REQ-X", "analyze", "escalated", "admin-force-escalate")], (
+        "force_escalate must call close_latest_stage_run with the stage derived "
+        "from STATE_TO_STAGE, outcome='escalated', fail_reason='admin-force-escalate'"
+    )
+    # close 必须在 SQL UPDATE 之前执行（先收尾 stage_run 再改 state）
+    assert call_order == ["stage_run_close", "sql_update"], (
+        "close_latest_stage_run must be called BEFORE the raw SQL UPDATE "
+        "so the stage_run is closed with the correct start→end duration"
+    )
+
+
+@pytest.mark.asyncio
+async def test_force_escalate_no_close_when_state_has_no_stage(monkeypatch):
+    """FRE-S4: INIT / 无 stage 对应 state 调 force_escalate → 不调 close_latest_stage_run。
+
+    STATE_TO_STAGE 只覆盖 *_RUNNING 类 state；INIT/DONE/ESCALATED 等没对应 stage，
+    不应该调 close（不会有 open stage_run）。
+    """
+    from dataclasses import dataclass
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from orchestrator import admin as admin_mod
+
+    @dataclass
+    class _Row:
+        req_id: str
+        project_id: str
+        state: ReqState
+        context: dict
+        history: list
+        created_at: _dt
+        updated_at: _dt
+
+    monkeypatch.setattr(admin_mod, "_verify_token", lambda x: None)
+
+    row = _Row(
+        req_id="REQ-X", project_id="p", state=ReqState.INIT,
+        context={}, history=[],
+        created_at=_dt.now(UTC), updated_at=_dt.now(UTC),
+    )
+
+    async def _get(_pool, _req_id):
+        return row
+    monkeypatch.setattr("orchestrator.admin.req_state.get", _get)
+
+    close_calls: list = []
+
+    async def _fake_close(_pool, req_id, stage, *, outcome, fail_reason=None):
+        close_calls.append((req_id, stage, outcome))
+
+    monkeypatch.setattr(
+        "orchestrator.admin.stage_runs.close_latest_stage_run", _fake_close,
+    )
+
+    class FakePool:
+        async def execute(self, sql, *args):
+            return "UPDATE 1"
+
+    monkeypatch.setattr("orchestrator.admin.db.get_pool", lambda: FakePool())
+
+    async def _fake_cleanup(req_id, terminal_state):
+        pass
+    monkeypatch.setattr(
+        "orchestrator.admin.engine._cleanup_runner_on_terminal", _fake_cleanup,
+    )
+
+    result = await force_escalate("REQ-X", authorization="Bearer x")
+
+    assert result == {"action": "force_escalated", "from_state": "init", "kind": "admin"}
+    assert close_calls == [], (
+        "When current state has no corresponding stage in STATE_TO_STAGE "
+        "(e.g. INIT), close_latest_stage_run must NOT be called"
+    )
+
+
+
 # /admin/req/{req_id}/escalate — kind param + BKD sync (REQ-429)
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -958,7 +1108,6 @@ async def test_force_escalate_bkd_failure_does_not_block(monkeypatch):
     # cleanup task 还是起了
     await asyncio.sleep(0)
     assert cleanup_calls == [("REQ-X", ReqState.ESCALATED)]
-
 
 def test_admin_route_table_runner_pause_renamed():
     """ARE-S9: /admin/req/{req_id}/runner-pause 已注册，旧 /pause 不存在."""

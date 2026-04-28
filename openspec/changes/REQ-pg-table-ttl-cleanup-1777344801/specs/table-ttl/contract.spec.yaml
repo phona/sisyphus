@@ -1,0 +1,85 @@
+capability: table-ttl
+version: "1.0"
+description: >
+  Periodic background TTL cleanup for four append-only tables in the sisyphus
+  Postgres instance. Runs as an asyncio background task in the orchestrator.
+  No HTTP endpoint — purely internal maintenance.
+
+background_task:
+  module: orchestrator.maintenance.table_ttl
+  entry: run_loop
+  startup_condition:
+    settings.ttl_cleanup_enabled: true
+    settings.ttl_cleanup_interval_sec: "> 0"
+
+tables:
+  event_seen:
+    time_column: seen_at
+    config_key: ttl_event_seen_days
+    default_days: 30
+    filter: none  # all rows subject to TTL
+
+  dispatch_slugs:
+    time_column: created_at
+    config_key: ttl_dispatch_slugs_days
+    default_days: 90
+    filter: none
+
+  verifier_decisions:
+    time_column: made_at
+    config_key: ttl_verifier_decisions_days
+    default_days: 90
+    filter: none
+
+  stage_runs:
+    time_column: ended_at
+    config_key: ttl_stage_runs_closed_days
+    default_days: 90
+    filter: "ended_at IS NOT NULL"  # MUST NOT delete open (in-flight) rows
+
+config_keys:
+  - key: SISYPHUS_TTL_CLEANUP_ENABLED
+    type: bool
+    default: true
+  - key: SISYPHUS_TTL_CLEANUP_INTERVAL_SEC
+    type: int
+    default: 86400
+  - key: SISYPHUS_TTL_EVENT_SEEN_DAYS
+    type: int
+    default: 30
+  - key: SISYPHUS_TTL_DISPATCH_SLUGS_DAYS
+    type: int
+    default: 90
+  - key: SISYPHUS_TTL_VERIFIER_DECISIONS_DAYS
+    type: int
+    default: 90
+  - key: SISYPHUS_TTL_STAGE_RUNS_CLOSED_DAYS
+    type: int
+    default: 90
+
+cleanup_result_schema:
+  type: object
+  properties:
+    event_seen:
+      $ref: "#/$defs/table_summary"
+    dispatch_slugs:
+      $ref: "#/$defs/table_summary"
+    verifier_decisions:
+      $ref: "#/$defs/table_summary"
+    stage_runs:
+      $ref: "#/$defs/table_summary"
+
+"$defs":
+  table_summary:
+    type: object
+    required: [before, after, deleted]
+    properties:
+      before:
+        type: integer
+        description: Row count before deletion
+      after:
+        type: integer
+        description: Row count after deletion
+      deleted:
+        type: integer
+        description: Number of rows deleted (before - after)
