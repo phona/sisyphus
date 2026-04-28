@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     runner_gc_interval_sec: int = 900    # 15min
     # 磁盘压力阈值：超过此比例 GC 强清所有非 active PVC（不论 retention）
     runner_gc_disk_pressure_threshold: float = 0.8
+    # accept env GC 扫描周期；0 = 不跑（dev / 没接 accept-env-up 的部署可关）
+    accept_env_gc_interval_sec: int = 900    # 15min
 
     # ─── Admission gate（fresh REQ entry rate-limit）────────────────────────
     # 同时跑的 REQ 上限：start_intake / start_analyze 进门时数 req_state 里非
