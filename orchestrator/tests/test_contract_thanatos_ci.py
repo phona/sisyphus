@@ -129,15 +129,19 @@ def test_TCIF_S4_thanatos_pyproject_has_dependency_groups_dev_with_pytest():
     """
     pyproject = REPO_ROOT / "thanatos" / "pyproject.toml"
     assert pyproject.exists(), "thanatos/pyproject.toml not found"
-    content = pyproject.read_text()
-    assert "[dependency-groups]" in content, (
+    import tomllib
+    with open(pyproject, "rb") as f:
+        data = tomllib.load(f)
+    dep_groups = data.get("dependency-groups") or {}
+    assert dep_groups, (
         "Expected [dependency-groups] section in thanatos/pyproject.toml.\n"
         "Without this, 'uv run pytest' uses one-off tool mode and cannot import thanatos."
     )
-    dep_groups_section = content.split("[dependency-groups]")[1].split("[")[0]
-    assert "pytest" in dep_groups_section, (
-        "Expected 'pytest' in [dependency-groups] section of thanatos/pyproject.toml.\n"
-        f"[dependency-groups] content:\n{dep_groups_section}"
+    dev_deps = dep_groups.get("dev") or []
+    has_pytest = any("pytest" in str(d) for d in dev_deps)
+    assert has_pytest, (
+        "Expected 'pytest' in [dependency-groups].dev of thanatos/pyproject.toml.\n"
+        f"dev deps: {dev_deps}"
     )
 
 
