@@ -15,8 +15,7 @@ Scenarios covered:
 from __future__ import annotations
 
 from typing import ClassVar
-from unittest.mock import AsyncMock, call
-
+from unittest.mock import AsyncMock
 
 # ─── Shared helpers ───────────────────────────────────────────────────────────
 
