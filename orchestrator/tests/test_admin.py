@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from orchestrator.admin import (
     CompleteBody,
     EmitBody,
+    EscalateBody,
     ResumeBody,
     _FakeBody,
     complete_req,
@@ -135,7 +136,7 @@ async def test_force_escalate_marks_escalated_and_triggers_cleanup(monkeypatch):
 
     result = await force_escalate("REQ-X", authorization="Bearer x")
 
-    assert result == {"action": "force_escalated", "from_state": "analyzing"}
+    assert result == {"action": "force_escalated", "from_state": "analyzing", "kind": "admin"}
     # SQL UPDATE 跑了一次
     assert len(executed) == 1
     sql, _args = executed[0]
@@ -864,7 +865,7 @@ async def test_force_escalate_closes_current_stage_run(monkeypatch):
 
     result = await force_escalate("REQ-X", authorization="Bearer x")
 
-    assert result == {"action": "force_escalated", "from_state": "analyzing"}
+    assert result == {"action": "force_escalated", "from_state": "analyzing", "kind": "admin"}
     # close_latest_stage_run 调了一次：req_id, stage="analyze", outcome="escalated"
     assert close_calls == [("REQ-X", "analyze", "escalated", "admin-force-escalate")], (
         "force_escalate must call close_latest_stage_run with the stage derived "
@@ -935,12 +936,178 @@ async def test_force_escalate_no_close_when_state_has_no_stage(monkeypatch):
 
     result = await force_escalate("REQ-X", authorization="Bearer x")
 
-    assert result == {"action": "force_escalated", "from_state": "init"}
+    assert result == {"action": "force_escalated", "from_state": "init", "kind": "admin"}
     assert close_calls == [], (
         "When current state has no corresponding stage in STATE_TO_STAGE "
         "(e.g. INIT), close_latest_stage_run must NOT be called"
     )
 
+
+
+# /admin/req/{req_id}/escalate — kind param + BKD sync (REQ-429)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_escalate_body_default_kind():
+    """EKS-S1: EscalateBody 默认 kind="admin"."""
+    assert EscalateBody().kind == "admin"
+
+
+def test_escalate_body_custom_kind():
+    """EKS-S2: EscalateBody 接受自定义 kind。"""
+    assert EscalateBody(kind="infra-flake").kind == "infra-flake"
+
+
+def _bypass_auth_pool_for_escalate(monkeypatch, pool, row, bkd_calls: list | None = None):
+    """共用 patch helper for force_escalate 新测试。"""
+    from orchestrator import admin as admin_mod
+
+    monkeypatch.setattr(admin_mod, "_verify_token", lambda x: None)
+
+    async def _get(_pool, _req_id):
+        return row
+
+    monkeypatch.setattr("orchestrator.admin.req_state.get", _get)
+    monkeypatch.setattr("orchestrator.admin.db.get_pool", lambda: pool)
+
+    async def _fake_cleanup(req_id, terminal_state):
+        pass
+
+    monkeypatch.setattr(
+        "orchestrator.admin.engine._cleanup_runner_on_terminal", _fake_cleanup,
+    )
+
+    recorded = bkd_calls if bkd_calls is not None else []
+
+    class _FakeBKD:
+        async def merge_tags_and_update(self, proj, issue_id, *, add=None, remove=None, status_id=None):
+            recorded.append({"proj": proj, "issue_id": issue_id, "add": add, "status_id": status_id})
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            ...
+
+    monkeypatch.setattr("orchestrator.admin.BKDClient", lambda *a, **kw: _FakeBKD())
+    return recorded
+
+
+@pytest.mark.asyncio
+async def test_force_escalate_custom_kind_in_sql_and_response(monkeypatch):
+    """EKS-S3: kind="infra-flake" → SQL ctx contains escalated_reason + response has kind."""
+    import json as _json
+
+    pool = _FakePool()
+    row = _FakeRow(
+        req_id="REQ-X", project_id="p", state=ReqState.ANALYZING,
+        context={"intent_issue_id": "issue-abc"},
+    )
+    _bypass_auth_pool_for_escalate(monkeypatch, pool, row)
+
+    result = await force_escalate(
+        "REQ-X", body=EscalateBody(kind="infra-flake"), authorization="Bearer x",
+    )
+
+    assert result == {"action": "force_escalated", "from_state": "analyzing", "kind": "infra-flake"}
+    assert len(pool.executed) == 1
+    _sql, args = pool.executed[0]
+    ctx = _json.loads(args[1])
+    assert ctx["escalated_reason"] == "infra-flake"
+
+
+@pytest.mark.asyncio
+async def test_force_escalate_bkd_sync_called_with_correct_args(monkeypatch):
+    """EKS-S4: BKD sync 在 SQL UPDATE 后调用，传 add=[escalated, reason:<kind>] + status_id=review。"""
+    pool = _FakePool()
+    row = _FakeRow(
+        req_id="REQ-X", project_id="myproj", state=ReqState.ANALYZING,
+        context={"intent_issue_id": "intent-123"},
+    )
+    bkd_calls: list = []
+    _bypass_auth_pool_for_escalate(monkeypatch, pool, row, bkd_calls)
+
+    await force_escalate(
+        "REQ-X", body=EscalateBody(kind="watchdog-stuck"), authorization="Bearer x",
+    )
+
+    assert len(bkd_calls) == 1
+    call = bkd_calls[0]
+    assert call["proj"] == "myproj"
+    assert call["issue_id"] == "intent-123"
+    assert "escalated" in call["add"]
+    assert "reason:watchdog-stuck" in call["add"]
+    assert call["status_id"] == "review"
+
+
+@pytest.mark.asyncio
+async def test_force_escalate_bkd_uses_req_id_fallback_when_no_intent_issue(monkeypatch):
+    """EKS-S5: ctx 没 intent_issue_id → fallback 用 req_id。"""
+    pool = _FakePool()
+    row = _FakeRow(
+        req_id="REQ-X", project_id="p", state=ReqState.ANALYZING,
+        context={},  # 没 intent_issue_id
+    )
+    bkd_calls: list = []
+    _bypass_auth_pool_for_escalate(monkeypatch, pool, row, bkd_calls)
+
+    await force_escalate("REQ-X", authorization="Bearer x")
+
+    assert bkd_calls[0]["issue_id"] == "REQ-X"
+
+
+@pytest.mark.asyncio
+async def test_force_escalate_bkd_failure_does_not_block(monkeypatch):
+    """EKS-S6: BKD sync 失败 → 不影响 SQL UPDATE 结果 + cleanup task。"""
+    import json as _json
+
+    pool = _FakePool()
+    row = _FakeRow(
+        req_id="REQ-X", project_id="p", state=ReqState.ANALYZING,
+        context={},
+    )
+    from orchestrator import admin as admin_mod
+
+    monkeypatch.setattr(admin_mod, "_verify_token", lambda x: None)
+
+    async def _get(_pool, _req_id):
+        return row
+
+    monkeypatch.setattr("orchestrator.admin.req_state.get", _get)
+    monkeypatch.setattr("orchestrator.admin.db.get_pool", lambda: pool)
+
+    cleanup_calls: list = []
+
+    async def _fake_cleanup(req_id, terminal_state):
+        cleanup_calls.append((req_id, terminal_state))
+
+    monkeypatch.setattr(
+        "orchestrator.admin.engine._cleanup_runner_on_terminal", _fake_cleanup,
+    )
+
+    class _FailBKD:
+        async def merge_tags_and_update(self, *a, **kw):
+            raise RuntimeError("BKD unreachable")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            ...
+
+    monkeypatch.setattr("orchestrator.admin.BKDClient", lambda *a, **kw: _FailBKD())
+
+    result = await force_escalate("REQ-X", authorization="Bearer x")
+
+    # SQL UPDATE 成功
+    assert result["action"] == "force_escalated"
+    assert len(pool.executed) == 1
+    _sql, args = pool.executed[0]
+    ctx = _json.loads(args[1])
+    assert ctx["escalated_reason"] == "admin"
+    # cleanup task 还是起了
+    await asyncio.sleep(0)
+    assert cleanup_calls == [("REQ-X", ReqState.ESCALATED)]
 
 def test_admin_route_table_runner_pause_renamed():
     """ARE-S9: /admin/req/{req_id}/runner-pause 已注册，旧 /pause 不存在."""

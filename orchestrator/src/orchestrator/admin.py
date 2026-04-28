@@ -37,6 +37,8 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from . import engine, k8s_runner, runner_gc
+from .bkd import BKDClient
+from .config import settings
 from .state import Event, ReqState
 from .store import db, req_state, stage_runs
 from .webhook import _verify_token
@@ -97,6 +99,11 @@ async def emit_event(
     )
 
 
+class EscalateBody(BaseModel):
+    """force_escalate body。kind 写入 ctx.escalated_reason + BKD reason tag。"""
+    kind: str = "admin"
+
+
 # 持引用防 fire-and-forget cleanup task 被 GC（done_callback 自清）。
 # 跟 _complete_cleanup_tasks 同模式但隔离作用域，便于测试 introspect 仅本 endpoint 起的 task。
 _force_escalate_cleanup_tasks: set[asyncio.Task] = set()
@@ -105,6 +112,7 @@ _force_escalate_cleanup_tasks: set[asyncio.Task] = set()
 @admin.post("/req/{req_id}/escalate")
 async def force_escalate(
     req_id: str,
+    body: EscalateBody | None = None,
     authorization: str | None = Header(default=None),
 ) -> dict:
     """强制 REQ 进入 escalated（卡死时手工止损）+ 立即清 runner Pod（保 PVC 给人工 debug）。
@@ -115,6 +123,7 @@ async def force_escalate(
     保留期（runner_gc 把 escalated retention 内的 REQ 当 active，不扫 Pod）。
     """
     _verify_token(authorization)
+    params = body or EscalateBody()
 
     pool = db.get_pool()
     row = await req_state.get(pool, req_id)
@@ -144,7 +153,7 @@ async def force_escalate(
         "UPDATE req_state SET state='escalated', "
         "context = context || $2::jsonb, updated_at = now() WHERE req_id = $1",
         req_id,
-        '{"escalated_reason": "admin"}',
+        json.dumps({"escalated_reason": params.kind}),
     )
 
     # 立即触发 runner cleanup（不等 runner_gc 下一轮）；fire-and-forget。
@@ -157,8 +166,25 @@ async def force_escalate(
     _force_escalate_cleanup_tasks.add(task)
     task.add_done_callback(_force_escalate_cleanup_tasks.discard)
 
-    log.warning("admin.force_escalate", req_id=req_id, from_state=row.state.value)
-    return {"action": "force_escalated", "from_state": row.state.value}
+    # BKD sync: tag intent issue + move to review（mirror escalate.py session-failed path）。
+    # non-blocking — BKD 不可达不阻塞强推结果。
+    intent_issue_id = (row.context or {}).get("intent_issue_id") or req_id
+    proj = row.project_id
+    try:
+        async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+            await bkd.merge_tags_and_update(
+                proj, intent_issue_id,
+                add=["escalated", f"reason:{params.kind}"],
+                status_id="review",
+            )
+    except Exception as e:
+        log.warning(
+            "admin.force_escalate.bkd_sync_failed",
+            req_id=req_id, intent_issue_id=intent_issue_id, error=str(e),
+        )
+
+    log.warning("admin.force_escalate", req_id=req_id, from_state=row.state.value, kind=params.kind)
+    return {"action": "force_escalated", "from_state": row.state.value, "kind": params.kind}
 
 
 class CompleteBody(BaseModel):
