@@ -23,8 +23,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 _PRODUCTION_SOURCE = Path(__file__).resolve().parent.parent / "src" / "orchestrator"
 
 
