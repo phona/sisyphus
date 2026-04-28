@@ -1,0 +1,49 @@
+version: "1.0"
+capability: staging-test-baseline-diff
+description: >
+  Two-phase baseline diff for staging_test checker.
+  Baseline (origin/main tests) cached 24h in baseline_results table.
+  True fail set = pr_failures - baseline_failures.
+
+scenarios:
+  - id: BD-1
+    description: baseline all pass + PR all pass → pass
+  - id: BD-2
+    description: baseline N fail + PR same N fail → diff empty → pass
+  - id: BD-3
+    description: baseline N fail + PR N+1 fail → fail with diff context in stderr
+  - id: BD-4
+    description: baseline phase exception → fallback to old exit-code logic
+
+db_objects:
+  - table: baseline_results
+    columns:
+      - name: cache_key
+        type: TEXT
+        unique: true
+        description: "baseline:staging_test:<main_head_sha>"
+      - name: main_sha
+        type: TEXT
+      - name: repo_results
+        type: JSONB
+        description: "{repo_basename: passed_bool}"
+      - name: created_at
+        type: TIMESTAMPTZ
+        default: NOW()
+    ttl_hours: 24
+
+checker_behavior:
+  phase1_baseline:
+    command: _build_baseline_cmd()
+    branch: origin/main
+    cache: true
+    cache_key_format: "baseline:staging_test:{main_sha}"
+    on_failure: degrade_to_old_logic
+  phase2_pr:
+    command: _build_cmd(req_id)
+    branch: "feat/{req_id}"
+    flake_retry: true
+  diff_logic:
+    pass_condition: "pr_introduced_failures == empty_set"
+    fail_condition: "pr_introduced_failures != empty_set"
+    context_in_stderr: SISYPHUS_BASELINE_DIFF_block
