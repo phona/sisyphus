@@ -58,6 +58,17 @@ CASES: list[tuple[str, list[str], Event | None]] = [
     ("session.completed", ["pr-ci", "REQ-1"],                                None),
     ("session.completed", ["accept", "REQ-1"],                               None),
 
+    # REQ-router-session-completed-audit: session.completed without result coverage
+    # challenger without result → None (intermediate round, not SESSION_FAILED)
+    ("session.completed", ["challenger", "REQ-1"],                           None),
+    # fixer without extra tags → FIXER_DONE (fixer never uses result:* tags)
+    ("session.completed", ["fixer", "REQ-1"],                                Event.FIXER_DONE),
+    # no stage tag at all → None (orphan / unclassified session, skip silently)
+    ("session.completed", ["REQ-1"],                                         None),
+    # known stage tag + unrecognized result variant → None (not SESSION_FAILED)
+    ("session.completed", ["challenger", "REQ-1", "result:weird"],           None),
+    ("session.completed", ["staging-test", "REQ-1", "result:weird"],         None),
+
     # 未知 event_type
     ("session.unknown",   ["dev", "REQ-1"],                                  None),
 ]
