@@ -350,7 +350,17 @@ async def escalate(*, body, req_id, tags, ctx):
         else:
             final_reason = "session-failed-after-2-retries"
 
+    # 兜底：正常路径 body.event fallback 保证 final_reason 非空；
+    # 异常边界（body.event=None + ctx_reason=None）防御性截停，避免 DB 留 null。
+    if not final_reason:
+        log.warning("escalate.reason_missing_defaulted", req_id=req_id)
+        final_reason = "unknown"
+
     pool = db.get_pool()
+
+    # 提前落 escalated_reason：在可能抛异常的 GH incident / BKD tag 代码之前写入 DB，
+    # 确保即使后续步骤 crash，状态行的 escalated_reason 也不是 null。
+    await req_state.update_context(pool, req_id, {"escalated_reason": final_reason})
 
     # ─── GH 事故 issue（per-involved-repo loop, idempotent on ctx.gh_incident_urls） ─
     # 仅在 real-escalate 路径开 issue（auto-resume 不开，会刷屏）。Layer 1-4 是

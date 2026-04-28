@@ -39,6 +39,7 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
     finalized = (ctx or {}).get("intake_finalized_intent")
     if not finalized:
         log.warning("start_analyze_with_finalized_intent.missing_finalized_intent", req_id=req_id)
+        await req_state.update_context(db.get_pool(), req_id, {"escalated_reason": "missing-finalized-intent"})
         return {
             "emit": Event.VERIFY_ESCALATE.value,
             "reason": "intake_finalized_intent missing in ctx",
@@ -63,6 +64,7 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
         req_id, ctx, tags=tags, default_repos=settings.default_involved_repos,
     )
     if clone_rc is not None:
+        await req_state.update_context(db.get_pool(), req_id, {"escalated_reason": "clone-failed"})
         return {
             "emit": Event.VERIFY_ESCALATE.value,
             "reason": f"clone failed (rc={clone_rc}) for repos={cloned_repos}"[:200],

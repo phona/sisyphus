@@ -76,6 +76,7 @@ async def start_analyze(*, body, req_id, tags, ctx):
     )
     if clone_rc is not None:
         # helper 跑过但失败 → 不 dispatch agent，直接 escalate
+        await req_state.update_context(db.get_pool(), req_id, {"escalated_reason": "clone-failed"})
         return {
             "emit": Event.VERIFY_ESCALATE.value,
             "reason": f"clone failed (rc={clone_rc}) for repos={cloned_repos}"[:200],

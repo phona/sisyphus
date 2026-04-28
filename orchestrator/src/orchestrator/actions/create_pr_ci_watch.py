@@ -189,6 +189,7 @@ async def _run_checker(*, req_id: str, ctx: dict) -> dict:
     except ValueError as e:
         # Config error → ESCALATED directly (PR_CI_TIMEOUT), not verifier (PR_CI_FAIL).
         log.error("create_pr_ci_watch.config_error", req_id=req_id, error=str(e))
+        await req_state.update_context(db.get_pool(), req_id, {"escalated_reason": "pr-ci-timeout"})
         return {
             "emit": Event.PR_CI_TIMEOUT.value,
             "reason": f"config error: {e}"[:200],
@@ -207,6 +208,7 @@ async def _run_checker(*, req_id: str, ctx: dict) -> dict:
 
     if result.exit_code == 124:
         emit = Event.PR_CI_TIMEOUT
+        await req_state.update_context(db.get_pool(), req_id, {"escalated_reason": "pr-ci-timeout"})
     elif result.passed:
         emit = Event.PR_CI_PASS
     else:
