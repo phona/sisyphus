@@ -160,7 +160,7 @@ async def test_vfr_s2_below_cap_increments_count_cas_to_stage_running_and_calls_
     infra_retry_count increments to 1, CAS to STAGING_TEST_RUNNING, create_staging_test invoked."""
     from orchestrator.actions import REGISTRY
     from orchestrator.actions._verifier import apply_verify_infra_retry
-    from orchestrator.state import Event, ReqState
+    from orchestrator.state import ReqState
 
     settings = _make_settings(verifier_infra_retry_cap=2)
     mock_req_state = AsyncMock()
@@ -184,7 +184,7 @@ async def test_vfr_s2_below_cap_increments_count_cas_to_stage_running_and_calls_
 
     p = _action_patches(settings, mock_req_state, mock_stage_runs)
     with p[0], p[1], p[2], p[3]:
-        result = await apply_verify_infra_retry(
+        await apply_verify_infra_retry(
             body=_make_body_obj(),
             req_id=_REQ_ID,
             tags=["verifier", _REQ_ID, "verify:staging_test"],

@@ -1,0 +1,17 @@
+openspec: "1.0"
+kind: CodeQuality
+capability: ruff-lint-fix
+req: REQ-ruff-fix-dispatch-idempotency-1777342033
+description: >
+  No API surface change. This capability enforces that the dispatch
+  idempotency challenger test file is free of ruff lint findings
+  (I001 import sort, F841 unused variable).
+scenarios:
+  - id: RUFF-S1
+    spec: specs/ruff-lint-fix/spec.md
+  - id: RUFF-S2
+    spec: specs/ruff-lint-fix/spec.md
+  - id: RUFF-S3
+    spec: specs/ruff-lint-fix/spec.md
+  - id: RUFF-S4
+    spec: specs/ruff-lint-fix/spec.md
