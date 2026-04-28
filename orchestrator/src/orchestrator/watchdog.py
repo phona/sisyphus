@@ -53,6 +53,7 @@ _STATE_ISSUE_KEY: dict[ReqState, str | None] = {
     ReqState.ANALYZE_ARTIFACT_CHECKING: None,    # 客观 checker，由 orchestrator 下发不绑 issue
     ReqState.SPEC_LINT_RUNNING: None,            # M15: 客观 checker，由 orchestrator 下发不绑 issue
     ReqState.DEV_CROSS_CHECK_RUNNING: None,      # M15: 客观 checker，由 orchestrator 下发不绑 issue
+    ReqState.CHALLENGER_RUNNING: "challenger_issue_id",
     ReqState.STAGING_TEST_RUNNING: "staging_test_issue_id",
     ReqState.PR_CI_RUNNING: "pr_ci_watch_issue_id",
     ReqState.ACCEPT_RUNNING: "accept_issue_id",
@@ -152,6 +153,18 @@ async def _check_and_escalate(row) -> bool:
     issue_id: str | None = None
     if issue_key:
         issue_id = ctx.get(issue_key)
+
+    # Defense-in-depth for CHALLENGER_RUNNING: if challenger_issue_id was not
+    # persisted to ctx (start_challenger action bug), skip rather than falsely
+    # treating as an ended session and killing a live agent.
+    # Scoped to CHALLENGER_RUNNING only; other states (e.g. FIXER_RUNNING) have
+    # safety caps that must still fire even without an issue_id in ctx.
+    if state == ReqState.CHALLENGER_RUNNING and issue_id is None:
+        log.warning(
+            "watchdog.missing_issue_id",
+            req_id=req_id, state=state_str, issue_key=issue_key,
+        )
+        return False
 
     # 1. 查 BKD session 状态（有 issue_id 才查）
     issue = None

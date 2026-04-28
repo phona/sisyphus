@@ -206,7 +206,8 @@ async def test_spec_lint_escalates_without_bkd_lookup(monkeypatch):
 # ─── Case 5：ctx 里没 issue_id（比如 create_dev 还没落 ctx 就挂了）→ escalate
 @pytest.mark.asyncio
 async def test_missing_issue_id_in_ctx_escalates(monkeypatch):
-    """stage 有 issue_key 但 ctx 里缺少该 issue_id → 无法查 BKD，保守 escalate。"""
+    """stage has issue_key but ctx is missing the issue_id → proceeds to ended fast
+    lane and escalates. Only CHALLENGER_RUNNING gets the defensive skip guard."""
     pool = FakePool(rows=[
         _row("REQ-5", ReqState.STAGING_TEST_RUNNING.value, ctx={}),
     ])
@@ -218,7 +219,7 @@ async def test_missing_issue_id_in_ctx_escalates(monkeypatch):
     result = await watchdog._tick()
 
     assert result == {"checked": 1, "escalated": 1}
-    # 无 issue_id 不查
+    # 无 issue_id 不查 BKD
     fake_bkd.get_issue.assert_not_called()
     assert len(step_calls) == 1
 
@@ -763,3 +764,76 @@ def test_settings_session_ended_threshold_env_override(monkeypatch):
         bkd_token="x", webhook_token="x", pg_dsn="postgresql://x:x@x/x",  # type: ignore[call-arg]
     )
     assert s.watchdog_session_ended_threshold_sec == 120
+
+
+# ─── REQ-start-actions-ctx-persist: CHALLENGER_RUNNING reconciliation ─────────
+
+
+def test_challenger_running_in_state_issue_key():
+    """CHALLENGER_RUNNING must be in _STATE_ISSUE_KEY so watchdog can reconcile BKD
+    session status instead of blindly escalating after the threshold."""
+    assert ReqState.CHALLENGER_RUNNING in watchdog._STATE_ISSUE_KEY
+    assert watchdog._STATE_ISSUE_KEY[ReqState.CHALLENGER_RUNNING] == "challenger_issue_id"
+
+
+@pytest.mark.asyncio
+async def test_challenger_running_missing_issue_id_skips(monkeypatch):
+    """CHALLENGER_RUNNING + missing challenger_issue_id in ctx → defensive skip.
+
+    Before the fix, start_challenger didn't write challenger_issue_id to ctx, so
+    watchdog would see issue_id=None and immediately escalate after ended_sec.
+    The defensive guard now prevents false escalation while the agent is still live.
+    """
+    pool = FakePool(rows=[
+        _row("REQ-CH-M", ReqState.CHALLENGER_RUNNING.value, ctx={}),
+    ])
+    _patch_pool(monkeypatch, pool)
+    fake_bkd = _patch_bkd(monkeypatch, FakeIssue(session_status="running", id="ch-m"))
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 0}
+    fake_bkd.get_issue.assert_not_called()
+    assert step_calls == []
+
+
+@pytest.mark.asyncio
+async def test_challenger_running_session_skips_when_still_running(monkeypatch):
+    """CHALLENGER_RUNNING + challenger_issue_id in ctx + session running → skip."""
+    pool = FakePool(rows=[
+        _row("REQ-CH-R", ReqState.CHALLENGER_RUNNING.value,
+             ctx={"challenger_issue_id": "ch-r1", "intent_issue_id": "int-1"},
+             stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="running", id="ch-r1"))
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 0}
+    assert step_calls == []
+
+
+@pytest.mark.asyncio
+async def test_challenger_running_session_failed_escalates(monkeypatch):
+    """CHALLENGER_RUNNING + challenger_issue_id in ctx + session failed → escalate."""
+    pool = FakePool(rows=[
+        _row("REQ-CH-F", ReqState.CHALLENGER_RUNNING.value,
+             ctx={"challenger_issue_id": "ch-f1", "intent_issue_id": "int-2"},
+             stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _patch_bkd(monkeypatch, FakeIssue(session_status="failed", id="ch-f1"))
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 1}
+    assert step_calls[0]["event"] == Event.SESSION_FAILED
+    assert step_calls[0]["cur_state"] == ReqState.CHALLENGER_RUNNING
+    assert step_calls[0]["body_issue"] == "ch-f1"

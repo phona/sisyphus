@@ -1,0 +1,61 @@
+capability: start-actions-ctx-persist
+version: "1.0"
+description: |
+  start_challenger action must persist challenger_issue_id to REQ context so
+  that watchdog can query the BKD session status when the REQ is in
+  CHALLENGER_RUNNING state.
+
+  watchdog must include CHALLENGER_RUNNING in _STATE_ISSUE_KEY with the ctx key
+  "challenger_issue_id", and must skip escalation (not falsely escalate) when
+  challenger_issue_id is absent from ctx — a defense-in-depth guard against
+  races where the ctx write has not yet completed.
+
+context_fields:
+  challenger_issue_id:
+    type: string
+    written_by:
+      - "start_challenger action via req_state.update_context AFTER bkd.update_issue"
+    consumed_by:
+      - "watchdog._check_and_escalate: _STATE_ISSUE_KEY[CHALLENGER_RUNNING]"
+    semantics: |
+      BKD issue ID of the challenger agent issue for this REQ.
+      Used by watchdog to query session_status and decide whether to escalate.
+
+state_issue_key_changes:
+  added:
+    - state: CHALLENGER_RUNNING
+      ctx_key: challenger_issue_id
+      reason: |
+        challenger_issue_id now persisted by start_challenger; watchdog can
+        fetch the BKD issue and skip escalation when session is still running.
+
+watchdog_guard:
+  condition: "state == CHALLENGER_RUNNING and issue_id is None"
+  action: "log warning + return False (skip escalation)"
+  scope: CHALLENGER_RUNNING only
+  rationale: |
+    Absence of challenger_issue_id in ctx should be treated as a transient
+    race (ctx write in flight) rather than an ended session. Other states
+    (e.g. FIXER_RUNNING) have hard safety caps that must fire even without
+    an issue_id in ctx, so the guard is NOT applied broadly.
+
+actions:
+  start_challenger:
+    module: orchestrator.actions.start_challenger
+    ctx_write_semantics: |
+      AFTER bkd.update_issue(status_id="working") completes:
+        pool = db.get_pool()
+        await req_state.update_context(pool, req_id, {"challenger_issue_id": issue.id})
+      The write MUST occur before the function returns so that CHALLENGER_RUNNING
+      state in watchdog has a non-None issue_id to query.
+
+  watchdog._check_and_escalate:
+    module: orchestrator.watchdog
+    challenger_guard_semantics: |
+      After resolving issue_id from ctx via _STATE_ISSUE_KEY, BEFORE calling
+      BKDClient.get_issue:
+        IF state == CHALLENGER_RUNNING AND issue_id is None:
+          log.warning("watchdog.missing_issue_id", ...)
+          return False
+      This prevents false escalation when ctx write is delayed or on pre-fix
+      deployments where challenger_issue_id was never written.

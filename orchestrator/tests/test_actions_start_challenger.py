@@ -9,11 +9,18 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from orchestrator.actions import start_challenger
+
+
+@pytest.fixture(autouse=True)
+def _mock_db_and_req_state(monkeypatch):
+    """Prevent real DB calls introduced by REQ-start-actions-ctx-persist."""
+    monkeypatch.setattr(start_challenger.db, "get_pool", MagicMock(return_value=object()))
+    monkeypatch.setattr(start_challenger.req_state, "update_context", AsyncMock())
 
 
 @dataclass
@@ -159,3 +166,27 @@ async def test_start_challenger_no_hint_keeps_base_tags(monkeypatch):
     )
     _, kwargs = fake.create_issue.await_args
     assert kwargs["tags"] == ["challenger", "REQ-X", "parent-id:analyze-1"]
+
+
+# ─── REQ-start-actions-ctx-persist: challenger_issue_id written to ctx ────────
+
+
+@pytest.mark.asyncio
+async def test_start_challenger_writes_challenger_issue_id_to_ctx(monkeypatch):
+    """start_challenger must persist challenger_issue_id to ctx via req_state.update_context
+    so that watchdog can reconcile the BKD session status for CHALLENGER_RUNNING state."""
+    _patch_bkd(monkeypatch)
+    _patch_pr_links_empty(monkeypatch)
+
+    await start_challenger.start_challenger(
+        body=_make_body(issue_id="spec-lint-1"),
+        req_id="REQ-CH",
+        tags=["REQ-CH"],
+        ctx={},
+    )
+
+    start_challenger.req_state.update_context.assert_awaited_once()
+    call_args, _ = start_challenger.req_state.update_context.await_args
+    # positional: (pool, req_id, patch_dict)
+    assert call_args[1] == "REQ-CH"
+    assert call_args[2] == {"challenger_issue_id": "ch-new-1"}

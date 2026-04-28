@@ -29,6 +29,7 @@ from ..config import settings
 from ..intent_tags import filter_propagatable_intent_tags
 from ..prompts import render
 from ..state import Event
+from ..store import db, req_state
 from . import register, short_title
 from ._skip import skip_if_enabled
 
@@ -76,5 +77,7 @@ async def start_challenger(*, body, req_id, tags, ctx):
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")
 
+    pool = db.get_pool()
+    await req_state.update_context(pool, req_id, {"challenger_issue_id": issue.id})
     log.info("start_challenger.done", req_id=req_id, issue_id=issue.id)
     return {"challenger_issue_id": issue.id, "req_id": req_id}
