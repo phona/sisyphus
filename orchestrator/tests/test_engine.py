@@ -199,9 +199,14 @@ async def test_cas_failure_skips(stub_actions):
 
 @pytest.fixture
 def mock_runner_controller():
-    """注入 fake controller，断言 cleanup_runner 调用参数。"""
+    """注入 fake controller，断言 cleanup_runner + exec_in_runner 调用参数。"""
     fake = MagicMock()
     fake.cleanup_runner = AsyncMock(return_value=None)
+    fake.exec_in_runner = AsyncMock(
+        return_value=k8s_runner.ExecResult(
+            exit_code=0, stdout="", stderr="", duration_sec=1.0,
+        )
+    )
     k8s_runner.set_controller(fake)
     yield fake
     k8s_runner.set_controller(None)
@@ -332,6 +337,116 @@ async def test_cleanup_no_controller_safe(stub_actions, monkeypatch):
 async def test_cleanup_failure_does_not_block_engine(stub_actions, mock_runner_controller):
     """cleanup_runner 抛错 → engine 不受影响（fire-and-forget）。"""
     mock_runner_controller.cleanup_runner = AsyncMock(side_effect=RuntimeError("kapow"))
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ARCHIVING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    result = await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.ARCHIVING, ctx={}, event=Event.ARCHIVE_DONE,
+    )
+    await _drain_tasks()
+
+    assert pool.rows["REQ-1"].state == ReqState.DONE.value
+    assert result["next_state"] == ReqState.DONE.value
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# REQ-branch-worktree-cleanup: terminal state 触发 git worktree + branch 清理
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_terminal_done_triggers_git_cleanup(stub_actions, mock_runner_controller):
+    """DONE 时 cleanup_runner 之后还要 exec_in_runner 清理 git worktree + 分支。"""
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ARCHIVING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.ARCHIVING, ctx={}, event=Event.ARCHIVE_DONE,
+    )
+    await _drain_tasks()
+
+    mock_runner_controller.cleanup_runner.assert_awaited_once_with(
+        "REQ-1", retain_pvc=False,
+    )
+    mock_runner_controller.exec_in_runner.assert_awaited_once()
+    call_args = mock_runner_controller.exec_in_runner.await_args
+    assert call_args[0][0] == "REQ-1"  # req_id
+    command = call_args[0][1]
+    assert "git worktree remove" in command
+    assert "git branch -D" in command
+    assert call_args[1].get("timeout_sec") == 60
+
+
+@pytest.mark.asyncio
+async def test_terminal_escalated_triggers_git_cleanup(stub_actions, mock_runner_controller):
+    """ACCEPT_ENV_UP_FAIL → ESCALATED 时 retain_pvc=True，且 git cleanup 仍然要跑。"""
+    calls, reg = stub_actions
+
+    async def escalate(*, body, req_id, tags, ctx):
+        calls.append(("escalate", {"req_id": req_id}))
+        return {"escalated": True}
+
+    reg["escalate"] = escalate
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ACCEPT_RUNNING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "check.failed"})()
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.ACCEPT_RUNNING, ctx={}, event=Event.ACCEPT_ENV_UP_FAIL,
+    )
+    await _drain_tasks()
+
+    assert pool.rows["REQ-1"].state == ReqState.ESCALATED.value
+    mock_runner_controller.cleanup_runner.assert_awaited_once_with(
+        "REQ-1", retain_pvc=True,
+    )
+    mock_runner_controller.exec_in_runner.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_runner_failure_still_attempts_git_cleanup(
+    stub_actions, mock_runner_controller,
+):
+    """cleanup_runner 抛错，但 exec_in_runner 仍应被尝试。"""
+    mock_runner_controller.cleanup_runner = AsyncMock(side_effect=RuntimeError("kapow"))
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ARCHIVING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.ARCHIVING, ctx={}, event=Event.ARCHIVE_DONE,
+    )
+    await _drain_tasks()
+
+    mock_runner_controller.exec_in_runner.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_git_cleanup_failure_does_not_block_engine(stub_actions, mock_runner_controller):
+    """exec_in_runner 抛错 → 不阻塞 engine（fire-and-forget）。"""
+    mock_runner_controller.exec_in_runner = AsyncMock(side_effect=RuntimeError("exec boom"))
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ARCHIVING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    result = await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.ARCHIVING, ctx={}, event=Event.ARCHIVE_DONE,
+    )
+    await _drain_tasks()
+
+    assert pool.rows["REQ-1"].state == ReqState.DONE.value
+    assert result["next_state"] == ReqState.DONE.value
+
+
+@pytest.mark.asyncio
+async def test_git_cleanup_nonzero_exit_logged(stub_actions, mock_runner_controller):
+    """exec_in_runner 返回非零退出码 → 不抛异常，只记录 debug。"""
+    mock_runner_controller.exec_in_runner = AsyncMock(
+        return_value=k8s_runner.ExecResult(
+            exit_code=1, stdout="some error", stderr="", duration_sec=0.5,
+        )
+    )
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.ARCHIVING.value)})
     body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()

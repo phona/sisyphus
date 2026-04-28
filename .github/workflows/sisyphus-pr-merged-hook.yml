@@ -52,3 +52,13 @@ jobs:
             exit 1
           fi
           echo "Done."
+
+      - name: Delete merged branch
+        if: steps.extract.outputs.req_id != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          branch="${{ github.event.pull_request.head.ref }}"
+          echo "Deleting merged branch: $branch"
+          gh api repos/${{ github.repository }}/git/refs/heads/$branch -X DELETE \
+            || echo "Branch $branch already deleted or not found"

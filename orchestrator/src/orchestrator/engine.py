@@ -227,6 +227,29 @@ async def _cleanup_runner_on_terminal(req_id: str, terminal_state: ReqState) -> 
     except RuntimeError as e:
         log.debug("runner.cleanup_no_controller", req_id=req_id, error=str(e))
         return
+    # REQ-branch-worktree-cleanup: 先清理 git worktree + 分支（须在删 Pod 前执行）
+    try:
+        result = await rc.exec_in_runner(
+            req_id,
+            "cd /workspace/sisyphus && "
+            "for wt in $(git worktree list --porcelain | grep '^worktree ' | grep '/worktrees/' | awk '{print $2}'); do "
+            "  branch=$(git -C \"$wt\" rev-parse --abbrev-ref HEAD 2>/dev/null); "
+            "  if [ \"$branch\" != '' ] && [ \"$branch\" != 'HEAD' ]; then "
+            "    git worktree remove \"$wt\" --force 2>/dev/null; "
+            "    git branch -D \"$branch\" 2>/dev/null || true; "
+            "  fi; "
+            "done",
+            timeout_sec=60,
+        )
+        if result.exit_code == 0:
+            log.info("runner.git_cleanup_done", req_id=req_id)
+        else:
+            log.debug("runner.git_cleanup_exit_nonzero",
+                      req_id=req_id, exit_code=result.exit_code,
+                      stdout=result.stdout[:200], stderr=result.stderr[:200])
+    except Exception:
+        log.debug("runner.git_cleanup_failed", req_id=req_id)
+
     try:
         await rc.cleanup_runner(
             req_id,
