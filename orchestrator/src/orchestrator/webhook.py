@@ -150,7 +150,6 @@ async def webhook(request: Request) -> JSONResponse:
     has_req_tag = bool(router_lib.extract_req_id(tags))
     if body.event == "session.completed" and not has_req_tag:
         log.debug("webhook.skip_no_req_tag", issue_id=body.issueId, tags=tags)
-        await dedup.mark_processed(pool, eid)
         return {"action": "skip", "reason": "session event without REQ tag"}
     if (
         body.event == "issue.updated"
@@ -160,7 +159,6 @@ async def webhook(request: Request) -> JSONResponse:
     ):
         log.debug("webhook.skip_no_req_or_intent_tag",
                   issue_id=body.issueId, tags=tags)
-        await dedup.mark_processed(pool, eid)
         return {"action": "skip", "reason": "issue.updated without REQ or intent tag"}
     await obs.record_event(
         "webhook.received",
@@ -228,7 +226,6 @@ async def webhook(request: Request) -> JSONResponse:
 
     if event is None:
         log.debug("webhook.no_event_mapping", tags=tags, event_type=body.event)
-        await dedup.mark_processed(pool, eid)
         return {"action": "skip", "reason": "no event mapping"}
 
     # ─── 3.5 把上游 BKD issue 推目标 statusId（webhook 已识别为有效完工信号）──────
@@ -249,7 +246,6 @@ async def webhook(request: Request) -> JSONResponse:
     req_id = router_lib.extract_req_id(tags, body.issueNumber)
     if req_id is None:
         log.warning("webhook.no_req_id", tags=tags)
-        await dedup.mark_processed(pool, eid)
         return {"action": "skip", "reason": "no req_id resolvable"}
 
     # ─── 5. fetch / init REQ state（支持任意 state init via init:STATE tag）────────────────

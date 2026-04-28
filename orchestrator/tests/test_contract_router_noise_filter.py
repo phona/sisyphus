@@ -161,8 +161,9 @@ async def test_rnf_s1_issue_updated_no_req_no_intent_is_skipped(monkeypatch):
     """
     RNF-S1: webhook 收到 issue.updated，tags 不含 REQ-* 也不含 intent:intake /
     intent:analyze 时，必须命中 noise filter，返回 action=skip + 含 issue.updated 的
-    reason；dedup.mark_processed 被调用一次；obs.record_event / derive_event /
-    engine.step 均不被调用。
+    reason；dedup.mark_processed **不被调用**（让 processed_at 保持 NULL，
+    BKD 重发时走 retry 路径，避免合法事件因 tag 竞争丢失）；obs.record_event /
+    derive_event / engine.step 均不被调用。
     """
     from orchestrator import engine, webhook
 
@@ -190,9 +191,10 @@ async def test_rnf_s1_issue_updated_no_req_no_intent_is_skipped(monkeypatch):
         f"RNF-S1: skip reason must identify 'issue.updated' noise, got reason={reason!r}"
     )
 
-    assert len(tracking["mark_calls"]) == 1, (
-        f"RNF-S1: dedup.mark_processed must be called exactly once so BKD at-least-once "
-        f"retry also short-circuits; called {len(tracking['mark_calls'])} times"
+    assert len(tracking["mark_calls"]) == 0, (
+        f"RNF-S1: dedup.mark_processed must NOT be called for noise skip — "
+        f"processed_at must remain NULL so BKD retry can reprocess if tags "
+        f"were missing due to race; called {len(tracking['mark_calls'])} times"
     )
 
     assert len(tracking["obs_calls"]) == 0, (
@@ -294,7 +296,8 @@ async def test_rnf_s5_session_completed_no_req_still_skipped(monkeypatch):
     """
     RNF-S5: 新 issue.updated noise filter 加入后，既有 session.completed filter
     必须仍然生效：session.completed 且 tags 无 REQ-* 时返回 action=skip，
-    reason 包含 'session'，mark_processed 被调用，engine.step 不被调用。
+    reason 包含 'session'，mark_processed **不被调用**（让 BKD 重发走 retry），
+    engine.step 不被调用。
     """
     from orchestrator import engine, webhook
 
@@ -323,8 +326,9 @@ async def test_rnf_s5_session_completed_no_req_still_skipped(monkeypatch):
         f"got reason={reason!r}"
     )
 
-    assert len(tracking["mark_calls"]) == 1, (
-        f"RNF-S5: mark_processed must be called exactly once; "
+    assert len(tracking["mark_calls"]) == 0, (
+        f"RNF-S5: mark_processed must NOT be called for noise skip — "
+        f"processed_at must remain NULL so BKD retry can reprocess; "
         f"called {len(tracking['mark_calls'])} times"
     )
 
