@@ -1,0 +1,12 @@
+id: ctx-persist
+title: Action Context Persistence and Watchdog Defensive Skip
+version: "1.0"
+scenarios:
+  - id: CTX-S1
+    description: new challenger issue persists challenger_issue_id to ctx
+  - id: CTX-S2
+    description: slug-hit replay also persists challenger_issue_id to ctx
+  - id: CTX-S3
+    description: CHALLENGER_RUNNING with missing issue_id skips escalation
+  - id: CTX-S4
+    description: PR_CI_RUNNING with missing issue_id still escalates
