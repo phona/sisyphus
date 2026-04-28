@@ -69,6 +69,8 @@ class Event(StrEnum):
     TEARDOWN_DONE_PASS = "teardown-done.pass"       # env-down 完（上一个是 accept.pass）
     TEARDOWN_DONE_FAIL = "teardown-done.fail"       # env-down 完（上一个是 accept.fail）→ verifier
     ARCHIVE_DONE = "archive.done"
+    # REQ-pr-merge-archive-hook-1777344443：人手合 PR 后 GHA 触发，跳过剩余 gate 直接归档
+    PR_MERGED = "pr.merged"
     SESSION_FAILED = "session.failed"
     # REQ-bkd-acceptance-feedback-loop-1777278984: BKD-native 用户验收 gate（Case 2, 0 黑话纯原语）
     # 信号通道 = BKD intent issue statusId（webhook 在 PENDING_USER_REVIEW state 收 issue.updated 时派事件）
@@ -213,6 +215,23 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     (ReqState.PENDING_USER_REVIEW, Event.USER_REVIEW_FIX):
         Transition(ReqState.ESCALATED, "escalate",
                    "用户把 BKD intent statusId 改 review/blocked → 标 user-requested-fix 入 escalated"),
+
+    # ─── PR_MERGED：人手合 PR 后 GHA 钩 → admin endpoint 注入，跳 gate 直归档 ───────────
+    # REQ-pr-merge-archive-hook-1777344443
+    # 主场景：PENDING_USER_REVIEW（最常见的卡死态：accept 全过但 sisyphus 不知道 PR 被人合了）。
+    # 兜底：REVIEW_RUNNING / PR_CI_RUNNING（极少：verifier 或 CI 还在跑时人已合 PR）。
+    # CAS 保证并发安全：如果 verifier/CI 也在尝试 transition，两者竞争，输的一方 CAS_LOST。
+    (ReqState.PENDING_USER_REVIEW, Event.PR_MERGED):
+        Transition(ReqState.ARCHIVING, "done_archive",
+                   "PR merged by reviewer → skip user-review gate → archive"),
+
+    (ReqState.REVIEW_RUNNING, Event.PR_MERGED):
+        Transition(ReqState.ARCHIVING, "done_archive",
+                   "PR merged while verifier running → archive (CAS races verifier; one wins)"),
+
+    (ReqState.PR_CI_RUNNING, Event.PR_MERGED):
+        Transition(ReqState.ARCHIVING, "done_archive",
+                   "PR merged while CI running → archive (CAS races ci-watch; one wins)"),
 
     # ─── verifier 子链 ─────────────────────────────────────────────────
     # verifier-agent 完成 → webhook 解 decision JSON → emit 对应事件。

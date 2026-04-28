@@ -9,6 +9,9 @@ State 操作：
   POST /admin/req/{req_id}/resume     body: {"action": "pass"|"fix-needed", "stage"?, "fixer"?, "reason"?}
                                        → state-level resume from ESCALATED
                                        （派 VERIFY_PASS / VERIFY_FIX_NEEDED 走合法 transition）
+  POST /admin/req/{req_id}/pr-merged  body: {"merged_pr_url": "...", "merged_sha": "...", "merged_at": "..."}
+                                       → GHA 钩：人手合 PR 后通知 orch，state 在 pending-user-review /
+                                          review-running / pr-ci-running 时发 PR_MERGED → done_archive
   GET  /admin/metrics
   GET  /admin/req/{req_id}
 
@@ -611,6 +614,96 @@ async def list_runners(
             }
             for r in runners
         ],
+    }
+
+
+class PrMergedBody(BaseModel):
+    """PR merge hook body from GHA workflow."""
+    merged_pr_url: str
+    merged_sha: str
+    merged_at: str
+
+
+# Terminal states where PR_MERGED is a noop (already done or escalated).
+_PR_MERGED_NOOP_STATES = frozenset({ReqState.DONE, ReqState.ESCALATED})
+
+# States that accept PR_MERGED → done_archive transition (via state.py TRANSITIONS).
+_PR_MERGED_VALID_STATES = frozenset({
+    ReqState.PENDING_USER_REVIEW,
+    ReqState.REVIEW_RUNNING,
+    ReqState.PR_CI_RUNNING,
+})
+
+
+@admin.post("/req/{req_id}/pr-merged")
+async def pr_merged(
+    req_id: str,
+    body: PrMergedBody,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """GHA 钩：人手合 PR 后通知 orch 闭环归档（REQ-pr-merge-archive-hook-1777344443）。
+
+    - state ∈ {done, escalated} → 200 noop（幂等，防双触发）
+    - state ∈ {pending-user-review, review-running, pr-ci-running} → 写 merge ctx + emit PR_MERGED
+    - 其他 state → 409（不在预期窗口，需人工 triage）
+    """
+    _verify_token(authorization)
+
+    pool = db.get_pool()
+    row = await req_state.get(pool, req_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"req {req_id} not found")
+
+    if row.state in _PR_MERGED_NOOP_STATES:
+        log.info("admin.pr_merged.noop", req_id=req_id, state=row.state.value)
+        return {"action": "noop", "state": row.state.value}
+
+    if row.state not in _PR_MERGED_VALID_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"req {req_id} is in state {row.state.value!r}; "
+                f"pr-merged hook only applies to "
+                f"{[s.value for s in _PR_MERGED_VALID_STATES]}"
+            ),
+        )
+
+    # 写 merge 元数据入 ctx，让 done_archive action 可读到
+    ctx_patch = {
+        "merged_pr_url": body.merged_pr_url,
+        "merged_sha": body.merged_sha,
+        "merged_at": body.merged_at,
+        "pr_merged_trigger": "gha-hook",
+    }
+    await req_state.update_context(pool, req_id, ctx_patch)
+
+    # 重读 ctx（update_context 后 row.context 未刷新）
+    row = await req_state.get(pool, req_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"req {req_id} not found")
+
+    log.warning(
+        "admin.pr_merged",
+        req_id=req_id,
+        from_state=row.state.value,
+        merged_pr_url=body.merged_pr_url,
+        merged_sha=body.merged_sha,
+    )
+    fake = _FakeBody(req_id, row.project_id)
+    result = await engine.step(
+        pool,
+        body=fake,
+        req_id=req_id,
+        project_id=row.project_id,
+        tags=[],
+        cur_state=row.state,
+        ctx=row.context,
+        event=Event.PR_MERGED,
+    )
+    return {
+        "action": "pr_merged",
+        "from_state": row.state.value,
+        "result": result,
     }
 
 
