@@ -380,45 +380,24 @@ async def test_terminal_done_triggers_git_cleanup(stub_actions, mock_runner_cont
 
 @pytest.mark.asyncio
 async def test_terminal_escalated_triggers_git_cleanup(stub_actions, mock_runner_controller):
-    """ESCALATED 时 retain_pvc=True，但 git cleanup 仍然要跑。"""
+    """ACCEPT_ENV_UP_FAIL → ESCALATED 时 retain_pvc=True，且 git cleanup 仍然要跑。"""
     calls, reg = stub_actions
 
     async def escalate(*, body, req_id, tags, ctx):
         calls.append(("escalate", {"req_id": req_id}))
-        from orchestrator import k8s_runner as krunner
-        from orchestrator.store import req_state
-        await req_state.cas_transition(
-            None, req_id, ReqState.STAGING_TEST_RUNNING, ReqState.ESCALATED,
-            Event.SESSION_FAILED, "escalate",
-        )
-        try:
-            rc = krunner.get_controller()
-            await rc.cleanup_runner(req_id, retain_pvc=True)
-        except Exception:
-            pass
         return {"escalated": True}
 
     reg["escalate"] = escalate
 
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.STAGING_TEST_RUNNING.value)})
-    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.failed"})()
-    import orchestrator.store.req_state as rs_mod
-    orig = rs_mod.cas_transition
-    async def fake_cas(p, rid, expected, target, evt, action, context_patch=None):
-        if rid in pool.rows and pool.rows[rid].state == expected.value:
-            pool.rows[rid].state = target.value
-            return True
-        return False
-    rs_mod.cas_transition = fake_cas
-    try:
-        await engine.step(
-            pool, body=body, req_id="REQ-1", project_id="p", tags=[],
-            cur_state=ReqState.STAGING_TEST_RUNNING, ctx={}, event=Event.SESSION_FAILED,
-        )
-        await _drain_tasks()
-    finally:
-        rs_mod.cas_transition = orig
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ACCEPT_RUNNING.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "check.failed"})()
+    await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p", tags=[],
+        cur_state=ReqState.ACCEPT_RUNNING, ctx={}, event=Event.ACCEPT_ENV_UP_FAIL,
+    )
+    await _drain_tasks()
 
+    assert pool.rows["REQ-1"].state == ReqState.ESCALATED.value
     mock_runner_controller.cleanup_runner.assert_awaited_once_with(
         "REQ-1", retain_pvc=True,
     )
