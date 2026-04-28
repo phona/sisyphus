@@ -53,6 +53,7 @@ async def create_accept(*, body, req_id, tags, ctx):
     resolved = await resolve_integration_dir(rc, req_id)
     if resolved.dir is None:
         log.warning("create_accept.no_integration_dir", req_id=req_id, reason=resolved.reason)
+        await req_state.update_context(db.get_pool(), req_id, {"escalated_reason": "accept-env-up-failed"})
         return {
             "emit": Event.ACCEPT_ENV_UP_FAIL.value,
             "reason": resolved.reason,
@@ -74,11 +75,13 @@ async def create_accept(*, body, req_id, tags, ctx):
         )
     except Exception as e:
         log.exception("create_accept.env_up_crashed", req_id=req_id, error=str(e))
+        await req_state.update_context(db.get_pool(), req_id, {"escalated_reason": "accept-env-up-failed"})
         return {"emit": Event.ACCEPT_ENV_UP_FAIL.value, "error": str(e)[:200]}
 
     if result.exit_code != 0:
         log.warning("create_accept.env_up_failed", req_id=req_id,
                     exit_code=result.exit_code, stderr_tail=result.stderr[-500:])
+        await req_state.update_context(db.get_pool(), req_id, {"escalated_reason": "accept-env-up-failed"})
         return {
             "emit": Event.ACCEPT_ENV_UP_FAIL.value,
             "exit_code": result.exit_code,
@@ -97,6 +100,7 @@ async def create_accept(*, body, req_id, tags, ctx):
     except json.JSONDecodeError:
         log.warning("create_accept.env_up_bad_json", req_id=req_id,
                     last_line_preview=last_line[:200])
+        await req_state.update_context(db.get_pool(), req_id, {"escalated_reason": "accept-env-up-failed"})
         return {
             "emit": Event.ACCEPT_ENV_UP_FAIL.value,
             "reason": "env-up stdout tail is not JSON",
@@ -105,6 +109,7 @@ async def create_accept(*, body, req_id, tags, ctx):
     endpoint = accept_env.get("endpoint") if isinstance(accept_env, dict) else None
     if not endpoint:
         log.warning("create_accept.env_up_no_endpoint", req_id=req_id, accept_env=accept_env)
+        await req_state.update_context(db.get_pool(), req_id, {"escalated_reason": "accept-env-up-failed"})
         return {
             "emit": Event.ACCEPT_ENV_UP_FAIL.value,
             "reason": "env-up JSON missing endpoint",
