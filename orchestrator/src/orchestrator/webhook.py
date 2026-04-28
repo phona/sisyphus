@@ -420,12 +420,23 @@ async def webhook(request: Request) -> JSONResponse:
         await req_state.update_context(pool, req_id, patch)
         ctx = {**ctx, **patch}
 
-    # ─── 5.8 VERIFY_ESCALATE → 预置 escalated_reason ────────────────────────
-    # escalate action 从 ctx.escalated_reason 读 reason；没设则 fallback 到
-    # body.event.replace(".", "-") = "session-completed"，语义不明。
-    if event == Event.VERIFY_ESCALATE:
-        await req_state.update_context(pool, req_id, {"escalated_reason": "verifier-decision"})
-        ctx = {**ctx, "escalated_reason": "verifier-decision"}
+    # ─── 5.8 pre-set escalated_reason for session.completed → escalate paths ─────
+    # escalate action reads ctx.escalated_reason for its reason string; without it
+    # the priority-4 fallback yields body.event.replace(".", "-") = "session-completed"
+    # — ambiguous and unhelpful.  Cover all session.completed → escalate routes:
+    #   VERIFY_ESCALATE  → "verifier-decision"  (verifier explicit decision)
+    #   INTAKE_FAIL      → "intake-fail"         (intake-agent failed / no finalized intent)
+    #   PR_CI_TIMEOUT    → "pr-ci-timeout"       (pr-ci-watch timed out waiting for GHA)
+    _SESSION_COMPLETED_ESCALATE_REASONS: dict[Event, str] = {
+        Event.VERIFY_ESCALATE: "verifier-decision",
+        Event.INTAKE_FAIL:     "intake-fail",
+        Event.PR_CI_TIMEOUT:   "pr-ci-timeout",
+    }
+    if body.event == "session.completed":
+        _sc_reason = _SESSION_COMPLETED_ESCALATE_REASONS.get(event)
+        if _sc_reason is not None:
+            await req_state.update_context(pool, req_id, {"escalated_reason": _sc_reason})
+            ctx = {**ctx, "escalated_reason": _sc_reason}
 
     # ─── 5.9 stamp BKD session token onto 当前开着的 stage_run ───────────────
     # 必须放在 engine.step 之前：engine 在 transition 时会 close_latest_stage_run，
