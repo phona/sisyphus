@@ -12,6 +12,9 @@
   - done/escalate 清理：delete Pod + PVC
 
 所有阻塞 K8s API 走 asyncio.to_thread，不堵事件循环。
+_k8s_api_lock 序列化全部 core_v1 调用——kubernetes-python 共享 ApiClient 在并发
+asyncio.to_thread 下会随机走 ws_client 路径，把正常 HTTP 200 JSON 响应当成
+WebSocket 握手失败，抛 ApiException(status=0)。锁住后串行调用彻底规避。
 """
 from __future__ import annotations
 
@@ -110,6 +113,12 @@ class RunnerController:
         # 兼容没暴露 /dev/kvm 的节点（嵌套虚拟化里跑的 K8s）。
         self.kvm_enabled = kvm_enabled
 
+        # Serializes all core_v1 calls: kubernetes-python ApiClient is not thread-safe
+        # when shared across concurrent asyncio.to_thread calls. Without this lock,
+        # concurrent callers randomly enter ws_client.websocket_call and treat a normal
+        # HTTP 200 JSON response as a failed WebSocket handshake → ApiException(status=0).
+        self._k8s_api_lock = asyncio.Lock()
+
         if core_v1 is not None:
             # 测试注入 mock client
             self.core_v1 = core_v1
@@ -119,6 +128,13 @@ class RunnerController:
             else:
                 config.load_kube_config()
             self.core_v1 = client.CoreV1Api()
+
+    # ── K8s API serialization helper ────────────────────────────────────
+
+    async def _k8s(self, fn, *args, **kwargs):
+        """Serialize K8s API calls through _k8s_api_lock, then run in thread."""
+        async with self._k8s_api_lock:
+            return await asyncio.to_thread(fn, *args, **kwargs)
 
     # ── naming helpers ──────────────────────────────────────────────────
     # K8s 名字小写 + `-` / 数字，REQ 本来就是 `REQ-N` 格式，转成 `req-n` 合法
@@ -313,7 +329,7 @@ class RunnerController:
 
         # PVC 先建（Pod 挂它；PVC 落不下来 Pod 会 Pending）
         try:
-            await asyncio.to_thread(
+            await self._k8s(
                 self.core_v1.create_namespaced_persistent_volume_claim,
                 self.namespace, self.build_pvc(req_id),
             )
@@ -325,7 +341,7 @@ class RunnerController:
 
         # Pod
         try:
-            await asyncio.to_thread(
+            await self._k8s(
                 self.core_v1.create_namespaced_pod,
                 self.namespace, self.build_pod(req_id),
             )
@@ -361,7 +377,7 @@ class RunnerController:
         deadline = time.monotonic() + timeout_sec
         while time.monotonic() < deadline:
             try:
-                pod = await asyncio.to_thread(
+                pod = await self._k8s(
                     self.core_v1.read_namespaced_pod_status,
                     pod_name, self.namespace,
                 )
@@ -390,7 +406,7 @@ class RunnerController:
     async def pause(self, req_id: str) -> bool:
         """删 Pod（PVC 保留）。已不存在返回 False。"""
         try:
-            await asyncio.to_thread(
+            await self._k8s(
                 self.core_v1.delete_namespaced_pod,
                 self.pod_name(req_id), self.namespace,
             )
@@ -413,7 +429,7 @@ class RunnerController:
         """
         pod_deleted = pvc_deleted = False
         try:
-            await asyncio.to_thread(
+            await self._k8s(
                 self.core_v1.delete_namespaced_pod,
                 self.pod_name(req_id), self.namespace,
             )
@@ -423,7 +439,7 @@ class RunnerController:
                 raise
         if not retain_pvc:
             try:
-                await asyncio.to_thread(
+                await self._k8s(
                     self.core_v1.delete_namespaced_persistent_volume_claim,
                     self.pvc_name(req_id), self.namespace,
                 )
@@ -445,7 +461,7 @@ class RunnerController:
         pod_phase = "NotFound"
         created_at: str | None = None
         try:
-            pod = await asyncio.to_thread(
+            pod = await self._k8s(
                 self.core_v1.read_namespaced_pod_status,
                 pod_name, self.namespace,
             )
@@ -458,7 +474,7 @@ class RunnerController:
 
         pvc_phase = "NotFound"
         try:
-            pvc = await asyncio.to_thread(
+            pvc = await self._k8s(
                 self.core_v1.read_namespaced_persistent_volume_claim_status,
                 pvc_name, self.namespace,
             )
@@ -477,7 +493,7 @@ class RunnerController:
     async def list_runners(self) -> list[RunnerStatus]:
         """列所有 runner（按 label 过滤）。"""
         results: list[RunnerStatus] = []
-        pvcs = await asyncio.to_thread(
+        pvcs = await self._k8s(
             self.core_v1.list_namespaced_persistent_volume_claim,
             self.namespace, label_selector="sisyphus/role=workspace",
         )
@@ -498,7 +514,7 @@ class RunnerController:
         通过节点 ephemeral-storage allocatable / capacity 推算（local-path PVC 占 ephemeral）。
         失败时抛异常，让 caller fallback 到正常 retention 模式。
         """
-        nodes = await asyncio.to_thread(self.core_v1.list_node)
+        nodes = await self._k8s(self.core_v1.list_node)
         # 取第一个 ready node（sisyphus 单节点 K3s 场景）
         for node in nodes.items:
             cap = node.status.capacity or {}
@@ -529,7 +545,7 @@ class RunnerController:
         keep_lower = {r.lower() for r in keep_req_ids}
         cleaned: list[str] = []
 
-        pods = await asyncio.to_thread(
+        pods = await self._k8s(
             self.core_v1.list_namespaced_pod,
             self.namespace, label_selector="sisyphus/role=runner",
         )
@@ -539,7 +555,7 @@ class RunnerController:
                 continue
             req_id = req_label.upper() if req_label.lower().startswith("req-") else req_label
             try:
-                await asyncio.to_thread(
+                await self._k8s(
                     self.core_v1.delete_namespaced_pod,
                     self.pod_name(req_id), self.namespace,
                 )
@@ -564,7 +580,7 @@ class RunnerController:
         keep_lower = {r.lower() for r in keep_req_ids}
         cleaned: list[str] = []
 
-        pvcs = await asyncio.to_thread(
+        pvcs = await self._k8s(
             self.core_v1.list_namespaced_persistent_volume_claim,
             self.namespace, label_selector="sisyphus/role=workspace",
         )
@@ -574,7 +590,7 @@ class RunnerController:
                 continue
             req_id = req_label.upper() if req_label.lower().startswith("req-") else req_label
             try:
-                await asyncio.to_thread(
+                await self._k8s(
                     self.core_v1.delete_namespaced_persistent_volume_claim,
                     self.pvc_name(req_id), self.namespace,
                 )
@@ -652,7 +668,7 @@ class RunnerController:
         exec_argv = ["/bin/bash", "-c", full_cmd]
 
         started = time.monotonic()
-        resp = await asyncio.to_thread(
+        resp = await self._k8s(
             stream,
             self.core_v1.connect_get_namespaced_pod_exec,
             pod_name, self.namespace,
