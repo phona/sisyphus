@@ -129,7 +129,7 @@
 - `event_log`：所有状态变更、action 执行、webhook 接收的 append-only 记录
 - `stage_runs`：每个 stage 的启动/结束时间、 outcome（pass/fail/fix/escalate）、agent 类型
 - `verifier_decisions`：verifier 的 3 路决策 + confidence + reason + audit
-- `improvement_log`：系统自我改进建议（TODO：当前未启用）
+- `improvement_log`：人工改进假设记录（hypothesis → baseline → observed → verdict 闭环，见 observability.md）
 
 驱动指标：
 
