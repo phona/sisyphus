@@ -32,7 +32,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-
 # ─── Minimal fake pool ────────────────────────────────────────────────────────
 
 
@@ -267,7 +266,7 @@ async def test_DISP_S2_no_slug_hit_calls_create_issue_and_stores_slug():
     )
 
     with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
-        result = await invoke_verifier(
+        await invoke_verifier(
             stage="spec_lint",
             trigger="fail",
             req_id="REQ-1",
@@ -339,7 +338,7 @@ async def test_DISP_S5_round_aware_slug_distinguishes_fixer_rounds():
     ]
 
     with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
-        result = await invoke_verifier(
+        await invoke_verifier(
             stage="spec_lint",
             trigger="success",
             req_id="REQ-1",

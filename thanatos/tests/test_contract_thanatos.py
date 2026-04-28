@@ -6,6 +6,7 @@ All tests are marked @pytest.mark.integration — run via `uv run pytest -m inte
 """
 
 import pathlib
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -176,6 +177,8 @@ def test_than_s6_helm_adb_two_containers():
 
     if not CHART_PATH.exists():
         pytest.skip(f"helm chart not found at {CHART_PATH}")
+    if not shutil.which("helm"):
+        pytest.skip("helm not installed")
 
     result = subprocess.run(
         [
@@ -227,6 +230,8 @@ def test_than_s7_helm_playwright_single_container():
 
     if not CHART_PATH.exists():
         pytest.skip(f"helm chart not found at {CHART_PATH}")
+    if not shutil.which("helm"):
+        pytest.skip("helm not installed")
 
     result = subprocess.run(
         ["helm", "template", "thanatos", str(CHART_PATH), "--set", "driver=playwright"],

@@ -353,6 +353,9 @@ async def test_start_analyze_missing_finalized_intent_escalates(monkeypatch):
     """ctx に intake_finalized_intent がない → emit VERIFY_ESCALATE。"""
     from orchestrator.actions import start_analyze_with_finalized_intent as mod
 
+    monkeypatch.setattr(mod.db, "get_pool", lambda: object())
+    monkeypatch.setattr(mod.req_state, "update_context", AsyncMock())
+
     out = await mod.start_analyze_with_finalized_intent(
         body=make_body(), req_id="REQ-9", tags=[], ctx={},
     )
@@ -364,6 +367,9 @@ async def test_start_analyze_missing_finalized_intent_escalates(monkeypatch):
 async def test_start_analyze_none_ctx_escalates(monkeypatch):
     """ctx=None → emit VERIFY_ESCALATE（ctx が None の場合も安全に処理）。"""
     from orchestrator.actions import start_analyze_with_finalized_intent as mod
+
+    monkeypatch.setattr(mod.db, "get_pool", lambda: object())
+    monkeypatch.setattr(mod.req_state, "update_context", AsyncMock())
 
     out = await mod.start_analyze_with_finalized_intent(
         body=make_body(), req_id="REQ-9", tags=[], ctx=None,
