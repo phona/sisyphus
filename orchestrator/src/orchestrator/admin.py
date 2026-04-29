@@ -6,9 +6,9 @@ State 操作：
   POST /admin/req/{req_id}/emit       body: {"event": "..."}
   POST /admin/req/{req_id}/escalate
   POST /admin/req/{req_id}/complete   body: {"reason": "..."} (optional)
-  POST /admin/req/{req_id}/resume     body: {"action": "pass"|"fix-needed", "stage"?, "fixer"?, "reason"?}
+  POST /admin/req/{req_id}/resume     body: {"action": "pass"|"retry-analyze", "stage"?, "reason"?}
                                        → state-level resume from ESCALATED
-                                       （派 VERIFY_PASS / VERIFY_FIX_NEEDED 走合法 transition）
+                                       （派 VERIFY_PASS / VERIFY_RETRY_ANALYZE 走合法 transition）
   POST /admin/req/{req_id}/pr-merged  body: {"merged_pr_url": "...", "merged_sha": "...", "merged_at": "..."}
                                        → GHA 钩：人手合 PR 后通知 orch，state 在 pending-user-review /
                                           review-running / pr-ci-running 时发 PR_MERGED → done_archive
@@ -297,11 +297,10 @@ class ResumeBody(BaseModel):
     """state-level resume from ESCALATED 的 body schema。
 
     action 必传，无默认 —— 走 admin override 绕过 verifier-agent 的语义要求 explicit。
-    其余可选：stage / fixer 覆盖 ctx 路由字段；reason 仅审计。
+    其余可选：stage 覆盖 ctx 路由字段；reason 仅审计。
     """
-    action: Literal["pass", "fix-needed"]
+    action: Literal["pass", "retry-analyze"]
     stage: str | None = None
-    fixer: Literal["dev", "spec"] | None = None
     reason: str | None = None
 
 
@@ -315,7 +314,7 @@ async def resume_req(
 
     跟 BKD verifier follow-up 路径并行：两条路径都最终命中
     `(ESCALATED, VERIFY_PASS) → REVIEW_RUNNING (apply_verify_pass)` 或
-    `(ESCALATED, VERIFY_FIX_NEEDED) → FIXER_RUNNING (start_fixer)`，
+    `(ESCALATED, VERIFY_RETRY_ANALYZE) → ANALYZING (apply_verify_retry_analyze)`，
     区别仅在事件来源（BKD verifier 路径有 verifier_decisions 行；admin
     路径靠 ctx.resumed_by_admin 标识）。
 
@@ -360,8 +359,6 @@ async def resume_req(
     }
     if body.stage:
         ctx_patch["verifier_stage"] = body.stage
-    if body.fixer:
-        ctx_patch["verifier_fixer"] = body.fixer
     if body.reason:
         ctx_patch["resume_reason"] = body.reason
     await req_state.update_context(pool, req_id, ctx_patch)
@@ -372,13 +369,13 @@ async def resume_req(
         raise HTTPException(status_code=404, detail=f"req {req_id} not found")
 
     event = (
-        Event.VERIFY_PASS if body.action == "pass" else Event.VERIFY_FIX_NEEDED
+        Event.VERIFY_PASS if body.action == "pass" else Event.VERIFY_RETRY_ANALYZE
     )
     fake = _FakeBody(req_id, row.project_id)
     log.warning(
         "admin.resume",
         req_id=req_id, action=body.action, stage=effective_stage,
-        fixer=body.fixer, reason=body.reason,
+        reason=body.reason,
     )
     chained = await engine.step(
         pool,
@@ -446,7 +443,7 @@ async def metrics(
     ]
 
     rows = await pool.fetch(
-        "SELECT req_id, final_state, total_sec, total_steps, bugfix_rounds, intent_title "
+        "SELECT req_id, final_state, total_sec, total_steps, retry_analyze_count, intent_title "
         "FROM req_summary ORDER BY updated_at DESC LIMIT 20",
     )
     recent = [dict(r) for r in rows]

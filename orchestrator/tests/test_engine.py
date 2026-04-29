@@ -591,17 +591,17 @@ async def test_verify_pass_closes_orphan_verifier_stage_run(stub_actions):
 
 
 @pytest.mark.asyncio
-async def test_verify_fix_needed_still_closes_verifier_via_normal_path(stub_actions):
-    """REGRESSION: VERIFY_FIX_NEEDED → REVIEW_RUNNING → FIXER_RUNNING 是不同 state，应仍走
-    通用 close-on-leave + open-on-enter 路径：verifier outcome='fix' + 新开 fixer。
+async def test_verify_retry_analyze_closes_verifier_and_opens_analyze(stub_actions):
+    """REGRESSION: VERIFY_RETRY_ANALYZE → REVIEW_RUNNING → ANALYZING 是不同 state，应仍走
+    通用 close-on-leave + open-on-enter 路径：verifier outcome='retry-analyze' + 新开 analyze。
     """
     calls, reg = stub_actions
 
-    async def start_fixer(*, body, req_id, tags, ctx):
-        calls.append(("start_fixer", {"req_id": req_id}))
+    async def apply_verify_retry_analyze(*, body, req_id, tags, ctx):
+        calls.append(("apply_verify_retry_analyze", {"req_id": req_id}))
         return {"ok": True}
 
-    reg["start_fixer"] = start_fixer
+    reg["apply_verify_retry_analyze"] = apply_verify_retry_analyze
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.REVIEW_RUNNING.value)})
     body = type("B", (), {"issueId": "v-1", "projectId": "p", "event": "session.completed"})()
@@ -609,22 +609,22 @@ async def test_verify_fix_needed_still_closes_verifier_via_normal_path(stub_acti
         pool, body=body, req_id="REQ-1", project_id="p",
         tags=["verifier", "REQ-1", "verify:dev_cross_check"],
         cur_state=ReqState.REVIEW_RUNNING,
-        ctx={"verifier_stage": "dev_cross_check"}, event=Event.VERIFY_FIX_NEEDED,
+        ctx={"verifier_stage": "dev_cross_check"}, event=Event.VERIFY_RETRY_ANALYZE,
     )
 
-    assert pool.rows["REQ-1"].state == ReqState.FIXER_RUNNING.value
+    assert pool.rows["REQ-1"].state == ReqState.ANALYZING.value
 
     closes = [c for c in pool.stage_runs_calls if c[0] == "close"]
     inserts = [c for c in pool.stage_runs_calls if c[0] == "insert"]
-    # 通用 close: verifier outcome='fix'（不是 'pass'）
+    # 通用 close: verifier outcome='retry-analyze'（不是 'pass'）
     assert len(closes) == 1, pool.stage_runs_calls
     args = closes[0][2]
     assert args[1] == "verifier"
-    assert args[2] == "fix"
-    # 通用 open: fixer
+    assert args[2] == "retry-analyze"
+    # 通用 open: analyze
     assert len(inserts) == 1
     insert_args = inserts[0][2]
-    assert insert_args[1] == "fixer"
+    assert insert_args[1] == "analyze"
 
 
 @pytest.mark.asyncio

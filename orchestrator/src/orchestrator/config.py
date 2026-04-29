@@ -159,7 +159,7 @@ class Settings(BaseSettings):
     runner_ready_attempts: int = 3
 
     # ─── agent model 控制 ─────────────────────────────────────────────────
-    # sisyphus 起的 agent 用哪个模型（verifier / fixer / accept / pr_ci_watch /
+    # sisyphus 起的 agent 用哪个模型（verifier / accept / pr_ci_watch /
     # done_archive / staging_test）。None = 用 BKD per-engine 默认（opus）。
     # 默认 claude-sonnet-4-6（成本低于 opus；测试 helm values 可覆盖成 'claude-haiku-4-5'）。
     # 注意：analyze agent 的 model 是 user 创 intent issue 时定的，sisyphus 不控；
@@ -201,20 +201,6 @@ class Settings(BaseSettings):
     # 立即 escalate；session_status == "running" 仍由 in-loop 跳过（不受影响）。
     # 把 "BKD agent 死了但没发 session.failed webhook" 的兜底从 60min 缩到 5min。
     watchdog_session_ended_threshold_sec: int = 300
-
-    # ─── 防 verifier↔fixer 死循环：硬封顶 fixer round 数 ─────────────────
-    # 每次 verifier decision=fix 都会 start_fixer 起新一轮 fixer agent，跑完回 verifier
-    # 复查；verifier 再判 fix 又起一轮。某些场景（spec 自相矛盾 / fixer 改不动根因）
-    # 会无限循环。第 N+1 次 start_fixer 到达 cap → escalate（reason=fixer-round-cap）
-    # 让人介入。N 默认 5；调高 = 给 fixer 更多机会，调低 = 更早叫人。
-    fixer_round_cap: int = 5
-
-    # ─── verifier 判 infra-flake 时的自动重跑次数上限 ────────────────────
-    # verifier decision=retry（基础设施 flaky 判定）时，apply_verify_infra_retry
-    # 从 ctx.infra_retry_count 读已重跑次数；< cap 则重跑 stage checker，
-    # >= cap 则 emit VERIFY_ESCALATE（reason=infra-retry-cap）让人介入。
-    # 默认 2：给 infra flake 2 次自愈机会，超了人工检查基础设施。
-    verifier_infra_retry_cap: int = 2
 
     # ─── REQ-checker-infra-flake-retry-1777247423：infra-flake bounded retry ──
     # 三个 kubectl-exec checker（spec_lint / dev_cross_check / staging_test）一次跑挂时，

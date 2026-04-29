@@ -663,14 +663,13 @@ async def test_resume_pass_with_body_stage_overrides_ctx(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resume_fix_needed_dispatches_verify_fix_needed_event(monkeypatch):
-    """ARE-S2: action=fix-needed → engine.step with event=VERIFY_FIX_NEEDED."""
+async def test_resume_retry_analyze_dispatches_verify_retry_analyze_event(monkeypatch):
+    """ARE-S2: action=retry-analyze → engine.step with event=VERIFY_RETRY_ANALYZE."""
     pool = _FakePool()
     row = _FakeRow(
         req_id="REQ-X", project_id="p", state=ReqState.ESCALATED,
         context={
             "verifier_stage": "dev_cross_check",
-            "verifier_fixer": "dev",
         },
     )
     _bypass_auth_pool_and_update(monkeypatch, pool, row=row)
@@ -679,15 +678,15 @@ async def test_resume_fix_needed_dispatches_verify_fix_needed_event(monkeypatch)
 
     async def _step(*a, **kw):
         step_calls.append(kw)
-        return {"action": "start_fixer"}
+        return {"action": "apply_verify_retry_analyze"}
 
     monkeypatch.setattr("orchestrator.admin.engine.step", _step)
 
-    body = ResumeBody(action="fix-needed")
+    body = ResumeBody(action="retry-analyze")
     result = await resume_req("REQ-X", body=body, authorization="Bearer x")
 
-    assert result["event"] == "verify.fix-needed"
-    assert step_calls[0]["event"] == Event.VERIFY_FIX_NEEDED
+    assert result["event"] == "verify.retry-analyze"
+    assert step_calls[0]["event"] == Event.VERIFY_RETRY_ANALYZE
 
 
 @pytest.mark.asyncio
@@ -714,36 +713,10 @@ async def test_resume_writes_audit_to_context(monkeypatch):
     assert patch["resume_reason"] == "GHA infra flake confirmed"
 
 
-@pytest.mark.asyncio
-async def test_resume_fixer_override_in_body(monkeypatch):
-    """body.fixer="spec" → ctx.verifier_fixer patched."""
-    pool = _FakePool()
-    row = _FakeRow(
-        req_id="REQ-X", project_id="p", state=ReqState.ESCALATED,
-        context={"verifier_stage": "spec_lint", "verifier_fixer": "dev"},
-    )
-    update_calls = _bypass_auth_pool_and_update(monkeypatch, pool, row=row)
-
-    async def _step(*a, **kw):
-        return {}
-
-    monkeypatch.setattr("orchestrator.admin.engine.step", _step)
-
-    body = ResumeBody(action="fix-needed", fixer="spec")
-    await resume_req("REQ-X", body=body, authorization="Bearer x")
-    assert update_calls[0]["verifier_fixer"] == "spec"
-
-
 def test_resume_body_invalid_action_raises():
-    """ResumeBody schema 拒绝 action ∉ {pass, fix-needed}."""
+    """ResumeBody schema 拒绝 action ∉ {pass, retry-analyze}."""
     with pytest.raises(ValidationError):
         ResumeBody(action="bogus")
-
-
-def test_resume_body_invalid_fixer_raises():
-    """ResumeBody schema 拒绝 fixer ∉ {dev, spec}."""
-    with pytest.raises(ValidationError):
-        ResumeBody(action="fix-needed", fixer="qa")
 
 
 def test_resume_body_action_required():

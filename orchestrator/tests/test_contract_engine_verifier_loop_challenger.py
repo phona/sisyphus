@@ -14,14 +14,14 @@ Scenarios covered:
   VLT-S5   (ACCEPT_TEARING_DOWN, TEARDOWN_DONE_FAIL) → REVIEW_RUNNING + invoke_verifier_for_accept_fail
   VLT-S6   (ANALYZE_ARTIFACT_CHECKING, ANALYZE_ARTIFACT_CHECK_FAIL) → REVIEW_RUNNING + invoke_verifier_for_analyze_artifact_check_fail
   VLT-S7   (CHALLENGER_RUNNING, CHALLENGER_FAIL) → REVIEW_RUNNING + invoke_verifier_for_challenger_fail
-  VLT-S8   (REVIEW_RUNNING, VERIFY_FIX_NEEDED) → FIXER_RUNNING, stage_runs: close verifier/fix + insert fixer
+  VLT-S8   (REVIEW_RUNNING, VERIFY_RETRY_ANALYZE) → ANALYZING, stage_runs: close verifier/retry-analyze + insert analyze
   VLT-S9   (REVIEW_RUNNING, VERIFY_ESCALATE) → ESCALATED + cleanup_runner fire-and-forget
-  VLT-S10  (FIXER_RUNNING, FIXER_DONE) → REVIEW_RUNNING, stage_runs: close fixer/pass + insert verifier
-  VLT-S11  (FIXER_RUNNING, VERIFY_ESCALATE) → ESCALATED + escalate dispatched
+  VLT-S10  ~~removed: fixer done~~
+  VLT-S11  ~~removed: fixer escalate~~
   VLT-S12  (ESCALATED, VERIFY_PASS) → ESCALATED self-loop + apply_verify_pass dispatched, no cleanup
-  VLT-S13  (ESCALATED, VERIFY_FIX_NEEDED) → FIXER_RUNNING + start_fixer dispatched
+  VLT-S13  (ESCALATED, VERIFY_RETRY_ANALYZE) → ANALYZING + apply_verify_retry_analyze dispatched
   VLT-S14  (ESCALATED, VERIFY_ESCALATE) → ESCALATED no-op self-loop, no cleanup_runner
-  VLT-S15  13× (*_RUNNING, SESSION_FAILED) → self-loop + escalate dispatch, no cleanup
+  VLT-S15  12× (*_RUNNING, SESSION_FAILED) → self-loop + escalate dispatch, no cleanup
   VLT-S16  (INIT, SESSION_FAILED) → skip, reason contains "no transition init+session.failed"
 
 Module contract under test: orchestrator.engine.step
@@ -189,15 +189,15 @@ async def test_vlt_s1_to_s7_upstream_fail_enters_review_running(
     )
 
 
-# ─── VLT-S8: REVIEW_RUNNING + VERIFY_FIX_NEEDED → FIXER_RUNNING + stage_runs roll ──
+# ─── VLT-S8: REVIEW_RUNNING + VERIFY_RETRY_ANALYZE → ANALYZING + stage_runs roll ──
 
 
 @pytest.mark.asyncio
-async def test_vlt_s8_verify_fix_needed_enters_fixer_running_with_stage_runs(
+async def test_vlt_s8_verify_retry_analyze_enters_analyzing_with_stage_runs(
     monkeypatch,
 ) -> None:
-    """VLT-S8: (REVIEW_RUNNING, VERIFY_FIX_NEEDED) → FIXER_RUNNING via start_fixer.
-    Engine MUST close verifier stage_run (outcome=fix) and insert a fixer stage_run."""
+    """VLT-S8: (REVIEW_RUNNING, VERIFY_RETRY_ANALYZE) → ANALYZING via apply_verify_retry_analyze.
+    Engine MUST close verifier stage_run (outcome=retry-analyze) and insert an analyze stage_run."""
     from orchestrator import engine
     from orchestrator.actions import REGISTRY
     from orchestrator.state import Event, ReqState
@@ -209,29 +209,29 @@ async def test_vlt_s8_verify_fix_needed_enters_fixer_running_with_stage_runs(
     calls: list[str] = []
 
     async def _stub(**_kw):
-        calls.append("start_fixer")
+        calls.append("apply_verify_retry_analyze")
         return {}
 
-    REGISTRY["start_fixer"] = _stub
+    REGISTRY["apply_verify_retry_analyze"] = _stub
 
     result = await _step(
         cur_state=ReqState.REVIEW_RUNNING,
-        event=Event.VERIFY_FIX_NEEDED,
+        event=Event.VERIFY_RETRY_ANALYZE,
         tags=["verifier", _REQ_ID, "verify:dev_cross_check"],
         ctx={"verifier_stage": "dev_cross_check"},
     )
 
-    assert result.get("action") == "start_fixer", (
-        f"VLT-S8: action MUST be 'start_fixer'; got {result!r}"
+    assert result.get("action") == "apply_verify_retry_analyze", (
+        f"VLT-S8: action MUST be 'apply_verify_retry_analyze'; got {result!r}"
     )
-    assert result.get("next_state") == ReqState.FIXER_RUNNING.value, (
-        f"VLT-S8: next_state MUST be 'fixer-running'; got {result!r}"
+    assert result.get("next_state") == ReqState.ANALYZING.value, (
+        f"VLT-S8: next_state MUST be 'analyzing'; got {result!r}"
     )
-    assert len(calls) == 1, "VLT-S8: start_fixer MUST be awaited exactly once"
+    assert len(calls) == 1, "VLT-S8: apply_verify_retry_analyze MUST be awaited exactly once"
 
     cas_next = cas.call_args.args[3]
-    assert cas_next == ReqState.FIXER_RUNNING, (
-        f"VLT-S8: CAS MUST advance to FIXER_RUNNING; got {cas_next!r}"
+    assert cas_next == ReqState.ANALYZING, (
+        f"VLT-S8: CAS MUST advance to ANALYZING; got {cas_next!r}"
     )
 
     close_calls = close_mock.call_args_list
@@ -247,13 +247,13 @@ async def test_vlt_s8_verify_fix_needed_enters_fixer_running_with_stage_runs(
     assert close_call.args[2] == "verifier", (
         f"VLT-S8: close MUST target stage='verifier'; got args={close_call.args!r}"
     )
-    assert close_call.kwargs.get("outcome") == "fix", (
-        f"VLT-S8: close MUST record outcome='fix'; got kwargs={close_call.kwargs!r}"
+    assert close_call.kwargs.get("outcome") == "retry-analyze", (
+        f"VLT-S8: close MUST record outcome='retry-analyze'; got kwargs={close_call.kwargs!r}"
     )
     # signature: insert_stage_run(pool, req_id, stage, ...)
     insert_call = insert_calls[0]
-    assert insert_call.args[2] == "fixer", (
-        f"VLT-S8: insert MUST target stage='fixer'; got args={insert_call.args!r}"
+    assert insert_call.args[2] == "analyze", (
+        f"VLT-S8: insert MUST target stage='analyze'; got args={insert_call.args!r}"
     )
 
 
@@ -312,121 +312,6 @@ async def test_vlt_s9_verify_escalate_enters_escalated_and_triggers_cleanup(
     )
 
 
-# ─── VLT-S10: FIXER_RUNNING + FIXER_DONE → REVIEW_RUNNING ───────────────────
-
-
-@pytest.mark.asyncio
-async def test_vlt_s10_fixer_done_returns_to_review_running(monkeypatch) -> None:
-    """VLT-S10: (FIXER_RUNNING, FIXER_DONE) → REVIEW_RUNNING via invoke_verifier_after_fix.
-    Engine MUST close fixer stage_run (outcome=pass) and insert a verifier stage_run."""
-    from orchestrator import engine
-    from orchestrator.actions import REGISTRY
-    from orchestrator.state import Event, ReqState
-
-    cas = _patch_io(monkeypatch)
-    close_mock = engine.stage_runs.close_latest_stage_run
-    insert_mock = engine.stage_runs.insert_stage_run
-
-    calls: list[str] = []
-
-    async def _stub(**_kw):
-        calls.append("invoke_verifier_after_fix")
-        return {}
-
-    REGISTRY["invoke_verifier_after_fix"] = _stub
-
-    result = await _step(
-        cur_state=ReqState.FIXER_RUNNING,
-        event=Event.FIXER_DONE,
-        tags=["fixer", _REQ_ID, "parent-stage:dev_cross_check"],
-        ctx={"fixer_role": "dev"},
-    )
-
-    assert result.get("action") == "invoke_verifier_after_fix", (
-        f"VLT-S10: action MUST be 'invoke_verifier_after_fix'; got {result!r}"
-    )
-    assert result.get("next_state") == ReqState.REVIEW_RUNNING.value, (
-        f"VLT-S10: next_state MUST be 'review-running'; got {result!r}"
-    )
-    assert len(calls) == 1, "VLT-S10: invoke_verifier_after_fix MUST be awaited exactly once"
-
-    cas_next = cas.call_args.args[3]
-    assert cas_next == ReqState.REVIEW_RUNNING, (
-        f"VLT-S10: CAS MUST advance to REVIEW_RUNNING; got {cas_next!r}"
-    )
-
-    close_calls = close_mock.call_args_list
-    insert_calls = insert_mock.call_args_list
-    assert len(close_calls) == 1, (
-        f"VLT-S10: exactly 1 close MUST be recorded; got {close_calls!r}"
-    )
-    assert len(insert_calls) == 1, (
-        f"VLT-S10: exactly 1 insert MUST be recorded; got {insert_calls!r}"
-    )
-    # signature: close_latest_stage_run(pool, req_id, stage, *, outcome=...)
-    close_call = close_calls[0]
-    assert close_call.args[2] == "fixer", (
-        f"VLT-S10: close MUST target stage='fixer'; got args={close_call.args!r}"
-    )
-    assert close_call.kwargs.get("outcome") == "pass", (
-        f"VLT-S10: close MUST record outcome='pass'; got kwargs={close_call.kwargs!r}"
-    )
-    # signature: insert_stage_run(pool, req_id, stage, ...)
-    insert_call = insert_calls[0]
-    assert insert_call.args[2] == "verifier", (
-        f"VLT-S10: insert MUST target stage='verifier'; got args={insert_call.args!r}"
-    )
-
-
-# ─── VLT-S11: FIXER_RUNNING + VERIFY_ESCALATE → ESCALATED (round-cap escape) ─
-
-
-@pytest.mark.asyncio
-async def test_vlt_s11_fixer_round_cap_escapes_to_escalated(monkeypatch) -> None:
-    """VLT-S11: (FIXER_RUNNING, VERIFY_ESCALATE) → ESCALATED via escalate.
-    Round-cap escape path: start_fixer itself emits VERIFY_ESCALATE when cap hit."""
-    from orchestrator import engine
-    from orchestrator.actions import REGISTRY
-    from orchestrator.state import Event, ReqState
-
-    _patch_io(monkeypatch)
-
-    cleanup_calls: list[tuple] = []
-
-    class _FakeController:
-        async def cleanup_runner(self, req_id, *, retain_pvc=False):
-            cleanup_calls.append((req_id, retain_pvc))
-
-    monkeypatch.setattr(engine.k8s_runner, "get_controller", lambda: _FakeController())
-
-    calls: list[str] = []
-
-    async def _stub(**_kw):
-        calls.append("escalate")
-        return {}
-
-    REGISTRY["escalate"] = _stub
-
-    result = await _step(
-        cur_state=ReqState.FIXER_RUNNING,
-        event=Event.VERIFY_ESCALATE,
-        tags=["fixer", _REQ_ID],
-        ctx={"fixer_round": 5},
-    )
-    await asyncio.sleep(0)
-
-    assert result.get("action") == "escalate", (
-        f"VLT-S11: action MUST be 'escalate'; got {result!r}"
-    )
-    assert result.get("next_state") == ReqState.ESCALATED.value, (
-        f"VLT-S11: next_state MUST be 'escalated'; got {result!r}"
-    )
-    assert len(calls) == 1, "VLT-S11: escalate MUST be awaited exactly once"
-    assert len(cleanup_calls) == 1, (
-        f"VLT-S11: cleanup_runner MUST fire-and-forget once; got {cleanup_calls!r}"
-    )
-
-
 # ─── VLT-S12: ESCALATED + VERIFY_PASS → self-loop, apply_verify_pass ─────────
 
 
@@ -481,15 +366,15 @@ async def test_vlt_s12_escalated_verify_pass_dispatches_apply_verify_pass(
     )
 
 
-# ─── VLT-S13: ESCALATED + VERIFY_FIX_NEEDED → FIXER_RUNNING ─────────────────
+# ─── VLT-S13: ESCALATED + VERIFY_RETRY_ANALYZE → ANALYZING ─────────────────
 
 
 @pytest.mark.asyncio
-async def test_vlt_s13_escalated_verify_fix_needed_enters_fixer_running(
+async def test_vlt_s13_escalated_verify_retry_analyze_enters_analyzing(
     monkeypatch,
 ) -> None:
-    """VLT-S13: (ESCALATED, VERIFY_FIX_NEEDED) → FIXER_RUNNING via start_fixer.
-    Human-resume path: user re-opens verifier from ESCALATED and decides fix."""
+    """VLT-S13: (ESCALATED, VERIFY_RETRY_ANALYZE) → ANALYZING via apply_verify_retry_analyze.
+    Human-resume path: user re-opens verifier from ESCALATED and decides retry-analyze."""
     from orchestrator.actions import REGISTRY
     from orchestrator.state import Event, ReqState
 
@@ -497,29 +382,29 @@ async def test_vlt_s13_escalated_verify_fix_needed_enters_fixer_running(
     calls: list[str] = []
 
     async def _stub(**_kw):
-        calls.append("start_fixer")
+        calls.append("apply_verify_retry_analyze")
         return {}
 
-    REGISTRY["start_fixer"] = _stub
+    REGISTRY["apply_verify_retry_analyze"] = _stub
 
     result = await _step(
         cur_state=ReqState.ESCALATED,
-        event=Event.VERIFY_FIX_NEEDED,
+        event=Event.VERIFY_RETRY_ANALYZE,
         tags=["verifier", _REQ_ID, "verify:staging_test"],
-        ctx={"verifier_stage": "staging_test", "verifier_fixer": "dev"},
+        ctx={"verifier_stage": "staging_test"},
     )
 
-    assert result.get("action") == "start_fixer", (
-        f"VLT-S13: action MUST be 'start_fixer'; got {result!r}"
+    assert result.get("action") == "apply_verify_retry_analyze", (
+        f"VLT-S13: action MUST be 'apply_verify_retry_analyze'; got {result!r}"
     )
-    assert result.get("next_state") == ReqState.FIXER_RUNNING.value, (
-        f"VLT-S13: next_state MUST be 'fixer-running'; got {result!r}"
+    assert result.get("next_state") == ReqState.ANALYZING.value, (
+        f"VLT-S13: next_state MUST be 'analyzing'; got {result!r}"
     )
-    assert len(calls) == 1, "VLT-S13: start_fixer MUST be awaited exactly once"
+    assert len(calls) == 1, "VLT-S13: apply_verify_retry_analyze MUST be awaited exactly once"
 
     cas_next = cas.call_args.args[3]
-    assert cas_next == ReqState.FIXER_RUNNING, (
-        f"VLT-S13: CAS MUST advance to FIXER_RUNNING; got {cas_next!r}"
+    assert cas_next == ReqState.ANALYZING, (
+        f"VLT-S13: CAS MUST advance to ANALYZING; got {cas_next!r}"
     )
 
 
@@ -578,7 +463,6 @@ _SESSION_FAILED_STATE_NAMES = [
     "ACCEPT_RUNNING",
     "ACCEPT_TEARING_DOWN",
     "REVIEW_RUNNING",
-    "FIXER_RUNNING",
     "ARCHIVING",
 ]
 
@@ -592,7 +476,7 @@ async def test_vlt_s15_session_failed_self_loops_to_escalate(
     monkeypatch, state_name,
 ) -> None:
     """VLT-S15: (state, SESSION_FAILED) MUST dispatch escalate and remain in same state.
-    Parametrized across all 13 in-flight states. Self-loop: no cleanup_runner."""
+    Parametrized across all 12 in-flight states. Self-loop: no cleanup_runner."""
     from orchestrator import engine
     from orchestrator.actions import REGISTRY
     from orchestrator.state import Event, ReqState

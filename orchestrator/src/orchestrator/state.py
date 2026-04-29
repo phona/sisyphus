@@ -39,7 +39,6 @@ class ReqState(StrEnum):
     ARCHIVING = "archiving"                     # done-archive agent（合 PR 等）
     # verifier-agent 框架
     REVIEW_RUNNING = "review-running"           # verifier-agent 在跑（success / fail 两触发统一入口）
-    FIXER_RUNNING = "fixer-running"             # verifier decision=fix → 起对应 fixer agent（dev/spec）
     DONE = "done"                               # REQ 完成
     ESCALATED = "escalated"                     # 熔断 / session-failed / 人工止损
 
@@ -77,12 +76,10 @@ class Event(StrEnum):
     USER_REVIEW_PASS = "user-review.pass"           # statusId → done：用户 approve，发车
     USER_REVIEW_FIX = "user-review.fix"             # statusId → review/blocked：用户要返工 → escalate
     # verifier-agent 决策事件（webhook.py 从 verifier issue 的 decision JSON 派发）
-    # 3 路决策：pass / fix / escalate（retry_checker 已砍 —— flaky/外部抖动直接 escalate）
+    # 3 路决策：pass / retry-analyze / escalate
     VERIFY_PASS = "verify.pass"                     # decision.action = pass → 推下一 stage
-    VERIFY_FIX_NEEDED = "verify.fix-needed"         # decision.action = fix → 起 fixer agent
+    VERIFY_RETRY_ANALYZE = "verify.retry-analyze"   # decision.action = retry-analyze → 打回 analyze 重新跑
     VERIFY_ESCALATE = "verify.escalate"             # decision.action = escalate
-    VERIFY_INFRA_RETRY = "verify.infra-retry"       # decision.action = retry → 有界重跑 stage checker（infra flake）
-    FIXER_DONE = "fixer.done"                       # fixer agent 跑完 → 回对应 stage 重跑 checker
 
 
 @dataclass(frozen=True)
@@ -238,30 +235,16 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     # 注意：VERIFY_PASS 的目标 stage 由 ctx.verifier_stage 决定 —— transition 表无法静态表达
     # next_state 随 stage 变化，所以 apply_verify_pass action 内部手工 CAS 到对应 stage_running
     # 再链式 emit 该 stage 的 done/pass 事件（走原主链 transition）。
-    # 4 路决策：pass / fix / escalate / retry（infra-flake 有界重跑，超 cap → escalate）
+    # 3 路决策：pass / retry-analyze / escalate
     (ReqState.REVIEW_RUNNING, Event.VERIFY_PASS):
         Transition(ReqState.REVIEW_RUNNING, "apply_verify_pass",
                    "decision=pass → action 读 stage 手动推进"),
-    (ReqState.REVIEW_RUNNING, Event.VERIFY_FIX_NEEDED):
-        Transition(ReqState.FIXER_RUNNING, "start_fixer",
-                   "decision=fix → 起对应 fixer（dev/spec）"),
+    (ReqState.REVIEW_RUNNING, Event.VERIFY_RETRY_ANALYZE):
+        Transition(ReqState.ANALYZING, "apply_verify_retry_analyze",
+                   "decision=retry-analyze → 打回 analyze 重新跑"),
     (ReqState.REVIEW_RUNNING, Event.VERIFY_ESCALATE):
         Transition(ReqState.ESCALATED, "escalate",
                    "verifier decision=escalate 或 schema invalid"),
-    (ReqState.REVIEW_RUNNING, Event.VERIFY_INFRA_RETRY):
-        Transition(ReqState.REVIEW_RUNNING, "apply_verify_infra_retry",
-                   "decision=retry → 有界重跑 stage checker（infra flake；超 cap → escalate）"),
-
-    (ReqState.FIXER_RUNNING, Event.FIXER_DONE):
-        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_after_fix",
-                   "fixer 完 → 再跑 verifier 复查"),
-
-    # start_fixer 自检 fixer_round 超 cap → 走主链 escalate（不跑新 fixer）。
-    # 复用 escalate action 把 reason / tag / runner 清理收口，避免 start_fixer 内
-    # 自己开第二条 escalate 实现。
-    (ReqState.FIXER_RUNNING, Event.VERIFY_ESCALATE):
-        Transition(ReqState.ESCALATED, "escalate",
-                   "fixer round 触顶 / start_fixer 自判 escalate"),
 
     # ─── 终态 ───────────────────────────────────────────────────────────
     (ReqState.ARCHIVING, Event.ARCHIVE_DONE):
@@ -269,16 +252,16 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
 
     # ─── 人工恢复（escalate ≠ 死终态）─────────────────────────────────────
     # 用户在 BKD UI follow-up 那个 escalate 的 verifier issue → BKD wake agent →
-    # 写新 decision JSON → session.completed 走原来 verifier 同一套链路 → 命中下面 3 条。
-    # 复用 apply_verify_pass / start_fixer，它们的 CAS source 同时接 REVIEW_RUNNING + ESCALATED。
+    # 写新 decision JSON → session.completed 走原来 verifier 同一套链路 → 命中下面 2 条。
+    # 复用 apply_verify_pass / apply_verify_retry_analyze，它们的 CAS source 同时接 REVIEW_RUNNING + ESCALATED。
     # 配套：webhook.py 把 verifier-decision=escalate 的 issue PATCH 到 BKD statusId="review"
     # （而非 done），用户在 BKD 看板"待审查"列就能定位到该 follow-up 哪条。
     (ReqState.ESCALATED, Event.VERIFY_PASS):
         Transition(ReqState.ESCALATED, "apply_verify_pass",
                    "用户续 escalate 的 verifier issue → 新 decision=pass → action 推下一 stage"),
-    (ReqState.ESCALATED, Event.VERIFY_FIX_NEEDED):
-        Transition(ReqState.FIXER_RUNNING, "start_fixer",
-                   "用户续 escalate 的 verifier issue → 新 decision=fix → 起 fixer"),
+    (ReqState.ESCALATED, Event.VERIFY_RETRY_ANALYZE):
+        Transition(ReqState.ANALYZING, "apply_verify_retry_analyze",
+                   "用户续 escalate 的 verifier issue → 新 decision=retry-analyze → 打回 analyze"),
     (ReqState.ESCALATED, Event.VERIFY_ESCALATE):
         Transition(ReqState.ESCALATED, None,
                    "用户续了但 verifier 还是判 escalate → 留原地等下一次 follow-up"),
@@ -298,7 +281,7 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
             ReqState.DEV_CROSS_CHECK_RUNNING,
             ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
             ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
-            ReqState.REVIEW_RUNNING, ReqState.FIXER_RUNNING,
+            ReqState.REVIEW_RUNNING,
             ReqState.ARCHIVING,
         ]
     },

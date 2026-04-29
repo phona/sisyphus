@@ -59,7 +59,6 @@ _STATE_ISSUE_KEY: dict[ReqState, str | None] = {
     ReqState.ACCEPT_RUNNING: "accept_issue_id",
     ReqState.ACCEPT_TEARING_DOWN: "accept_issue_id",
     ReqState.REVIEW_RUNNING: "verifier_issue_id",
-    ReqState.FIXER_RUNNING: "fixer_issue_id",
     ReqState.ARCHIVING: "archive_issue_id",
 }
 
@@ -77,7 +76,7 @@ _STATE_FAILURE_EVENT: dict[ReqState, str] = {
 # verifier 也排除：verifier 判 escalate 时 issue 应保持 review，BKD 侧无法区分 pass/fix/escalate。
 # REQ-fix-bkd-sub-issue-status-sync-1777426309
 _SUB_AGENT_ROLE_TAGS: frozenset[str] = frozenset({
-    "analyze", "challenger", "fixer", "accept", "done-archive",
+    "analyze", "challenger", "accept", "done-archive",
 })
 
 # 排除：终态 + 等人态（human-in-loop）+ 未入链
@@ -141,7 +140,6 @@ _STAGE_POLICY: dict[ReqState, _StagePolicy | None] = {
     ReqState.ACCEPT_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
     ReqState.ACCEPT_TEARING_DOWN: _StagePolicy(ended_sec=300, stuck_sec=None),
     ReqState.ARCHIVING: _StagePolicy(ended_sec=300, stuck_sec=None),
-    ReqState.FIXER_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
     ReqState.REVIEW_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
     # external-poll
     ReqState.PR_CI_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=14400),
@@ -218,12 +216,12 @@ async def _tick() -> dict:
     )
     escalated = 0
     for row in rows:
-        if await _check_and_escalate(row):
+        if await _check_and_escalate(pool, row):
             escalated += 1
     return {"checked": len(rows), "escalated": escalated}
 
 
-async def _check_and_escalate(row) -> bool:
+async def _check_and_escalate(pool, row) -> bool:
     """检查一条 stuck row，按 stage policy 决定 skip / escalate。返 True = 真 escalate。"""
     req_id = row["req_id"]
     project_id = row["project_id"]
@@ -268,33 +266,12 @@ async def _check_and_escalate(row) -> bool:
                 req_id=req_id, issue_id=issue_id, error=str(e),
             )
 
-    # 2. 防 verifier↔fixer 死循环兜底：FIXER_RUNNING 卡住且 fixer_round 已达 cap →
-    # 显式标 escalated_reason=fixer-round-cap，escalate.py 识别为 hard reason 直接终止。
-    # 此检查必须在 defensive issue_id 检查之前，因为 fixer cap 是独立终止条件，不依赖 BKD session。
-    fx_round = int(ctx.get("fixer_round") or 0)
-    cap = settings.fixer_round_cap
-    pool = db.get_pool()
-    if state == ReqState.FIXER_RUNNING and fx_round >= cap:
-        try:
-            await req_state.update_context(pool, req_id, {
-                "escalated_reason": "fixer-round-cap",
-                "fixer_round_cap_hit": cap,
-            })
-            ctx["escalated_reason"] = "fixer-round-cap"
-            log.warning("watchdog.fixer_round_cap_hit",
-                        req_id=req_id, fixer_round=fx_round, cap=cap)
-        except Exception as e:
-            log.warning("watchdog.fixer_round_cap_tag_failed",
-                        req_id=req_id, error=str(e))
-        # fall through to escalate — 不 return，继续走下面的 escalate 路径
-
-    # 3. defensive: stage expects a BKD issue (issue_key set) but issue_id is
+    # 2. defensive: stage expects a BKD issue (issue_key set) but issue_id is
     # missing from ctx on an autonomous-bounded stage (stuck_sec=None).
     # Treat as "session may still be running" and skip, rather than blindly
     # treating absent issue_id as "session ended" and escalating prematurely.
     # Defense-in-depth even when actions forget to call update_context.
-    # 排除 fixer-round-cap 场景（该场景已在上一步处理，不依赖 issue_id）。
-    if issue_id is None and policy.stuck_sec is None and ctx.get("escalated_reason") != "fixer-round-cap":
+    if issue_id is None and policy.stuck_sec is None:
         log.warning("watchdog.missing_issue_id", req_id=req_id, state=state.value)
         return False
 
@@ -373,7 +350,7 @@ async def _check_and_escalate(row) -> bool:
 async def _sync_stuck_sub_agent_statuses_tick() -> dict:
     """补偿清理：把 BKD 中 sessionStatus=completed 但 statusId=review 的 sub-agent issue 推 done。
 
-    只动非 verifier 的 sub-agent issue（analyze / challenger / fixer / accept / done-archive）。
+    只动非 verifier 的 sub-agent issue（analyze / challenger / accept / done-archive）。
     verifier issue 在 escalate 时应保持 review，BKD 侧无法区分 verdict，保守排除。
     REQ-fix-bkd-sub-issue-status-sync-1777426309
     """

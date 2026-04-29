@@ -53,13 +53,12 @@ STATE_TO_STAGE: dict[ReqState, str] = {
     ReqState.ACCEPT_RUNNING:         "accept",
     ReqState.ACCEPT_TEARING_DOWN:    "accept_teardown",
     ReqState.REVIEW_RUNNING:         "verifier",
-    ReqState.FIXER_RUNNING:          "fixer",
     ReqState.ARCHIVING:              "archive",
 }
 # 仅以下 state 对应的 stage 由 BKD agent 跑；其他 state 是机械 checker / teardown，
 # 没 BKD session 可绑。webhook 用此集合决定 stamp_bkd_session_id 是否值得调用。
 AGENT_STAGES: frozenset[str] = frozenset({
-    "analyze", "verifier", "fixer", "accept", "archive",
+    "analyze", "verifier", "accept", "archive",
 })
 
 # event → stage_runs.outcome 标签。escalate / session.failed 全归 fail。
@@ -84,9 +83,8 @@ _EVENT_TO_OUTCOME: dict[Event, str] = {
     Event.ARCHIVE_DONE:         "pass",
     Event.SESSION_FAILED:       "fail",
     Event.VERIFY_PASS:          "pass",
-    Event.VERIFY_FIX_NEEDED:    "fix",
+    Event.VERIFY_RETRY_ANALYZE: "retry-analyze",
     Event.VERIFY_ESCALATE:      "escalate",
-    Event.FIXER_DONE:           "pass",
 }
 
 

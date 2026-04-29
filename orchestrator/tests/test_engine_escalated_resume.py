@@ -329,23 +329,23 @@ async def test_ert_s7_escalated_verify_pass_chains_to_next_stage(
 
 
 # ───────────────────────────────────────────────────────────────────────
-# ERT-S8: ESCALATED + VERIFY_FIX_NEEDED — verify:<stage> tag forwarded to start_fixer
+# ERT-S8: ESCALATED + VERIFY_RETRY_ANALYZE — verify:<stage> tag forwarded to apply_verify_retry_analyze
 # ───────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_ert_s8_escalated_verify_fix_needed_forwards_stage_tag(stub_actions):
-    """Spec ERT-S8: start_fixer 必须能从触发本次 transition 的 verifier issue tag 读
+async def test_ert_s8_escalated_verify_retry_analyze_forwards_stage_tag(stub_actions):
+    """Spec ERT-S8: apply_verify_retry_analyze 必须能从触发本次 transition 的 verifier issue tag 读
     `verify:<stage>` —— 多 verifier 并发时 ctx.verifier_stage 会被后来者覆盖，issue
     tag 是无歧义真相。本 case 同时穿 ctx.verifier_stage 和 verify:staging_test tag，
     断言两者都能从 engine 传给 handler。"""
     calls: list = []
 
-    async def start_fixer(*, body, req_id, tags, ctx):
+    async def apply_verify_retry_analyze(*, body, req_id, tags, ctx):
         calls.append({"tags": list(tags or []), "ctx": dict(ctx or {})})
         return {"ok": True}
 
-    stub_actions["start_fixer"] = start_fixer
+    stub_actions["apply_verify_retry_analyze"] = apply_verify_retry_analyze
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.ESCALATED.value)})
     body = _body(issueId="vfy-resume", projectId="p", event="session.completed")
@@ -354,19 +354,18 @@ async def test_ert_s8_escalated_verify_fix_needed_forwards_stage_tag(stub_action
         pool, body=body, req_id="REQ-1", project_id="p",
         tags=["verifier", "REQ-1", "verify:staging_test"],
         cur_state=ReqState.ESCALATED,
-        ctx={"verifier_stage": "staging_test", "verifier_fixer": "dev"},
-        event=Event.VERIFY_FIX_NEEDED,
+        ctx={"verifier_stage": "staging_test"},
+        event=Event.VERIFY_RETRY_ANALYZE,
     )
 
-    assert result["action"] == "start_fixer"
-    assert result["next_state"] == ReqState.FIXER_RUNNING.value
-    assert pool.rows["REQ-1"].state == ReqState.FIXER_RUNNING.value
+    assert result["action"] == "apply_verify_retry_analyze"
+    assert result["next_state"] == ReqState.ANALYZING.value
+    assert pool.rows["REQ-1"].state == ReqState.ANALYZING.value
     assert len(calls) == 1
     assert "verify:staging_test" in calls[0]["tags"], (
         f"engine must forward verify:<stage> tag, got {calls[0]['tags']!r}"
     )
     assert calls[0]["ctx"].get("verifier_stage") == "staging_test"
-    assert calls[0]["ctx"].get("verifier_fixer") == "dev"
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -442,14 +441,13 @@ async def test_ert_s9_full_transition_sweep(
     )
 
 
-def test_ert_s9_sweep_covers_exactly_53():
-    """Sanity: TRANSITIONS 必须正好 50 条 —— 加 / 减 transition 时这条 fail 提醒
+def test_ert_s9_sweep_covers_exactly_49():
+    """Sanity: TRANSITIONS 必须正好 49 条 —— 加 / 减 transition 时这条 fail 提醒
     review 是否同步加 spec scenario / 文档（state-machine.md / dump_transitions）。
 
-    REQ-bkd-acceptance-feedback-loop-1777278984 起新增 PENDING_USER_REVIEW 入/出
-    transitions（pr.opened 入站 + acceptance approve/request_changes 出站），从 47
-    增至 49；后续 REQ 再增 1 条至 50。"""
-    assert len(state_mod.TRANSITIONS) == 53, (
+    REQ-kill-fixer-1777459527 砍掉 FIXER_RUNNING 和相关 transitions，从 53 减到 49。
+    37 显式 + 12 SESSION_FAILED self-loop = 49。"""
+    assert len(state_mod.TRANSITIONS) == 49, (
         f"expected 53 transitions, got {len(state_mod.TRANSITIONS)}; "
         "if you intentionally added/removed a transition, update this assertion "
         "AND add granular ERT/MCT/APT/VLT scenario coverage for it."

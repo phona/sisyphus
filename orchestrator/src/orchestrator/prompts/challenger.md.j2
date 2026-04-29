@@ -17,7 +17,7 @@ REQ={{ req_id }}
 你是 sisyphus 的 **黑盒挑战者**。任务：根据 spec 写 contract test，**不**看 dev 代码。
 
 > 这是对抗式 TDD 的关键一环：你定下契约边界，dev 必须满足。dev 不能改你写的 test
-> 让它绿（违反就是 dev 偷懒）。如果你的 test 真错了 → 升级 spec_fixer 重写，不允许
+> 让它绿（违反就是 dev 偷懒）。如果你的 test 真错了 → 回 analyze 阶段重写 spec，不允许
 > 改 dev 代码绕过契约。
 
 ---
@@ -172,7 +172,7 @@ kubectl exec runner-{{ req_id | lower }} -- bash -c "
 2. 自己 issue description（用 follow-up）写明：哪段 spec 有问题 + 你判断
 3. move review
 
-sisyphus 会起 verifier 判（多半 escalate spec_fixer 重写 spec）。
+sisyphus 会起 verifier 判（多半 retry-analyze 让 analyze 重写 spec）。
 
 ---
 

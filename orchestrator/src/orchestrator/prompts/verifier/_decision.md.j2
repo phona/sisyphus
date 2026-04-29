@@ -4,7 +4,7 @@
 JSON decision。sisyphus 通过 BKD `/logs` API 取你最后一条 assistant message，正则
 `r"```json\s*(\{.*?\})\s*```"` 匹配 JSON 块。
 
-> ⚠️ **不要只写人话总结**（"Verdict: fix / dev"）—— 那种没 JSON 块，sisyphus 解不到 →
+> ⚠️ **不要只写人话总结**（"Verdict: retry-analyze"）—— 那种没 JSON 块，sisyphus 解不到 →
 > 默认 escalate → 你的判断作废。
 
 > ⚠️ **不要把 JSON 写在 BKD issue description** —— BKD 没 description 字段，写了
@@ -14,42 +14,30 @@ JSON decision。sisyphus 通过 BKD `/logs` API 取你最后一条 assistant mes
 
 ````json
 {
-  "action":      "pass" | "fix" | "escalate" | "retry",
-  "fixer":       "dev" | "spec" | null,
-  "scope":       "src/" | "openspec/changes/REQ-x/" | null,
+  "action":      "pass" | "retry-analyze" | "escalate",
   "reason":      "一句话人话：为什么做这个决定",
   "confidence":  "high" | "low",
   "target_repo": "<owner>/repo-a"
 }
 ````
 
-语义（4 路决策）：
+语义（3 路决策）：
 - `pass`：产物可以推进到下一阶段。sisyphus 会把 REQ 主链继续往下走。
-- `fix`：需要起 fixer agent 改代码/spec。必须同时给 `fixer` 和 `scope`。
-  - `dev`：改 src/ 下业务代码 / 实现
-  - `spec`：改 openspec/changes/REQ-*/ 下的需求 / acceptance 描述
-- `retry`：**infra-flake 有界自动重跑**。仅当你高度确信（`confidence=high`）失败原因
-  是纯基础设施抖动（网络 blip、docker rate-limit、kubectl exec channel race、
-  SonarQube 503、GHA runner 抢占等），且与 REQ 业务逻辑**完全无关**时才用。
-  sisyphus 会自动重跑该 stage 的 checker（最多 `verifier_infra_retry_cap` 次，
-  默认 2 次），超过 cap 仍自动 escalate 给人。`fixer` 必须是 null。
-  **不要对 analyze / accept / challenger stage 用 retry** —— 这些非机械 checker，
-  会退回 escalate。
-- `escalate`：超出 AI 自理范围 —— **infra flake 超 retry cap / 环境问题反复出现 /
-  不确定是否 flaky / 所有非 retry 的基础设施问题**。sisyphus 不机制性兜重跑，
-  由人来重新触发 / 修基础设施。
+- `retry-analyze`：需要打回 analyze 重新跑。带上 `reason` 说明为什么打回。
+  analyze 自己决定：自己修 / 派 sub-agent / 重写 spec。
+- `escalate`：超出 AI 自理范围 —— **基础设施问题 / 需求矛盾 / 不确定 / 反复 retry-analyze
+  仍不过**。sisyphus 不机制性兜重跑，由人来重新触发 / 修基础设施 / 澄清需求。
 
-> ⚠️ action 字段**只能**取 `"pass"` / `"fix"` / `"escalate"` / `"retry"`，其它字面量
+> ⚠️ action 字段**只能**取 `"pass"` / `"retry-analyze"` / `"escalate"`，其它字面量
 > 都会被 router 当 invalid → 默认 escalate。
 
 规则：
-- `action=fix` 时 `fixer` 不能是 null；其它 action（pass / escalate / retry）时 `fixer` 必须是 null。
-- `action=retry` 时 `confidence` 建议 `"high"`；`confidence=low` 时请改用 `escalate`。
+- `confidence=low` 时请改用 `escalate`。
 - 不要在 JSON 里写注释（会 parse 失败）。
-- **`target_repo` (可选)**：多仓 REQ 时建议填，告诉 fixer "去哪个仓修"。
+- **`target_repo` (可选)**：多仓 REQ 时建议填，告诉 analyze "去哪个仓修"。
   格式 `owner/repo`（与 BKD intent description 列出的仓名一致）。
-  单仓 REQ 可省略；fixer 会用启发式自定位。**不填不会破坏 schema**——
-  老的 `{action, fixer, scope, reason, confidence}` 五字段 decision 仍合法。
+  单仓 REQ 可省略；analyze 会用启发式自定位。**不填不会破坏 schema**——
+  老的 `{action, reason, confidence}` 三字段 decision 仍合法。
 
 sisyphus 解析顺序（实际工作的）：
 1. 先看 issue tags 有没有 `decision:<urlsafe-base64-json>` —— 你可以用 curl PATCH 加
@@ -58,5 +46,5 @@ sisyphus 解析顺序（实际工作的）：
 
 任意一条命中即可。**最简单**：把 JSON 块写进你最后回复里就行。
 
-也建议另外加个 human-readable summary tag（如 `decision:fix-spec`、`decision:escalate`），
+也建议另外加个 human-readable summary tag（如 `decision:retry-analyze`、`decision:escalate`），
 方便人 review BKD UI 时一眼看判决（这种 tag 不影响 sisyphus 解析，纯 UX）。

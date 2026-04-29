@@ -186,11 +186,11 @@ async def test_str_s6_empty_token_is_noop() -> None:
 def test_agent_stages_contains_all_spec_required_stages() -> None:
     """
     Boundary for STR-S1/S2: engine.AGENT_STAGES MUST be a frozenset containing
-    all five agent stages: analyze, verifier, fixer, accept, archive.
+    all four agent stages: analyze, verifier, accept, archive.
     """
     from orchestrator.engine import AGENT_STAGES
 
-    required = {"analyze", "verifier", "fixer", "accept", "archive"}
+    required = {"analyze", "verifier", "accept", "archive"}
     assert isinstance(AGENT_STAGES, frozenset), (
         f"AGENT_STAGES MUST be frozenset; got {type(AGENT_STAGES).__name__!r}"
     )

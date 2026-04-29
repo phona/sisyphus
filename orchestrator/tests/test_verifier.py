@@ -5,7 +5,7 @@
 2. decision 提取（tag base64 / description ```json```）
 3. derive_verifier_event 整合：合规 / 非法 / 缺失 → 正确事件
 4. invoke_verifier：prompt 渲染 + BKD issue 创建 + ctx 落字段
-5. action handler：apply_verify_pass / start_fixer / invoke_verifier_after_fix 的行为
+5. action handler：apply_verify_pass / apply_verify_retry_analyze 的行为
 6. 12 个 stage_trigger prompt 模板都能渲染出来
 """
 from __future__ import annotations
@@ -29,27 +29,16 @@ from orchestrator.state import Event
 # ─── 1. validate_decision ────────────────────────────────────────────────
 
 @pytest.mark.parametrize("decision,ok", [
-    ({"action": "pass", "fixer": None, "scope": None, "reason": "ok", "confidence": "high"}, True),
-    ({"action": "fix", "fixer": "dev", "scope": "src/", "reason": "bug", "confidence": "high"}, True),
-    ({"action": "fix", "fixer": "spec", "scope": "openspec/changes/REQ-1/", "reason": "x", "confidence": "low"}, True),
-    # M15: fixer=manifest 已删（manifest 抽象层砍掉），保留作 invalid case 验证
-    ({"action": "fix", "fixer": "manifest", "scope": "manifest.pr.number", "reason": "y", "confidence": "high"}, False),
+    ({"action": "pass", "scope": None, "reason": "ok", "confidence": "high"}, True),
+    ({"action": "retry-analyze", "scope": "src/", "reason": "bug", "confidence": "high"}, True),
+    ({"action": "retry-analyze", "scope": "openspec/changes/REQ-1/", "reason": "x", "confidence": "low"}, True),
     # retry_checker 已砍 → 当 invalid action（unknown enum）
-    ({"action": "retry_checker", "fixer": None, "scope": None, "reason": "flaky", "confidence": "low"}, False),
-    ({"action": "escalate", "fixer": None, "scope": None, "reason": "need human", "confidence": "high"}, True),
-    # REQ-428: retry action — VFR-S5: valid + invalid cases
-    ({"action": "retry", "fixer": None, "scope": None, "reason": "infra flaky: kubectl", "confidence": "high"}, True),
-    ({"action": "retry", "fixer": "dev", "scope": None, "reason": "x", "confidence": "high"}, False),  # fixer must be null
+    ({"action": "retry_checker", "scope": None, "reason": "flaky", "confidence": "low"}, False),
+    ({"action": "escalate", "scope": None, "reason": "need human", "confidence": "high"}, True),
     # invalid action
-    ({"action": "nope", "fixer": None, "scope": None, "reason": "", "confidence": "high"}, False),
-    # missing fixer for fix
-    ({"action": "fix", "fixer": None, "scope": "src/", "reason": "", "confidence": "high"}, False),
-    # fixer set when not fix
-    ({"action": "pass", "fixer": "dev", "scope": "src/", "reason": "", "confidence": "high"}, False),
-    # invalid fixer
-    ({"action": "fix", "fixer": "wizard", "scope": "src/", "reason": "", "confidence": "high"}, False),
+    ({"action": "nope", "scope": None, "reason": "", "confidence": "high"}, False),
     # invalid confidence
-    ({"action": "pass", "fixer": None, "scope": None, "reason": "", "confidence": "medium"}, False),
+    ({"action": "pass", "scope": None, "reason": "", "confidence": "medium"}, False),
     # not a dict
     ("not a dict", False),
     (None, False),
@@ -61,10 +50,8 @@ def test_validate_decision(decision, ok):
 
 def test_decision_to_event_mapping():
     assert decision_to_event({"action": "pass"}) == Event.VERIFY_PASS
-    assert decision_to_event({"action": "fix"}) == Event.VERIFY_FIX_NEEDED
+    assert decision_to_event({"action": "retry-analyze"}) == Event.VERIFY_RETRY_ANALYZE
     assert decision_to_event({"action": "escalate"}) == Event.VERIFY_ESCALATE
-    # REQ-428 VFR-S6: retry maps to VERIFY_INFRA_RETRY
-    assert decision_to_event({"action": "retry"}) == Event.VERIFY_INFRA_RETRY
 
 
 def _b64(d: dict) -> str:
@@ -74,7 +61,7 @@ def _b64(d: dict) -> str:
 # ─── 2. extract_decision_from_issue ──────────────────────────────────────
 
 def test_extract_from_tag_base64():
-    d = {"action": "pass", "fixer": None, "scope": None, "reason": "ok", "confidence": "high"}
+    d = {"action": "pass", "scope": None, "reason": "ok", "confidence": "high"}
     b64 = base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
     tags = ["verifier", "REQ-1", f"decision:{b64}"]
     got = extract_decision_from_issue(None, tags)
@@ -82,23 +69,23 @@ def test_extract_from_tag_base64():
 
 
 def test_extract_from_description_json_block():
-    d = {"action": "fix", "fixer": "dev", "scope": "src/", "reason": "need fix", "confidence": "high"}
+    d = {"action": "retry-analyze", "scope": "src/", "reason": "need fix", "confidence": "high"}
     desc = f"some text\n```json\n{json.dumps(d)}\n```\nfooter"
     got = extract_decision_from_issue(desc, [])
     assert got == d
 
 
 def test_extract_prefers_last_json_block():
-    d1 = {"action": "pass", "fixer": None}
-    d2 = {"action": "escalate", "fixer": None}
+    d1 = {"action": "pass", "scope": None}
+    d2 = {"action": "escalate", "scope": None}
     desc = f"```json\n{json.dumps(d1)}\n```\n```json\n{json.dumps(d2)}\n```"
     got = extract_decision_from_issue(desc, [])
     assert got == d2
 
 
 def test_extract_tag_beats_description_when_valid():
-    d_tag = {"action": "pass", "fixer": None}
-    d_desc = {"action": "escalate", "fixer": None}
+    d_tag = {"action": "pass", "scope": None}
+    d_desc = {"action": "escalate", "scope": None}
     b64 = base64.urlsafe_b64encode(json.dumps(d_tag).encode()).decode().rstrip("=")
     desc = f"```json\n{json.dumps(d_desc)}\n```"
     got = extract_decision_from_issue(desc, [f"decision:{b64}"])
@@ -106,7 +93,7 @@ def test_extract_tag_beats_description_when_valid():
 
 
 def test_extract_bad_tag_falls_back_to_description():
-    d_desc = {"action": "pass", "fixer": None}
+    d_desc = {"action": "pass", "scope": None}
     desc = f"```json\n{json.dumps(d_desc)}\n```"
     got = extract_decision_from_issue(desc, ["decision:!!!not-base64!!!"])
     assert got == d_desc
@@ -121,7 +108,7 @@ def test_extract_none_when_empty():
 # ─── 3. derive_verifier_event 整合 ───────────────────────────────────────
 
 def test_derive_verifier_event_pass():
-    d = {"action": "pass", "fixer": None, "scope": None, "reason": "ok", "confidence": "high"}
+    d = {"action": "pass", "scope": None, "reason": "ok", "confidence": "high"}
     b64 = base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
     ev, decision, why = derive_verifier_event(None, [f"decision:{b64}"])
     assert ev == Event.VERIFY_PASS
@@ -129,17 +116,17 @@ def test_derive_verifier_event_pass():
     assert why == ""
 
 
-def test_derive_verifier_event_fix():
-    d = {"action": "fix", "fixer": "dev", "scope": "src/", "reason": "bug", "confidence": "high"}
+def test_derive_verifier_event_retry_analyze():
+    d = {"action": "retry-analyze", "scope": "src/", "reason": "bug", "confidence": "high"}
     b64 = base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
     ev, got_decision, _ = derive_verifier_event(None, [f"decision:{b64}"])
-    assert ev == Event.VERIFY_FIX_NEEDED
+    assert ev == Event.VERIFY_RETRY_ANALYZE
     assert got_decision == d
 
 
 def test_derive_verifier_event_legacy_retry_checker_now_escalates():
     """retry_checker 已砍 → router 当 invalid action → escalate（避免老 prompt 卡死）。"""
-    d = {"action": "retry_checker", "fixer": None, "scope": None, "reason": "flaky", "confidence": "low"}
+    d = {"action": "retry_checker", "scope": None, "reason": "flaky", "confidence": "low"}
     desc = f"```json\n{json.dumps(d)}\n```"
     ev, _decision, why = derive_verifier_event(desc, [])
     assert ev == Event.VERIFY_ESCALATE
@@ -165,7 +152,7 @@ def test_derive_verifier_event_no_decision_escalates():
 # ─── 3.5 derive_verifier_event_with_retry_info ───────────────────────────
 
 def test_derive_with_retry_info_valid_decision():
-    d = {"action": "pass", "fixer": None, "scope": None, "reason": "ok", "confidence": "high"}
+    d = {"action": "pass", "scope": None, "reason": "ok", "confidence": "high"}
     ev, decision, why, retry = derive_verifier_event_with_retry_info(None, [f"decision:{_b64(d)}"])
     assert ev == Event.VERIFY_PASS
     assert decision == d
@@ -192,7 +179,7 @@ def test_derive_with_retry_info_no_decision_not_retry_worthy():
 
 def test_derive_with_retry_info_unparseable_but_retry_worthy():
     """找到了 decision-like 文本但解析失败 → retry_worthy=True。"""
-    desc = "My decision is {action: pass, fixer: None} because..."
+    desc = "My decision is {action: pass, scope: None} because..."
     ev, decision, _why, retry = derive_verifier_event_with_retry_info(desc, [])
     assert ev == Event.VERIFY_ESCALATE
     assert decision is None
@@ -308,7 +295,7 @@ async def test_invoke_verifier_renders_template(monkeypatch):
     assert "TypeError: whoopsie" in prompt
     # decision schema 指示必须在
     assert '"action":' in prompt
-    assert "pass" in prompt and "fix" in prompt and "escalate" in prompt
+    assert "pass" in prompt and "retry-analyze" in prompt and "escalate" in prompt
     # retry_checker 已砍：prompt 不应再提该选项
     assert "retry_checker" not in prompt
 
@@ -527,184 +514,6 @@ async def test_apply_verify_pass_resumes_from_escalated(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_start_fixer_creates_issue_with_fixer_tags(monkeypatch):
-    from orchestrator.actions import _verifier as v
-    fake = make_fake_bkd()
-    fake.create_issue.return_value = FakeIssue(id="fix-1")
-    patch_bkd(monkeypatch, fake)
-
-    async def fake_update(pool, req_id, patch):
-        pass
-    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
-
-    out = await v.start_fixer(
-        body=make_body(project_id="proj-x"), req_id="REQ-9", tags=[],
-        ctx={
-            "verifier_stage": "staging_test",
-            "verifier_fixer": "spec",
-            "verifier_scope": "openspec/changes/REQ-9/",
-            "verifier_reason": "spec contract 漏字段",
-            "verifier_issue_id": "vfy-old",
-        },
-    )
-    assert out["fixer_issue_id"] == "fix-1"
-    assert out["fixer"] == "spec"
-    assert out["stage"] == "staging_test"
-
-    _, kwargs = fake.create_issue.await_args
-    assert "fixer" in kwargs["tags"]
-    assert "REQ-9" in kwargs["tags"]
-    assert "fixer:spec" in kwargs["tags"]
-    assert "parent-stage:staging_test" in kwargs["tags"]
-    assert kwargs["use_worktree"] is True
-
-    # follow-up prompt 里 scope + reason 带入
-    _, fu = fake.follow_up_issue.await_args
-    assert "openspec/changes/REQ-9/" in fu["prompt"]
-    assert "spec contract 漏字段" in fu["prompt"]
-
-
-@pytest.mark.asyncio
-async def test_start_fixer_defaults_to_dev(monkeypatch):
-    """ctx 里没 verifier_fixer 时兜底 dev。"""
-    from orchestrator.actions import _verifier as v
-    fake = make_fake_bkd()
-    fake.create_issue.return_value = FakeIssue(id="fix-2")
-    patch_bkd(monkeypatch, fake)
-
-    async def fake_update(pool, req_id, patch):
-        pass
-    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
-
-    out = await v.start_fixer(
-        body=make_body(), req_id="REQ-9", tags=[],
-        ctx={"verifier_stage": "dev"},
-    )
-    assert out["fixer"] == "dev"
-
-
-# ─── 7. fixer round cap ────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_start_fixer_persists_round_counter(monkeypatch):
-    """每次 start_fixer 都把下一轮号写进 ctx.fixer_round。
-
-    第一次：ctx.fixer_round 不存在 → 写 1。第 N 次：写 N。
-    bugfix prompt 的 round_n 同时升到 next_round（上一版恒为 1，看不出轮次）。
-    """
-    from orchestrator.actions import _verifier as v
-    fake = make_fake_bkd()
-    fake.create_issue.return_value = FakeIssue(id="fix-3")
-    patch_bkd(monkeypatch, fake)
-
-    patches: list = []
-
-    async def fake_update(pool, req_id, patch):
-        patches.append(patch)
-    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
-
-    out = await v.start_fixer(
-        body=make_body(), req_id="REQ-9", tags=[],
-        ctx={"verifier_stage": "dev_cross_check", "fixer_round": 2},
-    )
-    assert out["fixer_round"] == 3
-    # ctx 写了 fixer_round=3
-    rounds = [p for p in patches if "fixer_round" in p]
-    assert rounds and rounds[-1]["fixer_round"] == 3
-    # 创 issue 时带 round:3 tag
-    _, kwargs = fake.create_issue.await_args
-    assert "round:3" in kwargs["tags"]
-    # bugfix prompt 渲染里出现 ROUND=3
-    _, fu = fake.follow_up_issue.await_args
-    assert "ROUND=3" in fu["prompt"]
-
-
-@pytest.mark.asyncio
-async def test_start_fixer_caps_at_default_5(monkeypatch):
-    """ctx.fixer_round=5（已起 5 轮）+ 第 6 次调 start_fixer → escalate（不开 fixer）。"""
-    from orchestrator.actions import _verifier as v
-    fake = make_fake_bkd()
-    patch_bkd(monkeypatch, fake)
-
-    patches: list = []
-
-    async def fake_update(pool, req_id, patch):
-        patches.append(patch)
-    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
-
-    out = await v.start_fixer(
-        body=make_body(), req_id="REQ-9", tags=["verify:dev_cross_check"],
-        ctx={"verifier_stage": "dev_cross_check", "fixer_round": 5},
-    )
-    # 不创 fixer issue
-    fake.create_issue.assert_not_called()
-    fake.follow_up_issue.assert_not_called()
-    # emit verify.escalate
-    assert out["emit"] == Event.VERIFY_ESCALATE.value
-    assert out["reason"] == "fixer-round-cap"
-    # ctx 标了 escalated_reason
-    reasons = [p for p in patches if "escalated_reason" in p]
-    assert reasons
-    assert reasons[-1]["escalated_reason"] == "fixer-round-cap"
-    assert reasons[-1]["fixer_round_cap_hit"] == 5
-
-
-@pytest.mark.asyncio
-async def test_start_fixer_cap_respects_setting_override(monkeypatch):
-    """settings.fixer_round_cap 可被运维覆盖。设 cap=2 + 已跑 2 轮 → 第 3 次 escalate。"""
-    from orchestrator.actions import _verifier as v
-    fake = make_fake_bkd()
-    fake.create_issue.return_value = FakeIssue(id="fix-cap")
-    patch_bkd(monkeypatch, fake)
-
-    async def fake_update(pool, req_id, patch):
-        pass
-    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
-    monkeypatch.setattr("orchestrator.actions._verifier.settings.fixer_round_cap", 2)
-
-    # 跑第 2 轮（next=2，恰好等于 cap，allowed）
-    out = await v.start_fixer(
-        body=make_body(), req_id="REQ-9", tags=[],
-        ctx={"verifier_stage": "dev_cross_check", "fixer_round": 1},
-    )
-    assert out["fixer_round"] == 2
-
-    # 跑第 3 轮（next=3 > cap=2 → escalate）
-    out2 = await v.start_fixer(
-        body=make_body(), req_id="REQ-9", tags=[],
-        ctx={"verifier_stage": "dev_cross_check", "fixer_round": 2},
-    )
-    assert out2["emit"] == Event.VERIFY_ESCALATE.value
-    assert out2["reason"] == "fixer-round-cap"
-
-
-@pytest.mark.asyncio
-async def test_start_fixer_first_round_with_no_ctx_field(monkeypatch):
-    """ctx 里完全没 fixer_round 字段 → 视为 0，next_round=1，正常起 fixer。"""
-    from orchestrator.actions import _verifier as v
-    fake = make_fake_bkd()
-    fake.create_issue.return_value = FakeIssue(id="fix-first")
-    patch_bkd(monkeypatch, fake)
-
-    async def fake_update(pool, req_id, patch):
-        pass
-    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
-
-    out = await v.start_fixer(
-        body=make_body(), req_id="REQ-9", tags=[],
-        ctx={"verifier_stage": "dev_cross_check"},
-    )
-    assert out["fixer_round"] == 1
-    fake.create_issue.assert_called_once()
-
-
-@pytest.mark.asyncio
 async def test_invoke_verifier_for_staging_test_fail(monkeypatch):
     """B2：专门 handler 写死 stage=staging_test，不再从 tags sniff。
 
@@ -785,34 +594,3 @@ async def test_invoke_verifier_for_accept_fail(monkeypatch):
     assert "verify:accept" in kwargs["tags"]
 
 
-@pytest.mark.asyncio
-async def test_invoke_verifier_after_fix_passes_history(monkeypatch):
-    from orchestrator.actions import _verifier as v
-    fake = make_fake_bkd()
-    fake.create_issue.return_value = FakeIssue(id="vfy-2")
-    patch_bkd(monkeypatch, fake)
-
-    history_updates: list = []
-
-    async def fake_update(pool, req_id, patch):
-        history_updates.append(patch)
-
-    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
-
-    out = await v.invoke_verifier_after_fix(
-        body=make_body(project_id="p"), req_id="REQ-9", tags=[],
-        ctx={
-            "verifier_stage": "staging_test",
-            "fixer_role": "dev",
-            "fixer_issue_id": "fix-1",
-            "verifier_history": [{"round": 1}],
-        },
-    )
-    assert out["verifier_issue_id"] == "vfy-2"
-    # 至少一次 update 带有累积的 history
-    hist_writes = [p for p in history_updates if "verifier_history" in p]
-    assert hist_writes, "should persist verifier_history"
-    hist = hist_writes[-1]["verifier_history"]
-    assert len(hist) == 2
-    assert hist[-1] == {"fixer": "dev", "fixer_issue_id": "fix-1"}

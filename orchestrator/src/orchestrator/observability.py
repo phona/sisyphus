@@ -24,7 +24,7 @@ _STAGE_FROM_TAGS = (
     # M16 起新 issue 走 "spec"；保留 contract-spec/acceptance-spec 识别历史数据
     "spec", "contract-spec", "acceptance-spec",
     "dev", "ci",
-    "accept", "bugfix", "diagnose",
+    "accept",
     "done-archive", "github-incident",
 )
 

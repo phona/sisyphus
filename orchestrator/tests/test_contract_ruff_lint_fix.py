@@ -142,7 +142,7 @@ def test_ruff_s4_no_unused_variable_in_disp_s5() -> None:
     """RUFF-S4: In test_DISP_S5_round_aware_slug_distinguishes_fixer_rounds,
     'await invoke_verifier(...)' must be a bare expression — no 'result =' LHS.
     """
-    func_name = "test_DISP_S5_round_aware_slug_distinguishes_fixer_rounds"
+    func_name = "test_DISP_S5_round_aware_slug_distinguishes_retry_analyze_rounds"
     func_node = _parse_func(func_name)
     bad = _has_result_assign_on_invoke_verifier(func_node)
     assert not bad, (

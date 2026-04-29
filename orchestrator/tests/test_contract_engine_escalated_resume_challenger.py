@@ -317,16 +317,15 @@ async def test_ert_s7_escalated_verify_pass_chains_to_pr_ci_running(monkeypatch)
     )
 
 
-# ─── ERT-S8: ESCALATED + VERIFY_FIX_NEEDED → FIXER_RUNNING + tag forwarding ──
+# ─── ERT-S8: ESCALATED + VERIFY_RETRY_ANALYZE → ANALYZING + tag forwarding ──
 
 
-async def test_ert_s8_escalated_verify_fix_needed_forwards_stage_tag_to_fixer(
+async def test_ert_s8_escalated_verify_retry_analyze_forwards_stage_tag(
     monkeypatch,
 ) -> None:
-    """ERT-S8: ESCALATED + VERIFY_FIX_NEEDED → FIXER_RUNNING via start_fixer.
+    """ERT-S8: ESCALATED + VERIFY_RETRY_ANALYZE → ANALYZING via apply_verify_retry_analyze.
     Engine MUST forward verify:staging_test tag and ctx verifier_stage=staging_test
-    to start_fixer, because start_fixer reads stage from the issue tag to resolve
-    multi-verifier-concurrent ctx race."""
+    to apply_verify_retry_analyze."""
     from orchestrator.actions import REGISTRY
     from orchestrator.state import Event, ReqState
 
@@ -338,33 +337,33 @@ async def test_ert_s8_escalated_verify_fix_needed_forwards_stage_tag_to_fixer(
         recorded["ctx"] = dict(kw.get("ctx", {}))
         return {}
 
-    REGISTRY["start_fixer"] = _stub
+    REGISTRY["apply_verify_retry_analyze"] = _stub
 
     result = await _step(
         cur_state=ReqState.ESCALATED,
-        event=Event.VERIFY_FIX_NEEDED,
+        event=Event.VERIFY_RETRY_ANALYZE,
         tags=["verifier", _REQ_ID, "verify:staging_test"],
-        ctx={"verifier_stage": "staging_test", "verifier_fixer": "dev"},
+        ctx={"verifier_stage": "staging_test"},
     )
 
-    assert result.get("action") == "start_fixer", (
-        f"ERT-S8: action MUST be 'start_fixer'; got {result!r}"
+    assert result.get("action") == "apply_verify_retry_analyze", (
+        f"ERT-S8: action MUST be 'apply_verify_retry_analyze'; got {result!r}"
     )
-    assert result.get("next_state") == ReqState.FIXER_RUNNING.value, (
-        f"ERT-S8: next_state MUST be {ReqState.FIXER_RUNNING.value!r}; got {result!r}"
+    assert result.get("next_state") == ReqState.ANALYZING.value, (
+        f"ERT-S8: next_state MUST be {ReqState.ANALYZING.value!r}; got {result!r}"
     )
     cas_next = cas.call_args.args[3]
-    assert cas_next == ReqState.FIXER_RUNNING, (
-        f"ERT-S8: CAS MUST advance to FIXER_RUNNING; got {cas_next!r}"
+    assert cas_next == ReqState.ANALYZING, (
+        f"ERT-S8: CAS MUST advance to ANALYZING; got {cas_next!r}"
     )
 
     tags = recorded.get("tags", [])
     assert "verify:staging_test" in tags, (
-        f"ERT-S8: start_fixer MUST receive 'verify:staging_test' tag; got tags={tags!r}"
+        f"ERT-S8: apply_verify_retry_analyze MUST receive 'verify:staging_test' tag; got tags={tags!r}"
     )
     ctx = recorded.get("ctx", {})
     assert ctx.get("verifier_stage") == "staging_test", (
-        f"ERT-S8: start_fixer MUST receive ctx.verifier_stage='staging_test'; got ctx={ctx!r}"
+        f"ERT-S8: handler MUST receive ctx.verifier_stage='staging_test'; got ctx={ctx!r}"
     )
 
 

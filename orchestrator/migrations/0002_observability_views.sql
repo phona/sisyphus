@@ -37,7 +37,8 @@ SELECT
     r.updated_at,
     EXTRACT(EPOCH FROM (r.updated_at - r.created_at))::INT AS total_sec,
     jsonb_array_length(r.history) AS total_steps,
-    COALESCE((r.context->>'bugfix_round')::INT, 0) AS bugfix_rounds,
+    COALESCE((r.context->>'retry_analyze_count')::INT,
+             (r.context->>'bugfix_round')::INT, 0) AS retry_analyze_count,
     (r.context->>'circuit_broken')::BOOL AS cb_tripped,
     r.context->>'intent_title' AS intent_title
 FROM req_state r;

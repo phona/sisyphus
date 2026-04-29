@@ -50,9 +50,6 @@ CASES: list[tuple[str, list[str], Event | None]] = [
 
     # M14b verifier-agent：由 router 主动返 None，交 webhook.derive_verifier_event 解 JSON
     ("session.completed", ["verifier", "REQ-1", "verify:dev", "trigger:success"], None),
-    # M14b fixer-agent：完成后 FIXER_DONE
-    ("session.completed", ["fixer", "REQ-1", "fixer:dev"],                    Event.FIXER_DONE),
-
     # 没结果 tag → None（agent 没正常完成）
     ("session.completed", ["staging-test", "REQ-1"],                         None),
     ("session.completed", ["pr-ci", "REQ-1"],                                None),
@@ -61,8 +58,7 @@ CASES: list[tuple[str, list[str], Event | None]] = [
     # REQ-router-session-completed-audit: session.completed without result coverage
     # challenger without result → None (intermediate round, not SESSION_FAILED)
     ("session.completed", ["challenger", "REQ-1"],                           None),
-    # fixer without extra tags → FIXER_DONE (fixer never uses result:* tags)
-    ("session.completed", ["fixer", "REQ-1"],                                Event.FIXER_DONE),
+    # no stage tag at all → None (orphan / unclassified session, skip silently)
     # no stage tag at all → None (orphan / unclassified session, skip silently)
     ("session.completed", ["REQ-1"],                                         None),
     # known stage tag + unrecognized result variant → None (not SESSION_FAILED)

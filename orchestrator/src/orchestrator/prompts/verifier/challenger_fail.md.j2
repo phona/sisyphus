@@ -5,7 +5,7 @@
 sisyphus M18：challenger-agent 设了 `result:fail`。它的任务是**根据 spec 写黑盒 contract test**
 （`tests/integration/`），不看业务代码。设 `result:fail` 通常意味着 spec 本身有问题。
 
-你要判：是 **spec 模糊/矛盾/漏定义**（spec_fixer 修），还是 challenger 自己**理解错了 spec**
+你要判：是 **spec 模糊/矛盾/漏定义**（analyze 修），还是 challenger 自己**理解错了 spec**
 （escalate 让人手起一次），还是**根本没法黑盒测**（escalate 给 user）。
 
 {% if stderr_tail %}
@@ -16,8 +16,8 @@ sisyphus M18：challenger-agent 设了 `result:fail`。它的任务是**根据 s
 {% endif %}
 
 ### 关注点
-- challenger 在 BKD chat 写"spec 自相矛盾" → `fix` + `fixer=spec` + `target_repo=<spec home repo>` + scope 指 spec.md / contract.spec.yaml 的具体段落
-- challenger 写"spec 漏关键字段"（比如说"返 JSON" 但没说 schema）→ `fix` + `fixer=spec`
+- challenger 在 BKD chat 写"spec 自相矛盾" → `retry-analyze` + `target_repo=<spec home repo>`
+- challenger 写"spec 漏关键字段"（比如说"返 JSON" 但没说 schema）→ `retry-analyze`
 - challenger 写"无法黑盒测"（要内部 hook / 时序敏感 / 需要 mock 不可能）→ `escalate`
   说明这条 spec 不可被外部观察验证，需要 user 改需求或加可观测点
 - challenger 看错了 spec，把 hint 当强约束 → `escalate`，由人手起一次
@@ -26,7 +26,7 @@ sisyphus M18：challenger-agent 设了 `result:fail`。它的任务是**根据 s
 ### NOT 该做
 - 不亲自写 contract test（那是 challenger 的职责）
 - 不动 dev 业务代码 / unit test
-- 不直接改 spec（你只判 fixer 谁来改）
+- 不直接改 spec（你只判 retry-analyze / escalate）
 
 ### 多仓识别
 

@@ -19,8 +19,8 @@ artifact 里有每条 scenario 的 step 结果。env-down 还没跑。
 
 ### 典型决策
 - `pass`：真的都跑了 + 结果 assert 严格 + 覆盖到 REQ
-- `fix` + `fixer=spec`：acceptance feature 文件有被降标（需要回 spec 阶段修）
-- `fix` + `fixer=dev`：feature 暴露出实际 bug（assert 对着新 bug）
+- `retry-analyze`：acceptance feature 文件有被降标（需要回 analyze 阶段修）
+- `retry-analyze`：feature 暴露出实际 bug（assert 对着新 bug）
 - `escalate`：明显过不去，且看不出是哪层的锅
 
 ─────────

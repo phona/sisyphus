@@ -43,19 +43,14 @@ EXPECTED = [
     (ReqState.PENDING_USER_REVIEW,  Event.USER_REVIEW_FIX,     ReqState.ESCALATED,           "escalate"),
     (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_FAIL,  ReqState.REVIEW_RUNNING,      "invoke_verifier_for_accept_fail"),
     (ReqState.ARCHIVING,            Event.ARCHIVE_DONE,        ReqState.DONE,                None),
-    # M14b verifier 子链（3 路：pass / fix / escalate）
+    # M14b verifier 子链（3 路：pass / retry-analyze / escalate）
     (ReqState.REVIEW_RUNNING,       Event.VERIFY_PASS,         ReqState.REVIEW_RUNNING,      "apply_verify_pass"),
-    (ReqState.REVIEW_RUNNING,       Event.VERIFY_FIX_NEEDED,   ReqState.FIXER_RUNNING,       "start_fixer"),
+    (ReqState.REVIEW_RUNNING,       Event.VERIFY_RETRY_ANALYZE, ReqState.ANALYZING,          "apply_verify_retry_analyze"),
     (ReqState.REVIEW_RUNNING,       Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
-    (ReqState.FIXER_RUNNING,        Event.FIXER_DONE,          ReqState.REVIEW_RUNNING,      "invoke_verifier_after_fix"),
-    # fixer round cap：start_fixer 自检超 cap → 链 emit verify.escalate 走 escalate
-    (ReqState.FIXER_RUNNING,        Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
     # PR merged hook：人手合 PR 后 GHA 触发，跳 gate 直归档
     (ReqState.PENDING_USER_REVIEW,  Event.PR_MERGED,           ReqState.ARCHIVING,           "done_archive"),
     (ReqState.REVIEW_RUNNING,       Event.PR_MERGED,           ReqState.ARCHIVING,           "done_archive"),
     (ReqState.PR_CI_RUNNING,        Event.PR_MERGED,           ReqState.ARCHIVING,           "done_archive"),
-    # verifier infra-flake 有界重试
-    (ReqState.REVIEW_RUNNING,       Event.VERIFY_INFRA_RETRY,  ReqState.REVIEW_RUNNING,      "apply_verify_infra_retry"),
 ]
 
 
@@ -80,8 +75,8 @@ def test_session_failed_routes_to_escalate_action_all_running_states():
         ReqState.SPEC_LINT_RUNNING, ReqState.DEV_CROSS_CHECK_RUNNING,
         ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
         ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
-        # M14b：verifier / fixer running state 也必须 escalate
-        ReqState.REVIEW_RUNNING, ReqState.FIXER_RUNNING,
+        # M14b：verifier running state 也必须 escalate
+        ReqState.REVIEW_RUNNING,
         ReqState.ARCHIVING,
     ]
     for st in running:
@@ -92,19 +87,21 @@ def test_session_failed_routes_to_escalate_action_all_running_states():
 
 
 def test_m14b_verifier_states_present():
-    """M14b：新引入的 REVIEW_RUNNING / FIXER_RUNNING 应出现在 ReqState 枚举。"""
+    """M14b：新引入的 REVIEW_RUNNING 应出现在 ReqState 枚举。"""
     values = {s.value for s in ReqState}
     assert "review-running" in values
-    assert "fixer-running" in values
+    assert "fixer-running" not in values
 
 
 def test_m14b_verifier_events_present():
     """M14b：3 路决策事件定义齐全（retry_checker 已砍）。"""
     values = {e.value for e in Event}
     for ev in [
-        "verify.pass", "verify.fix-needed", "verify.escalate", "fixer.done",
+        "verify.pass", "verify.retry-analyze", "verify.escalate",
     ]:
         assert ev in values, f"M14b 缺 event: {ev}"
+    assert "verify.fix-needed" not in values, "fixer 已砍，event 不应再存在"
+    assert "fixer.done" not in values, "fixer 已砍，event 不应再存在"
     assert "verify.retry-checker" not in values, "retry_checker 已砍，event 不应再存在"
 
 
@@ -149,7 +146,7 @@ def test_escalated_resumable_via_verifier_followup():
 
     其他 event（非 verifier 类）仍然没出口 —— escalated 只通过"人续 verifier issue"复活。
     """
-    resumable = {Event.VERIFY_PASS, Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE}
+    resumable = {Event.VERIFY_PASS, Event.VERIFY_RETRY_ANALYZE, Event.VERIFY_ESCALATE}
     for ev in Event:
         t = decide(ReqState.ESCALATED, ev)
         if ev in resumable:

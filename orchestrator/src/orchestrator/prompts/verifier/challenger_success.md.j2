@@ -15,16 +15,16 @@ sisyphus M18：challenger-agent 设 `result:pass`，已 push contract test 到 f
 
 ### 关注点（覆盖度）
 - spec 写了 N 条 scenarios，contract test 是不是有 N 个 test func
-- 漏了任意一条 → `fix` + `fixer=spec`（让 challenger 补上，scope 指漏了的 scenario id）
+- 漏了任意一条 → `retry-analyze`（让 analyze 在 challenger 阶段补上，scope 指漏了的 scenario id）
 - 测试逻辑跟 scenario 描述对得上吗（GIVEN/WHEN/THEN 跟 test 步骤同步）
 
 ### 关注点（不应做的）
-- challenger 改了业务代码 / unit test（违反路径白名单）→ `fix` + `fixer=spec` + scope 指被违规改的文件
+- challenger 改了业务代码 / unit test（违反路径白名单）→ `retry-analyze` + scope 指被违规改的文件
 - challenger 跳过 push（feat 分支没新 commit）→ `escalate`（人手起一次）
 
 ### 通常路径
 - contract test 完整 + 黑盒 + 覆盖每条 scenario → `pass`，dev_cross_check 接手
-- 漏 / 错 / 越界 → `fix` + `fixer=spec`
+- 漏 / 错 / 越界 → `retry-analyze`
 - 完全跑偏（比如只写了一个空文件）→ `escalate`
 
 ─────────

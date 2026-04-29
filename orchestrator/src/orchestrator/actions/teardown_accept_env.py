@@ -26,7 +26,7 @@ async def teardown_accept_env(*, body, req_id, tags, ctx):
     """跑 accept-env-down 清 lab，然后按 accept_result emit 下一步事件。"""
     # accept 被 skip 时（skip_accept=true，ttpos-arch-lab 没接前的常态），
     # teardown 也跳：没真 env 可拆，也没 result:pass tag 可读 — 强行读会默认 fail
-    # 误推 bugfix 链。复用 skip_accept flag，emit TEARDOWN_DONE_PASS（accept 既然跳过被
+    # 误推修复链。复用 skip_accept flag，emit TEARDOWN_DONE_PASS（accept 既然跳过被
     # 视为通过，teardown 也应通过）。
     if rv := skip_if_enabled("accept", Event.TEARDOWN_DONE_PASS, req_id=req_id):
         return rv

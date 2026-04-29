@@ -19,7 +19,7 @@
 --   last_cmd         最近一次 check 跑的命令
 --   last_checked_at  最近一次 check 时间
 --   stuck_min        REQ 从上次 state 变化到现在的分钟数
---   bugfix_rounds    已用 bugfix round 数（context 里）
+--   retry_analyze_count  已用 retry-analyze 次数（context 里）
 --   recent_fail_24h  近 24h 该 REQ 在 last_stage 上 fail 次数
 --   bkd_intent_url   clickable BKD intent issue URL（context.bkd_intent_url，
 --                    REQ-pr-issue-traceability-1777218612；Metabase 列类型设
@@ -87,7 +87,8 @@ SELECT
     lc.last_cmd,
     lc.last_checked_at,
     ROUND(EXTRACT(EPOCH FROM (now() - r.updated_at)) / 60)::INT AS stuck_min,
-    COALESCE((r.context->>'bugfix_round')::INT, 0) AS bugfix_rounds,
+    COALESCE((r.context->>'retry_analyze_count')::INT,
+             (r.context->>'bugfix_round')::INT, 0) AS retry_analyze_count,
     COALESCE(rf.fail_count_24h, 0) AS recent_fail_24h,
     r.context->>'bkd_intent_url' AS bkd_intent_url,
     pu.pr_urls_md

@@ -187,7 +187,7 @@ async def test_counts_patch_failure(monkeypatch):
     issues = {
         "proj-1": [
             _make_issue("iss-a", "review", "completed", ["analyze", "REQ-1"]),
-            _make_issue("iss-b", "review", "completed", ["fixer", "REQ-2"]),
+            _make_issue("iss-b", "review", "completed", ["challenger", "REQ-2"]),
         ],
     }
     captured = _patch_bkd_for_sync(monkeypatch, issues, patch_raises={"proj-1:iss-a"})

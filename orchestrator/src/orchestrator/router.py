@@ -26,9 +26,8 @@ SPEC_TAGS = {"spec"}
 # staging-test / pr-ci / accept 都走 result:* tag 判 pass/fail
 
 # ─── M14b verifier decision schema 校验 + 映射 ─────────────────────────────
-# 4 路决策：pass / fix / escalate / retry（infra-flake 有界重跑）
-_VALID_ACTIONS = {"pass", "fix", "escalate", "retry"}
-_VALID_FIXERS = {"dev", "spec", None}
+# 3 路决策：pass / retry-analyze / escalate
+_VALID_ACTIONS = {"pass", "retry-analyze", "escalate"}
 _VALID_CONFIDENCE = {"high", "low"}
 _VALID_VERDICTS = {"legitimate", "test-hack", "code-lobotomy", "spec-drift", "unclear"}
 
@@ -43,13 +42,6 @@ def validate_decision(decision: object) -> tuple[bool, str]:
     action = decision.get("action")
     if action not in _VALID_ACTIONS:
         return False, f"invalid action: {action!r}"
-    fixer = decision.get("fixer")
-    if fixer not in _VALID_FIXERS:
-        return False, f"invalid fixer: {fixer!r}"
-    if action == "fix" and fixer is None:
-        return False, "action=fix requires non-null fixer"
-    if action in ("pass", "escalate", "retry") and fixer is not None:
-        return False, f"action={action} must have null fixer"
     conf = decision.get("confidence")
     if conf not in _VALID_CONFIDENCE:
         return False, f"invalid confidence: {conf!r}"
@@ -59,7 +51,7 @@ def validate_decision(decision: object) -> tuple[bool, str]:
 
 
 def validate_audit_soft(audit: dict | None) -> str | None:
-    """软验证 audit 字段（M-fixer-audit）。
+    """软验证 audit 字段（M14e verifier-audit）。
 
     返回 None 表示 OK；否则返回 warning message。
     只 log.warning，不影响 action 决策，不改 validate_decision 本体。
@@ -83,10 +75,8 @@ def decision_to_event(decision: dict) -> Event:
     action = decision["action"]
     if action == "pass":
         return Event.VERIFY_PASS
-    if action == "fix":
-        return Event.VERIFY_FIX_NEEDED
-    if action == "retry":
-        return Event.VERIFY_INFRA_RETRY
+    if action == "retry-analyze":
+        return Event.VERIFY_RETRY_ANALYZE
     return Event.VERIFY_ESCALATE
 
 
@@ -237,10 +227,6 @@ def derive_event(event_type: str, tags: Iterable[str]) -> Event | None:
                 return Event.ACCEPT_FAIL
         if "done-archive" in tagset and "result:pass" in tagset:
             return Event.ARCHIVE_DONE
-        if "fixer" in tagset and (
-            "result:pass" in tagset or "result:fail" in tagset
-        ):
-            return Event.FIXER_DONE
         # 其他 issue.updated 一律忽略（避免自指 loop）
         return None
 
@@ -265,10 +251,6 @@ def derive_event(event_type: str, tags: Iterable[str]) -> Event | None:
     # 这里返 None 让 webhook fall through 到 _derive_verifier_event。
     if "verifier" in tagset:
         return None
-
-    # M14b fixer-agent：fixer 完成 → FIXER_DONE
-    if "fixer" in tagset:
-        return Event.FIXER_DONE
 
     # M18：challenger-agent 写完 contract test → result:pass / result:fail
     if "challenger" in tagset:

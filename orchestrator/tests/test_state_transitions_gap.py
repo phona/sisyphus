@@ -52,27 +52,11 @@ def test_pr_merged_only_from_specific_states():
 
 def test_verify_infra_retry_from_review_running():
     """verifier decision=retry → 有界重跑 stage checker（infra flake；超 cap → escalate）。"""
-    t = decide(ReqState.REVIEW_RUNNING, Event.VERIFY_INFRA_RETRY)
-    assert t is not None
-    assert t.next_state == ReqState.REVIEW_RUNNING
-    assert t.action == "apply_verify_infra_retry"
-
-
-def test_verify_infra_retry_only_from_review_running():
-    """VERIFY_INFRA_RETRY 只应从 REVIEW_RUNNING 触发（verifier 决策的上下文）。"""
-    for st in ReqState:
-        if st == ReqState.REVIEW_RUNNING:
-            continue
-        assert decide(st, Event.VERIFY_INFRA_RETRY) is None, (
-            f"VERIFY_INFRA_RETRY should NOT be valid from {st.value}"
-        )
-
-
 # ── 缺口 3：ESCALATED 恢复态 transition 实际值（此前只测了 existence）──────────────────
 
 ESCALATED_RESUME_CASES = [
     (Event.VERIFY_PASS, ReqState.ESCALATED, "apply_verify_pass"),
-    (Event.VERIFY_FIX_NEEDED, ReqState.FIXER_RUNNING, "start_fixer"),
+    (Event.VERIFY_RETRY_ANALYZE, ReqState.ANALYZING, "apply_verify_retry_analyze"),
 ]
 
 
@@ -250,27 +234,16 @@ def test_pending_user_review_illegal_events():
 
 
 def test_review_running_illegal_events():
-    """REVIEW_RUNNING 接受 verifier 4 路决策 + merged + SESSION_FAILED。"""
+    """REVIEW_RUNNING 接受 verifier 3 路决策 + merged + SESSION_FAILED。"""
     legal = {
-        Event.VERIFY_PASS, Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE,
-        Event.VERIFY_INFRA_RETRY, Event.PR_MERGED, Event.SESSION_FAILED,
+        Event.VERIFY_PASS, Event.VERIFY_RETRY_ANALYZE, Event.VERIFY_ESCALATE,
+        Event.PR_MERGED, Event.SESSION_FAILED,
     }
     for ev in Event:
         if ev in legal:
             continue
         assert decide(ReqState.REVIEW_RUNNING, ev) is None, (
             f"REVIEW_RUNNING should not accept {ev.value}"
-        )
-
-
-def test_fixer_running_illegal_events():
-    """FIXER_RUNNING 接受 fixer.done / verify.escalate / SESSION_FAILED。"""
-    legal = {Event.FIXER_DONE, Event.VERIFY_ESCALATE, Event.SESSION_FAILED}
-    for ev in Event:
-        if ev in legal:
-            continue
-        assert decide(ReqState.FIXER_RUNNING, ev) is None, (
-            f"FIXER_RUNNING should not accept {ev.value}"
         )
 
 
@@ -317,11 +290,11 @@ def test_all_transitions_reason_is_str_or_none():
 def test_transition_count_sanity():
     """transition 总数 sanity check：防止未来重构误删/误增。
 
-    当前总数 = 40 显式 + 13 SESSION_FAILED self-loop = 53。
+    当前总数 = 37 显式 + 12 SESSION_FAILED self-loop = 49。
     如果数字变了，说明有人增删 transition，本测试会 fail 提醒同步测试。
     """
-    assert len(TRANSITIONS) == 53, (
-        f"Expected 53 transitions, got {len(TRANSITIONS)}. "
+    assert len(TRANSITIONS) == 49, (
+        f"Expected 49 transitions, got {len(TRANSITIONS)}. "
         "If this is intentional, update this assertion and add corresponding tests."
     )
 
@@ -329,16 +302,16 @@ def test_transition_count_sanity():
 def test_explicit_transition_count():
     """非 SESSION_FAILED 的显式 transition 数量 sanity check。"""
     explicit = [k for k in TRANSITIONS if k[1] != Event.SESSION_FAILED]
-    assert len(explicit) == 40, (
-        f"Expected 40 explicit transitions, got {len(explicit)}"
+    assert len(explicit) == 37, (
+        f"Expected 37 explicit transitions, got {len(explicit)}"
     )
 
 
 def test_session_failed_transition_count():
     """SESSION_FAILED self-loop 数量 sanity check。"""
     session_failed = [k for k in TRANSITIONS if k[1] == Event.SESSION_FAILED]
-    assert len(session_failed) == 13, (
-        f"Expected 13 SESSION_FAILED transitions, got {len(session_failed)}"
+    assert len(session_failed) == 12, (
+        f"Expected 12 SESSION_FAILED transitions, got {len(session_failed)}"
     )
 
 
@@ -356,12 +329,12 @@ def test_verify_pass_from_review_running_is_self_loop():
     assert t.action == "apply_verify_pass"
 
 
-def test_verify_infra_retry_from_review_running_is_self_loop():
-    """VERIFY_INFRA_RETRY 同样是 self-loop：action 内部有界重跑 checker。"""
-    t = decide(ReqState.REVIEW_RUNNING, Event.VERIFY_INFRA_RETRY)
+def test_verify_retry_analyze_from_review_running_goes_to_analyzing():
+    """VERIFY_RETRY_ANALYZE 从 REVIEW_RUNNING 出发 → ANALYZING via apply_verify_retry_analyze。"""
+    t = decide(ReqState.REVIEW_RUNNING, Event.VERIFY_RETRY_ANALYZE)
     assert t is not None
-    assert t.next_state == ReqState.REVIEW_RUNNING
-    assert t.action == "apply_verify_infra_retry"
+    assert t.next_state == ReqState.ANALYZING
+    assert t.action == "apply_verify_retry_analyze"
 
 
 # ── 缺口 8：终态安全 —— DONE / ESCALATED 不应有未声明的出口─────────────────────────────
@@ -375,7 +348,7 @@ def test_done_no_transitions_at_all():
 
 def test_escalated_non_resume_events_all_none():
     """ESCALATED 只有 3 个 verifier 决策事件有出口，其余全部非法。"""
-    resume_events = {Event.VERIFY_PASS, Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE}
+    resume_events = {Event.VERIFY_PASS, Event.VERIFY_RETRY_ANALYZE, Event.VERIFY_ESCALATE}
     for ev in Event:
         if ev in resume_events:
             continue

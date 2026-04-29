@@ -26,7 +26,7 @@ Makefile ci 契约：仅 lint 变更文件；BASE_REV 缺失则全量；详见 d
 
 ### 典型决策
 - `pass`：所有仓改动覆盖契约，质量可接受，staging 继续跑
-- `fix` + `fixer=dev` + `target_repo=<某仓>` + `scope=src/`：指明哪仓要补逻辑 / 修实现 / 加边界
+- `retry-analyze` + `target_repo=<某仓>` + `scope=src/`：指明哪仓要补逻辑 / 修实现 / 加边界
 - `escalate`：发现 spec 和 dev 都没错但改动根本偏离 intent（需求层 bug）
 
 ─────────

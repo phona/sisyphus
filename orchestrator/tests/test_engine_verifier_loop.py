@@ -2,7 +2,7 @@
 (REQ-test-verifier-loop-1777267725).
 
 Goal: pin down the routing decisions in `state.TRANSITIONS` for the two
-"事故响应路径" — verifier loop (entry / decision out / fixer back-edge /
+"事故响应路径" — verifier loop (entry / decision out / retry-analyze /
 ESCALATED resume) and SESSION_FAILED self-loop on every in-flight state —
 so that a regression in the transition table is caught by mock tests
 **without** booting BKD / Postgres / K8s.
@@ -141,11 +141,11 @@ async def test_vlt_s1_to_s7_upstream_fail_enters_review_running(
 
 
 @pytest.mark.asyncio
-async def test_vlt_s8_verify_fix_needed_enters_fixer_running(stub_actions):
-    """Spec VLT-S8: REVIEW_RUNNING + VERIFY_FIX_NEEDED → FIXER_RUNNING via start_fixer。
-    跨 *_RUNNING state → engine 必须 close verifier(outcome=fix) + open fixer。"""
+async def test_vlt_s8_verify_retry_analyze_enters_analyzing(stub_actions):
+    """Spec VLT-S8: REVIEW_RUNNING + VERIFY_RETRY_ANALYZE → ANALYZING via apply_verify_retry_analyze。
+    engine 必须 close verifier(outcome=retry-analyze) + open analyze。"""
     calls: list = []
-    stub_actions["start_fixer"] = _make_recorder("start_fixer", calls)
+    stub_actions["apply_verify_retry_analyze"] = _make_recorder("apply_verify_retry_analyze", calls)
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.REVIEW_RUNNING.value)})
     body = _body(issueId="vfy-1", projectId="p", event="session.completed")
@@ -155,12 +155,12 @@ async def test_vlt_s8_verify_fix_needed_enters_fixer_running(stub_actions):
         tags=["verifier", "REQ-1", "verify:dev_cross_check"],
         cur_state=ReqState.REVIEW_RUNNING,
         ctx={"verifier_stage": "dev_cross_check"},
-        event=Event.VERIFY_FIX_NEEDED,
+        event=Event.VERIFY_RETRY_ANALYZE,
     )
 
-    assert result["action"] == "start_fixer"
-    assert result["next_state"] == ReqState.FIXER_RUNNING.value
-    assert pool.rows["REQ-1"].state == ReqState.FIXER_RUNNING.value
+    assert result["action"] == "apply_verify_retry_analyze"
+    assert result["next_state"] == ReqState.ANALYZING.value
+    assert pool.rows["REQ-1"].state == ReqState.ANALYZING.value
 
     closes = [c for c in pool.stage_runs_calls if c[0] == "close"]
     inserts = [c for c in pool.stage_runs_calls if c[0] == "insert"]
@@ -168,11 +168,11 @@ async def test_vlt_s8_verify_fix_needed_enters_fixer_running(stub_actions):
     close_args = closes[0][2]
     # close_latest_stage_run signature: (req_id, stage, outcome, fail_reason)
     assert close_args[1] == "verifier"
-    assert close_args[2] == "fix"
+    assert close_args[2] == "retry-analyze"
     assert len(inserts) == 1, f"expected exactly 1 insert, got {pool.stage_runs_calls!r}"
     insert_args = inserts[0][2]
     # insert_stage_run signature: (req_id, stage, agent_type, ...)
-    assert insert_args[1] == "fixer"
+    assert insert_args[1] == "analyze"
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -196,80 +196,6 @@ async def test_vlt_s9_verify_escalate_enters_escalated_with_cleanup(
         pool, body=body, req_id="REQ-1", project_id="p",
         tags=["verifier", "REQ-1"],
         cur_state=ReqState.REVIEW_RUNNING, ctx={},
-        event=Event.VERIFY_ESCALATE,
-    )
-    await _drain_tasks()
-
-    assert result["action"] == "escalate"
-    assert result["next_state"] == ReqState.ESCALATED.value
-    assert pool.rows["REQ-1"].state == ReqState.ESCALATED.value
-    assert len(calls) == 1
-    mock_runner_controller.cleanup_runner.assert_awaited_once_with(
-        "REQ-1", retain_pvc=True,
-    )
-
-
-# ───────────────────────────────────────────────────────────────────────
-# VLT-S10: FIXER_RUNNING + FIXER_DONE → REVIEW_RUNNING (re-verify back-edge)
-# ───────────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_vlt_s10_fixer_done_returns_to_review_running(stub_actions):
-    """Spec VLT-S10: FIXER_RUNNING + FIXER_DONE → REVIEW_RUNNING via
-    invoke_verifier_after_fix。stage_runs：fixer close outcome=pass + verifier insert。"""
-    calls: list = []
-    stub_actions["invoke_verifier_after_fix"] = _make_recorder(
-        "invoke_verifier_after_fix", calls,
-    )
-
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.FIXER_RUNNING.value)})
-    body = _body(issueId="fix-1", projectId="p", event="session.completed")
-
-    result = await engine.step(
-        pool, body=body, req_id="REQ-1", project_id="p",
-        tags=["fixer", "REQ-1", "parent-stage:dev_cross_check"],
-        cur_state=ReqState.FIXER_RUNNING,
-        ctx={"fixer_role": "dev"},
-        event=Event.FIXER_DONE,
-    )
-
-    assert result["action"] == "invoke_verifier_after_fix"
-    assert result["next_state"] == ReqState.REVIEW_RUNNING.value
-    assert pool.rows["REQ-1"].state == ReqState.REVIEW_RUNNING.value
-    assert len(calls) == 1
-
-    closes = [c for c in pool.stage_runs_calls if c[0] == "close"]
-    inserts = [c for c in pool.stage_runs_calls if c[0] == "insert"]
-    assert len(closes) == 1, pool.stage_runs_calls
-    close_args = closes[0][2]
-    assert close_args[1] == "fixer"
-    assert close_args[2] == "pass"
-    assert len(inserts) == 1
-    assert inserts[0][2][1] == "verifier"
-
-
-# ───────────────────────────────────────────────────────────────────────
-# VLT-S11: FIXER_RUNNING + VERIFY_ESCALATE → ESCALATED (round cap escape)
-# ───────────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_vlt_s11_fixer_round_cap_escapes_to_escalated(
-    stub_actions, mock_runner_controller,
-):
-    """Spec VLT-S11: FIXER_RUNNING + VERIFY_ESCALATE → ESCALATED via escalate。
-    用于 start_fixer 自检 round cap 击顶时 emit VERIFY_ESCALATE 的兜底 transition。"""
-    calls: list = []
-    stub_actions["escalate"] = _make_recorder("escalate", calls)
-
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.FIXER_RUNNING.value)})
-    body = _body(issueId="fix-1", projectId="p", event="session.completed")
-
-    result = await engine.step(
-        pool, body=body, req_id="REQ-1", project_id="p",
-        tags=["fixer", "REQ-1"],
-        cur_state=ReqState.FIXER_RUNNING, ctx={"fixer_round": 5},
         event=Event.VERIFY_ESCALATE,
     )
     await _drain_tasks()
@@ -324,11 +250,11 @@ async def test_vlt_s12_escalated_verify_pass_dispatches_apply(
 
 
 @pytest.mark.asyncio
-async def test_vlt_s13_escalated_verify_fix_needed_enters_fixer_running(stub_actions):
-    """Spec VLT-S13: ESCALATED + VERIFY_FIX_NEEDED → FIXER_RUNNING via start_fixer。
-    人工 resume 路径：从 ESCALATED 起 fixer，复用主链 start_fixer。"""
+async def test_vlt_s13_escalated_verify_retry_analyze_enters_analyzing(stub_actions):
+    """Spec VLT-S13: ESCALATED + VERIFY_RETRY_ANALYZE → ANALYZING via apply_verify_retry_analyze。
+    人工 resume 路径：从 ESCALATED 回 analyze，复用主链 apply_verify_retry_analyze。"""
     calls: list = []
-    stub_actions["start_fixer"] = _make_recorder("start_fixer", calls)
+    stub_actions["apply_verify_retry_analyze"] = _make_recorder("apply_verify_retry_analyze", calls)
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.ESCALATED.value)})
     body = _body(issueId="vfy-resume", projectId="p", event="session.completed")
@@ -337,13 +263,13 @@ async def test_vlt_s13_escalated_verify_fix_needed_enters_fixer_running(stub_act
         pool, body=body, req_id="REQ-1", project_id="p",
         tags=["verifier", "REQ-1", "verify:staging_test"],
         cur_state=ReqState.ESCALATED,
-        ctx={"verifier_stage": "staging_test", "verifier_fixer": "dev"},
-        event=Event.VERIFY_FIX_NEEDED,
+        ctx={"verifier_stage": "staging_test"},
+        event=Event.VERIFY_RETRY_ANALYZE,
     )
 
-    assert result["action"] == "start_fixer"
-    assert result["next_state"] == ReqState.FIXER_RUNNING.value
-    assert pool.rows["REQ-1"].state == ReqState.FIXER_RUNNING.value
+    assert result["action"] == "apply_verify_retry_analyze"
+    assert result["next_state"] == ReqState.ANALYZING.value
+    assert pool.rows["REQ-1"].state == ReqState.ANALYZING.value
     assert len(calls) == 1
 
 
@@ -389,7 +315,7 @@ _SESSION_FAILED_STATES = [
         ReqState.DEV_CROSS_CHECK_RUNNING,
         ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
         ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
-        ReqState.REVIEW_RUNNING, ReqState.FIXER_RUNNING,
+        ReqState.REVIEW_RUNNING,
         ReqState.ARCHIVING,
     ]
 ]
@@ -400,7 +326,7 @@ _SESSION_FAILED_STATES = [
 async def test_vlt_s15_session_failed_self_loops_to_escalate(
     stub_actions, mock_runner_controller, state,
 ):
-    """Spec VLT-S15: 13 个 *_RUNNING state 每个 + SESSION_FAILED → 自循环 + dispatch
+    """Spec VLT-S15: 12 个 *_RUNNING state 每个 + SESSION_FAILED → 自循环 + dispatch
     escalate action。state 不动（self-loop；stub 不 CAS），escalate 内部决定真 ESCALATE。
     自循环 cur=next 都非 terminal → engine 也不触发 cleanup。"""
     calls: list = []
@@ -455,11 +381,11 @@ async def test_vlt_s16_session_failed_on_init_is_dropped(stub_actions):
 
 
 @pytest.mark.asyncio
-async def test_vfr_s1_verify_infra_retry_dispatches_apply(stub_actions):
-    """Spec VFR-S1: REVIEW_RUNNING + VERIFY_INFRA_RETRY → REVIEW_RUNNING self-loop,
-    action=apply_verify_infra_retry。infra-flake 路径，action 内部决定是否真 CAS 推 stage。"""
+async def test_vfr_s1_verify_retry_analyze_dispatches_apply(stub_actions):
+    """Spec VFR-S1: REVIEW_RUNNING + VERIFY_RETRY_ANALYZE → ANALYZING,
+    action=apply_verify_retry_analyze。retry-analyze 路径回 analyze 阶段修。"""
     calls: list = []
-    stub_actions["apply_verify_infra_retry"] = _make_recorder("apply_verify_infra_retry", calls)
+    stub_actions["apply_verify_retry_analyze"] = _make_recorder("apply_verify_retry_analyze", calls)
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.REVIEW_RUNNING.value)})
     body = _body(issueId="vfy-1", projectId="p", event="session.completed")
@@ -468,12 +394,11 @@ async def test_vfr_s1_verify_infra_retry_dispatches_apply(stub_actions):
         pool, body=body, req_id="REQ-1", project_id="p",
         tags=["verifier", "REQ-1", "verify:staging_test"],
         cur_state=ReqState.REVIEW_RUNNING,
-        ctx={"verifier_stage": "staging_test", "infra_retry_count": 0},
-        event=Event.VERIFY_INFRA_RETRY,
+        ctx={"verifier_stage": "staging_test", "retry_analyze_count": 0},
+        event=Event.VERIFY_RETRY_ANALYZE,
     )
 
-    assert result["action"] == "apply_verify_infra_retry"
-    # transition 表声明 self-loop（stub 不 CAS；action 内部实际会 CAS 到 staging_test_running）
-    assert result["next_state"] == ReqState.REVIEW_RUNNING.value
-    assert pool.rows["REQ-1"].state == ReqState.REVIEW_RUNNING.value
-    assert len(calls) == 1, "apply_verify_infra_retry must be dispatched once"
+    assert result["action"] == "apply_verify_retry_analyze"
+    assert result["next_state"] == ReqState.ANALYZING.value
+    assert pool.rows["REQ-1"].state == ReqState.ANALYZING.value
+    assert len(calls) == 1, "apply_verify_retry_analyze must be dispatched once"

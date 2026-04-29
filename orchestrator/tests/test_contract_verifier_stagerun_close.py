@@ -182,18 +182,18 @@ async def test_vsc_s2_close_error_logged_not_raised(monkeypatch):
     )
 
 
-# ─── VSC-S3: VERIFY_FIX_NEEDED uses existing generic close+open path ──────────
+# ─── VSC-S3: VERIFY_RETRY_ANALYZE uses existing generic close+open path ──────────
 
 
-async def test_vsc_s3_verify_fix_needed_normal_close_open(monkeypatch):
+async def test_vsc_s3_verify_retry_analyze_normal_close_open(monkeypatch):
     """
-    VSC-S3: (REVIEW_RUNNING, VERIFY_FIX_NEEDED) → next_state=FIXER_RUNNING (state change).
+    VSC-S3: (REVIEW_RUNNING, VERIFY_RETRY_ANALYZE) → next_state=ANALYZING (state change).
     _record_stage_transitions MUST:
-    - close the verifier stage_run with outcome='fix' via the generic close-on-leave path
-    - open a fixer stage_run via the generic open-on-enter path
+    - close the verifier stage_run with outcome='retry-analyze' via the generic close-on-leave path
+    - open an analyze stage_run via the generic open-on-enter path
 
-    This verifies the existing behavior is preserved and not accidentally broken by the
-    VERIFY_PASS fix — the explicit close branch MUST only trigger on VERIFY_PASS.
+    This verifies the behavior is preserved for the retry-analyze path — the explicit
+    close branch MUST only trigger on VERIFY_PASS.
     """
     import orchestrator.engine as engine_mod
     from orchestrator.state import Event, ReqState
@@ -207,24 +207,24 @@ async def test_vsc_s3_verify_fix_needed_normal_close_open(monkeypatch):
         pool,
         req_id="REQ-vsc-test-003",
         cur_state=ReqState.REVIEW_RUNNING,
-        next_state=ReqState.FIXER_RUNNING,
-        event=Event.VERIFY_FIX_NEEDED,
+        next_state=ReqState.ANALYZING,
+        event=Event.VERIFY_RETRY_ANALYZE,
     )
 
     verifier_closes = [c for c in fake_sr._close_calls if c["stage"] == "verifier"]
     assert len(verifier_closes) >= 1, (
-        f"VSC-S3: verifier stage_run MUST be closed on VERIFY_FIX_NEEDED (leave REVIEW_RUNNING); "
+        f"VSC-S3: verifier stage_run MUST be closed on VERIFY_RETRY_ANALYZE (leave REVIEW_RUNNING); "
         f"close_calls: {fake_sr._close_calls}"
     )
-    assert verifier_closes[0]["outcome"] == "fix", (
-        f"VSC-S3: verifier close outcome MUST be 'fix' for VERIFY_FIX_NEEDED; "
+    assert verifier_closes[0]["outcome"] == "retry-analyze", (
+        f"VSC-S3: verifier close outcome MUST be 'retry-analyze' for VERIFY_RETRY_ANALYZE; "
         f"got {verifier_closes[0]['outcome']!r}. "
-        f"Contract: _EVENT_TO_OUTCOME[VERIFY_FIX_NEEDED] == 'fix'"
+        f"Contract: _EVENT_TO_OUTCOME[VERIFY_RETRY_ANALYZE] == 'retry-analyze'"
     )
 
-    fixer_opens = [o for o in fake_sr._open_calls if o["stage"] == "fixer"]
-    assert len(fixer_opens) >= 1, (
-        f"VSC-S3: fixer stage_run MUST be opened on enter FIXER_RUNNING; "
+    analyze_opens = [o for o in fake_sr._open_calls if o["stage"] == "analyze"]
+    assert len(analyze_opens) >= 1, (
+        f"VSC-S3: analyze stage_run MUST be opened on enter ANALYZING; "
         f"open_calls: {fake_sr._open_calls}"
     )
 

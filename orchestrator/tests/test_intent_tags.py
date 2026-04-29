@@ -88,7 +88,7 @@ def test_filter_strips_all_managed_prefixes():
         "intent:analyze", "result:pass", "pr-ci:pass",
         "verify:dev_cross_check", "trigger:fail",
         "decision:eyJhY3Rpb24iOiJwYXNzIn0=",
-        "fixer:dev", "parent:analyze", "parent-id:abc123",
+        "parent:analyze", "parent-id:abc123",
         "parent-stage:spec_lint", "target:phona/foo",
         "round-3", "pr:phona/foo#42",
     ]

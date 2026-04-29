@@ -40,7 +40,7 @@ def test_UTI_S1_filter_strips_exact_managed_tags() -> None:
 
     managed_exact = [
         "sisyphus", "intake", "analyze", "challenger", "verifier",
-        "fixer", "accept", "staging-test", "pr-ci", "done-archive",
+        "accept", "staging-test", "pr-ci", "done-archive",
     ]
     result = filter_propagatable_intent_tags(managed_exact)
     assert result == [], (
@@ -62,7 +62,6 @@ def test_UTI_S2_filter_strips_managed_prefix_tags() -> None:
         "verify:dev_cross_check",
         "trigger:fail",
         "decision:eyJ...",
-        "fixer:dev",
         "parent:analyze",
         "parent-id:abc123",
         "parent-stage:spec_lint",

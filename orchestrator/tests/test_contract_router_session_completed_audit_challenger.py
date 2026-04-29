@@ -10,7 +10,7 @@ Scenarios covered:
   RSCA-S4  challenger without result tag → derive_event returns None (not SESSION_FAILED)
   RSCA-S5  session.completed with no stage tag → derive_event returns None
   RSCA-S6  session.completed with known stage + unrecognized result → derive_event returns None
-  RSCA-S7  fixer without result tag → derive_event returns FIXER_DONE
+  RSCA-S7  ~~fixer without result tag → derive_event returns FIXER_DONE~~ (fixer removed)
 """
 from __future__ import annotations
 
@@ -277,20 +277,3 @@ def test_rsca_s6_known_stage_unrecognized_result_returns_none():
         f"but unrecognized result tag; got {result!r}"
     )
 
-
-# ─── RSCA-S7: fixer without result → FIXER_DONE ─────────────────────────────
-
-
-def test_rsca_s7_fixer_without_result_returns_fixer_done():
-    """
-    RSCA-S7: derive_event("session.completed", ["fixer", "REQ-x"]) must return
-    FIXER_DONE — fixer never requires a result tag.
-    """
-    from orchestrator.router import derive_event
-    from orchestrator.state import Event
-
-    result = derive_event("session.completed", ["fixer", "REQ-rsca-s7"])
-    assert result == Event.FIXER_DONE, (
-        "RSCA-S7: derive_event must return FIXER_DONE for session.completed + fixer tag "
-        f"(fixer never needs a result tag); got {result!r}"
-    )

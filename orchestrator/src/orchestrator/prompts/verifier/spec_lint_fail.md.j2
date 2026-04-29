@@ -18,20 +18,18 @@ sisyphus 的机械 spec_lint checker 红了。它**遍历所有 source repo**—
 
 stderr 里 sisyphus 用 `=== FAIL: <repo-basename> ===` 标记**哪个仓**挂了。
 找到后在 decision JSON 里**填 `target_repo`**（如 `<owner>/repo-a`），
-fixer 不用全仓盲扫。
+analyze 不用全仓盲扫。
 
 如果多仓同时红，挑**根因仓**填（一般是上游 contract 仓 / producer 仓）；
-其他仓的红可能是连带，fix 完 retry 自然消失。
+其他仓的红可能是连带，retry-analyze 后自然消失。
 
 ### 关注点
-- `openspec validate` 报 schema 结构错（字段类型 / enum / required 缺失）→ `fix` + `fixer=spec` + `target_repo=<挂的仓>`
-- `check-scenario-refs.sh` 报 scenario 引用不存在 → `fix` + `fixer=spec`，
+- `openspec validate` 报 schema 结构错（字段类型 / enum / required 缺失）→ `retry-analyze`
+- `check-scenario-refs.sh` 报 scenario 引用不存在 → `retry-analyze`，
   仔细看是**该仓自己缺**还是**跨仓引用没用 `--specs-search-path` 找到** → 后者
   机械层 bug → `escalate`（人去修 checker 调用参数）
-- acceptance Gherkin parse 错（语法 / 缺 step）→ `fix` + `fixer=spec`
+- acceptance Gherkin parse 错（语法 / 缺 step）→ `retry-analyze`
 - sisyphus 自己的 ci 脚本抽风（路径 / 工具链不在 / `/workspace/source/*` 空）→ `escalate`
-- 明确纯 infra 抖动（kubectl exec channel race / 网络 / 工具下载超时）且
-  与 spec 内容**完全无关** → `retry`（confidence=high）
 - 需求本身让 spec 写不出来 → `escalate`
 
 ### NOT 该做

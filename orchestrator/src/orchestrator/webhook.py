@@ -77,9 +77,7 @@ Please output ONLY a valid JSON object in exactly this format (use double quotes
 
 ```json
 {
-  "action": "pass|fix|escalate|retry",
-  "fixer": "dev|spec|null",
-  "scope": "optional scope string",
+  "action": "pass|retry-analyze|escalate",
   "reason": "explanation",
   "confidence": "high|low"
 }
@@ -457,7 +455,7 @@ async def webhook(request: Request) -> JSONResponse:
 
     # ─── 3.5 把上游 BKD issue 推目标 statusId（webhook 已识别为有效完工信号）──────
     # 默认 "done"。**verifier 判 escalate 例外** → "review"，让 BKD 看板"待审查"列只剩
-    # 用户可 follow-up 续作业的 issue（resume 路径）。其他 (analyze/challenger/fixer/checker
+    # 用户可 follow-up 续作业的 issue（resume 路径）。其他 (analyze/challenger/checker
     # 完成) 全推 done，UI 干净。session.failed 不推（保留人工排查）。
     if body.event == "session.completed":
         is_verifier_escalate = (
@@ -511,10 +509,9 @@ async def webhook(request: Request) -> JSONResponse:
     cur_state = row.state
     ctx = row.context
 
-    # ─── 5.6 verifier decision payload 落 ctx（start_fixer 等 action 读）──
+    # ─── 5.6 verifier decision payload 落 ctx（apply_verify_retry_analyze 等 action 读）──
     if decision_payload is not None:
         patch = {
-            "verifier_fixer": decision_payload.get("fixer"),
             "verifier_scope": decision_payload.get("scope"),
             "verifier_reason": decision_payload.get("reason"),
             "verifier_confidence": decision_payload.get("confidence"),
@@ -524,7 +521,7 @@ async def webhook(request: Request) -> JSONResponse:
 
         # M14e：落 verifier_decisions（best-effort，失败只 log）
         try:
-            # 软验证 audit 字段（fixer-audit REQ）
+            # 软验证 audit 字段（verifier-audit）
             audit_raw = decision_payload.get("audit") if isinstance(decision_payload.get("audit"), dict) else None
             audit_warn = router_lib.validate_audit_soft(audit_raw)
             if audit_warn:
@@ -536,7 +533,7 @@ async def webhook(request: Request) -> JSONResponse:
                 stage=ctx.get("verifier_stage") or "unknown",
                 trigger=ctx.get("verifier_trigger") or "unknown",
                 action=decision_payload.get("action"),
-                fixer=decision_payload.get("fixer"),
+                fixer=None,
                 scope=decision_payload.get("scope"),
                 reason=decision_payload.get("reason"),
                 confidence=decision_payload.get("confidence"),

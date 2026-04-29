@@ -304,14 +304,14 @@ async def test_DISP_S2_no_slug_hit_calls_create_issue_and_stores_slug():
 # ─── DISP-S5: round-aware slug distinguishes fixer rounds ────────────────────
 
 
-async def test_DISP_S5_round_aware_slug_distinguishes_fixer_rounds():
+async def test_DISP_S5_round_aware_slug_distinguishes_retry_analyze_rounds():
     """
-    DISP-S5: invoke_verifier with fixer_round=1 MUST compute a slug with 'r1',
+    DISP-S5: invoke_verifier with retry_analyze_count=1 MUST compute a slug with 'r1',
     not reuse the r0 slug, causing a new create_issue call.
 
     GIVEN slug for round 0 exists; slug for round 1 does not
     WHEN  invoke_verifier(req_id='REQ-1', stage='spec_lint', trigger='success',
-                          ctx={'fixer_round': 1})
+                          ctx={'retry_analyze_count': 1})
     THEN  a NEW slug containing 'r1' is computed → no slug hit → create_issue called
     """
     from orchestrator.actions._verifier import invoke_verifier
@@ -343,7 +343,7 @@ async def test_DISP_S5_round_aware_slug_distinguishes_fixer_rounds():
             trigger="success",
             req_id="REQ-1",
             project_id="proj-test",
-            ctx={"fixer_round": 1},
+            ctx={"retry_analyze_count": 1},
         )
 
     # invoke_verifier must have called dispatch_slugs.get
@@ -352,7 +352,7 @@ async def test_DISP_S5_round_aware_slug_distinguishes_fixer_rounds():
     # The slug must contain 'r1' (round 1), not just 'r0'
     r1_slugs = [s for s in get_slugs_seen if "r1" in s]
     assert r1_slugs, (
-        f"invoke_verifier with fixer_round=1 must compute a slug containing 'r1'; "
+        f"invoke_verifier with retry_analyze_count=1 must compute a slug containing 'r1'; "
         f"slugs checked: {get_slugs_seen!r}"
     )
 

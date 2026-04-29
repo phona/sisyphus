@@ -12,7 +12,7 @@ sisyphus 的机械 **post-artifact-check** 全绿。机械层确认：
 ⚠️ 这一关**只校产物存在 + 非空**——不校 spec **内容**对不对（那是 spec_lint /
 challenger 的活）。所以"绿"只是说 agent 真动手了，不是说产物质量好。
 
-你（多数情况下被 fixer recheck 触发）要判：spec / proposal / tasks **内容是否可信**。
+你要判：spec / proposal / tasks **内容是否可信**。
 
 ### 关注点
 
@@ -31,9 +31,9 @@ challenger 的活）。所以"绿"只是说 agent 真动手了，不是说产物
 ### 典型决策
 
 - `pass`：产物结构 + 内容质量都过得去，让 spec_lint 接着校 spec 格式
-- `fix` + `fixer=spec` + `scope=openspec/changes/{{ req_id }}/`：内容稀薄 / 占位
-  / 跨仓漏写 → spec fixer 补
-- `escalate`：内容看起来 agent 完全没理解需求，需要重起 analyze（fixer 救不回来）
+- `retry-analyze` + `scope=openspec/changes/{{ req_id }}/`：内容稀薄 / 占位
+  / 跨仓漏写 → analyze 补
+- `escalate`：内容看起来 agent 完全没理解需求，需要重起 analyze
 
 ─────────
 

@@ -5,13 +5,13 @@
   **不**看 cmd/ internal/ handlers/ 等业务代码（white-box 是 dev 的活）。
 - 输出：tests/contract/*_contract_test.go（或对应语言的 contract test）—— 黑盒断言契约。
 - challenger 写完 push 同一 feat/<REQ> 分支，set tag result:pass。
-- 后续 staging_test 跑 dev 的 unit + challenger 的 contract，任一红 → fixer 修
-  （fix 域路径白名单：dev_fixer 不能改 tests/contract/，spec_fixer 不能改 cmd/）。
+- 后续 staging_test 跑 dev 的 unit + challenger 的 contract，任一红 → analyze 重跑修
+  （analyze agent 自决改代码或改 spec，verifier 复查）。
 
 跟 dev 的对抗约束：
 - challenger 不见 dev 代码（path scope 排除 cmd/internal/handlers/migrations/...）
 - dev 不能改 challenger 写的 tests/contract/ —— 不能"偷偷改测试让它绿"
-- 真冲突时 verifier 4-路判：code bug / contract test bug / spec 模糊 / spec 漏写
+- 真冲突时 verifier 3-路判：pass / retry-analyze / escalate
 
 行为：
 1. update-issue 自己 sub-issue（spec lint 上游）—— 不复用 intent issue（让 challenger 干净）

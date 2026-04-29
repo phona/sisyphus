@@ -26,7 +26,6 @@ SISYPHUS_MANAGED_EXACT: frozenset[str] = frozenset({
     "analyze",
     "challenger",
     "verifier",
-    "fixer",
     "accept",
     "staging-test",
     "pr-ci",
@@ -34,7 +33,7 @@ SISYPHUS_MANAGED_EXACT: frozenset[str] = frozenset({
     "pr-ready",
 })
 
-# Sisyphus 自己管的 tag 前缀。覆盖 §1 入口 / §4 结果 / §5 verifier / §6 fixer /
+# Sisyphus 自己管的 tag 前缀。覆盖 §1 入口 / §4 结果 / §5 verifier /
 # §7 多仓辅助里所有 sisyphus 程序写 / 读的 tag。
 #
 # `parent:` / `parent-id:` / `parent-stage:` 三个独立前缀都列出来：startswith
@@ -47,7 +46,6 @@ SISYPHUS_MANAGED_PREFIXES: tuple[str, ...] = (
     "verify:",
     "trigger:",
     "decision:",
-    "fixer:",
     "parent:",
     "parent-id:",
     "parent-stage:",
