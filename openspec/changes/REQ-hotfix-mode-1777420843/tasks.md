@@ -21,4 +21,4 @@
 
 ## Stage: PR
 - [x] git push feat/REQ-hotfix-mode-1777420843
-- [ ] gh pr create --label sisyphus
+- [x] gh pr create --label sisyphus
