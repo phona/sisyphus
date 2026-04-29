@@ -72,6 +72,14 @@ _STATE_FAILURE_EVENT: dict[ReqState, str] = {
     ReqState.ARCHIVING: "archive.failed",
 }
 
+# sub-agent role tag（intake 不在此列：intake 跑在 user 创的 intent issue 上，
+# 那条 issue 的 statusId 反映用户意图，不该被补偿清理动）。
+# verifier 也排除：verifier 判 escalate 时 issue 应保持 review，BKD 侧无法区分 pass/fix/escalate。
+# REQ-fix-bkd-sub-issue-status-sync-1777426309
+_SUB_AGENT_ROLE_TAGS: frozenset[str] = frozenset({
+    "analyze", "challenger", "fixer", "accept", "done-archive",
+})
+
 # 排除：终态 + 等人态（human-in-loop）+ 未入链
 # human-in-loop states 同时存于 _NO_WATCHDOG_STATES（ReqState 对象）和此处（string value），
 # 使 _SKIP_STATES 成为 canonical container（spec USER-S12 / watchdog skip 查询均引用此集合）。
@@ -362,6 +370,82 @@ async def _check_and_escalate(row) -> bool:
     return True
 
 
+async def _sync_stuck_sub_agent_statuses_tick() -> dict:
+    """补偿清理：把 BKD 中 sessionStatus=completed 但 statusId=review 的 sub-agent issue 推 done。
+
+    只动非 verifier 的 sub-agent issue（analyze / challenger / fixer / accept / done-archive）。
+    verifier issue 在 escalate 时应保持 review，BKD 侧无法区分 verdict，保守排除。
+    REQ-fix-bkd-sub-issue-status-sync-1777426309
+    """
+    pool = db.get_pool()
+    # 从 req_state 取活跃 project_id（去重），避免扫到无关 project
+    try:
+        project_rows = await pool.fetch(
+            """
+            SELECT DISTINCT project_id FROM req_state
+             WHERE state <> ALL($1::text[])
+            """,
+            list(_SKIP_STATES),
+        )
+    except Exception as e:
+        log.warning("watchdog.bkd_sync.fetch_projects_failed", error=str(e))
+        return {"patched": 0, "failed": 0, "skipped": 0}
+
+    patched = 0
+    failed = 0
+    for prow in project_rows:
+        project_id = prow["project_id"]
+        try:
+            async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+                issues = await bkd.list_issues(project_id)
+        except Exception as e:
+            log.warning("watchdog.bkd_sync.list_issues_failed",
+                        project_id=project_id, error=str(e))
+            continue
+
+        for issue in issues:
+            if issue.status_id != "review":
+                continue
+            if issue.session_status != "completed":
+                continue
+            tags = issue.tags or []
+            # 必须有 REQ tag（属于 sisyphus 工作流）
+            if not any((t or "").startswith("REQ-") for t in tags):
+                continue
+            # 命中 sub-agent role tag 且排除 verifier
+            role_tag = None
+            for t in tags:
+                if t in _SUB_AGENT_ROLE_TAGS:
+                    role_tag = t
+                    break
+            if role_tag is None:
+                continue
+
+            try:
+                async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+                    await bkd.update_issue(
+                        project_id=project_id,
+                        issue_id=issue.id,
+                        status_id="done",
+                    )
+                patched += 1
+                log.info(
+                    "watchdog.bkd_sync.patched",
+                    project_id=project_id, issue_id=issue.id,
+                    role_tag=role_tag,
+                    req_id=next((t for t in tags if t.startswith("REQ-")), None),
+                )
+            except Exception as e:
+                failed += 1
+                log.warning(
+                    "watchdog.bkd_sync.patch_failed",
+                    project_id=project_id, issue_id=issue.id,
+                    error=str(e),
+                )
+
+    return {"patched": patched, "failed": failed}
+
+
 async def run_loop() -> None:
     """orchestrator 启动起的后台任务。"""
     if not settings.watchdog_enabled:
@@ -373,6 +457,7 @@ async def run_loop() -> None:
         interval_sec=interval,
         stuck_threshold_sec=settings.watchdog_stuck_threshold_sec,
     )
+    tick_count = 0
     while True:
         try:
             result = await _tick()
@@ -380,6 +465,18 @@ async def run_loop() -> None:
                 log.warning("watchdog.swept", **result)
             else:
                 log.debug("watchdog.tick", **result)
+
+            # 每 5 个 tick（默认 ~5min）跑一次 BKD 补偿清理
+            tick_count += 1
+            if tick_count % 5 == 0:
+                try:
+                    sync_result = await _sync_stuck_sub_agent_statuses_tick()
+                    if sync_result.get("patched") or sync_result.get("failed"):
+                        log.info("watchdog.bkd_sync", **sync_result)
+                    else:
+                        log.debug("watchdog.bkd_sync", **sync_result)
+                except Exception as e:
+                    log.exception("watchdog.bkd_sync.error", error=str(e))
         except asyncio.CancelledError:
             log.info("watchdog.loop.stopped")
             raise
