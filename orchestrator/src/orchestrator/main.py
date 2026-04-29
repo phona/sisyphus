@@ -73,13 +73,12 @@ async def startup() -> None:
         # 5. 起 runner GC 后台任务（周期清 done/escalated 过保留期的 PVC）
         if settings.runner_gc_interval_sec > 0:
             _bg_tasks.append(asyncio.create_task(runner_gc.run_loop(), name="runner_gc"))
+        # 5b. 起 accept env GC 后台任务（清 terminal / orphan 的 accept-* namespace）
+        if settings.accept_env_gc_interval_sec > 0:
+            _bg_tasks.append(asyncio.create_task(accept_env_gc.run_loop(), name="accept_env_gc"))
     except Exception as e:
         # dev / 单机 / 没 kubeconfig 的场景允许失败（调 action 会抛，但 http 主进程能起）
         log.warning("k8s_runner.init_failed", error=str(e))
-    # 5b. 起 accept env GC 后台任务（清 terminal / orphan 的 accept-* namespace）
-    # 移出 try 块：accept_env_gc 内部自己处理 controller 缺失（gc_once catch RuntimeError）
-    if settings.accept_env_gc_interval_sec > 0:
-        _bg_tasks.append(asyncio.create_task(accept_env_gc.run_loop(), name="accept_env_gc"))
     # 6. 起 watchdog 兜底任务（M8：BKD 不发 session.failed 时周期性 escalate 卡死 REQ）
     if settings.watchdog_enabled and settings.watchdog_interval_sec > 0:
         _bg_tasks.append(asyncio.create_task(watchdog.run_loop(), name="watchdog"))
