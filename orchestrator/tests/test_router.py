@@ -15,6 +15,10 @@ CASES: list[tuple[str, list[str], Event | None]] = [
     ("issue.updated",     ["intent:analyze"],                                Event.INTENT_ANALYZE),
     # intent 已被 analyze 接管 → 不再发
     ("issue.updated",     ["intent:analyze", "analyze", "REQ-1"],            None),
+    # hotfix intent 入口
+    ("issue.updated",     ["intent:hotfix"],                                 Event.INTENT_HOTFIX),
+    # intent:hotfix 已被 hotfix 接管 → 不再发
+    ("issue.updated",     ["intent:hotfix", "hotfix", "REQ-1"],              None),
     # M12：resume:analyze 路径已删（砍 M6 admission），不再映射任何 event
     ("issue.updated",     ["resume:analyze", "analyze", "REQ-1"],            None),
     # 普通 issue.updated 一律忽略（避免自指）

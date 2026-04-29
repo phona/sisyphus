@@ -226,6 +226,7 @@ async def webhook(request: Request) -> JSONResponse:
         and not has_req_tag
         and "intent:intake" not in tags
         and "intent:analyze" not in tags
+        and "intent:hotfix" not in tags
     ):
         log.debug("webhook.skip_no_req_or_intent_tag",
                   issue_id=body.issueId, tags=tags)
@@ -389,6 +390,9 @@ async def webhook(request: Request) -> JSONResponse:
             "intent_issue_id": body.issueId,
             "intent_title": (body.title or "").strip(),
         }
+        # hotfix 标记：精简流水线需要 ctx.hotfix 供 action 区分路径
+        if "intent:hotfix" in tags:
+            init_ctx["hotfix"] = True
         # REQ-pr-issue-traceability-1777218612: 把 BKD 前端 URL 一并落库，
         # 让 gh_incident body / Metabase 看板渲染 clickable 链接，不必每次再算。
         bkd_url = links.bkd_issue_url(body.projectId, body.issueId)

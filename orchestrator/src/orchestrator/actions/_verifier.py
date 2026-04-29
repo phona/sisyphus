@@ -73,6 +73,20 @@ _PASS_ROUTING: dict[str, tuple[ReqState, Event]] = {
     "accept":                  (ReqState.ACCEPT_RUNNING,           Event.ACCEPT_PASS),
 }
 
+# hotfix 精简流水线的 verifier pass 路由（ctx.hotfix 为 True 时使用）
+_HOTFIX_PASS_ROUTING: dict[str, tuple[ReqState, Event]] = {
+    "dev_cross_check":  (ReqState.HOTFIX_DEV_CROSS_CHECK_RUNNING,  Event.DEV_CROSS_CHECK_PASS),
+    "staging_test":     (ReqState.HOTFIX_STAGING_TEST_RUNNING,     Event.STAGING_TEST_PASS),
+    "pr_ci":            (ReqState.HOTFIX_PR_CI_RUNNING,            Event.PR_CI_PASS),
+}
+
+# hotfix 精简流水线的 infra-retry 路由
+_HOTFIX_RETRY_ROUTING: dict[str, tuple[ReqState, str]] = {
+    "staging_test":    (ReqState.HOTFIX_STAGING_TEST_RUNNING,    "create_staging_test"),
+    "dev_cross_check": (ReqState.HOTFIX_DEV_CROSS_CHECK_RUNNING, "create_dev_cross_check"),
+    "pr_ci":           (ReqState.HOTFIX_PR_CI_RUNNING,           "create_pr_ci_watch"),
+}
+
 # ─── invoke_verifier：起 BKD verifier issue ──────────────────────────────
 
 async def invoke_verifier(
@@ -192,19 +206,26 @@ def _stage_from_tags_or_ctx(tags: list[str] | None, ctx: dict | None) -> str | N
 async def apply_verify_pass(*, body, req_id, tags, ctx):
     """decision=pass：读 verifier issue 的 verify:<stage> tag，手工 CAS REVIEW_RUNNING
     → stage_running，链式 emit 该 stage 的 done/pass 事件（走原主链 transition）。
+
+    hotfix 路径通过 ctx.hotfix 区分，使用 _HOTFIX_PASS_ROUTING。
     """
     stage = _stage_from_tags_or_ctx(tags, ctx)
-    route = _PASS_ROUTING.get(stage) if stage else None
+    is_hotfix = (ctx or {}).get("hotfix") is True
+    routing = _HOTFIX_PASS_ROUTING if is_hotfix else _PASS_ROUTING
+    route = routing.get(stage) if stage else None
     if route is None:
-        log.error("apply_verify_pass.unknown_stage", req_id=req_id, stage=stage)
+        log.error("apply_verify_pass.unknown_stage", req_id=req_id, stage=stage, hotfix=is_hotfix)
         return {"emit": Event.VERIFY_ESCALATE.value,
                 "reason": f"unknown verifier_stage: {stage!r}"}
 
     target_state, next_event = route
     pool = db.get_pool()
-    # CAS 接 REVIEW_RUNNING（正常 verifier 完成）+ ESCALATED（人续 escalate 的 verifier）
+    # CAS 接 REVIEW_RUNNING / HOTFIX_REVIEW_RUNNING（正常 verifier 完成）+ ESCALATED（人续 escalate 的 verifier）
+    src_candidates = [ReqState.REVIEW_RUNNING, ReqState.ESCALATED]
+    if is_hotfix:
+        src_candidates.insert(0, ReqState.HOTFIX_REVIEW_RUNNING)
     src_state = None
-    for src in (ReqState.REVIEW_RUNNING, ReqState.ESCALATED):
+    for src in src_candidates:
         if await req_state.cas_transition(
             pool, req_id, src, target_state,
             Event.VERIFY_PASS, "apply_verify_pass",
@@ -212,7 +233,7 @@ async def apply_verify_pass(*, body, req_id, tags, ctx):
             src_state = src
             break
     if src_state is None:
-        log.warning("apply_verify_pass.cas_failed", req_id=req_id, stage=stage)
+        log.warning("apply_verify_pass.cas_failed", req_id=req_id, stage=stage, hotfix=is_hotfix)
         return {"cas_failed": True}
 
     # 收尾 stage_runs.verifier 行（best-effort）。
@@ -221,9 +242,9 @@ async def apply_verify_pass(*, body, req_id, tags, ctx):
     # stage_runs；这里手 CAS 推到 target_state 也绕过 engine 的钩子。结果是
     # verifier 行 insert 后没人 close（DB 实证：18 条 outcome=NULL，污染
     # Metabase 的 stage_stats / agent_quality 看板）。
-    # 仅 src=REVIEW_RUNNING 路径需要 close（ESCALATED 续是 self-loop 重入，
+    # 仅 src=REVIEW_RUNNING / HOTFIX_REVIEW_RUNNING 路径需要 close（ESCALATED 续是 self-loop 重入，
     # 上一轮 verifier 行已被前次 escalate 路径关掉，不会有新的 open verifier 行）。
-    if src_state == ReqState.REVIEW_RUNNING:
+    if src_state in (ReqState.REVIEW_RUNNING, ReqState.HOTFIX_REVIEW_RUNNING):
         try:
             await stage_runs.close_latest_stage_run(
                 pool, req_id, "verifier", outcome="pass",
@@ -514,16 +535,20 @@ async def apply_verify_infra_retry(*, body, req_id, tags, ctx):
 
     仅覆盖机械 checker stage（staging_test / dev_cross_check / spec_lint / pr_ci）。
     其他 stage（analyze / accept / challenger）输出 retry 时也走 escalate，并 log warning。
+
+    hotfix 路径通过 ctx.hotfix 区分，使用 _HOTFIX_RETRY_ROUTING。
     """
     from . import REGISTRY  # 延迟导入避免循环
 
     stage = _stage_from_tags_or_ctx(tags, ctx)
-    retry_info = _RETRY_ROUTING.get(stage) if stage else None
+    is_hotfix = (ctx or {}).get("hotfix") is True
+    routing = _HOTFIX_RETRY_ROUTING if is_hotfix else _RETRY_ROUTING
+    retry_info = routing.get(stage) if stage else None
 
     if retry_info is None:
         log.warning(
             "apply_verify_infra_retry.stage_not_retryable",
-            req_id=req_id, stage=stage,
+            req_id=req_id, stage=stage, hotfix=is_hotfix,
         )
         return {
             "emit": Event.VERIFY_ESCALATE.value,
@@ -552,13 +577,14 @@ async def apply_verify_infra_retry(*, body, req_id, tags, ctx):
             "cap": cap,
         }
 
-    # CAS REVIEW_RUNNING → target_state（重回 stage_running 再跑一次 checker）
+    # CAS REVIEW_RUNNING / HOTFIX_REVIEW_RUNNING → target_state（重回 stage_running 再跑一次 checker）
+    src_state = ReqState.HOTFIX_REVIEW_RUNNING if is_hotfix else ReqState.REVIEW_RUNNING
     cas_ok = await req_state.cas_transition(
-        pool, req_id, ReqState.REVIEW_RUNNING, target_state,
+        pool, req_id, src_state, target_state,
         Event.VERIFY_INFRA_RETRY, "apply_verify_infra_retry",
     )
     if not cas_ok:
-        log.warning("apply_verify_infra_retry.cas_failed", req_id=req_id, stage=stage)
+        log.warning("apply_verify_infra_retry.cas_failed", req_id=req_id, stage=stage, hotfix=is_hotfix)
         return {"cas_failed": True}
 
     # close verifier stage_run（同 apply_verify_pass 的模式）

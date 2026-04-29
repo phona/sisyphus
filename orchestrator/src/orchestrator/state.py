@@ -42,6 +42,14 @@ class ReqState(StrEnum):
     FIXER_RUNNING = "fixer-running"             # verifier decision=fix → 起对应 fixer agent（dev/spec）
     DONE = "done"                               # REQ 完成
     ESCALATED = "escalated"                     # 熔断 / session-failed / 人工止损
+    # ─── hotfix 精简流水线 ───────────────────────────────────────────────
+    HOTFIX_ANALYZING = "hotfix-analyzing"                     # hotfix：快速确认修复方案
+    HOTFIX_DEV_CROSS_CHECK_RUNNING = "hotfix-dev-cross-check-running"  # hotfix：lint 检查
+    HOTFIX_STAGING_TEST_RUNNING = "hotfix-staging-test-running"        # hotfix：单元测试
+    HOTFIX_PR_CI_RUNNING = "hotfix-pr-ci-running"                      # hotfix：PR CI
+    HOTFIX_REVIEW_RUNNING = "hotfix-review-running"                    # hotfix：verifier
+    HOTFIX_FIXER_RUNNING = "hotfix-fixer-running"                      # hotfix：fixer
+    HOTFIX_ARCHIVING = "hotfix-archiving"                              # hotfix：归档
 
 
 class Event(StrEnum):
@@ -49,6 +57,7 @@ class Event(StrEnum):
     INTAKE_PASS = "intake.pass"                     # intake-agent 完 + finalized intent JSON ok
     INTAKE_FAIL = "intake.fail"                     # intake-agent 异常 / 用户放弃
     INTENT_ANALYZE = "intent.analyze"               # 人在 BKD 打 intent:analyze tag（旧入口，现支持 init:STATE）
+    INTENT_HOTFIX = "intent.hotfix"                 # 人在 BKD 打 intent:hotfix tag → 起 hotfix 精简流水线
     ANALYZE_DONE = "analyze.done"                   # analyze-agent 完成
     ANALYZE_ARTIFACT_CHECK_PASS = "analyze-artifact-check.pass"   # 机械校 analyze 产物（proposal/tasks/spec.md）通过
     ANALYZE_ARTIFACT_CHECK_FAIL = "analyze-artifact-check.fail"   # 机械校 analyze 产物失败 → verifier
@@ -233,6 +242,82 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
         Transition(ReqState.ARCHIVING, "done_archive",
                    "PR merged while CI running → archive (CAS races ci-watch; one wins)"),
 
+    # ─── hotfix 精简流水线 ───────────────────────────────────────────────
+    # 跳过 intake/spec-lint/challenger/accept，保留 analyze/dev-cross-check/staging-test/pr-ci/archive
+    (ReqState.INIT, Event.INTENT_HOTFIX):
+        Transition(ReqState.HOTFIX_ANALYZING, "start_analyze",
+                   "intent:hotfix → 启动 hotfix 精简流水线（analyze → dev-cross-check → staging-test → pr-ci → archive）"),
+
+    (ReqState.HOTFIX_ANALYZING, Event.ANALYZE_DONE):
+        Transition(ReqState.HOTFIX_DEV_CROSS_CHECK_RUNNING, "create_dev_cross_check",
+                   "hotfix analyze 完 → 直接 dev-cross-check（跳过 artifact-check / spec-lint / challenger）"),
+
+    (ReqState.HOTFIX_ANALYZING, Event.VERIFY_ESCALATE):
+        Transition(ReqState.ESCALATED, "escalate",
+                   "hotfix start_analyze 内部判 escalate（clone failed 等）"),
+
+    (ReqState.HOTFIX_DEV_CROSS_CHECK_RUNNING, Event.DEV_CROSS_CHECK_PASS):
+        Transition(ReqState.HOTFIX_STAGING_TEST_RUNNING, "create_staging_test",
+                   "hotfix dev-cross-check 通过 → staging-test"),
+
+    (ReqState.HOTFIX_DEV_CROSS_CHECK_RUNNING, Event.DEV_CROSS_CHECK_FAIL):
+        Transition(ReqState.HOTFIX_REVIEW_RUNNING, "invoke_verifier_for_dev_cross_check_fail",
+                   "hotfix dev-cross-check 失败 → verifier"),
+
+    (ReqState.HOTFIX_STAGING_TEST_RUNNING, Event.STAGING_TEST_PASS):
+        Transition(ReqState.HOTFIX_PR_CI_RUNNING, "create_pr_ci_watch",
+                   "hotfix staging-test 通过 → pr-ci-watch"),
+
+    (ReqState.HOTFIX_STAGING_TEST_RUNNING, Event.STAGING_TEST_FAIL):
+        Transition(ReqState.HOTFIX_REVIEW_RUNNING, "invoke_verifier_for_staging_test_fail",
+                   "hotfix staging-test 失败 → verifier"),
+
+    (ReqState.HOTFIX_PR_CI_RUNNING, Event.PR_CI_PASS):
+        Transition(ReqState.HOTFIX_ARCHIVING, "done_archive",
+                   "hotfix PR CI 全绿 → 直接归档（跳过 accept / user-review）"),
+
+    (ReqState.HOTFIX_PR_CI_RUNNING, Event.PR_CI_FAIL):
+        Transition(ReqState.HOTFIX_REVIEW_RUNNING, "invoke_verifier_for_pr_ci_fail",
+                   "hotfix pr-ci 失败 → verifier"),
+
+    (ReqState.HOTFIX_PR_CI_RUNNING, Event.PR_CI_TIMEOUT):
+        Transition(ReqState.ESCALATED, "escalate",
+                   "hotfix PR CI 未触发 → escalate"),
+
+    (ReqState.HOTFIX_ARCHIVING, Event.ARCHIVE_DONE):
+        Transition(ReqState.DONE, None, "hotfix REQ complete"),
+
+    # hotfix PR merged hook（同正常 REQ 的 PR_MERGED 逻辑）
+    (ReqState.HOTFIX_PR_CI_RUNNING, Event.PR_MERGED):
+        Transition(ReqState.HOTFIX_ARCHIVING, "done_archive",
+                   "hotfix PR merged while CI running → archive"),
+
+    (ReqState.HOTFIX_REVIEW_RUNNING, Event.PR_MERGED):
+        Transition(ReqState.HOTFIX_ARCHIVING, "done_archive",
+                   "hotfix PR merged while verifier running → archive"),
+
+    # hotfix verifier 子链（复用正常 verifier action，action 内部通过 ctx.hotfix 区分路径）
+    (ReqState.HOTFIX_REVIEW_RUNNING, Event.VERIFY_PASS):
+        Transition(ReqState.HOTFIX_REVIEW_RUNNING, "apply_verify_pass",
+                   "hotfix decision=pass → action 读 stage 手动推进"),
+    (ReqState.HOTFIX_REVIEW_RUNNING, Event.VERIFY_FIX_NEEDED):
+        Transition(ReqState.HOTFIX_FIXER_RUNNING, "start_fixer",
+                   "hotfix decision=fix → 起 fixer"),
+    (ReqState.HOTFIX_REVIEW_RUNNING, Event.VERIFY_ESCALATE):
+        Transition(ReqState.ESCALATED, "escalate",
+                   "hotfix verifier decision=escalate"),
+    (ReqState.HOTFIX_REVIEW_RUNNING, Event.VERIFY_INFRA_RETRY):
+        Transition(ReqState.HOTFIX_REVIEW_RUNNING, "apply_verify_infra_retry",
+                   "hotfix decision=retry → 有界重跑 stage checker"),
+
+    (ReqState.HOTFIX_FIXER_RUNNING, Event.FIXER_DONE):
+        Transition(ReqState.HOTFIX_REVIEW_RUNNING, "invoke_verifier_after_fix",
+                   "hotfix fixer 完 → 再跑 verifier 复查"),
+
+    (ReqState.HOTFIX_FIXER_RUNNING, Event.VERIFY_ESCALATE):
+        Transition(ReqState.ESCALATED, "escalate",
+                   "hotfix fixer round 触顶 / start_fixer 自判 escalate"),
+
     # ─── verifier 子链 ─────────────────────────────────────────────────
     # verifier-agent 完成 → webhook 解 decision JSON → emit 对应事件。
     # 注意：VERIFY_PASS 的目标 stage 由 ctx.verifier_stage 决定 —— transition 表无法静态表达
@@ -300,6 +385,13 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
             ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
             ReqState.REVIEW_RUNNING, ReqState.FIXER_RUNNING,
             ReqState.ARCHIVING,
+            # hotfix 精简流水线
+            ReqState.HOTFIX_ANALYZING,
+            ReqState.HOTFIX_DEV_CROSS_CHECK_RUNNING,
+            ReqState.HOTFIX_STAGING_TEST_RUNNING,
+            ReqState.HOTFIX_PR_CI_RUNNING,
+            ReqState.HOTFIX_REVIEW_RUNNING, ReqState.HOTFIX_FIXER_RUNNING,
+            ReqState.HOTFIX_ARCHIVING,
         ]
     },
 }

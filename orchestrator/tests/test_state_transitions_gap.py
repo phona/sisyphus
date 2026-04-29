@@ -34,11 +34,15 @@ def test_pr_merged_race_transitions(st, ev, next_st, action):
 
 
 def test_pr_merged_only_from_specific_states():
-    """PR_MERGED 只允许从 PENDING_USER_REVIEW / REVIEW_RUNNING / PR_CI_RUNNING 触发。
+    """PR_MERGED 只允许从 PENDING_USER_REVIEW / REVIEW_RUNNING / PR_CI_RUNNING /
+    HOTFIX_PR_CI_RUNNING / HOTFIX_REVIEW_RUNNING 触发。
 
     从其他任何 state 触发 PR_MERGED 都是非法的（不应有 transition）。
     """
-    allowed = {ReqState.PENDING_USER_REVIEW, ReqState.REVIEW_RUNNING, ReqState.PR_CI_RUNNING}
+    allowed = {
+        ReqState.PENDING_USER_REVIEW, ReqState.REVIEW_RUNNING, ReqState.PR_CI_RUNNING,
+        ReqState.HOTFIX_PR_CI_RUNNING, ReqState.HOTFIX_REVIEW_RUNNING,
+    }
     for st in ReqState:
         if st in allowed:
             continue
@@ -59,9 +63,10 @@ def test_verify_infra_retry_from_review_running():
 
 
 def test_verify_infra_retry_only_from_review_running():
-    """VERIFY_INFRA_RETRY 只应从 REVIEW_RUNNING 触发（verifier 决策的上下文）。"""
+    """VERIFY_INFRA_RETRY 只应从 REVIEW_RUNNING / HOTFIX_REVIEW_RUNNING 触发（verifier 决策的上下文）。"""
+    allowed = {ReqState.REVIEW_RUNNING, ReqState.HOTFIX_REVIEW_RUNNING}
     for st in ReqState:
-        if st == ReqState.REVIEW_RUNNING:
+        if st in allowed:
             continue
         assert decide(st, Event.VERIFY_INFRA_RETRY) is None, (
             f"VERIFY_INFRA_RETRY should NOT be valid from {st.value}"
@@ -112,8 +117,8 @@ def test_challenger_running_session_failed_self_loop():
 
 
 def test_init_illegal_events():
-    """INIT 只接受 INTENT_INTAKE 和 INTENT_ANALYZE。"""
-    legal = {Event.INTENT_INTAKE, Event.INTENT_ANALYZE}
+    """INIT 只接受 INTENT_INTAKE / INTENT_ANALYZE / INTENT_HOTFIX。"""
+    legal = {Event.INTENT_INTAKE, Event.INTENT_ANALYZE, Event.INTENT_HOTFIX}
     for ev in Event:
         if ev in legal:
             continue
@@ -285,6 +290,89 @@ def test_archiving_illegal_events():
         )
 
 
+def test_hotfix_analyzing_illegal_events():
+    """HOTFIX_ANALYZING 只接受 analyze.done / verify.escalate / SESSION_FAILED。"""
+    legal = {Event.ANALYZE_DONE, Event.VERIFY_ESCALATE, Event.SESSION_FAILED}
+    for ev in Event:
+        if ev in legal:
+            continue
+        assert decide(ReqState.HOTFIX_ANALYZING, ev) is None, (
+            f"HOTFIX_ANALYZING should not accept {ev.value}"
+        )
+
+
+def test_hotfix_dev_cross_check_illegal_events():
+    """HOTFIX_DEV_CROSS_CHECK_RUNNING 只接受 pass/fail + SESSION_FAILED。"""
+    legal = {Event.DEV_CROSS_CHECK_PASS, Event.DEV_CROSS_CHECK_FAIL, Event.SESSION_FAILED}
+    for ev in Event:
+        if ev in legal:
+            continue
+        assert decide(ReqState.HOTFIX_DEV_CROSS_CHECK_RUNNING, ev) is None, (
+            f"HOTFIX_DEV_CROSS_CHECK_RUNNING should not accept {ev.value}"
+        )
+
+
+def test_hotfix_staging_test_illegal_events():
+    """HOTFIX_STAGING_TEST_RUNNING 只接受 pass/fail + SESSION_FAILED。"""
+    legal = {Event.STAGING_TEST_PASS, Event.STAGING_TEST_FAIL, Event.SESSION_FAILED}
+    for ev in Event:
+        if ev in legal:
+            continue
+        assert decide(ReqState.HOTFIX_STAGING_TEST_RUNNING, ev) is None, (
+            f"HOTFIX_STAGING_TEST_RUNNING should not accept {ev.value}"
+        )
+
+
+def test_hotfix_pr_ci_illegal_events():
+    """HOTFIX_PR_CI_RUNNING 接受 pass/fail/timeout/merged + SESSION_FAILED。"""
+    legal = {
+        Event.PR_CI_PASS, Event.PR_CI_FAIL, Event.PR_CI_TIMEOUT,
+        Event.PR_MERGED, Event.SESSION_FAILED,
+    }
+    for ev in Event:
+        if ev in legal:
+            continue
+        assert decide(ReqState.HOTFIX_PR_CI_RUNNING, ev) is None, (
+            f"HOTFIX_PR_CI_RUNNING should not accept {ev.value}"
+        )
+
+
+def test_hotfix_review_running_illegal_events():
+    """HOTFIX_REVIEW_RUNNING 接受 verifier 4 路决策 + merged + SESSION_FAILED。"""
+    legal = {
+        Event.VERIFY_PASS, Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE,
+        Event.VERIFY_INFRA_RETRY, Event.PR_MERGED, Event.SESSION_FAILED,
+    }
+    for ev in Event:
+        if ev in legal:
+            continue
+        assert decide(ReqState.HOTFIX_REVIEW_RUNNING, ev) is None, (
+            f"HOTFIX_REVIEW_RUNNING should not accept {ev.value}"
+        )
+
+
+def test_hotfix_fixer_running_illegal_events():
+    """HOTFIX_FIXER_RUNNING 接受 fixer.done / verify.escalate / SESSION_FAILED。"""
+    legal = {Event.FIXER_DONE, Event.VERIFY_ESCALATE, Event.SESSION_FAILED}
+    for ev in Event:
+        if ev in legal:
+            continue
+        assert decide(ReqState.HOTFIX_FIXER_RUNNING, ev) is None, (
+            f"HOTFIX_FIXER_RUNNING should not accept {ev.value}"
+        )
+
+
+def test_hotfix_archiving_illegal_events():
+    """HOTFIX_ARCHIVING 接受 archive.done / SESSION_FAILED。"""
+    legal = {Event.ARCHIVE_DONE, Event.SESSION_FAILED}
+    for ev in Event:
+        if ev in legal:
+            continue
+        assert decide(ReqState.HOTFIX_ARCHIVING, ev) is None, (
+            f"HOTFIX_ARCHIVING should not accept {ev.value}"
+        )
+
+
 def test_gh_incident_open_has_no_transitions():
     """GH_INCIDENT_OPEN 是等人 state，没有任何 outgoing transition。"""
     for ev in Event:
@@ -317,11 +405,11 @@ def test_all_transitions_reason_is_str_or_none():
 def test_transition_count_sanity():
     """transition 总数 sanity check：防止未来重构误删/误增。
 
-    当前总数 = 40 显式 + 13 SESSION_FAILED self-loop = 53。
+    当前总数 = 59 显式 + 20 SESSION_FAILED self-loop = 79（含 hotfix 精简流水线 19+7）。
     如果数字变了，说明有人增删 transition，本测试会 fail 提醒同步测试。
     """
-    assert len(TRANSITIONS) == 53, (
-        f"Expected 53 transitions, got {len(TRANSITIONS)}. "
+    assert len(TRANSITIONS) == 79, (
+        f"Expected 79 transitions, got {len(TRANSITIONS)}. "
         "If this is intentional, update this assertion and add corresponding tests."
     )
 
@@ -329,16 +417,16 @@ def test_transition_count_sanity():
 def test_explicit_transition_count():
     """非 SESSION_FAILED 的显式 transition 数量 sanity check。"""
     explicit = [k for k in TRANSITIONS if k[1] != Event.SESSION_FAILED]
-    assert len(explicit) == 40, (
-        f"Expected 40 explicit transitions, got {len(explicit)}"
+    assert len(explicit) == 59, (
+        f"Expected 59 explicit transitions, got {len(explicit)}"
     )
 
 
 def test_session_failed_transition_count():
     """SESSION_FAILED self-loop 数量 sanity check。"""
     session_failed = [k for k in TRANSITIONS if k[1] == Event.SESSION_FAILED]
-    assert len(session_failed) == 13, (
-        f"Expected 13 SESSION_FAILED transitions, got {len(session_failed)}"
+    assert len(session_failed) == 20, (
+        f"Expected 20 SESSION_FAILED transitions, got {len(session_failed)}"
     )
 
 
@@ -361,6 +449,22 @@ def test_verify_infra_retry_from_review_running_is_self_loop():
     t = decide(ReqState.REVIEW_RUNNING, Event.VERIFY_INFRA_RETRY)
     assert t is not None
     assert t.next_state == ReqState.REVIEW_RUNNING
+    assert t.action == "apply_verify_infra_retry"
+
+
+def test_verify_pass_from_hotfix_review_running_is_self_loop():
+    """hotfix 路径：VERIFY_PASS 从 HOTFIX_REVIEW_RUNNING 出发也是 self-loop。"""
+    t = decide(ReqState.HOTFIX_REVIEW_RUNNING, Event.VERIFY_PASS)
+    assert t is not None
+    assert t.next_state == ReqState.HOTFIX_REVIEW_RUNNING
+    assert t.action == "apply_verify_pass"
+
+
+def test_verify_infra_retry_from_hotfix_review_running_is_self_loop():
+    """hotfix 路径：VERIFY_INFRA_RETRY 从 HOTFIX_REVIEW_RUNNING 出发也是 self-loop。"""
+    t = decide(ReqState.HOTFIX_REVIEW_RUNNING, Event.VERIFY_INFRA_RETRY)
+    assert t is not None
+    assert t.next_state == ReqState.HOTFIX_REVIEW_RUNNING
     assert t.action == "apply_verify_infra_retry"
 
 

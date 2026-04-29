@@ -27,12 +27,15 @@ async def done_archive(*, body, req_id, tags, ctx):
     # the archive-agent has clickable links pinned in its prompt without
     # re-running `gh pr list` in the runner.
     pr_urls = (ctx or {}).get("pr_urls") or {}
+    is_hotfix = (ctx or {}).get("hotfix") is True
 
     # PR-link tag 注入（REQ-issue-link-pr-quality-base-1777218242）
     links = await pr_links.ensure_pr_links_in_ctx(
         req_id=req_id, branch=branch, ctx=ctx, project_id=proj,
     )
     extra_tags = pr_links.pr_link_tags(links)
+    if is_hotfix:
+        extra_tags.append("hotfix")
 
     pool = db.get_pool()
     slug = f"done_archive|{req_id}|{getattr(body, 'executionId', None) or ''}"
@@ -41,9 +44,10 @@ async def done_archive(*, body, req_id, tags, ctx):
         await req_state.update_context(pool, req_id, {"archive_issue_id": hit})
         return {"archive_issue_id": hit}
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+        stage_label = "[HOTFIX DONE]" if is_hotfix else "[DONE]"
         issue = await bkd.create_issue(
             project_id=proj,
-            title=f"[{req_id}] [DONE] archive & PR{short_title(ctx)}",
+            title=f"[{req_id}] {stage_label} archive & PR{short_title(ctx)}",
             tags=["done-archive", req_id, f"parent-id:{accept_issue_id}", *extra_tags],
             status_id="todo",
             model=settings.agent_model,

@@ -20,7 +20,7 @@
   `staging-test-running` 三个 checker stage 内部从单仓变成 for-each-repo 遍历
   （任一仓红 → stage fail）。状态机层面无影响。
 
-## 2. ReqState 枚举（18 个）
+## 2. ReqState 枚举（25 个）
 
 | state | 含义 | 类型 |
 |---|---|---|
@@ -40,10 +40,17 @@
 | `fixer-running` | **M14b** decision=fix → 起对应 fixer agent | in-flight |
 | `archiving` | done-archive agent 跑：每仓 `openspec apply` + 写 archive 结果。**不 auto-merge / 不 push main**——final merge 由人在每仓审过再合（#124） | in-flight |
 | `gh-incident-open` | ~~（已规划，未启用）GitHub issue 已开等人 \| wait-human~~ — 设计被 PR #118 / #122 重新走"escalate side-effect"路：进 ESCALATED 时 `escalate` action 调 `gh_incident.open_incident()`，对**每个 involved source repo**（intake_finalized_intent / ctx.involved_repos / `repo:` tag / `default_involved_repos` / `settings.gh_incident_repo` 5 层 fallback）独立 POST 一条 GH issue，URL 写入 `ctx.gh_incident_urls: dict[str, str]`，**不引入新 state**。enum 仍保留，但 TRANSITIONS 表无任何条目用到它，相当于 dead code，下次大改 state 表时删 |
+| `hotfix-analyzing` | **hotfix 精简流水线** analyze-agent 快速确认修复方案（跳过 intake/spec-lint/challenger/accept） | in-flight |
+| `hotfix-dev-cross-check-running` | hotfix：for-each-repo `make ci-lint` | in-flight |
+| `hotfix-staging-test-running` | hotfix：for-each-repo `make ci-unit-test && make ci-integration-test` | in-flight |
+| `hotfix-pr-ci-running` | hotfix：等 GHA 全套绿 | in-flight |
+| `hotfix-review-running` | hotfix：verifier-agent 在跑 | in-flight |
+| `hotfix-fixer-running` | hotfix：fixer agent 在跑 | in-flight |
+| `hotfix-archiving` | hotfix：归档（带 `hotfix` tag + `[HOTFIX DONE]` 标题） | in-flight |
 | **`done`** | REQ 完成 | **terminal** |
 | **`escalated`** | 熔断 / session-failed / 人工止损 | **terminal** |
 
-## 3. Event 枚举（33 个）
+## 3. Event 枚举（34 个）
 
 | event | 来源 | 触发什么 |
 |---|---|---|
@@ -51,6 +58,7 @@
 | **`intake.pass`** | intake-agent PATCH `result:pass` + finalized intent JSON 解析成功 | start_analyze_with_finalized_intent |
 | **`intake.fail`** | intake-agent PATCH `result:fail` / 或 finalized intent JSON 解析失败 | escalate |
 | `intent.analyze` | 人在 BKD 打 `intent:analyze` tag（跳过 intake 直接进 analyze） | start_analyze |
+| **`intent.hotfix`** | 人在 BKD 打 `intent:hotfix` tag → 启动 hotfix 精简流水线（跳过 intake/spec-lint/challenger/accept） | start_analyze |
 | `analyze.done` | analyze-agent session.completed | create_analyze_artifact_check |
 | **`analyze-artifact-check.pass`** | **REQ-analyze-artifact-check-1777254586** 产物校验退码 0 | create_spec_lint |
 | **`analyze-artifact-check.fail`** | **REQ-analyze-artifact-check-1777254586** 产物校验退码非 0 / timeout | invoke_verifier_for_analyze_artifact_check_fail |

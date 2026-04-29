@@ -261,6 +261,95 @@ def test_no_orphan_actions():
         )
 
 
+# ── REQ-hotfix-mode-1777420843 ------------------------------------------------
+
+HOTFIX_EXPECTED = [
+    # hotfix happy path
+    (ReqState.INIT,                              Event.INTENT_HOTFIX,              ReqState.HOTFIX_ANALYZING,                 "start_analyze"),
+    (ReqState.HOTFIX_ANALYZING,                  Event.ANALYZE_DONE,               ReqState.HOTFIX_DEV_CROSS_CHECK_RUNNING,   "create_dev_cross_check"),
+    (ReqState.HOTFIX_ANALYZING,                  Event.VERIFY_ESCALATE,            ReqState.ESCALATED,                        "escalate"),
+    (ReqState.HOTFIX_DEV_CROSS_CHECK_RUNNING,    Event.DEV_CROSS_CHECK_PASS,       ReqState.HOTFIX_STAGING_TEST_RUNNING,      "create_staging_test"),
+    (ReqState.HOTFIX_DEV_CROSS_CHECK_RUNNING,    Event.DEV_CROSS_CHECK_FAIL,       ReqState.HOTFIX_REVIEW_RUNNING,            "invoke_verifier_for_dev_cross_check_fail"),
+    (ReqState.HOTFIX_STAGING_TEST_RUNNING,       Event.STAGING_TEST_PASS,          ReqState.HOTFIX_PR_CI_RUNNING,             "create_pr_ci_watch"),
+    (ReqState.HOTFIX_STAGING_TEST_RUNNING,       Event.STAGING_TEST_FAIL,          ReqState.HOTFIX_REVIEW_RUNNING,            "invoke_verifier_for_staging_test_fail"),
+    (ReqState.HOTFIX_PR_CI_RUNNING,              Event.PR_CI_PASS,                 ReqState.HOTFIX_ARCHIVING,                 "done_archive"),
+    (ReqState.HOTFIX_PR_CI_RUNNING,              Event.PR_CI_FAIL,                 ReqState.HOTFIX_REVIEW_RUNNING,            "invoke_verifier_for_pr_ci_fail"),
+    (ReqState.HOTFIX_PR_CI_RUNNING,              Event.PR_CI_TIMEOUT,              ReqState.ESCALATED,                        "escalate"),
+    (ReqState.HOTFIX_ARCHIVING,                  Event.ARCHIVE_DONE,               ReqState.DONE,                             None),
+    # hotfix PR merged hook
+    (ReqState.HOTFIX_PR_CI_RUNNING,              Event.PR_MERGED,                  ReqState.HOTFIX_ARCHIVING,                 "done_archive"),
+    (ReqState.HOTFIX_REVIEW_RUNNING,             Event.PR_MERGED,                  ReqState.HOTFIX_ARCHIVING,                 "done_archive"),
+    # hotfix verifier subchain
+    (ReqState.HOTFIX_REVIEW_RUNNING,             Event.VERIFY_PASS,                ReqState.HOTFIX_REVIEW_RUNNING,            "apply_verify_pass"),
+    (ReqState.HOTFIX_REVIEW_RUNNING,             Event.VERIFY_FIX_NEEDED,          ReqState.HOTFIX_FIXER_RUNNING,             "start_fixer"),
+    (ReqState.HOTFIX_REVIEW_RUNNING,             Event.VERIFY_ESCALATE,            ReqState.ESCALATED,                        "escalate"),
+    (ReqState.HOTFIX_REVIEW_RUNNING,             Event.VERIFY_INFRA_RETRY,         ReqState.HOTFIX_REVIEW_RUNNING,            "apply_verify_infra_retry"),
+    (ReqState.HOTFIX_FIXER_RUNNING,              Event.FIXER_DONE,                 ReqState.HOTFIX_REVIEW_RUNNING,            "invoke_verifier_after_fix"),
+    (ReqState.HOTFIX_FIXER_RUNNING,              Event.VERIFY_ESCALATE,            ReqState.ESCALATED,                        "escalate"),
+]
+
+
+@pytest.mark.parametrize("st,ev,next_st,action", HOTFIX_EXPECTED)
+def test_hotfix_transition(st, ev, next_st, action):
+    t = decide(st, ev)
+    assert t is not None, f"missing hotfix transition {st.value}+{ev.value}"
+    assert t.next_state == next_st
+    assert t.action == action
+
+
+def test_hotfix_states_present():
+    """hotfix 精简流水线状态枚举齐全。"""
+    values = {s.value for s in ReqState}
+    for st in [
+        "hotfix-analyzing", "hotfix-dev-cross-check-running",
+        "hotfix-staging-test-running", "hotfix-pr-ci-running",
+        "hotfix-review-running", "hotfix-fixer-running",
+        "hotfix-archiving",
+    ]:
+        assert st in values, f"缺 hotfix state: {st}"
+
+
+def test_hotfix_event_present():
+    """INTENT_HOTFIX 事件定义齐全。"""
+    assert "intent.hotfix" in {e.value for e in Event}
+
+
+def test_hotfix_session_failed_routes_to_escalate():
+    """SESSION_FAILED 在 hotfix running states 都触发 escalate action（self-loop）。"""
+    hotfix_running = [
+        ReqState.HOTFIX_ANALYZING,
+        ReqState.HOTFIX_DEV_CROSS_CHECK_RUNNING,
+        ReqState.HOTFIX_STAGING_TEST_RUNNING,
+        ReqState.HOTFIX_PR_CI_RUNNING,
+        ReqState.HOTFIX_REVIEW_RUNNING,
+        ReqState.HOTFIX_FIXER_RUNNING,
+        ReqState.HOTFIX_ARCHIVING,
+    ]
+    for st in hotfix_running:
+        t = decide(st, Event.SESSION_FAILED)
+        assert t is not None and t.action == "escalate", st
+        assert t.next_state == st, f"{st} should self-loop, got {t.next_state}"
+
+
+def test_hotfix_done_terminal_has_no_outgoing():
+    """DONE 对 hotfix 也是死终态。"""
+    for ev in Event:
+        assert decide(ReqState.DONE, ev) is None, f"DONE should not move on {ev.value}"
+
+
+def test_hotfix_no_orphan_actions():
+    """hotfix transition.action 同样能在 REGISTRY 找到。"""
+    from orchestrator.actions import REGISTRY  # 触发 import-side-effect 注册
+    for (st, ev), t in TRANSITIONS.items():
+        if not st.value.startswith("hotfix"):
+            continue
+        if t.action is None:
+            continue
+        assert t.action in REGISTRY, (
+            f"({st.value}, {ev.value}) → action '{t.action}' 没在 REGISTRY 注册"
+        )
+
+
 def test_dump_transitions_renders():
     md = dump_transitions()
     assert "| state |" in md
@@ -270,3 +359,7 @@ def test_dump_transitions_renders():
     assert "pr-ci-running" in md
     assert "accept-tearing-down" in md
     assert "review-running" in md
+    # hotfix 新 state 出现
+    assert "hotfix-analyzing" in md
+    assert "hotfix-pr-ci-running" in md
+    assert "hotfix-archiving" in md

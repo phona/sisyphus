@@ -55,11 +55,20 @@ STATE_TO_STAGE: dict[ReqState, str] = {
     ReqState.REVIEW_RUNNING:         "verifier",
     ReqState.FIXER_RUNNING:          "fixer",
     ReqState.ARCHIVING:              "archive",
+    # hotfix 精简流水线（stage 名复用，前缀区分）
+    ReqState.HOTFIX_ANALYZING:              "hotfix_analyze",
+    ReqState.HOTFIX_DEV_CROSS_CHECK_RUNNING: "hotfix_dev_cross_check",
+    ReqState.HOTFIX_STAGING_TEST_RUNNING:   "hotfix_staging_test",
+    ReqState.HOTFIX_PR_CI_RUNNING:          "hotfix_pr_ci",
+    ReqState.HOTFIX_REVIEW_RUNNING:         "hotfix_verifier",
+    ReqState.HOTFIX_FIXER_RUNNING:          "hotfix_fixer",
+    ReqState.HOTFIX_ARCHIVING:              "hotfix_archive",
 }
 # 仅以下 state 对应的 stage 由 BKD agent 跑；其他 state 是机械 checker / teardown，
 # 没 BKD session 可绑。webhook 用此集合决定 stamp_bkd_session_id 是否值得调用。
 AGENT_STAGES: frozenset[str] = frozenset({
     "analyze", "verifier", "fixer", "accept", "archive",
+    "hotfix_analyze", "hotfix_verifier", "hotfix_fixer", "hotfix_archive",
 })
 
 # event → stage_runs.outcome 标签。escalate / session.failed 全归 fail。
