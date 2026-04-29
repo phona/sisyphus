@@ -151,7 +151,7 @@ async def test_start_analyze_skips_clone_when_no_involved_repos(monkeypatch):
     """直接路径：ctx 没 involved_repos → 不调 exec_in_runner，agent 还是被 dispatch。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    follow_up, _, create_issue, merge_tags = _patch_bkd_client(monkeypatch, target_module=start_analyze)
+    follow_up, _, _create_issue, _merge_tags = _patch_bkd_client(monkeypatch, target_module=start_analyze)
 
     rv = await start_analyze.start_analyze(
         body=_make_body(), req_id="REQ-X", tags=[],
@@ -168,7 +168,7 @@ async def test_start_analyze_clone_failure_emits_verify_escalate(monkeypatch):
     """clone helper exit 非 0 → return emit=VERIFY_ESCALATE，agent 不被 dispatch。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=5, stderr="auth error"))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    follow_up, _, create_issue, merge_tags = _patch_bkd_client(monkeypatch, target_module=start_analyze)
+    follow_up, _, _create_issue, _merge_tags = _patch_bkd_client(monkeypatch, target_module=start_analyze)
 
     ctx = {"intake_finalized_intent": {"involved_repos": ["phona/typo-repo"]}}
     rv = await start_analyze.start_analyze(
@@ -462,7 +462,7 @@ async def test_start_analyze_passes_repo_tags_and_default_to_clone(monkeypatch):
     """直接 analyze 入口：ctx 没 involved，但 tags 带 `repo:`，sisyphus 替 clone。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    follow_up, _, create_issue, merge_tags = _patch_bkd_client(monkeypatch, target_module=start_analyze)
+    follow_up, _, _create_issue, _merge_tags = _patch_bkd_client(monkeypatch, target_module=start_analyze)
 
     rv = await start_analyze.start_analyze(
         body=_make_body(), req_id="REQ-X",
@@ -529,7 +529,7 @@ async def test_start_analyze_forwards_user_hint_tags(monkeypatch):
     """tags 含 repo: + ux: → create_issue 的 tags kwarg 把它们追加到 ['analyze', req_id]。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    _, update_issue, create_issue, merge_tags = _patch_bkd_client(
+    _, _update_issue, create_issue, merge_tags = _patch_bkd_client(
         monkeypatch, target_module=start_analyze,
     )
 
@@ -554,7 +554,7 @@ async def test_start_analyze_strips_sisyphus_managed_tags(monkeypatch):
     """stale intent:* / result:* / pr:* 不被转发到 create_issue tags。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    _, update_issue, create_issue, merge_tags = _patch_bkd_client(
+    _, _update_issue, create_issue, _merge_tags = _patch_bkd_client(
         monkeypatch, target_module=start_analyze,
     )
 
@@ -582,7 +582,7 @@ async def test_start_analyze_no_hint_tags_keeps_base_only(monkeypatch):
     """tags 全是 sisyphus-managed → create_issue 的 tags 只剩 ['analyze', req_id]，向后兼容。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    _, update_issue, create_issue, merge_tags = _patch_bkd_client(
+    _, _update_issue, create_issue, _merge_tags = _patch_bkd_client(
         monkeypatch, target_module=start_analyze,
     )
 

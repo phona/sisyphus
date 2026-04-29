@@ -19,10 +19,9 @@ from __future__ import annotations
 import os
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared helpers
@@ -151,7 +150,7 @@ async def test_FIX_S1_intent_issue_keeps_title_and_status(monkeypatch):
     _patch_admission(monkeypatch, sa)
     _patch_k8s_runner(monkeypatch, sa)
     _patch_db_and_dispatch(monkeypatch, sa)
-    merge_tags, create_issue, follow_up, update_issue = _patch_bkd_client(monkeypatch, sa)
+    _merge_tags, create_issue, _follow_up, update_issue = _patch_bkd_client(monkeypatch, sa)
 
     body = _make_body(title="Add login endpoint")
     result = await sa.start_analyze(
@@ -198,7 +197,7 @@ async def test_FIX_S2_analyze_sub_issue_tags_and_status(monkeypatch):
     _patch_admission(monkeypatch, sa)
     _patch_k8s_runner(monkeypatch, sa)
     _patch_db_and_dispatch(monkeypatch, sa)
-    merge_tags, create_issue, follow_up, update_issue = _patch_bkd_client(monkeypatch, sa)
+    _merge_tags, create_issue, _follow_up, update_issue = _patch_bkd_client(monkeypatch, sa)
 
     body = _make_body()
     await sa.start_analyze(
@@ -245,7 +244,7 @@ async def test_FIX_S3_intent_issue_gets_req_id_and_hint_tags_forwarded(monkeypat
     _patch_admission(monkeypatch, sa)
     _patch_k8s_runner(monkeypatch, sa)
     _patch_db_and_dispatch(monkeypatch, sa)
-    merge_tags, create_issue, follow_up, update_issue = _patch_bkd_client(monkeypatch, sa)
+    _merge_tags, create_issue, _follow_up, update_issue = _patch_bkd_client(monkeypatch, sa)
 
     body = _make_body()
     await sa.start_analyze(
@@ -304,7 +303,7 @@ async def test_FIX_S4_redispatch_is_idempotent(monkeypatch):
     _patch_db_and_dispatch(
         monkeypatch, sa, slug_hit="existing-analyze-issue-123",
     )
-    merge_tags, create_issue, follow_up, update_issue = _patch_bkd_client(monkeypatch, sa)
+    _merge_tags, create_issue, follow_up, update_issue = _patch_bkd_client(monkeypatch, sa)
 
     body = _make_body()
     result = await sa.start_analyze(
@@ -343,7 +342,7 @@ async def test_FIX_S5_backward_compat_preserves_existing_analyze_tag(monkeypatch
     _patch_k8s_runner(monkeypatch, sa)
     _patch_db_and_dispatch(monkeypatch, sa)
     # Intent issue already has "analyze" from a prior (old-version) run
-    merge_tags, create_issue, follow_up, update_issue = _patch_bkd_client(
+    _merge_tags, create_issue, _follow_up, update_issue = _patch_bkd_client(
         monkeypatch, sa, intent_issue_tags=["analyze"],
     )
 
