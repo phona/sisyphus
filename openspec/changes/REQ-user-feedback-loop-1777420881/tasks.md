@@ -24,5 +24,5 @@
 - [x] 运行 verifier loop / watchdog / engine / PR merged 相关回归测试（全部通过）
 
 ## Stage: PR
-- [ ] git push feat/REQ-user-feedback-loop-1777420881
-- [ ] gh pr create --label sisyphus
+- [x] git push feat/REQ-user-feedback-loop-1777420881
+- [x] gh pr create --label sisyphus
