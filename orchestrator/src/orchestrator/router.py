@@ -10,12 +10,12 @@ M14b：verifier-agent 触发后本模块负责把 decision JSON（tag 或 descri
 """
 from __future__ import annotations
 
-import base64
 import json
 import re
 from collections.abc import Iterable
 
 from .state import Event
+from .verifier_parser import extract_decision_robust
 
 log = __import__("structlog").get_logger(__name__)
 
@@ -100,63 +100,49 @@ def derive_verifier_event(
 
     reason 只在 escalate 时非空，供 obs / log 用。
     """
+    event, decision, reason, _ = derive_verifier_event_with_retry_info(description, tags)
+    return event, decision, reason
+
+
+def derive_verifier_event_with_retry_info(
+    description: str | None, tags: Iterable[str] | None,
+) -> tuple[Event, dict | None, str, bool]:
+    """verifier issue session.completed → (Event, decision, reason, retry_worthy)。
+
+    retry_worthy=True：找到了疑似 decision 但 schema invalid / 无法解析，
+    webhook 层据此 follow-up 要求 agent 重新输出标准格式（最多 retry 2 次）。
+    """
     decision = extract_decision_from_issue(description, tags)
     if decision is None:
-        return Event.VERIFY_ESCALATE, None, "no decision JSON found in tag or description"
+        # 用 robust parser 的 retry_worthy 判断
+        result = extract_decision_robust(description, tags)
+        if result.retry_worthy:
+            return (
+                Event.VERIFY_ESCALATE, None,
+                "decision-like text found but unparseable", True,
+            )
+        return (
+            Event.VERIFY_ESCALATE, None,
+            "no decision JSON found in tag or description", False,
+        )
     ok, why = validate_decision(decision)
     if not ok:
-        return Event.VERIFY_ESCALATE, decision, f"invalid decision: {why}"
-    return decision_to_event(decision), decision, ""
+        return Event.VERIFY_ESCALATE, decision, f"invalid decision: {why}", True
+    return decision_to_event(decision), decision, "", False
 
 
 def extract_decision_from_issue(
     description: str | None, tags: Iterable[str] | None,
 ) -> dict | None:
-    """从 BKD verifier issue 提取 decision JSON。
+    """从 BKD verifier issue 提取 decision JSON（全格式覆盖 + 预处理）。
 
     顺序：
-    1. tags 里的 `decision:<urlsafe-base64-json>`（机器写最稳）
-    2. description 里最后一个 ```json ... ``` 代码块
-    3. 都拿不到 → None（webhook 按 VERIFY_ESCALATE 走）
+    1. tags 里的 `decision:<base64-json>`（兼容 urlsafe/standard）
+    2. description 里 ```json ... ``` / ``` ... ``` 代码块
+    3. bare JSON / 嵌在 markdown 文本中的 JSON（含预处理修复）
     """
-    for t in tags or []:
-        if t.startswith("decision:"):
-            raw = t.removeprefix("decision:")
-            try:
-                data = base64.urlsafe_b64decode(raw + "==").decode("utf-8")
-                return json.loads(data)
-            except Exception as e:
-                log.warning("verifier.tag_decision_parse_failed", error=str(e))
-                break   # 继续试 description
-    if not description:
-        return None
-    # 优先：```json ... ``` 代码块（推荐）
-    blocks = re.findall(r"```json\s*(\{.*?\})\s*```", description, flags=re.DOTALL)
-    for blk in reversed(blocks):
-        try:
-            return json.loads(blk)
-        except Exception:
-            continue
-    # Fallback：纯 ``` ... ``` 无 lang 标的代码块（兼容 agent 漏写 json 标签）
-    blocks = re.findall(r"```\s*(\{.*?\})\s*```", description, flags=re.DOTALL)
-    for blk in reversed(blocks):
-        try:
-            data = json.loads(blk)
-            if isinstance(data, dict) and "action" in data:
-                return data
-        except Exception:
-            continue
-    # Fallback：扫所有 {...} 大括号块，找最后一个含 "action" 字段的合法 JSON
-    # （兼容 agent 用 markdown bullet/bold 没用 codeblock）
-    candidates = re.findall(r"\{[^{}]*\"action\"[^{}]*\}", description, flags=re.DOTALL)
-    for blk in reversed(candidates):
-        try:
-            data = json.loads(blk)
-            if isinstance(data, dict) and "action" in data:
-                return data
-        except Exception:
-            continue
-    return None
+    result = extract_decision_robust(description, tags)
+    return result.decision
 
 
 _REQUIRED_INTAKE_FIELDS = frozenset({

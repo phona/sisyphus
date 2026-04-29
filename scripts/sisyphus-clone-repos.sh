@@ -58,7 +58,28 @@ for repo_spec in "$@"; do
   target="$WORKSPACE_ROOT/$basename"
   url="https://x-access-token:${GH_TOKEN}@github.com/${repo_spec}.git"
 
+  needs_clone=0
+
   if [[ -d "$target/.git" ]]; then
+    # 检查是否是有效 git repo（.git 目录可能损坏）
+    if ! git -C "$target" rev-parse --git-dir >/dev/null 2>&1; then
+      echo "[sisyphus-clone-repos] $target/.git exists but is corrupt, re-cloning" >&2
+      rm -rf "$target"
+      needs_clone=1
+    elif [[ -n "$(git -C "$target" status --porcelain 2>/dev/null)" ]]; then
+      # working tree 不干净（前一个 REQ 的残留修改 / 脏数据）
+      echo "[sisyphus-clone-repos] $target has dirty working tree, re-cloning" >&2
+      rm -rf "$target"
+      needs_clone=1
+    fi
+  elif [[ -e "$target" ]]; then
+    # 目录存在但不是 git repo（PVC 残留的非仓库数据）
+    echo "[sisyphus-clone-repos] $target exists but is not a git repo, re-cloning" >&2
+    rm -rf "$target"
+    needs_clone=1
+  fi
+
+  if [[ "$needs_clone" -eq 0 && -d "$target/.git" ]]; then
     echo "[sisyphus-clone-repos] updating existing $repo_spec at $target" >&2
     if ! ( cd "$target" \
            && git remote set-url origin "$url" \
@@ -91,6 +112,18 @@ for repo_spec in "$@"; do
     if ! ( cd "$target" && git fetch --unshallow 2>/dev/null || true ); then
       echo "[sisyphus-clone-repos] WARN: unshallow failed for $repo_spec (continuing)" >&2
     fi
+  fi
+
+  # 验证关键项目文件存在（不阻断，仅 WARN——裸仓库或特殊项目允许通过）
+  has_project_file=0
+  for marker in Makefile pubspec.yaml package.json go.mod Cargo.toml pyproject.toml setup.py; do
+    if [[ -f "$target/$marker" ]]; then
+      has_project_file=1
+      break
+    fi
+  done
+  if [[ "$has_project_file" -eq 0 ]]; then
+    echo "[sisyphus-clone-repos] WARN: $target missing expected project files (Makefile, pubspec.yaml, package.json, go.mod, Cargo.toml, pyproject.toml, setup.py)" >&2
   fi
 
   CLONED+=("$repo_spec")

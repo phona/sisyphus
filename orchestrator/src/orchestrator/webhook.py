@@ -70,6 +70,22 @@ _USER_REVIEW_STATUS_TO_EVENT: dict[str, Event] = {
     "blocked": Event.USER_REVIEW_FIX,
 }
 
+_VERIFIER_RETRY_PROMPT = """\
+Your previous decision output could not be parsed as valid JSON.
+
+Please output ONLY a valid JSON object in exactly this format (use double quotes, no trailing commas):
+
+```json
+{
+  "action": "pass|fix|escalate|retry",
+  "fixer": "dev|spec|null",
+  "scope": "optional scope string",
+  "reason": "explanation",
+  "confidence": "high|low"
+}
+```
+"""
+
 
 async def _maybe_derive_user_review_event(
     *,
@@ -293,7 +309,9 @@ async def webhook(request: Request) -> JSONResponse:
 
     # M14b：verifier-agent session.completed → 解 decision JSON（tag 或 description）
     # router.derive_event 对 `verifier` tag 主动返 None，交给这里 full parse。
+    # REQ-fix-verifier-json-parse-1777420690：schema invalid 时自动 retry（最多 2 次）。
     decision_payload: dict | None = None
+    retry_worthy = False
     if (
         event is None
         and body.event == "session.completed"
@@ -316,10 +334,78 @@ async def webhook(request: Request) -> JSONResponse:
         except Exception as e:
             log.warning("webhook.verifier.fetch_decision_failed",
                         issue_id=body.issueId, error=str(e))
-        event, decision_payload, why = router_lib.derive_verifier_event(decision_source, tags)
+        event, decision_payload, why, retry_worthy = (
+            router_lib.derive_verifier_event_with_retry_info(decision_source, tags)
+        )
         log.info("webhook.verifier.decision",
                  issue_id=body.issueId, verifier_event=event.value,
-                 decision=decision_payload, reason=why)
+                 decision=decision_payload, reason=why, retry_worthy=retry_worthy)
+
+        # ─── 解析失败自动 retry（最多 2 次）───────────────────────────────────
+        if event == Event.VERIFY_ESCALATE and retry_worthy:
+            retry_req_id = router_lib.extract_req_id(tags, body.issueNumber)
+            if retry_req_id:
+                try:
+                    retry_row = await req_state.get(pool, retry_req_id)
+                    retry_ctx = retry_row.context or {} if retry_row else {}
+                    retry_count = int(retry_ctx.get("verifier_parse_retry_count", 0))
+                    if retry_count < 2:
+                        # follow-up 要求 verifier 重新输出标准格式
+                        try:
+                            async with BKDClient(
+                                settings.bkd_base_url, settings.bkd_token,
+                            ) as bkd:
+                                await bkd.follow_up_issue(
+                                    project_id=body.projectId,
+                                    issue_id=body.issueId,
+                                    prompt=_VERIFIER_RETRY_PROMPT,
+                                )
+                        except Exception as fu_e:
+                            log.warning(
+                                "webhook.verifier.retry_follow_up_failed",
+                                issue_id=body.issueId, error=str(fu_e),
+                            )
+                            # follow-up 失败也继续 escalate，不卡死
+                        else:
+                            await req_state.update_context(
+                                pool, retry_req_id,
+                                {"verifier_parse_retry_count": retry_count + 1},
+                            )
+                            log.info(
+                                "webhook.verifier.parse_retry",
+                                issue_id=body.issueId, req_id=retry_req_id,
+                                retry_count=retry_count + 1,
+                            )
+                            await obs.record_event(
+                                "verifier.decision.parse_retry",
+                                req_id=retry_req_id,
+                                issue_id=body.issueId,
+                                extras={
+                                    "retry_count": retry_count + 1,
+                                    "reason": why,
+                                },
+                            )
+                            return {
+                                "action": "skip",
+                                "reason": f"verifier_parse_retry_{retry_count + 1}",
+                            }
+                except Exception as e:
+                    log.warning(
+                        "webhook.verifier.retry_check_failed",
+                        issue_id=body.issueId, req_id=retry_req_id, error=str(e),
+                    )
+            # retry 次数已用完 或 查 ctx 失败 → 按 escalate 继续走
+            log.warning(
+                "webhook.verifier.parse_retry_exhausted",
+                issue_id=body.issueId, req_id=retry_req_id,
+                reason=why,
+            )
+            await obs.record_event(
+                "verifier.decision.parse_retry_exhausted",
+                req_id=retry_req_id,
+                issue_id=body.issueId,
+                extras={"reason": why},
+            )
 
     # INTAKE_PASS：扫所有 assistant-messages 找 finalized intent JSON
     # （不像 verifier 严要求 "JSON 必须放最后一条"，intake-agent 常先贴 JSON 再发短消息）

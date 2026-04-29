@@ -34,4 +34,44 @@ if [[ "${SISYPHUS_NO_DOCKER:-0}" != "1" ]]; then
   fi
 fi
 
+# ── Workspace 目录契约 + restart 恢复 ──────────────────────────────────
+# Pod restart（restartPolicy=Always）时，entrypoint.sh 会重新跑。
+# 用 /.sisyphus-runner-init 标记检测 restart：标记存在 → 清掉 /workspace/* 从零开始。
+INIT_MARKER="/.sisyphus-runner-init"
+WORKSPACE="/workspace"
+
+mkdir -p "$WORKSPACE"
+
+if [[ -f "$INIT_MARKER" ]]; then
+  echo "[sisyphus-entrypoint] restart detected (init marker present), cleaning workspace residue..."
+  rm -rf "$WORKSPACE"/* "$WORKSPACE"/.[!.]* 2>/dev/null || true
+fi
+
+# 确保标准目录存在
+mkdir -p "$WORKSPACE/source"
+mkdir -p "$WORKSPACE/integration"
+
+# 目录结构校验：/workspace/source 非空时，每个子项必须是合法 git repo。
+# 结构异常（PVC 残留 / 前一个 REQ 的脏数据）→ 清掉重来。
+if [[ -d "$WORKSPACE/source" ]]; then
+  malformed=0
+  for entry in "$WORKSPACE/source"/*; do
+    [[ -e "$entry" ]] || continue
+    if [[ ! -d "$entry" ]]; then
+      echo "[sisyphus-entrypoint] malformed: $entry is not a directory" >&2
+      malformed=1
+    elif [[ ! -d "$entry/.git" ]]; then
+      echo "[sisyphus-entrypoint] malformed: $entry is not a git repo" >&2
+      malformed=1
+    fi
+  done
+  if [[ "$malformed" -eq 1 ]]; then
+    echo "[sisyphus-entrypoint] cleaning malformed /workspace/source/*" >&2
+    rm -rf "$WORKSPACE/source"/*
+  fi
+fi
+
+# 写入初始化标记
+touch "$INIT_MARKER"
+
 exec "$@"

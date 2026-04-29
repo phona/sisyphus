@@ -20,6 +20,7 @@ import pytest
 from orchestrator.router import (
     decision_to_event,
     derive_verifier_event,
+    derive_verifier_event_with_retry_info,
     extract_decision_from_issue,
     validate_decision,
 )
@@ -64,6 +65,10 @@ def test_decision_to_event_mapping():
     assert decision_to_event({"action": "escalate"}) == Event.VERIFY_ESCALATE
     # REQ-428 VFR-S6: retry maps to VERIFY_INFRA_RETRY
     assert decision_to_event({"action": "retry"}) == Event.VERIFY_INFRA_RETRY
+
+
+def _b64(d: dict) -> str:
+    return base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
 
 
 # ─── 2. extract_decision_from_issue ──────────────────────────────────────
@@ -155,6 +160,43 @@ def test_derive_verifier_event_no_decision_escalates():
     assert ev == Event.VERIFY_ESCALATE
     assert decision is None
     assert "no decision" in why.lower()
+
+
+# ─── 3.5 derive_verifier_event_with_retry_info ───────────────────────────
+
+def test_derive_with_retry_info_valid_decision():
+    d = {"action": "pass", "fixer": None, "scope": None, "reason": "ok", "confidence": "high"}
+    ev, decision, why, retry = derive_verifier_event_with_retry_info(None, [f"decision:{_b64(d)}"])
+    assert ev == Event.VERIFY_PASS
+    assert decision == d
+    assert why == ""
+    assert retry is False
+
+
+def test_derive_with_retry_info_schema_invalid_is_retry_worthy():
+    d = {"action": "nope"}  # invalid action
+    desc = f"```json\n{json.dumps(d)}\n```"
+    ev, decision, why, retry = derive_verifier_event_with_retry_info(desc, [])
+    assert ev == Event.VERIFY_ESCALATE
+    assert decision == d
+    assert "invalid" in why.lower()
+    assert retry is True
+
+
+def test_derive_with_retry_info_no_decision_not_retry_worthy():
+    ev, decision, why, retry = derive_verifier_event_with_retry_info("no json here", [])
+    assert ev == Event.VERIFY_ESCALATE
+    assert decision is None
+    assert retry is False
+
+
+def test_derive_with_retry_info_unparseable_but_retry_worthy():
+    """找到了 decision-like 文本但解析失败 → retry_worthy=True。"""
+    desc = "My decision is {action: pass, fixer: None} because..."
+    ev, decision, why, retry = derive_verifier_event_with_retry_info(desc, [])
+    assert ev == Event.VERIFY_ESCALATE
+    assert decision is None
+    assert retry is True
 
 
 # ─── 4. invoke_verifier ─────────────────────────────────────────────────
