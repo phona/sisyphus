@@ -16,9 +16,9 @@
   - 1 条端到端 chain 用例（MCT-CHAIN）—— stub 每个 action emit 下一事件，
     验从 INIT 一路推到 DONE
   - 所有 case 用 `pytest.mark.asyncio`，不依赖真 DB / BKD / K8s
-- [x] MCT-S1：`(INIT, INTENT_ANALYZE)` → `ANALYZING` + `start_analyze`
-- [x] MCT-S2：`(ANALYZING, ANALYZE_DONE)` → `ANALYZE_ARTIFACT_CHECKING` + `create_analyze_artifact_check`
-- [x] MCT-S3：`(ANALYZE_ARTIFACT_CHECKING, ANALYZE_ARTIFACT_CHECK_PASS)` → `SPEC_LINT_RUNNING` + `create_spec_lint`
+- [x] MCT-S1：`(INIT, INTENT_EXECUTE)` → `EXECUTING` + `start_execute`
+- [x] MCT-S2：`(EXECUTING, EXECUTE_DONE)` → `EXECUTE_ARTIFACT_CHECKING` + `create_execute_artifact_check`
+- [x] MCT-S3：`(EXECUTE_ARTIFACT_CHECKING, EXECUTE_ARTIFACT_CHECK_PASS)` → `SPEC_LINT_RUNNING` + `create_spec_lint`
 - [x] MCT-S4：`(SPEC_LINT_RUNNING, SPEC_LINT_PASS)` → `CHALLENGER_RUNNING` + `start_challenger`
 - [x] MCT-S5：`(CHALLENGER_RUNNING, CHALLENGER_PASS)` → `DEV_CROSS_CHECK_RUNNING` + `create_dev_cross_check`
 - [x] MCT-S6：`(DEV_CROSS_CHECK_RUNNING, DEV_CROSS_CHECK_PASS)` → `STAGING_TEST_RUNNING` + `create_staging_test`
@@ -27,7 +27,7 @@
 - [x] MCT-S9：`(ACCEPT_RUNNING, ACCEPT_PASS)` → `ACCEPT_TEARING_DOWN` + `teardown_accept_env`
 - [x] MCT-S10：`(ACCEPT_TEARING_DOWN, TEARDOWN_DONE_PASS)` → `ARCHIVING` + `done_archive`
 - [x] MCT-S11：`(ARCHIVING, ARCHIVE_DONE)` → `DONE` + `None` (no-op)
-- [x] MCT-CHAIN：从 `(INIT, INTENT_ANALYZE)` 一路 emit 链推到 `DONE`
+- [x] MCT-CHAIN：从 `(INIT, INTENT_EXECUTE)` 一路 emit 链推到 `DONE`
 
 ## Stage: PR
 

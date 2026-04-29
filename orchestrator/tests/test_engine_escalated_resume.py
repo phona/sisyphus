@@ -6,7 +6,7 @@ This file closes the engine.step mock-test coverage gap to 47/47 of
 
 - ERT-S1..ERT-S6: the 6 transitions that no other engine.step mock test
   covered (intake-phase routing + pr_ci timeout + verify_escalate from
-  intake/analyze).
+  intake/execute).
 - ERT-S7..ERT-S8: deeper coverage of the **ESCALATED resume** paths
   beyond the dispatch-level smoke checks in test_engine_verifier_loop
   VLT-S12/VLT-S13 — proving the chain emit re-enters main chain after
@@ -100,16 +100,16 @@ async def test_ert_s1_init_intent_intake_enters_intaking(stub_actions):
 
 
 # ───────────────────────────────────────────────────────────────────────
-# ERT-S2: (INTAKING, INTAKE_PASS) → ANALYZING + start_analyze_with_finalized_intent
+# ERT-S2: (INTAKING, INTAKE_PASS) → EXECUTING + start_execute_with_finalized_intent
 # ───────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_ert_s2_intaking_intake_pass_enters_analyzing(stub_actions):
-    """Spec ERT-S2: intake 完成 + finalized intent → 接力到 analyze。"""
+async def test_ert_s2_intaking_intake_pass_enters_executing(stub_actions):
+    """Spec ERT-S2: intake 完成 + finalized intent → 接力到 execute。"""
     calls: list = []
-    stub_actions["start_analyze_with_finalized_intent"] = _make_recorder(
-        "start_analyze_with_finalized_intent", calls,
+    stub_actions["start_execute_with_finalized_intent"] = _make_recorder(
+        "start_execute_with_finalized_intent", calls,
     )
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.INTAKING.value)})
@@ -121,9 +121,9 @@ async def test_ert_s2_intaking_intake_pass_enters_analyzing(stub_actions):
         cur_state=ReqState.INTAKING, ctx={}, event=Event.INTAKE_PASS,
     )
 
-    assert result["action"] == "start_analyze_with_finalized_intent"
-    assert result["next_state"] == ReqState.ANALYZING.value
-    assert pool.rows["REQ-1"].state == ReqState.ANALYZING.value
+    assert result["action"] == "start_execute_with_finalized_intent"
+    assert result["next_state"] == ReqState.EXECUTING.value
+    assert pool.rows["REQ-1"].state == ReqState.EXECUTING.value
     assert len(calls) == 1
 
 
@@ -168,7 +168,7 @@ async def test_ert_s3_intaking_intake_fail_escalates_with_cleanup(
 async def test_ert_s4_intaking_verify_escalate_escalates_with_cleanup(
     stub_actions, mock_runner_controller,
 ):
-    """Spec ERT-S4: start_analyze_with_finalized_intent 内部判 escalate（intent 缺字段
+    """Spec ERT-S4: start_execute_with_finalized_intent 内部判 escalate（intent 缺字段
     / clone failed 等）→ ESCALATED + cleanup。"""
     calls: list = []
     stub_actions["escalate"] = _make_recorder("escalate", calls)
@@ -193,27 +193,27 @@ async def test_ert_s4_intaking_verify_escalate_escalates_with_cleanup(
 
 
 # ───────────────────────────────────────────────────────────────────────
-# ERT-S5: (ANALYZING, VERIFY_ESCALATE) → ESCALATED + escalate (with cleanup)
+# ERT-S5: (EXECUTING, VERIFY_ESCALATE) → ESCALATED + escalate (with cleanup)
 # ───────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_ert_s5_analyzing_verify_escalate_escalates_with_cleanup(
+async def test_ert_s5_executing_verify_escalate_escalates_with_cleanup(
     stub_actions, mock_runner_controller,
 ):
-    """Spec ERT-S5: start_analyze 内部判 escalate（clone_involved_repos 失败等）→
+    """Spec ERT-S5: start_execute 内部判 escalate（clone_involved_repos 失败等）→
     ESCALATED + cleanup。实证背景：REQ-ttpos-pat-validate (2026-04-26) 漏挂这条
-    transition 时 REQ 卡 ANALYZING 60min，靠 watchdog auto_resume 才推进。"""
+    transition 时 REQ 卡 EXECUTING 60min，靠 watchdog auto_resume 才推进。"""
     calls: list = []
     stub_actions["escalate"] = _make_recorder("escalate", calls)
 
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ANALYZING.value)})
-    body = _body(issueId="analyze-1", projectId="p", event="session.completed")
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.EXECUTING.value)})
+    body = _body(issueId="execute-1", projectId="p", event="session.completed")
 
     result = await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p",
-        tags=["analyze", "REQ-1"],
-        cur_state=ReqState.ANALYZING, ctx={}, event=Event.VERIFY_ESCALATE,
+        tags=["execute", "REQ-1"],
+        cur_state=ReqState.EXECUTING, ctx={}, event=Event.VERIFY_ESCALATE,
     )
     await _drain_tasks()
 

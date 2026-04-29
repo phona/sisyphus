@@ -35,7 +35,7 @@ async def list_reqs(
     """List the most-recently-updated REQs, optionally filtered by state.
 
     `limit` is clamped to [1, 200] server-side. `state`, when supplied,
-    must be a valid `ReqState` value (e.g. "analyzing", "pr-ci-running",
+    must be a valid `ReqState` value (e.g. "executing", "pr-ci-running",
     "done"); an unknown value raises an error.
     """
     return await queries.fetch_reqs(get_pool(), state=state, limit=limit)

@@ -47,7 +47,7 @@ The `SISYPHUS_STAGE` env-var values are unaffected.
   comment headers naming the calling Makefile target.
 - `deploy/accept-compose.yml`: comment header.
 - `orchestrator/deploy/my-values.yaml`: `skip_accept` comment.
-- `orchestrator/src/orchestrator/prompts/analyze.md.j2` /
+- `orchestrator/src/orchestrator/prompts/execute.md.j2` /
   `orchestrator/src/orchestrator/prompts/accept.md.j2`: prose mentions.
 
 ### Specs (openspec)

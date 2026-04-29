@@ -118,7 +118,7 @@ async def test_eat_s3_handler_returns_list(stub_actions):
 @pytest.mark.asyncio
 async def test_eat_s4_row_vanishes_mid_chain(stub_actions):
     """Spec EAT-S4: req_state.get 在 chain 中段返 None → 安全早返，不抛 AttributeError。"""
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ANALYZE_ARTIFACT_CHECKING.value)})
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.EXECUTE_ARTIFACT_CHECKING.value)})
 
     async def create_spec_lint(*, body, req_id, tags, ctx):
         # 模拟 row 在 dispatch 后被删（管理员清理 / DB reset / 测试夹具）
@@ -130,8 +130,8 @@ async def test_eat_s4_row_vanishes_mid_chain(stub_actions):
     result = await engine.step(
         pool, body=_body(issueId="x", projectId="p", event="check.passed"),
         req_id="REQ-1", project_id="p", tags=[],
-        cur_state=ReqState.ANALYZE_ARTIFACT_CHECKING, ctx={},
-        event=Event.ANALYZE_ARTIFACT_CHECK_PASS,
+        cur_state=ReqState.EXECUTE_ARTIFACT_CHECKING, ctx={},
+        event=Event.EXECUTE_ARTIFACT_CHECK_PASS,
     )
     assert result["action"] == "create_spec_lint"
     assert "chained" not in result, "row 没了，chain 应早返而不是再 step"
@@ -369,12 +369,12 @@ async def test_eat_s12_done_skips_every_event(stub_actions):
 
     # 把每个可能的 action 都注册成 any_action（如果有 transition 漏到 DONE）
     for name in [
-        "start_intake", "start_analyze", "start_analyze_with_finalized_intent",
-        "create_analyze_artifact_check", "create_spec_lint", "start_challenger",
+        "start_intake", "start_execute", "start_execute_with_finalized_intent",
+        "create_execute_artifact_check", "create_spec_lint", "start_challenger",
         "create_dev_cross_check", "create_staging_test", "create_pr_ci_watch",
         "create_accept", "teardown_accept_env", "escalate",
         "apply_verify_pass", "start_fixer", "invoke_verifier_after_fix",
-        "invoke_verifier_for_analyze_artifact_check_fail",
+        "invoke_verifier_for_execute_artifact_check_fail",
         "invoke_verifier_for_spec_lint_fail",
         "invoke_verifier_for_challenger_fail",
         "invoke_verifier_for_dev_cross_check_fail",

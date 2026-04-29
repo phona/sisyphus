@@ -1,20 +1,20 @@
-# REQ-clone-fallback-direct-analyze-1777119520: fix(_clone): multi-layer involved_repos fallback for direct analyze entry
+# REQ-clone-fallback-direct-execute-1777119520: fix(_clone): multi-layer involved_repos fallback for direct execute entry
 
 ## 问题
 
-REQ-clone-and-pr-ci-fallback-1777115925 让 `start_analyze` 在 dispatch
-analyze-agent 之前 server-side clone `ctx.intake_finalized_intent.involved_repos`
+REQ-clone-and-pr-ci-fallback-1777115925 让 `start_execute` 在 dispatch
+execute-agent 之前 server-side clone `ctx.intake_finalized_intent.involved_repos`
 （fallback `ctx.involved_repos`）到 `/workspace/source/<basename>/`。
 
-但 `start_analyze` 有**两条入口**：
+但 `start_execute` 有**两条入口**：
 
 | 入口 | 触发 | ctx 内容 |
 |---|---|---|
-| **intake → analyze**  | `intent:intake` → 多轮 BKD chat → `INTAKE_PASS` → `start_analyze_with_finalized_intent` | webhook 解析 intake 最后一条 message 的 finalized intent JSON 写入 `ctx.intake_finalized_intent.involved_repos` |
-| **直接 analyze**     | `intent:analyze` 一步到位 → `start_analyze` | webhook 只写 `{intent_issue_id, intent_title}`，**没有 involved_repos** |
+| **intake → analyze**  | `intent:intake` → 多轮 BKD chat → `INTAKE_PASS` → `start_execute_with_finalized_intent` | webhook 解析 intake 最后一条 message 的 finalized intent JSON 写入 `ctx.intake_finalized_intent.involved_repos` |
+| **直接 execute**     | `intent:execute` 一步到位 → `start_execute` | webhook 只写 `{intent_issue_id, intent_title}`，**没有 involved_repos** |
 
-直接 analyze 入口下 `_clone._resolve_repos` 一定返 `[]`，server-side clone 整段
-跳过，sisyphus 把 clone 完全甩给 `analyze.md.j2` Part A.3 的"agent 自跑 helper"
+直接 execute 入口下 `_clone._resolve_repos` 一定返 `[]`，server-side clone 整段
+跳过，sisyphus 把 clone 完全甩给 `execute.md.j2` Part A.3 的"agent 自跑 helper"
 fallback。本次（REQ-ups0uldr）就是这条路径，agent 必须自己 `kubectl exec
 runner -- /opt/sisyphus/scripts/sisyphus-clone-repos.sh phona/sisyphus`。
 
@@ -23,7 +23,7 @@ runner -- /opt/sisyphus/scripts/sisyphus-clone-repos.sh phona/sisyphus`。
 - 单仓 self-dogfood（sisyphus 改 sisyphus）也得每次手 clone，prompt 那段"多数情况
   sisyphus 已替你跑"成了空头支票
 - agent 的"自跑 helper"是软约束 —— 走 prompt 文字描述，没办法机制约束 agent 真跑
-  （历史上有 analyze-agent 跳 Part A 直接 grep；REQ-checker-empty-source-1777113775
+  （历史上有 execute-agent 跳 Part A 直接 grep；REQ-checker-empty-source-1777113775
   增加了 checker 兜底，但仍是事后裁决）
 - intent issue 上明明可以挂个 `repo:phona/sisyphus` tag 表明意图，**sisyphus 不读**
 - 单仓部署（如 sisyphus 自身 dogfood、ttpos-server-go single-repo lab）应当能在
@@ -35,14 +35,14 @@ runner -- /opt/sisyphus/scripts/sisyphus-clone-repos.sh phona/sisyphus`。
 
 | 层 | 来源 | 触发场景 |
 |---|---|---|
-| L1 | `ctx.intake_finalized_intent.involved_repos` | intake → analyze 主路径（**不变**） |
+| L1 | `ctx.intake_finalized_intent.involved_repos` | intake → execute 主路径（**不变**） |
 | L2 | `ctx.involved_repos` | 老 caller / 测试夹具显式塞 ctx（**不变**） |
-| L3 | BKD intent issue tags 形如 `repo:<org>/<name>` | 用户在直接 analyze 入口显式打 tag |
+| L3 | BKD intent issue tags 形如 `repo:<org>/<name>` | 用户在直接 execute 入口显式打 tag |
 | L4 | `settings.default_involved_repos`（env `SISYPHUS_DEFAULT_INVOLVED_REPOS`） | 单仓 / 默认仓部署，ops 配一次 |
 
-`start_analyze` 跟 `start_analyze_with_finalized_intent` 都改成传
+`start_execute` 跟 `start_execute_with_finalized_intent` 都改成传
 `tags=tags, default_repos=settings.default_involved_repos` 给 helper；intake
-路径会沿用 L1 命中，不受影响；直接 analyze 入口现在有 L3 / L4 兜底。
+路径会沿用 L1 命中，不受影响；直接 execute 入口现在有 L3 / L4 兜底。
 
 ### 故意不做
 
@@ -50,11 +50,11 @@ runner -- /opt/sisyphus/scripts/sisyphus-clone-repos.sh phona/sisyphus`。
   风险：路径串（`src/orchestrator`、`M14b/M14c`、`docs/integration-contracts.md`
   里的 `phona/foo` 示例）极易误命中 → 拉错仓污染 `/workspace/source/`，下游
   checker 行为不可预测。要文本声明就让用户显式打 `repo:` tag。
-- **不**改 `analyze.md.j2`。模板已经按 `cloned_repos` 真假分支显示"sisyphus
+- **不**改 `execute.md.j2`。模板已经按 `cloned_repos` 真假分支显示"sisyphus
   已替你 clone X"或"你必须自己 clone"，4 层全 miss 时仍 fall through 到原
   prompt 路径，agent 行为兼容。
 - **不**给 L3 / L4 加 PR-CI 端的"discovery"。`pr_ci_watch` 已经从
-  `/workspace/source/*` 实地探测，不依赖 ctx —— 这个 REQ 只动 analyze
+  `/workspace/source/*` 实地探测，不依赖 ctx —— 这个 REQ 只动 execute
   入口的 clone，pr_ci_watch 不动。
 
 ## 取舍
@@ -84,14 +84,14 @@ runner -- /opt/sisyphus/scripts/sisyphus-clone-repos.sh phona/sisyphus`。
     参数；旧签名 `(req_id, ctx)` 保持向后兼容（kwargs 可缺）
   - log 增加 `source` 字段（来自哪一层）方便观测
 - `orchestrator/src/orchestrator/config.py`：加 `default_involved_repos: list[str] = Field(default_factory=list)`，env `SISYPHUS_DEFAULT_INVOLVED_REPOS`
-- `orchestrator/src/orchestrator/actions/start_analyze.py`：调 `clone_involved_repos_into_runner` 时传 `tags=tags, default_repos=settings.default_involved_repos`
-- `orchestrator/src/orchestrator/actions/start_analyze_with_finalized_intent.py`：同上（intake 路径正常用不上 L3/L4，但传进去保持调用形状一致 + 防 intake JSON 异常时降级到 L4）
-- `orchestrator/tests/test_actions_start_analyze.py`：补 8 个 case 覆盖 4 层 priority + tag 解析 + start_analyze 透传
+- `orchestrator/src/orchestrator/actions/start_execute.py`：调 `clone_involved_repos_into_runner` 时传 `tags=tags, default_repos=settings.default_involved_repos`
+- `orchestrator/src/orchestrator/actions/start_execute_with_finalized_intent.py`：同上（intake 路径正常用不上 L3/L4，但传进去保持调用形状一致 + 防 intake JSON 异常时降级到 L4）
+- `orchestrator/tests/test_actions_start_execute.py`：补 8 个 case 覆盖 4 层 priority + tag 解析 + start_execute 透传
 - `orchestrator/tests/test_contract_clone_fallback_direct_analyze.py`：新增。锁死
   - layer priority order
   - settings field 存在 + default `[]`
   - `_clone.py` 不准 import `intent_title` / `get_issue` / `description`（自由文本解析 guard）
-  - start_analyze* 透传 `tags=tags` + `default_repos=settings.default_involved_repos`
+  - start_execute* 透传 `tags=tags` + `default_repos=settings.default_involved_repos`
   - slug 校验严格度
 
 不动 / 不影响：
@@ -99,4 +99,4 @@ runner -- /opt/sisyphus/scripts/sisyphus-clone-repos.sh phona/sisyphus`。
 - `state.py` / `engine.py` —— 状态机不变
 - `webhook.py` / `router.py` —— ctx 解析不变（webhook 仍只写 `intent_issue_id` + `intent_title`）
 - `pr_ci_watch.py` / `staging_test.py` —— checker 路径不动
-- `analyze.md.j2` —— 模板按 `cloned_repos` 真假分支已经处理两种情况，无需改
+- `execute.md.j2` —— 模板按 `cloned_repos` 真假分支已经处理两种情况，无需改

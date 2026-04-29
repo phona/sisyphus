@@ -1,11 +1,11 @@
-"""contract regression for REQ-clone-fallback-direct-analyze-1777119520:
+"""contract regression for REQ-clone-fallback-direct-execute-1777119520:
 
-multi-layer involved_repos fallback for direct analyze entry。
+multi-layer involved_repos fallback for direct execute entry。
 - _resolve_repos / resolve_repos 必须按 4-layer 顺序：ctx.intake → ctx.involved
   → tags.repo → settings.default
 - _clone helper 不能从自由文本（intent_title / prompt body）反向推断 repos
   （假阳性风险高，规则强制改用显式 tag 或 settings env）
-- start_analyze + start_analyze_with_finalized_intent 必须把 tags +
+- start_execute + start_execute_with_finalized_intent 必须把 tags +
   settings.default_involved_repos 透传给 clone helper
 - settings.default_involved_repos field 必须存在，env=SISYPHUS_DEFAULT_INVOLVED_REPOS
 """
@@ -52,7 +52,7 @@ def test_default_involved_repos_setting_exists():
     fields = Settings.model_fields
     assert "default_involved_repos" in fields, (
         "Settings.default_involved_repos must exist for "
-        "REQ-clone-fallback-direct-analyze-1777119520 (L4 fallback)."
+        "REQ-clone-fallback-direct-execute-1777119520 (L4 fallback)."
     )
     f = fields["default_involved_repos"]
     # 默认空 list（多仓部署不强加默认；单仓部署用 env 显式设）
@@ -80,25 +80,25 @@ def test_clone_helper_does_not_parse_intent_title_or_body():
     hits = [s for s in forbidden_substrings if s in src]
     assert hits == [], (
         f"_clone.py must NOT introspect free-text fields {hits} for repo slugs "
-        "(REQ-clone-fallback-direct-analyze-1777119520). Use explicit "
+        "(REQ-clone-fallback-direct-execute-1777119520). Use explicit "
         "`repo:<org>/<name>` tags or settings.default_involved_repos."
     )
 
 
-def test_start_analyze_actions_pass_tags_and_default_to_clone():
-    """start_analyze + start_analyze_with_finalized_intent 必须透传 tags +
+def test_start_execute_actions_pass_tags_and_default_to_clone():
+    """start_execute + start_execute_with_finalized_intent 必须透传 tags +
     settings.default_involved_repos 给 _clone helper。"""
-    for action_filename in ("start_analyze.py", "start_analyze_with_finalized_intent.py"):
+    for action_filename in ("start_execute.py", "start_execute_with_finalized_intent.py"):
         path = _PRODUCTION_SOURCE / "actions" / action_filename
         text = path.read_text(encoding="utf-8")
         assert "tags=tags" in text, (
             f"{action_filename} must pass tags=tags to clone_involved_repos_into_runner "
-            "(REQ-clone-fallback-direct-analyze-1777119520)."
+            "(REQ-clone-fallback-direct-execute-1777119520)."
         )
         assert "default_repos=settings.default_involved_repos" in text, (
             f"{action_filename} must pass default_repos=settings.default_involved_repos "
             "to clone_involved_repos_into_runner "
-            "(REQ-clone-fallback-direct-analyze-1777119520)."
+            "(REQ-clone-fallback-direct-execute-1777119520)."
         )
 
 

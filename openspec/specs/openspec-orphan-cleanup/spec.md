@@ -31,27 +31,27 @@ escalate transition from completing and returning `{"escalated": True}`.
 - **WHEN** the escalate action runs
 - **THEN** escalate still returns `{"escalated": True}` without raising
 
-### Requirement: start_analyze supersedes stale same-slug openspec/changes dirs
+### Requirement: start_execute supersedes stale same-slug openspec/changes dirs
 
 The system SHALL scan each cloned repo for `openspec/changes/` directories whose base slug
 (after stripping the `-vN` suffix) matches the current REQ's base slug but is not the current
-REQ itself, when `start_analyze` dispatches a new analyze run for REQ-XXX-vN (a redispatch).
+REQ itself, when `start_execute` dispatches a new execute run for REQ-XXX-vN (a redispatch).
 Any such stale directory MUST be moved to `openspec/changes/_superseded/<old-dir>/` and committed.
 The supersede step MUST be fail-open: any failure MUST NOT prevent BKD dispatch from proceeding.
 
 #### Scenario: SUPR-S1 vN redispatch triggers supersede mv and commit
 - **GIVEN** REQ-foo-1234-v2 is being dispatched with cloned_repos
-- **WHEN** start_analyze calls _supersede_stale_openspec_changes
+- **WHEN** start_execute calls _supersede_stale_openspec_changes
 - **THEN** exec_in_runner receives a command containing `_superseded` and the current req_id
 
 #### Scenario: SUPR-S2 no stale dirs when base_slug equals current
 - **GIVEN** REQ-foo-1234 (no -vN suffix) is dispatched
-- **WHEN** start_analyze calls _supersede_stale_openspec_changes
+- **WHEN** start_execute calls _supersede_stale_openspec_changes
 - **THEN** no mv is performed (current dir is excluded by the loop)
 
 #### Scenario: SUPR-S3 supersede exec failure does not block dispatch
 - **GIVEN** exec_in_runner raises RuntimeError during supersede
-- **WHEN** start_analyze runs
+- **WHEN** start_execute runs
 - **THEN** BKD dispatch still proceeds (no emit=VERIFY_ESCALATE in result)
 
 ### Requirement: cleanup script classifies orphan openspec/changes dirs by PG state

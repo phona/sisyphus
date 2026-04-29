@@ -18,7 +18,7 @@
 - [x] `scripts/sisyphus-accept-down-compose.sh` comment header
 - [x] `deploy/accept-compose.yml` header comment block
 - [x] `orchestrator/deploy/my-values.yaml` `skip_accept` comment
-- [x] `orchestrator/src/orchestrator/prompts/analyze.md.j2` accept-agent bullet
+- [x] `orchestrator/src/orchestrator/prompts/execute.md.j2` accept-agent bullet
 - [x] `orchestrator/src/orchestrator/prompts/accept.md.j2` env-up / env-down narration
 
 ## Stage: implementation — applied spec

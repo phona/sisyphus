@@ -191,11 +191,11 @@ authoritative writers).
   contain `bkd_intent_url="https://bkd.example/projects/p/issues/i"` and
   `pr_urls={"foo/bar": "https://github.com/foo/bar/pull/9"}`
 
-### Requirement: analyze prompt enforces a sisyphus cross-link footer in every PR body
+### Requirement: execute prompt enforces a sisyphus cross-link footer in every PR body
 
-`prompts/analyze.md.j2` SHALL receive a `bkd_intent_issue_url` template
-variable from `start_analyze` and render a "PR body footer" section that
-instructs the analyze-agent to append a fixed block to the body of every
+`prompts/execute.md.j2` SHALL receive a `bkd_intent_issue_url` template
+variable from `start_execute` and render a "PR body footer" section that
+instructs the execute-agent to append a fixed block to the body of every
 PR it opens. The block MUST contain:
 
 - the literal HTML comment marker `<!-- sisyphus:cross-link -->`
@@ -206,9 +206,9 @@ PR it opens. The block MUST contain:
 The marker comment is fixed so downstream tooling can detect a
 sisyphus-managed PR by string match.
 
-#### Scenario: XLINK-S16 analyze prompt renders cross-link block when url provided
+#### Scenario: XLINK-S16 execute prompt renders cross-link block when url provided
 
-- **GIVEN** `render("analyze.md.j2", req_id="REQ-x", project_id="P",
+- **GIVEN** `render("execute.md.j2", req_id="REQ-x", project_id="P",
   issue_id="I", bkd_intent_issue_url="https://bkd.example/projects/P/issues/I",
   cloned_repos=[], aissh_server_id="X", project_alias="P")` is called
 - **WHEN** the template is rendered
@@ -217,7 +217,7 @@ sisyphus-managed PR by string match.
 - **AND** the output MUST contain
   `[BKD intent issue](https://bkd.example/projects/P/issues/I)`
 
-#### Scenario: XLINK-S17 analyze prompt omits link line when bkd_intent_issue_url empty
+#### Scenario: XLINK-S17 execute prompt omits link line when bkd_intent_issue_url empty
 
 - **GIVEN** the same render call but `bkd_intent_issue_url=""`
 - **WHEN** the template is rendered

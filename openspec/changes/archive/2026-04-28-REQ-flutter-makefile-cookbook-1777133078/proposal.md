@@ -29,7 +29,7 @@ Makefile wrapper 模式（路径 A）：
 根 Makefile（新增）
   └── ci-env          → 输出 FLUTTER_VERSION 等 key=value
   └── ci-setup        → flutter pub get + melos bootstrap
-  └── ci-lint         → flutter analyze --no-pub + dart format --set-exit-if-changed
+  └── ci-lint         → flutter execute --no-pub + dart format --set-exit-if-changed
   └── ci-unit-test    → melos run test:unit（无 device）
   └── ci-integration-test → 空实现 exit 0（或 docker compose 后端集成）
   └── ci-build        → flutter build apk --release

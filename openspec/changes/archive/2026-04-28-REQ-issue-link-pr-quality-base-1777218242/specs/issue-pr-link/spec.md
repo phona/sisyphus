@@ -88,18 +88,18 @@ as no-op).
 
 The helper SHALL backfill `pr:*` tags onto every sisyphus-tracked BKD issue id
 present in ctx the first time it transitions from cache-miss to a non-empty
-discovered list. The helper SHALL inspect the keys `analyze_issue_id`,
+discovered list. The helper SHALL inspect the keys `execute_issue_id`,
 `staging_test_issue_id`, `pr_ci_watch_issue_id`, `accept_issue_id`, and
 `archive_issue_id`, and for each non-empty string id MUST call
 `bkd.merge_tags_and_update(project_id, issue_id, add=pr_link_tags(links))`.
 The backfill MUST tolerate per-issue PATCH errors by logging a warning and
-continuing to the next id. This covers the analyze issue (created before
+continuing to the next id. This covers the execute issue (created before
 PRs exist) and any earlier sub-issue that was created before the first
 successful discovery window.
 
-#### Scenario: LP-S5 first discovery backfills analyze issue
+#### Scenario: LP-S5 first discovery backfills execute issue
 
-- **GIVEN** `ctx = {"analyze_issue_id": "abc123"}`
+- **GIVEN** `ctx = {"execute_issue_id": "abc123"}`
 - **AND** discovery yields `[PrLink("phona/sisyphus", 42, "https://github.com/phona/sisyphus/pull/42")]`
 - **WHEN** `ensure_pr_links_in_ctx` is invoked
 - **THEN** `bkd.merge_tags_and_update` MUST be called once with arguments

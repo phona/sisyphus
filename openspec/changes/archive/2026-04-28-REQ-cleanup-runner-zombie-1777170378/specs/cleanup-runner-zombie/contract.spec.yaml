@@ -120,8 +120,8 @@ failure_modes:
   concurrent_force_escalate:
     cause: "两个 admin 同时 POST /escalate 同一 REQ"
     handler: |
-      第一个：row.state='analyzing' → SQL UPDATE → 起 cleanup task
-      第二个：row.state 可能仍 read 到 'analyzing'（race），SQL UPDATE 把已 escalated
+      第一个：row.state='executing' → SQL UPDATE → 起 cleanup task
+      第二个：row.state 可能仍 read 到 'executing'（race），SQL UPDATE 把已 escalated
               的行覆写为 escalated（幂等）+ 起第二个 cleanup task
               但 cleanup_runner 本身幂等（404 处理），第二轮删 Pod 时已 404 → 无副作用
     state_outcome: "state=escalated；可能起 1~2 个 cleanup task，结果相同"

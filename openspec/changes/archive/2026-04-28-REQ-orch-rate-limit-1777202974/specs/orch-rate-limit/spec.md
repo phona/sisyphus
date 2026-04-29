@@ -3,7 +3,7 @@
 ### Requirement: orchestrator gates fresh REQ entry on in-flight count and node disk pressure
 
 The sisyphus orchestrator SHALL run an admission check at the start of the
-two fresh-entry actions — `start_intake` and `start_analyze` — and MUST
+two fresh-entry actions — `start_intake` and `start_execute` — and MUST
 reject the REQ before any runner Pod / PVC creation when either
 condition holds:
 
@@ -22,7 +22,7 @@ the action handler, after writing
 `ctx.escalated_reason = "rate-limit:inflight-cap-exceeded"` or
 `"rate-limit:disk-pressure"` so the existing escalate pathway tags the
 REQ with the correct reason. The continuation action
-`start_analyze_with_finalized_intent` MUST NOT run the gate — that REQ
+`start_execute_with_finalized_intent` MUST NOT run the gate — that REQ
 already passed admission at intake time.
 
 The disk-pressure check SHALL fail open (admit + log warning) when:

@@ -58,13 +58,13 @@ other than `escalated` or `done`. The error body MUST include the current
 state name and a hint pointing the operator at `/admin/req/{req_id}/escalate`
 as the prerequisite for moving an in-flight REQ toward terminal cleanup.
 This intentionally narrow precondition prevents an admin from
-short-circuiting an in-flight stage (e.g. ANALYZING with a running
+short-circuiting an in-flight stage (e.g. EXECUTING with a running
 runner Pod) into DONE in a single call, which would race the action
 handler still touching the workspace and silently drop in-progress work.
 
 #### Scenario: ACE-S3 calling complete on an in-flight REQ returns 409
 
-- **GIVEN** a REQ row with `state='analyzing'` exists
+- **GIVEN** a REQ row with `state='executing'` exists
 - **WHEN** the client sends `POST /admin/req/REQ-X/complete`
 - **THEN** the response MUST be 409 with detail containing the literal
   substring `analyzing` and a hint mentioning `/admin/req/.../escalate`

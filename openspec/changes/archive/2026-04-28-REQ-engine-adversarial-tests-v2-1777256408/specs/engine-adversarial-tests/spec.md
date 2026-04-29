@@ -63,8 +63,8 @@ mid-recursion is a recoverable race, not a programmer error.
 - **GIVEN** an action handler registered for `create_spec_lint` returns
   `{"emit": "spec-lint.pass"}`, AND between the action's CAS-advance and the
   chained `req_state.get` the row for that REQ is removed from the FakePool
-- **WHEN** `engine.step` runs at `(ANALYZE_ARTIFACT_CHECKING,
-  ANALYZE_ARTIFACT_CHECK_PASS)`
+- **WHEN** `engine.step` runs at `(EXECUTE_ARTIFACT_CHECKING,
+  EXECUTE_ARTIFACT_CHECK_PASS)`
 - **THEN** the call MUST NOT raise, and the returned dict MUST contain
   `action="create_spec_lint"` without a `chained` key
 
@@ -144,7 +144,7 @@ state-machine progress depends on CAS, not observability writes.
 the webhook body lacks an `issueId` attribute, and a missing attribute MUST
 NOT raise. The engine reads `body.issueId` via `getattr(body, "issueId",
 None)` to support tests and edge cases where the webhook body is synthetic
-(e.g. INTENT_ANALYZE injection from snapshot loop).
+(e.g. INTENT_EXECUTE injection from snapshot loop).
 
 #### Scenario: EAT-S9 body without issueId attribute does not raise
 

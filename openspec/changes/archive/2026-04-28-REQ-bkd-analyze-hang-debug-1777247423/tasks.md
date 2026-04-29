@@ -1,4 +1,4 @@
-# Tasks — REQ-bkd-analyze-hang-debug-1777247423
+# Tasks — REQ-bkd-execute-hang-debug-1777247423
 
 ## Stage: investigate
 - [x] Read 60-min watchdog escalations from `artifact_checks` to confirm symptom
@@ -22,5 +22,5 @@
 - [x] No DB schema / migration / state transition changes (verified)
 
 ## Stage: PR
-- [x] git push feat/REQ-bkd-analyze-hang-debug-1777247423
+- [x] git push feat/REQ-bkd-execute-hang-debug-1777247423
 - [x] gh pr create --label sisyphus

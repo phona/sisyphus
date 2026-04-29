@@ -28,8 +28,8 @@ async def test_cas_no_context_patch_4_args():
     """无 patch → 5 个 placeholder 都不能在 SQL 里出现，args 必须 4 个。"""
     pool = CapturePool()
     ok = await rs.cas_transition(
-        pool, "REQ-1", ReqState.INIT, ReqState.ANALYZING,
-        Event.INTENT_ANALYZE, "start_analyze",
+        pool, "REQ-1", ReqState.INIT, ReqState.EXECUTING,
+        Event.INTENT_EXECUTE, "start_execute",
     )
     assert ok is True
     assert len(pool.calls) == 1
@@ -39,17 +39,17 @@ async def test_cas_no_context_patch_4_args():
     assert len(args) == 4            # req_id, expected, next, history_json
     assert args[0] == "REQ-1"
     assert args[1] == "init"
-    assert args[2] == "analyzing"
+    assert args[2] == "executing"
     history = json.loads(args[3])
-    assert history[0]["event"] == "intent.analyze"
+    assert history[0]["event"] == "intent.execute"
 
 
 @pytest.mark.asyncio
 async def test_cas_with_context_patch_5_args():
     pool = CapturePool()
     ok = await rs.cas_transition(
-        pool, "REQ-1", ReqState.INIT, ReqState.ANALYZING,
-        Event.INTENT_ANALYZE, "start_analyze",
+        pool, "REQ-1", ReqState.INIT, ReqState.EXECUTING,
+        Event.INTENT_EXECUTE, "start_execute",
         context_patch={"intent_issue_id": "i-9"},
     )
     assert ok is True
@@ -64,7 +64,7 @@ async def test_cas_failed_returns_false():
     pool = AsyncMock()
     pool.fetchrow = AsyncMock(return_value=None)   # CAS 没命中
     ok = await rs.cas_transition(
-        pool, "REQ-1", ReqState.INIT, ReqState.ANALYZING,
-        Event.INTENT_ANALYZE, "start_analyze",
+        pool, "REQ-1", ReqState.INIT, ReqState.EXECUTING,
+        Event.INTENT_EXECUTE, "start_execute",
     )
     assert ok is False

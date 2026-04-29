@@ -5,7 +5,7 @@
 /workspace 持久保存 clone 的 repos + 中间产物。
 
 生命周期绑 REQ：
-  - analyze 起：ensure_runner 幂等创建 PVC + Pod
+  - execute 起：ensure_runner 幂等创建 PVC + Pod
   - 中途 Pod 重启：K8s restartPolicy=Always 自动拉起（PVC 不动）
   - pause：delete Pod（PVC 留）
   - resume：重建 Pod（PVC 自动重挂）

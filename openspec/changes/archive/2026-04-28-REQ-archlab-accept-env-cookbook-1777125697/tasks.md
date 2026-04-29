@@ -25,7 +25,7 @@
 
 - [x] `git push origin feat/REQ-archlab-accept-env-cookbook-1777125697`
 - [x] `gh pr create` —— title + body 写清楚动机 + 测试方案
-- [x] BKD issue tags 保留 `analyze` + `REQ-archlab-accept-env-cookbook-1777125697`
+- [x] BKD issue tags 保留 `execute` + `REQ-archlab-accept-env-cookbook-1777125697`
 - [x] BKD issue move review
 
 ## 不在本 REQ scope（明确）

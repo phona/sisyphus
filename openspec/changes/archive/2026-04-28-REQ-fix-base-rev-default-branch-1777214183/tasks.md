@@ -16,7 +16,7 @@
 - [x] `orchestrator/src/orchestrator/actions/create_dev_cross_check.py` header
       注释同步
 - [x] 更新 prompt 文档：
-  - [x] `prompts/analyze.md.j2` —— 流程描述里 `origin/main` 改成 `origin/<default_branch>`
+  - [x] `prompts/execute.md.j2` —— 流程描述里 `origin/main` 改成 `origin/<default_branch>`
   - [x] `prompts/bugfix.md.j2` —— Step 3.5 push 前自检命令改用 `git symbolic-ref` 取默认分支
   - [x] `prompts/verifier/dev_cross_check_success.md.j2`
   - [x] `prompts/verifier/dev_cross_check_fail.md.j2`

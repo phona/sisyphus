@@ -5,8 +5,8 @@
 人在 BKD intent issue 上挂的 hint tag —— 比如 `repo:phona/foo`、`spec_home_repo:phona/x`、`ux:fast-track`、`priority:high`、`team:platform` —— 是给整条 REQ 流水线看的"用户上下文"。当前 sisyphus 把这些 tag **完整丢失**：
 
 1. `start_intake` PATCH intent issue 时硬编码 `tags=["sisyphus", "intake", req_id]` —— 用户 hint 全被覆盖
-2. `start_analyze` PATCH intent issue 时硬编码 `tags=["analyze", req_id]` —— 同样覆盖
-3. `start_analyze_with_finalized_intent` 创建新 analyze issue 用 `tags=["analyze", req_id]`
+2. `start_execute` PATCH intent issue 时硬编码 `tags=["execute", req_id]` —— 同样覆盖
+3. `start_execute_with_finalized_intent` 创建新 execute issue 用 `tags=["execute", req_id]`
 4. `start_challenger` 创建新 challenger issue 用 `tags=["challenger", req_id, f"parent-id:{src}", *pr_tags]`
 
 **实证后果**：
@@ -32,7 +32,7 @@
 
 **Sisyphus 管的 tag**（不传播）：
 
-- exact：`sisyphus`、`intake`、`analyze`、`challenger`、`verifier`、`fixer`、`accept`、`staging-test`、`pr-ci`、`done-archive`
+- exact：`sisyphus`、`intake`、`execute`、`challenger`、`verifier`、`fixer`、`accept`、`staging-test`、`pr-ci`、`done-archive`
 - 前缀：`intent:`、`result:`、`pr-ci:`、`verify:`、`trigger:`、`decision:`、`fixer:`、`parent:`、`parent-id:`、`parent-stage:`、`target:`、`round-`、`pr:`
 - pattern：`^REQ-[\w-]+$`（REQ id —— 各 callsite 自己显式注入）
 
@@ -49,8 +49,8 @@
 | 文件 | 改前 | 改后 |
 |---|---|---|
 | `actions/start_intake.py` | `tags=["sisyphus", "intake", req_id]` | `tags=["sisyphus", "intake", req_id, *forwarded]` |
-| `actions/start_analyze.py` | `tags=["analyze", req_id]` | `tags=["analyze", req_id, *forwarded]` |
-| `actions/start_analyze_with_finalized_intent.py` | `tags=["analyze", req_id]` | `tags=["analyze", req_id, *forwarded]` |
+| `actions/start_execute.py` | `tags=["execute", req_id]` | `tags=["execute", req_id, *forwarded]` |
+| `actions/start_execute_with_finalized_intent.py` | `tags=["execute", req_id]` | `tags=["execute", req_id, *forwarded]` |
 | `actions/start_challenger.py` | `tags=["challenger", req_id, f"parent-id:{src}", *pr_tags]` | `tags=["challenger", req_id, f"parent-id:{src}", *pr_tags, *forwarded]` |
 
 `forwarded` 取自 webhook body.tags（即触发本次 dispatch 的 issue 当前 tags），过滤后追加。顺序：sisyphus 管的 tag 在前，hint 在后；hint 之间保留出现顺序去重。
@@ -75,4 +75,4 @@
 - `body.tags` 在所有四个 callsite 入参里已有 / 已被传入 ctx 路径上能拿到的等价数据（`tags=` 是 action register 的标准参数）。
 - `_clone.py` 既有"读 tags 解 `repo:` slug"逻辑零变化（参数源不变）；本 REQ 只是让"PATCH 之后这些 tag 还在 issue 上"，更稳了不更脆。
 - 现有 router.py / state.py 不动 —— router 看 sisyphus 管的 tag 派事件，hint tag 在 router 集合里全 miss，不会误派事件。
-- 测试影响：`tests/test_actions_start_analyze.py` 既有断言用 `assert_awaited_once()` 和 cmd 子串匹配，对 tags 数组顺序 / 长度无强约束；新增 `repo:` 用例验证转发即可。
+- 测试影响：`tests/test_actions_start_execute.py` 既有断言用 `assert_awaited_once()` 和 cmd 子串匹配，对 tags 数组顺序 / 长度无强约束；新增 `repo:` 用例验证转发即可。

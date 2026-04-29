@@ -6,7 +6,7 @@
 
 ## 一句话
 
-研发主链（intent → analyze → spec → dev → ci-unit → ci-int → accept → archive → done）**状态机全部实现** + **运行时基础设施稳定**。v0.1.1 解锁 **ci-int 真跑**（DinD vfs → fuse-overlayfs，单 REQ 磁盘 15GB → 5GB），accept 仍 skip（ttpos-arch-lab 未接）。REQ-997 验证 28m6s 全链路跑通，详见 [REQ-997-postmortem.md](runs/REQ-997-postmortem.md)。
+研发主链（intent → execute → spec → dev → ci-unit → ci-int → accept → archive → done）**状态机全部实现** + **运行时基础设施稳定**。v0.1.1 解锁 **ci-int 真跑**（DinD vfs → fuse-overlayfs，单 REQ 磁盘 15GB → 5GB），accept 仍 skip（ttpos-arch-lab 未接）。REQ-997 验证 28m6s 全链路跑通，详见 [REQ-997-postmortem.md](runs/REQ-997-postmortem.md)。
 
 ---
 
@@ -70,7 +70,7 @@
 
 | agent | 调用次数 | 平均耗时 | 一把过率 | 备注 |
 |---|---|---|---|---|
-| analyze | 15 | ~18 min | 100% | 最慢稳定 stage |
+| execute | 15 | ~18 min | 100% | 最慢稳定 stage |
 | contract-spec | 5 | ~17 min | 100% | |
 | acceptance-spec | 4 | ~11 min | 100% | |
 | dev | 7 | ~17 min | 100% | |

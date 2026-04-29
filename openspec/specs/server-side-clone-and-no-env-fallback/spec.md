@@ -3,18 +3,18 @@
 ## Purpose
 TBD - created by archiving change REQ-clone-and-pr-ci-fallback-1777115925. Update Purpose after archive.
 ## Requirements
-### Requirement: start_analyze MUST server-side clone involved_repos before dispatching analyze-agent
+### Requirement: start_execute MUST server-side clone involved_repos before dispatching execute-agent
 
 The orchestrator SHALL own the clone of every repo listed in
 `ctx.intake_finalized_intent.involved_repos` (falling back to
 `ctx.involved_repos`) into the runner pod's `/workspace/source/<basename>/`,
-and MUST do so server-side from `actions/start_analyze.py::start_analyze`
-and `actions/start_analyze_with_finalized_intent.py::start_analyze_with_finalized_intent`
+and MUST do so server-side from `actions/start_execute.py::start_execute`
+and `actions/start_execute_with_finalized_intent.py::start_execute_with_finalized_intent`
 after `k8s_runner.ensure_runner(req_id, wait_ready=True)` returns and
 BEFORE the BKD `follow_up_issue(prompt)` call dispatches the
-analyze-agent. The clone MUST be performed by invoking
+execute-agent. The clone MUST be performed by invoking
 `/opt/sisyphus/scripts/sisyphus-clone-repos.sh <repo1> <repo2> ...` inside
-the runner pod via `k8s_runner.exec_in_runner`. The analyze-agent MUST
+the runner pod via `k8s_runner.exec_in_runner`. The execute-agent MUST
 NOT be the only path that places source code under
 `/workspace/source/<basename>/`.
 
@@ -25,7 +25,7 @@ agent to fall back to its prompt-driven clone path.
 
 #### Scenario: SCNF-S1 server-side clone runs sisyphus-clone-repos.sh with intake involved_repos
 
-- **GIVEN** `start_analyze_with_finalized_intent` is invoked with
+- **GIVEN** `start_execute_with_finalized_intent` is invoked with
   `ctx={"intake_finalized_intent": {"involved_repos": ["phona/repo-a", "ZonEaseTech/ttpos-server-go"]}}`
 - **WHEN** `k8s_runner.ensure_runner` returns Pod ready
 - **THEN** `k8s_runner.exec_in_runner` MUST be called with a command that
@@ -35,19 +35,19 @@ agent to fall back to its prompt-driven clone path.
 
 #### Scenario: SCNF-S2 server-side clone is skipped when no involved_repos in ctx
 
-- **GIVEN** `start_analyze` is invoked on the direct-analyze path with
+- **GIVEN** `start_execute` is invoked on the direct-analyze path with
   `ctx={"intent_title": "..."}` (no `intake_finalized_intent`, no
   `involved_repos`)
 - **WHEN** the action runs
 - **THEN** `k8s_runner.exec_in_runner` MUST NOT be called
-- **AND** the action MUST still dispatch the analyze-agent via
+- **AND** the action MUST still dispatch the execute-agent via
   `BKDClient.follow_up_issue` (preserving the direct-analyze fallback path
-  where the agent clones manually per `analyze.md.j2` Part A.3)
+  where the agent clones manually per `execute.md.j2` Part A.3)
 
-### Requirement: start_analyze MUST emit VERIFY_ESCALATE when server-side clone fails
+### Requirement: start_execute MUST emit VERIFY_ESCALATE when server-side clone fails
 
-The `start_analyze` / `start_analyze_with_finalized_intent` action SHALL
-NOT proceed to dispatch the analyze-agent when the server-side clone
+The `start_execute` / `start_execute_with_finalized_intent` action SHALL
+NOT proceed to dispatch the execute-agent when the server-side clone
 helper exits with a non-zero exit code (e.g., GitHub auth failure, repo
 name typo, persistent network error); it MUST instead return a mapping
 containing `emit: VERIFY_ESCALATE` and a `reason` string that includes
@@ -59,7 +59,7 @@ broken workspace to the agent.
 
 - **GIVEN** `ctx.intake_finalized_intent.involved_repos = ["phona/typo-repo"]`
   and `k8s_runner.exec_in_runner` returns `ExecResult(exit_code=5, stderr="...")`
-- **WHEN** `start_analyze_with_finalized_intent` runs
+- **WHEN** `start_execute_with_finalized_intent` runs
 - **THEN** the return value MUST contain `emit == "VERIFY_ESCALATE"` and
   `reason` MUST contain the substring `clone failed` and the literal
   `5` (the helper exit code)

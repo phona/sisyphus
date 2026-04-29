@@ -71,14 +71,14 @@ def _make_issue(issue_id: str, status_id: str, session_status: str, tags: list[s
     )
 
 
-# ─── Case 1：review + completed + analyze tag + REQ tag → patched ─────────
+# ─── Case 1：review + completed + execute tag + REQ tag → patched ─────────
 @pytest.mark.asyncio
-async def test_patches_stuck_analyze_issue(monkeypatch):
+async def test_patches_stuck_execute_issue(monkeypatch):
     pool = FakePool(rows=[{"project_id": "proj-1"}])
     _patch_pool(monkeypatch, pool)
     issues = {
         "proj-1": [
-            _make_issue("iss-a", "review", "completed", ["analyze", "REQ-1"]),
+            _make_issue("iss-a", "review", "completed", ["execute", "REQ-1"]),
         ],
     }
     captured = _patch_bkd_for_sync(monkeypatch, issues)
@@ -114,7 +114,7 @@ async def test_skips_running_session(monkeypatch):
     _patch_pool(monkeypatch, pool)
     issues = {
         "proj-1": [
-            _make_issue("iss-a", "review", "running", ["analyze", "REQ-1"]),
+            _make_issue("iss-a", "review", "running", ["execute", "REQ-1"]),
         ],
     }
     captured = _patch_bkd_for_sync(monkeypatch, issues)
@@ -132,7 +132,7 @@ async def test_skips_non_review_status(monkeypatch):
     _patch_pool(monkeypatch, pool)
     issues = {
         "proj-1": [
-            _make_issue("iss-a", "done", "completed", ["analyze", "REQ-1"]),
+            _make_issue("iss-a", "done", "completed", ["execute", "REQ-1"]),
         ],
     }
     captured = _patch_bkd_for_sync(monkeypatch, issues)
@@ -150,7 +150,7 @@ async def test_skips_issue_without_req_tag(monkeypatch):
     _patch_pool(monkeypatch, pool)
     issues = {
         "proj-1": [
-            _make_issue("iss-a", "review", "completed", ["analyze"]),
+            _make_issue("iss-a", "review", "completed", ["execute"]),
         ],
     }
     captured = _patch_bkd_for_sync(monkeypatch, issues)
@@ -186,7 +186,7 @@ async def test_counts_patch_failure(monkeypatch):
     _patch_pool(monkeypatch, pool)
     issues = {
         "proj-1": [
-            _make_issue("iss-a", "review", "completed", ["analyze", "REQ-1"]),
+            _make_issue("iss-a", "review", "completed", ["execute", "REQ-1"]),
             _make_issue("iss-b", "review", "completed", ["fixer", "REQ-2"]),
         ],
     }
@@ -208,7 +208,7 @@ async def test_scans_multiple_projects(monkeypatch):
     _patch_pool(monkeypatch, pool)
     issues = {
         "proj-a": [
-            _make_issue("iss-a1", "review", "completed", ["analyze", "REQ-A1"]),
+            _make_issue("iss-a1", "review", "completed", ["execute", "REQ-A1"]),
         ],
         "proj-b": [
             _make_issue("iss-b1", "review", "completed", ["challenger", "REQ-B1"]),

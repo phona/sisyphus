@@ -1,6 +1,6 @@
 # Tasks — REQ-runner-gc-pod-pvc-split-1777283946
 
-owner: analyze-agent or sub-agent of analyze
+owner: execute-agent or sub-agent of execute
 
 ## Stage: spec
 - [x] author specs/runner-gc-pod-pvc-split/contract.spec.yaml

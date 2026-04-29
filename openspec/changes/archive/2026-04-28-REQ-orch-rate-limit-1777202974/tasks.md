@@ -17,13 +17,13 @@
 - [x] `orchestrator/src/orchestrator/actions/start_intake.py`: call
       `check_admission` first; on reject patch `ctx.escalated_reason` +
       emit `VERIFY_ESCALATE`
-- [x] `orchestrator/src/orchestrator/actions/start_analyze.py`: same
+- [x] `orchestrator/src/orchestrator/actions/start_execute.py`: same
 - [x] `orchestrator/tests/test_admission.py`: unit tests for
       `check_admission` covering all 6 scenarios
 - [x] `orchestrator/tests/test_intake.py`: integration test that
       `start_intake` escalates when admission denies
-- [x] `orchestrator/tests/test_actions_start_analyze.py`: same for
-      `start_analyze`
+- [x] `orchestrator/tests/test_actions_start_execute.py`: same for
+      `start_execute`
 
 ## Stage: PR
 

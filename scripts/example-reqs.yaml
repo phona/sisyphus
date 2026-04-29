@@ -2,7 +2,7 @@
 # Usage:
 #   python bkd-cli.py --dry-run example-reqs.yaml          # validate
 #   python bkd-cli.py --trigger example-reqs.yaml           # create + trigger with intent:intake (default)
-#   python bkd-cli.py --trigger --intent analyze example-reqs.yaml  # skip intake, go direct analyze
+#   python bkd-cli.py --trigger --intent execute example-reqs.yaml  # skip intake, go direct execute
 
 project: nnvxh8wj
 base_url: http://localhost:3000/api
@@ -34,7 +34,7 @@ issues:
     tags: ["gap-analysis", "improver", "descoped"]
 
   - title: "【缺口-6】多仓库 M16 端到端合同测试"
-    description: "involved_repos / cloned_repos 代码已 wired（_clone.py 5 层 fallback），但没有合同测试验证 analyze → fix → verify → accept → archive 全链路的多仓行为。"
+    description: "involved_repos / cloned_repos 代码已 wired（_clone.py 5 层 fallback），但没有合同测试验证 execute → fix → verify → accept → archive 全链路的多仓行为。"
     priority: p2
     tags: ["gap-analysis", "multi-repo-contract"]
 

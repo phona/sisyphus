@@ -5,7 +5,7 @@
 - LP-S2 cache miss runs discovery and stashes ctx
 - LP-S3 runner exec error returns empty without raising
 - LP-S4 one repo errors, another succeeds (per-repo best-effort)
-- LP-S5 first discovery backfills analyze issue
+- LP-S5 first discovery backfills execute issue
 - LP-S6 pr_link_tags formats correctly
 - LP-S7 from_ctx tolerates malformed entries
 """
@@ -231,12 +231,12 @@ async def test_LP_S4_per_repo_best_effort_on_gh_error(monkeypatch, httpx_mock):
     ]
 
 
-# ─── LP-S5: first discovery backfills analyze issue ────────────────────────
+# ─── LP-S5: first discovery backfills execute issue ────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_LP_S5_first_discovery_backfills_analyze_issue(monkeypatch, httpx_mock):
-    """ctx.analyze_issue_id 存在 → 第一次 discover 时调 bkd.merge_tags_and_update。"""
+async def test_LP_S5_first_discovery_backfills_execute_issue(monkeypatch, httpx_mock):
+    """ctx.execute_issue_id 存在 → 第一次 discover 时调 bkd.merge_tags_and_update。"""
     monkeypatch.setattr(pr_links.settings, "github_token", "ghp_xxx")
     _patch_runner(monkeypatch, exec_return=FakeExec(
         stdout="git@github.com:phona/sisyphus.git\n",
@@ -251,7 +251,7 @@ async def test_LP_S5_first_discovery_backfills_analyze_issue(monkeypatch, httpx_
 
     result = await pr_links.ensure_pr_links_in_ctx(
         req_id="REQ-X", branch="feat/REQ-X",
-        ctx={"analyze_issue_id": "abc123"},
+        ctx={"execute_issue_id": "abc123"},
         project_id="p",
     )
 
@@ -277,7 +277,7 @@ async def test_LP_S5b_backfill_iterates_all_known_issue_ids(monkeypatch, httpx_m
     )
 
     ctx = {
-        "analyze_issue_id": "a-1",
+        "execute_issue_id": "a-1",
         "staging_test_issue_id": "s-1",
         "accept_issue_id": "ac-1",
         "unknown_key": "x-1",  # 不在白名单：不该被 backfill
@@ -315,7 +315,7 @@ async def test_LP_S5c_backfill_failure_does_not_raise(monkeypatch, httpx_mock):
         json=[{"number": 42, "html_url": "https://github.com/phona/sisyphus/pull/42"}],
     )
 
-    ctx = {"analyze_issue_id": "a-1", "staging_test_issue_id": "s-1"}
+    ctx = {"execute_issue_id": "a-1", "staging_test_issue_id": "s-1"}
     result = await pr_links.ensure_pr_links_in_ctx(
         req_id="REQ-X", branch="feat/REQ-X",
         ctx=ctx, project_id="p",

@@ -17,7 +17,7 @@ issues:
     priority: p0
     tags: ["dogfood", "intake", "result-tag", "pipeline-blocker"]
     trigger: true
-    intent: analyze
+    intent: execute
 
   - title: "【修复-2】intent issue webhook 丢失导致 start_intake 不运行"
     description: |
@@ -31,12 +31,12 @@ issues:
 
       修复方向：
       1. 检查 BKD webhook 配置和投递日志
-      2. 给 orchestrator 加 orphan intent issue 扫描增强（snapshot loop 已扫 intent:analyze，但 intent:intake 可能漏了）
+      2. 给 orchestrator 加 orphan intent issue 扫描增强（snapshot loop 已扫 intent:execute，但 intent:intake 可能漏了）
       3. 考虑在 bkd-cli.py 派单后主动 poll 确认 webhook 被处理，或加一个 admin trigger 接口
     priority: p0
     tags: ["dogfood", "webhook", "intent-intake", "pipeline-blocker"]
     trigger: true
-    intent: analyze
+    intent: execute
 
   - title: "【修复-3】webhook dedup 过度 mark_processed 导致合法事件丢失"
     description: |
@@ -57,7 +57,7 @@ issues:
     priority: p1
     tags: ["dogfood", "webhook", "dedup", "event-loss"]
     trigger: true
-    intent: analyze
+    intent: execute
 
   - title: "【修复-4】openspec changes 归档 + 残留清理"
     description: |
@@ -72,4 +72,4 @@ issues:
     priority: p1
     tags: ["dogfood", "openspec", "archive", "cleanup"]
     trigger: true
-    intent: analyze
+    intent: execute

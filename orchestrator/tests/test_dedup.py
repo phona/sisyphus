@@ -144,7 +144,7 @@ async def test_webhook_dedup_retry_after_crash(monkeypatch):
         async def __aexit__(self, *a): return False
         async def get_issue(self, *a, **kw):
             class R:
-                tags: ClassVar = ["REQ-1", "analyze"]
+                tags: ClassVar = ["REQ-1", "execute"]
             return R()
         async def update_issue(self, *a, **kw): pass
 
@@ -152,7 +152,7 @@ async def test_webhook_dedup_retry_after_crash(monkeypatch):
 
     # router
     monkeypatch.setattr(router_lib, "extract_req_id", lambda tags, num=None: "REQ-1")
-    monkeypatch.setattr(router_lib, "derive_event", lambda evt, tags: Event.INTENT_ANALYZE)
+    monkeypatch.setattr(router_lib, "derive_event", lambda evt, tags: Event.INTENT_EXECUTE)
 
     # req_state
     class FakeRow:
@@ -164,7 +164,7 @@ async def test_webhook_dedup_retry_after_crash(monkeypatch):
     monkeypatch.setattr(req_state_mod, "update_context", AsyncMock())
 
     # engine.step → return ok（simulate 状态机推进成功）
-    monkeypatch.setattr(engine, "step", AsyncMock(return_value={"action": "start_analyze"}))
+    monkeypatch.setattr(engine, "step", AsyncMock(return_value={"action": "start_execute"}))
 
     class MockReq:
         headers: ClassVar = {"authorization": "Bearer test-webhook-token"}
@@ -174,14 +174,14 @@ async def test_webhook_dedup_retry_after_crash(monkeypatch):
                 "issueId": "issue-abc",
                 "projectId": "proj-1",
                 "executionId": "exec-1",
-                "tags": ["REQ-1", "analyze"],
+                "tags": ["REQ-1", "execute"],
             }
 
     result = await webhook.webhook(MockReq())
 
     # mark_processed 必须被调
     assert mark_called, "mark_processed should be called after successful handler"
-    assert result["action"] == "start_analyze"
+    assert result["action"] == "start_execute"
 
 
 @pytest.mark.asyncio
@@ -207,13 +207,13 @@ async def test_webhook_dedup_no_mark_on_crash(monkeypatch):
         async def __aexit__(self, *a): return False
         async def get_issue(self, *a, **kw):
             class R:
-                tags: ClassVar = ["REQ-1", "analyze"]
+                tags: ClassVar = ["REQ-1", "execute"]
             return R()
         async def update_issue(self, *a, **kw): pass
 
     monkeypatch.setattr(webhook, "BKDClient", FakeBKD)
     monkeypatch.setattr(router_lib, "extract_req_id", lambda tags, num=None: "REQ-1")
-    monkeypatch.setattr(router_lib, "derive_event", lambda evt, tags: Event.INTENT_ANALYZE)
+    monkeypatch.setattr(router_lib, "derive_event", lambda evt, tags: Event.INTENT_EXECUTE)
 
     class FakeRow:
         state = ReqState.INIT
@@ -234,7 +234,7 @@ async def test_webhook_dedup_no_mark_on_crash(monkeypatch):
                 "issueId": "issue-abc",
                 "projectId": "proj-1",
                 "executionId": "exec-1",
-                "tags": ["REQ-1", "analyze"],
+                "tags": ["REQ-1", "execute"],
             }
 
     with pytest.raises(RuntimeError, match="handler crash"):
@@ -280,7 +280,7 @@ async def test_webhook_dedup_no_mark_on_early_skip_allows_retry(monkeypatch):
         async def __aexit__(self, *a): return False
         async def get_issue(self, *a, **kw):
             class R:
-                tags: ClassVar = ["analyze"]  # 第一次没 REQ tag
+                tags: ClassVar = ["execute"]  # 第一次没 REQ tag
             return R()
         async def update_issue(self, *a, **kw): pass
 
@@ -296,7 +296,7 @@ async def test_webhook_dedup_no_mark_on_early_skip_allows_retry(monkeypatch):
                 "issueId": "issue-550",
                 "projectId": "proj-550",
                 "executionId": "exec-550",
-                "tags": ["analyze"],
+                "tags": ["execute"],
             }
 
     # ── 第一次：无 REQ tag → 早期 skip，mark_processed 不调 ──
@@ -310,7 +310,7 @@ async def test_webhook_dedup_no_mark_on_early_skip_allows_retry(monkeypatch):
         router_lib, "extract_req_id",
         lambda tags, num=None: "REQ-550",
     )
-    monkeypatch.setattr(router_lib, "derive_event", lambda evt, tags: Event.INTENT_ANALYZE)
+    monkeypatch.setattr(router_lib, "derive_event", lambda evt, tags: Event.INTENT_EXECUTE)
 
     class FakeBKD2:
         def __init__(self, *a, **kw): pass
@@ -318,7 +318,7 @@ async def test_webhook_dedup_no_mark_on_early_skip_allows_retry(monkeypatch):
         async def __aexit__(self, *a): return False
         async def get_issue(self, *a, **kw):
             class R:
-                tags: ClassVar = ["REQ-550", "analyze"]
+                tags: ClassVar = ["REQ-550", "execute"]
             return R()
         async def update_issue(self, *a, **kw): pass
 
@@ -331,7 +331,7 @@ async def test_webhook_dedup_no_mark_on_early_skip_allows_retry(monkeypatch):
     monkeypatch.setattr(req_state_mod, "get", AsyncMock(return_value=FakeRow()))
     monkeypatch.setattr(req_state_mod, "insert_init", AsyncMock())
     monkeypatch.setattr(req_state_mod, "update_context", AsyncMock())
-    monkeypatch.setattr(engine, "step", AsyncMock(return_value={"action": "start_analyze"}))
+    monkeypatch.setattr(engine, "step", AsyncMock(return_value={"action": "start_execute"}))
 
     result2 = await webhook.webhook(MockReq())
 
@@ -339,5 +339,5 @@ async def test_webhook_dedup_no_mark_on_early_skip_allows_retry(monkeypatch):
     assert check_calls[1][0] == "retry", (
         f"second delivery must be 'retry' (processed_at still NULL), got {check_calls[1][0]!r}"
     )
-    assert result2["action"] == "start_analyze"
+    assert result2["action"] == "start_execute"
     assert len(mark_called) == 1, "mark_processed called once after successful retry"

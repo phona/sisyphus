@@ -11,11 +11,11 @@
 - [x] add `orchestrator/src/orchestrator/prompts/status_block.py` exposing
       `build_status_block_ctx(req_id, stage, ...)`
 - [x] include status block at the top of `intake.md.j2` (above tools_whitelist)
-- [x] include status block at the top of `analyze.md.j2` (above tools_whitelist)
+- [x] include status block at the top of `execute.md.j2` (above tools_whitelist)
 - [x] `start_intake.py`: pass `bkd_intent_issue_url` + `status_block` into render
-- [x] `start_analyze.py`: pass `status_block` into render (re-uses existing
+- [x] `start_execute.py`: pass `status_block` into render (re-uses existing
       `bkd_intent_issue_url` + `cloned_repos`, adds `pr_urls` from ctx)
-- [x] `start_analyze_with_finalized_intent.py`: pass `bkd_intent_issue_url` +
+- [x] `start_execute_with_finalized_intent.py`: pass `bkd_intent_issue_url` +
       `status_block` into render (parity with direct path)
 
 ## Stage: tests

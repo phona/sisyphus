@@ -2,11 +2,11 @@
 
 ## Why
 
-When sisyphus dispatches `start_intake` / `start_analyze`, it follow-ups a multi-page
+When sisyphus dispatches `start_intake` / `start_execute`, it follow-ups a multi-page
 prompt to the user-facing **BKD intent issue**. Today every status-relevant fact is
 *scattered* across that wall of text:
 
-| Fact | Where it surfaces (analyze.md.j2) |
+| Fact | Where it surfaces (execute.md.j2) |
 |---|---|
 | REQ id | line 15 (`REQ={{ req_id }}`) |
 | Pod name | line 79, 102, 222 |
@@ -24,7 +24,7 @@ intent issue, so a fan-out sub-agent reading the chat has no clickable anchor.
 ## What
 
 Add a single canonical **`## REQ Status` markdown table** at the top of the BKD
-intent stage prompts (`intake.md.j2` + `analyze.md.j2`). It consolidates the
+intent stage prompts (`intake.md.j2` + `execute.md.j2`). It consolidates the
 identity / location / link facts the orchestrator already has in hand at dispatch
 time:
 
@@ -34,7 +34,7 @@ time:
 | Field | Value |
 |---|---|
 | REQ | `REQ-foo` |
-| Stage | `analyze` |
+| Stage | `execute` |
 | Branch | `feat/REQ-foo` |
 | Runner Pod | `runner-req-foo` |
 | BKD intent issue | [open](https://bkd.example.com/projects/p/issues/iss-1) |
@@ -50,7 +50,7 @@ are computable from `req_id` alone.
 
 The block is rendered by a new shared partial
 `orchestrator/src/orchestrator/prompts/_shared/status_block.md.j2`, fed by a
-helper `prompts.status_block.build_status_block_ctx(...)`. Both intake and analyze
+helper `prompts.status_block.build_status_block_ctx(...)`. Both intake and execute
 templates `{% include %}` the partial **above** `tools_whitelist.md.j2` so it is
 the first thing the agent reads.
 
@@ -83,7 +83,7 @@ the first thing the agent reads.
 
 ## Acceptance
 
-- `## REQ Status` header is the first non-blank section of rendered analyze and
+- `## REQ Status` header is the first non-blank section of rendered execute and
   intake prompts.
 - Always-on rows (REQ / Stage / Branch / Runner Pod) appear with values
   derived from `req_id`.

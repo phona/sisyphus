@@ -98,9 +98,9 @@ _ENTRY_CASES = [
         id="VLT-S5-accept_teardown_fail",
     ),
     pytest.param(
-        ReqState.ANALYZE_ARTIFACT_CHECKING, Event.ANALYZE_ARTIFACT_CHECK_FAIL,
-        "invoke_verifier_for_analyze_artifact_check_fail",
-        id="VLT-S6-analyze_artifact_check_fail",
+        ReqState.EXECUTE_ARTIFACT_CHECKING, Event.EXECUTE_ARTIFACT_CHECK_FAIL,
+        "invoke_verifier_for_execute_artifact_check_fail",
+        id="VLT-S6-execute_artifact_check_fail",
     ),
     pytest.param(
         ReqState.CHALLENGER_RUNNING, Event.CHALLENGER_FAIL,
@@ -383,8 +383,8 @@ async def test_vlt_s14_escalated_verify_escalate_is_no_op(
 _SESSION_FAILED_STATES = [
     pytest.param(s, id=f"VLT-S15-{s.value}")
     for s in [
-        ReqState.INTAKING, ReqState.ANALYZING,
-        ReqState.ANALYZE_ARTIFACT_CHECKING,
+        ReqState.INTAKING, ReqState.EXECUTING,
+        ReqState.EXECUTE_ARTIFACT_CHECKING,
         ReqState.SPEC_LINT_RUNNING, ReqState.CHALLENGER_RUNNING,
         ReqState.DEV_CROSS_CHECK_RUNNING,
         ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,

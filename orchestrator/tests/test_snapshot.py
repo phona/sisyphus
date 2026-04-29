@@ -177,7 +177,7 @@ async def test_sync_once_upserts_per_project(monkeypatch):
     async def _client_ctx(*a, **kw):
         yield fake_bkd
 
-    # 两个 issue 都不是 intent:analyze orphan
+    # 两个 issue 都不是 intent:execute orphan
     async def _stub_get(pool, req_id):
         return object()
     monkeypatch.setattr(snapshot.req_state, "get", _stub_get)
@@ -194,7 +194,7 @@ async def test_sync_once_upserts_per_project(monkeypatch):
     assert all(sql.startswith("INSERT INTO bkd_snapshot") for sql, _ in captured)
 
 
-# ─── orphan intent:analyze 恢复 ──────────────────────────────────────
+# ─── orphan intent:execute 恢复 ──────────────────────────────────────
 
 
 class _StubInitRow:
@@ -204,7 +204,7 @@ class _StubInitRow:
 
 
 class _StubExistingRow:
-    state: ClassVar[ReqState] = ReqState.ANALYZING
+    state: ClassVar[ReqState] = ReqState.EXECUTING
     context: ClassVar[dict] = {}
 
 
@@ -270,11 +270,11 @@ def _orphan_test_setup(monkeypatch, *, issues, obs_present=True,
 
 
 @pytest.mark.asyncio
-async def test_orphan_intent_analyze_triggers_when_missing_req_state(monkeypatch):
-    """SNAP-ORPHAN-S1：intent:analyze tag + 没 req_state 行 → INTENT_ANALYZE 入栈。"""
+async def test_orphan_intent_execute_triggers_when_missing_req_state(monkeypatch):
+    """SNAP-ORPHAN-S1：intent:execute tag + 没 req_state 行 → INTENT_EXECUTE 入栈。"""
     issue = make_issue(
         id="i-9", issue_number=9, title="fix something", status_id="working",
-        tags=["intent:analyze"],
+        tags=["intent:execute"],
     )
     engine_step, insert_init, _ = _orphan_test_setup(monkeypatch, issues=[issue])
 
@@ -292,22 +292,22 @@ async def test_orphan_intent_analyze_triggers_when_missing_req_state(monkeypatch
 
     engine_step.assert_awaited_once()
     step_kwargs = engine_step.await_args.kwargs
-    assert step_kwargs["event"] == Event.INTENT_ANALYZE
+    assert step_kwargs["event"] == Event.INTENT_EXECUTE
     assert step_kwargs["cur_state"] == ReqState.INIT
     assert step_kwargs["req_id"] == "REQ-9"
     assert step_kwargs["project_id"] == "proj-X"
     body = step_kwargs["body"]
     assert body.issueId == "i-9"
     assert body.projectId == "proj-X"
-    assert "intent:analyze" in body.tags
+    assert "intent:execute" in body.tags
 
 
 @pytest.mark.asyncio
-async def test_orphan_intent_analyze_skipped_when_already_in_req_state(monkeypatch):
+async def test_orphan_intent_execute_skipped_when_already_in_req_state(monkeypatch):
     """SNAP-ORPHAN-S2：req_state 已有行 → 不触发。"""
     issue = make_issue(
         id="i-42", issue_number=42, title="t", status_id="working",
-        tags=["intent:analyze", "REQ-42"],
+        tags=["intent:execute", "REQ-42"],
     )
     engine_step, insert_init, _ = _orphan_test_setup(
         monkeypatch, issues=[issue], existing_req_ids=("REQ-42",),
@@ -320,11 +320,11 @@ async def test_orphan_intent_analyze_skipped_when_already_in_req_state(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_orphan_intent_analyze_skipped_when_analyze_tag_present(monkeypatch):
-    """SNAP-ORPHAN-S3：已经有 analyze tag → 不触发（已 rebrand 过）。"""
+async def test_orphan_intent_execute_skipped_when_execute_tag_present(monkeypatch):
+    """SNAP-ORPHAN-S3：已经有 execute tag → 不触发（已 rebrand 过）。"""
     issue = make_issue(
         id="i-7", issue_number=7, title="t", status_id="working",
-        tags=["intent:analyze", "analyze", "REQ-7"],
+        tags=["intent:execute", "execute", "REQ-7"],
     )
     engine_step, insert_init, _ = _orphan_test_setup(monkeypatch, issues=[issue])
 
@@ -336,11 +336,11 @@ async def test_orphan_intent_analyze_skipped_when_analyze_tag_present(monkeypatc
 
 @pytest.mark.parametrize("status", ["done", "cancelled"])
 @pytest.mark.asyncio
-async def test_orphan_intent_analyze_skipped_when_status_done(monkeypatch, status):
+async def test_orphan_intent_execute_skipped_when_status_done(monkeypatch, status):
     """SNAP-ORPHAN-S4：BKD 状态已 done/cancelled → 不触发。"""
     issue = make_issue(
         id="i-99", issue_number=99, title="t", status_id=status,
-        tags=["intent:analyze"],
+        tags=["intent:execute"],
     )
     engine_step, insert_init, _ = _orphan_test_setup(monkeypatch, issues=[issue])
 
@@ -355,7 +355,7 @@ async def test_sync_once_runs_orphan_pass_without_obs_pool(monkeypatch):
     """SNAP-ORPHAN-S5：obs pool 缺席时 orphan 恢复仍跑，sync_once 返 0（无 UPSERT）。"""
     issue = make_issue(
         id="i-9", issue_number=9, title="fix something", status_id="working",
-        tags=["intent:analyze"],
+        tags=["intent:execute"],
     )
     engine_step, insert_init, _ = _orphan_test_setup(
         monkeypatch, issues=[issue], obs_present=False,
@@ -369,15 +369,15 @@ async def test_sync_once_runs_orphan_pass_without_obs_pool(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_orphan_intent_analyze_failure_does_not_break_loop(monkeypatch):
+async def test_orphan_intent_execute_failure_does_not_break_loop(monkeypatch):
     """单 issue 恢复抛异常时，下一条仍被处理；整轮不挂。"""
     bad_issue = make_issue(
         id="i-bad", issue_number=11, title="bad", status_id="working",
-        tags=["intent:analyze"],
+        tags=["intent:execute"],
     )
     good_issue = make_issue(
         id="i-good", issue_number=12, title="good", status_id="working",
-        tags=["intent:analyze"],
+        tags=["intent:execute"],
     )
     engine_step, _, _ = _orphan_test_setup(
         monkeypatch, issues=[bad_issue, good_issue],

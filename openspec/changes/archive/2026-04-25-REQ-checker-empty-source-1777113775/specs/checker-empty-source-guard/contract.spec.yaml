@@ -49,7 +49,7 @@ guards:
         repo has feat/<REQ> branch fetchable from origin AND
         repo's root Makefile contains BOTH `^ci-unit-test:` AND `^ci-integration-test:`
     rationale: |
-      Catches the case where the analyze / dev agent reported done but did
+      Catches the case where the execute / dev agent reported done but did
       not actually push artifacts to feat/<REQ>, or the source repo lacks the
       ttpos-ci standard Makefile targets. checker SHALL NOT emit *_PASS when
       it has zero signal.

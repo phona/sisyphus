@@ -23,7 +23,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  user / PM 在 BKD UI 提需求（intent:analyze tag）                  │
+│  user / PM 在 BKD UI 提需求（intent:execute tag）                  │
 └──────────────────────────────────────────────────────────────────┘
                              ↓ webhook
 ┌──────────────────────────────────────────────────────────────────┐
@@ -43,7 +43,7 @@
         ↓（BKD agent 跨 SSH 进 K8s runner / 自带 Coder gh auth）
 ┌──────────────────────────────────────────────────────────────────┐
 │  BKD Agents (跑在 Coder workspace, gh auth 不依赖 sisyphus secret) │
-│  • analyze / spec / challenger / dev / accept / done_archive       │
+│  • execute / spec / challenger / dev / accept / done_archive       │
 │  • verifier (3 路决策)                                             │
 │  • fixer (dev / spec)                                              │
 │  ✅ 在 Coder workspace 里 git push feat/REQ-* + gh pr create       │
@@ -92,7 +92,7 @@
 ```
 ┌────────────────────────────────────────────────────────┐
 │  研发组织层： sisyphus (本仓库)                        │
-│    - 串 analyze → spec-lint → dev-cross-check          │
+│    - 串 execute → spec-lint → dev-cross-check          │
 │      → staging-test → pr-ci → accept → archive         │
 │    - verifier-agent 主观决策替代固定 fail 分流          │
 │    - watchdog / GC / 指标采集                           │
@@ -109,17 +109,17 @@
 
 ## 2. 主流水线
 
-happy path（含 INTAKING）十一段，入口可选 `intent:intake`（推荐）或 `intent:analyze`（跳过澄清）一路自动到 `done`。
+happy path（含 INTAKING）十一段，入口可选 `intent:intake`（推荐）或 `intent:execute`（跳过澄清）一路自动到 `done`。
 
 **入口选择**：
 - `intent:intake` → INTAKING（不熟悉的仓先澄清，brainstorm 和实现物理隔离）
-- `intent:analyze` → ANALYZING（跳过 intake，直接进 analyze，适合 trivial REQ）
+- `intent:execute` → EXECUTING（跳过 intake，直接进 analyze，适合 trivial REQ）
 
 ```mermaid
 flowchart TD
     Human[人在 BKD 打<br/>intent:intake tag]
     Intake[intake-agent<br/>多轮 BKD chat 澄清需求<br/>输出 finalized intent JSON]
-    Analyze[analyze-agent (M17 全责交付)<br/>写 spec + 业务码<br/>push feat/REQ-x + 开 PR<br/>自决拆 sub-issue]
+    Analyze[execute-agent (M17 全责交付)<br/>写 spec + 业务码<br/>push feat/REQ-x + 开 PR<br/>自决拆 sub-issue]
     SpecLint[spec-lint checker<br/>openspec validate<br/>+ check-scenario-refs.sh]
     Challenger[challenger-agent (M18)<br/>黑盒读 spec 写 contract test<br/>push feat 分支]
     DevCheck[dev-cross-check checker<br/>业务 repo 侧 ci-lint<br/>仅 lint 变更文件]
@@ -131,7 +131,7 @@ flowchart TD
     Archive[done_archive<br/>各仓 openspec apply 归档<br/>不自动合 PR]
     Done([done])
 
-    Human --> Intake --> Analyze --> SpecLint --> Challenger --> DevCheck --> Staging --> PRCI --> EnvUp --> Accept --> Teardown --> Archive --> Done
+    Human --> Intake --> Execute --> SpecLint --> Challenger --> DevCheck --> Staging --> PRCI --> EnvUp --> Accept --> Teardown --> Archive --> Done
 
     classDef agent fill:#e1f5ff,stroke:#0288d1
     classDef checker fill:#fff3e0,stroke:#f57c00
@@ -258,7 +258,7 @@ flowchart LR
 | **sisyphus orchestrator** | 状态机 + 路由 + watchdog + GC + 指标采集 | Python, K8s Deployment | 不写业务代码、不审 PR 内容 |
 | **机械 checker** | 跑 openspec validate / lint / 测试 / 轮 CI / 跑 accept-env-up/down | Python, runner pod 内 exec | 只看 exit code / API 返回 |
 | **intake-agent** | 多轮 BKD chat 澄清需求，输出 6 字段 finalized intent JSON。物理隔离 brainstorm（不能写代码 / 不能开 PR） | BKD agent + intake.md.j2 | 只读 + 问问题 |
-| **analyze-agent (M17 全责交付)** | 写 `proposal.md` / `design.md` / `tasks.md`（**每个被改的 source repo 的 `openspec/changes/REQ-x/` 下各一份**，没有主从）+ 调 `sisyphus-clone-repos.sh` 把所有仓 clone 到 `/workspace/source/<basename>/` + 实现业务代码 + push `feat/REQ-x` + **真开 PR** + 写 unit test。**自决**是 solo 写完还是开 BKD sub-issue 平行干（M16 起 sisyphus 不主动起 spec / dev BKD 子 agent；M17 起 analyze 全责交付） | BKD agent + analyze.md.j2 | integration test 留给 challenger 写（M18） |
+| **execute-agent (M17 全责交付)** | 写 `proposal.md` / `design.md` / `tasks.md`（**每个被改的 source repo 的 `openspec/changes/REQ-x/` 下各一份**，没有主从）+ 调 `sisyphus-clone-repos.sh` 把所有仓 clone 到 `/workspace/source/<basename>/` + 实现业务代码 + push `feat/REQ-x` + **真开 PR** + 写 unit test。**自决**是 solo 写完还是开 BKD sub-issue 平行干（M16 起 sisyphus 不主动起 spec / dev BKD 子 agent；M17 起 execute 全责交付） | BKD agent + execute.md.j2 | integration test 留给 challenger 写（M18） |
 | **challenger-agent (M18)** | 黑盒读 spec 写 contract test（`tests/integration/`）+ push feat 分支。**不看 dev 代码**避免 prompt 偷工。spec 自相矛盾 / 写不出 test → fail → verifier | BKD agent + challenger.md.j2 | 业务代码 LOCKED 不可改 |
 | **verifier-agent** | 主观判 stage 是否真过（pass / fix / escalate；含基础设施 flaky 直接 escalate） | BKD agent + verifier/{stage}_{trigger}.md.j2（14 对 + 3 partial） | 不写代码，只输出 decision JSON |
 | **fixer-agent** | 改一类东西：dev fixer 改业务码、spec fixer 改 spec | BKD agent + bugfix.md.j2（过渡） | scope 由 verifier 指定 |
@@ -269,9 +269,9 @@ flowchart LR
 
 | # | Stage | 触发 | 产物 / 副作用 | 推进信号 |
 |---|---|---|---|---|
-| 0 | **intake** (可选) | `intent:intake` tag | BKD chat 多轮澄清 + finalized intent JSON（6 字段）。不写代码，不开 PR | intake-agent PATCH `result:pass` + JSON 解析成功 → 新建 analyze issue |
-| 1 | **analyze (M17 全责交付)** | `intent:analyze` tag（跳过 intake）或 intake.pass 后新建 issue | `openspec/changes/REQ-x/{proposal,design,tasks}.md` 在**每个被改的 source repo** 各一份（没有主从）+ 业务代码 + unit test + 各仓 push `feat/REQ-x` + 开 PR；高层文档放 spec home repo | session.completed + analyze tag |
-| 2 | **spec-lint** (机械, for-each-repo) | analyze done | **遍历 `/workspace/source/*`**：每仓有 `openspec/changes/REQ-x/` 就跑 `openspec validate` + `check-scenario-refs.sh --specs-search-path`（跨仓引用）。任一仓红 → 整体红 | sisyphus 自己判，无 BKD agent |
+| 0 | **intake** (可选) | `intent:intake` tag | BKD chat 多轮澄清 + finalized intent JSON（6 字段）。不写代码，不开 PR | intake-agent PATCH `result:pass` + JSON 解析成功 → 新建 execute issue |
+| 1 | **analyze (M17 全责交付)** | `intent:execute` tag（跳过 intake）或 intake.pass 后新建 issue | `openspec/changes/REQ-x/{proposal,design,tasks}.md` 在**每个被改的 source repo** 各一份（没有主从）+ 业务代码 + unit test + 各仓 push `feat/REQ-x` + 开 PR；高层文档放 spec home repo | session.completed + execute tag |
+| 2 | **spec-lint** (机械, for-each-repo) | execute done | **遍历 `/workspace/source/*`**：每仓有 `openspec/changes/REQ-x/` 就跑 `openspec validate` + `check-scenario-refs.sh --specs-search-path`（跨仓引用）。任一仓红 → 整体红 | sisyphus 自己判，无 BKD agent |
 | 3 | **challenger (M18)** | spec-lint pass | 黑盒读 spec 写 contract test（`tests/integration/`）+ push feat 分支。spec 自相矛盾 / 写不出 test → fail → verifier | session.completed + challenger tag + result:pass/fail |
 | 4 | **dev-cross-check** (机械, for-each-repo) | challenger pass | 遍历每仓 `BASE_REV=$(git merge-base HEAD origin/<default_branch>) make ci-lint`（default_branch 先读 `origin/HEAD` 符号引用拿仓真实值，再退 main/master/develop/dev；ttpos-ci 标准，仅 lint 变更文件）；任一仓红 → 整体红 | sisyphus 自己判，无 BKD agent |
 | 5 | **staging-test** (机械, for-each-repo **并行**) | dev-cross-check pass | 遍历每仓 `make ci-unit-test && make ci-integration-test`（**单 repo 内串行**，避免内存峰值叠加），**repo 之间并行**起所有仓；任一仓退非 0 → 整体红 | sisyphus 自己判，无 BKD agent |
@@ -289,10 +289,10 @@ M15 起 sisyphus 不再维护 `manifest.yaml` 这种集中式 IDL。stage 间靠
 
 | 原语 | 谁写 | 谁读 | 内容 |
 |---|---|---|---|
-| **BKD intent issue description** | 人 / analyze-agent | analyze / challenger / archive | 涉及哪些 source / integration repo（**平等列表**，无主从）、可选 "spec home repo"（弱归属，仅 archive 用） |
+| **BKD intent issue description** | 人 / execute-agent | execute / challenger / archive | 涉及哪些 source / integration repo（**平等列表**，无主从）、可选 "spec home repo"（弱归属，仅 archive 用） |
 | **路径约定 `/workspace/source/<basename>/`** | sisyphus + `sisyphus-clone-repos.sh` | 所有 checker / agent | source repo clone 必须落到这个路径，checker 按它遍历 |
-| **`openspec/changes/REQ-x/tasks.md`** | analyze-agent | analyze 自身的 sub-agent / challenger（读 spec） | 每仓自带一份；M17 起由 analyze-agent 自决拆成多少 BKD sub-issue 并行 |
-| **git branch `feat/REQ-x`** | analyze-agent / challenger | pr-ci-watch、accept、staging-test | **每仓独立分支**；pr-ci 按 branch 在每仓找 PR |
+| **`openspec/changes/REQ-x/tasks.md`** | execute-agent | execute 自身的 sub-agent / challenger（读 spec） | 每仓自带一份；M17 起由 execute-agent 自决拆成多少 BKD sub-issue 并行 |
+| **git branch `feat/REQ-x`** | execute-agent / challenger | pr-ci-watch、accept、staging-test | **每仓独立分支**；pr-ci 按 branch 在每仓找 PR |
 | **`make ci-unit-test` + `ci-integration-test` target** | 业务 repo（一次性接入时定，对齐 ttpos-ci 标准） | staging-test checker | 每仓自己实现；checker for-each-repo `&&` 串行调 |
 | **`make ci-lint` target**（M15+，对齐 ttpos-ci 标准） | 业务 repo | dev-cross-check checker | 每仓 go vet + golangci-lint，仅 lint 变更文件（BASE_REV env） |
 | **`make accept-env-up` / `accept-env-down`** | integration repo | sisyphus accept stage | 起 / 拆 lab |
@@ -393,7 +393,7 @@ wait
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created: ensure_runner (analyze 起)
+    [*] --> Created: ensure_runner (execute 起)
     Created --> Running: K8s 调度 + entrypoint.sh
     Running --> Restarting: Pod crash (restartPolicy=Always)
     Restarting --> Running: 自动拉起 (PVC 不变)
@@ -413,7 +413,7 @@ stateDiagram-v2
 - `check-scenario-refs.sh` —— spec-lint checker 用，验证 spec 中引用的场景名必须在 specs 中定义；`--specs-search-path` flag 支持跨仓引用
 - `check-tasks-section-ownership.sh` —— 用于 dev-cross-check 或业务定制检查
 - `pre-commit-acl.sh` —— 用于 dev-cross-check 或业务定制检查
-- `sisyphus-clone-repos.sh` —— analyze agent 调用统一 clone 多仓 source repo 到 `/workspace/source/<basename>/`
+- `sisyphus-clone-repos.sh` —— execute agent 调用统一 clone 多仓 source repo 到 `/workspace/source/<basename>/`
 
 orchestrator 注入 env：
 
@@ -482,14 +482,14 @@ sisyphus 的 HITL UX **整条都在 BKD 看板里**完成 —— 不需要回 Gi
 评论：
 
 ```
-人 创 BKD intent issue（intent:intake / intent:analyze tag）
+人 创 BKD intent issue（intent:intake / intent:execute tag）
       │ statusId="todo"
       ▼
 INTAKING ─── watchdog 通过 _NO_WATCHDOG_STATES skip 整列（人多轮 chat 不算卡死）
       │ statusId 由 BKD UI 在 session 起 / 停时同步成 working / completed
       │ 用户聊澄清 → 打 result:pass tag → INTAKE_PASS
       ▼
-ANALYZING / SPEC_LINT / DEV_CROSS_CHECK / STAGING_TEST / PR_CI / ACCEPT / ARCHIVING
+EXECUTING / SPEC_LINT / DEV_CROSS_CHECK / STAGING_TEST / PR_CI / ACCEPT / ARCHIVING
       │ 主链推进；任一 stage 红走 verifier 子链（pass/fix/escalate）
       │ verifier 判 escalate → webhook._push_upstream_status 把 verifier issue
       │ 推到 statusId="review"，让 BKD"待审查"列只剩需要人 follow-up 的
@@ -521,7 +521,7 @@ ARCHIVE_DONE → DONE
   它保留在 `working` 列的意义是告诉看板使用者"这条 REQ 还在生命周期里"。
 - 各 stage 的细粒度进展由子 issue（analyze、challenger、verifier 等）
   在看板各列独立呈现；想看"跑到哪了"的人应该追踪这些子 issue。
-- 如果 intake 完就把 intent issue 推 `done`，后面 analyze → dev → staging-test
+- 如果 intake 完就把 intent issue 推 `done`，后面 execute → dev → staging-test
   → archive 全在"已完成"卡片下面跑，反而丢失了 REQ 级聚合视图。
 - 考虑过加 `intake-completed` 中间状态来减少 `working` 列的"脏项"感，
   但权衡后认为新状态的认知成本大于收益。若未来看板噪声确实干扰工作流，

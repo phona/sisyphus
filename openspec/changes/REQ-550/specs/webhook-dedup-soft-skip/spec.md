@@ -13,7 +13,7 @@ Specifically, the following four early return paths MUST NOT call
 
 1. `session.completed` without a `REQ-*` tag (noise filter)
 2. `issue.updated` without a `REQ-*` tag and without `intent:intake` or
-   `intent:analyze` (noise filter)
+   `intent:execute` (noise filter)
 3. `event` is `None` after `router.derive_event` (no event mapping)
 4. `req_id` is `None` after `router.extract_req_id` (no resolvable REQ ID)
 

@@ -29,7 +29,7 @@ ACTION_META: dict[str, ActionMeta] = {}
 def short_title(ctx: dict | None, max_len: int = 50) -> str:
     """从 ctx.intent_title 取需求标题做成短后缀（` — <title>`）方便 BKD 看板辨识。
 
-    剥掉前缀的 `[...]` 括号（如 `[REQ-x]`、`[ANALYZE]`、`[E2E FOO]`）—— 上层
+    剥掉前缀的 `[...]` 括号（如 `[REQ-x]`、`[EXECUTE]`、`[E2E FOO]`）—— 上层
     title 模板已经在外面再加 `[REQ-x] [STAGE]` 前缀，不剥的话 BKD UI 显示双倍
     `[REQ-x] [VERIFY pr_ci] fail — [REQ-x] [E2E FOO] /buildinfo` 长得读不下去。
 
@@ -71,16 +71,16 @@ def register(name: str, *, idempotent: bool = False):
 from . import (  # noqa: E402,F401
     _verifier,
     create_accept,
-    create_analyze_artifact_check,
     create_dev_cross_check,
+    create_execute_artifact_check,
     create_pr_ci_watch,
     create_spec_lint,
     create_staging_test,
     escalate,
     post_acceptance_report,
-    start_analyze,
-    start_analyze_with_finalized_intent,
     start_challenger,
+    start_execute,
+    start_execute_with_finalized_intent,
     start_intake,
     teardown_accept_env,
 )

@@ -44,8 +44,8 @@ _TERMINAL_STATE_TO_BKD_STATUS_ID: dict[ReqState, str] = {
 
 # M14e/M15：state → stage 名（用于 stage_runs 表）。
 STATE_TO_STAGE: dict[ReqState, str] = {
-    ReqState.ANALYZING:              "analyze",
-    ReqState.ANALYZE_ARTIFACT_CHECKING: "analyze_artifact_check",
+    ReqState.EXECUTING:              "execute",
+    ReqState.EXECUTE_ARTIFACT_CHECKING: "execute_artifact_check",
     ReqState.SPEC_LINT_RUNNING:      "spec_lint",
     ReqState.DEV_CROSS_CHECK_RUNNING: "dev_cross_check",
     ReqState.STAGING_TEST_RUNNING:   "staging_test",
@@ -58,14 +58,14 @@ STATE_TO_STAGE: dict[ReqState, str] = {
 # 仅以下 state 对应的 stage 由 BKD agent 跑；其他 state 是机械 checker / teardown，
 # 没 BKD session 可绑。webhook 用此集合决定 stamp_bkd_session_id 是否值得调用。
 AGENT_STAGES: frozenset[str] = frozenset({
-    "analyze", "verifier", "fixer", "accept",
+    "execute", "verifier", "fixer", "accept",
 })
 
 # event → stage_runs.outcome 标签。escalate / session.failed 全归 fail。
 _EVENT_TO_OUTCOME: dict[Event, str] = {
-    Event.ANALYZE_DONE:                "pass",
-    Event.ANALYZE_ARTIFACT_CHECK_PASS: "pass",
-    Event.ANALYZE_ARTIFACT_CHECK_FAIL: "fail",
+    Event.EXECUTE_DONE:                "pass",
+    Event.EXECUTE_ARTIFACT_CHECK_PASS: "pass",
+    Event.EXECUTE_ARTIFACT_CHECK_FAIL: "fail",
     Event.SPEC_LINT_PASS:       "pass",
     Event.SPEC_LINT_FAIL:       "fail",
     Event.DEV_CROSS_CHECK_PASS: "pass",

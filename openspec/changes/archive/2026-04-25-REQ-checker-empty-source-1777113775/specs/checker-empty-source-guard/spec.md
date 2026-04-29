@@ -30,13 +30,13 @@ that actually invokes `openspec validate` and `check-scenario-refs.sh`
 `openspec/changes/<REQ>/` directory). After the loop, if `ran -eq 0`, the
 script MUST exit with code 1 and stderr MUST contain the literal substring
 `FAIL spec_lint` and `0 source repos eligible`. This refuses the silent-pass
-where every cloned repo is skipped because the analyze-agent did not push a
+where every cloned repo is skipped because the execute-agent did not push a
 feat branch with the required openspec artifact.
 
 #### Scenario: CESG-S3 spec_lint exits non-zero when no repo has feat/<REQ> + openspec/changes/<REQ>/
 
 - **GIVEN** `/workspace/source/repo-a` exists (real git repo) but has no
-  `feat/REQ-X` branch on origin (analyze-agent failed to push)
+  `feat/REQ-X` branch on origin (execute-agent failed to push)
 - **WHEN** the spec_lint shell template runs against `REQ-X`
 - **THEN** the per-repo skip path triggers (`[skip] repo-a: no feat branch`),
   and after the loop the `ran=0` guard fires with exit code 1 and stderr

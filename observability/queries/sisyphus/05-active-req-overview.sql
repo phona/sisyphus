@@ -13,7 +13,7 @@
 -- 列含义：
 --   req_id           REQ ID
 --   project_id       项目 ID（来自 req_state）
---   state            当前状态机 state（analyzing / dev-running / ...）
+--   state            当前状态机 state（executing / dev-running / ...）
 --   last_stage       最近一次 check 的 stage
 --   last_passed      最近一次 check 是否通过
 --   last_cmd         最近一次 check 跑的命令

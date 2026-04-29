@@ -12,11 +12,11 @@ CASES: list[tuple[str, list[str], Event | None]] = [
     # intent:intake 已被 intake 接管 → 不再发
     ("issue.updated",     ["intent:intake", "intake", "REQ-1"],              None),
     # intent
-    ("issue.updated",     ["intent:analyze"],                                Event.INTENT_ANALYZE),
-    # intent 已被 analyze 接管 → 不再发
-    ("issue.updated",     ["intent:analyze", "analyze", "REQ-1"],            None),
-    # M12：resume:analyze 路径已删（砍 M6 admission），不再映射任何 event
-    ("issue.updated",     ["resume:analyze", "analyze", "REQ-1"],            None),
+    ("issue.updated",     ["intent:execute"],                                Event.INTENT_EXECUTE),
+    # intent 已被 execute 接管 → 不再发
+    ("issue.updated",     ["intent:execute", "execute", "REQ-1"],            None),
+    # M12：resume:execute 路径已删（砍 M6 admission），不再映射任何 event
+    ("issue.updated",     ["resume:execute", "execute", "REQ-1"],            None),
     # 普通 issue.updated 一律忽略（避免自指）
     ("issue.updated",     ["dev", "REQ-1"],                                  None),
 
@@ -30,7 +30,7 @@ CASES: list[tuple[str, list[str], Event | None]] = [
     ("session.completed", ["intake", "REQ-1"],                               None),
 
     # session.completed dispatch
-    ("session.completed", ["analyze", "REQ-1"],                              Event.ANALYZE_DONE),
+    ("session.completed", ["execute", "REQ-1"],                              Event.EXECUTE_DONE),
     # M15：spec / dev agent 的 session.completed 不再 router 映射 event
     # sisyphus 内部 emit SPEC_LINT_RUNNING / DEV_CROSS_CHECK_RUNNING
     ("session.completed", ["spec", "REQ-1"],                                 None),

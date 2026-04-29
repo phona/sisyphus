@@ -18,7 +18,7 @@
 - [x] VLT-S3：staging_test fail → REVIEW_RUNNING
 - [x] VLT-S4：pr_ci fail → REVIEW_RUNNING
 - [x] VLT-S5：accept teardown fail → REVIEW_RUNNING
-- [x] VLT-S6：analyze_artifact_check fail → REVIEW_RUNNING
+- [x] VLT-S6：execute_artifact_check fail → REVIEW_RUNNING
 - [x] VLT-S7：challenger fail → REVIEW_RUNNING
 - [x] VLT-S8：REVIEW_RUNNING + VERIFY_FIX_NEEDED → FIXER_RUNNING + stage_runs close/open
 - [x] VLT-S9：REVIEW_RUNNING + VERIFY_ESCALATE → ESCALATED + cleanup runner

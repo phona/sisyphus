@@ -15,10 +15,10 @@
 | # | transition | next_state | action |
 |---|---|---|---|
 | 1 | `(INIT, INTENT_INTAKE)` | INTAKING | `start_intake` |
-| 2 | `(INTAKING, INTAKE_PASS)` | ANALYZING | `start_analyze_with_finalized_intent` |
+| 2 | `(INTAKING, INTAKE_PASS)` | EXECUTING | `start_execute_with_finalized_intent` |
 | 3 | `(INTAKING, INTAKE_FAIL)` | ESCALATED | `escalate` |
 | 4 | `(INTAKING, VERIFY_ESCALATE)` | ESCALATED | `escalate` |
-| 5 | `(ANALYZING, VERIFY_ESCALATE)` | ESCALATED | `escalate` |
+| 5 | `(EXECUTING, VERIFY_ESCALATE)` | ESCALATED | `escalate` |
 | 6 | `(PR_CI_RUNNING, PR_CI_TIMEOUT)` | ESCALATED | `escalate` |
 
 而 `(ESCALATED, VERIFY_PASS)` / `(ESCALATED, VERIFY_FIX_NEEDED)` 这两条**人工
@@ -40,10 +40,10 @@ BKD / Postgres / K8s**。复用 `test_engine.py` 的 `FakePool` / `FakeReq` /
 | ID | 场景 | 期望 |
 |---|---|---|
 | ERT-S1 | `(INIT, INTENT_INTAKE)` | dispatch `start_intake`，state → `INTAKING` |
-| ERT-S2 | `(INTAKING, INTAKE_PASS)` | dispatch `start_analyze_with_finalized_intent`，state → `ANALYZING` |
+| ERT-S2 | `(INTAKING, INTAKE_PASS)` | dispatch `start_execute_with_finalized_intent`，state → `EXECUTING` |
 | ERT-S3 | `(INTAKING, INTAKE_FAIL)` | dispatch `escalate`，state → `ESCALATED`，cleanup_runner(retain_pvc=True) 被 await 一次 |
 | ERT-S4 | `(INTAKING, VERIFY_ESCALATE)` | dispatch `escalate`，state → `ESCALATED`，cleanup_runner(retain_pvc=True) 被 await 一次 |
-| ERT-S5 | `(ANALYZING, VERIFY_ESCALATE)` | dispatch `escalate`，state → `ESCALATED`，cleanup_runner(retain_pvc=True) 被 await 一次 |
+| ERT-S5 | `(EXECUTING, VERIFY_ESCALATE)` | dispatch `escalate`，state → `ESCALATED`，cleanup_runner(retain_pvc=True) 被 await 一次 |
 | ERT-S6 | `(PR_CI_RUNNING, PR_CI_TIMEOUT)` | dispatch `escalate`，state → `ESCALATED`，cleanup_runner(retain_pvc=True) 被 await 一次 |
 | ERT-S7 | ESCALATED + VERIFY_PASS **端到端 resume** | apply_verify_pass stub 内部 CAS `ESCALATED → STAGING_TEST_RUNNING` 并 `emit STAGING_TEST_PASS`；engine 链式调 `create_pr_ci_watch`；最终 row state = `PR_CI_RUNNING` |
 | ERT-S8 | ESCALATED + VERIFY_FIX_NEEDED **tag 透传** | start_fixer 收到的 tags 含 `verify:staging_test`、ctx 含 `verifier_stage=staging_test`，state → `FIXER_RUNNING` |
@@ -52,7 +52,7 @@ BKD / Postgres / K8s**。复用 `test_engine.py` 的 `FakePool` / `FakeReq` /
 ## 边界 & 不做
 
 - **不验** action handler 内部行为 —— 已被 `test_verifier.py` /
-  `test_actions_start_analyze.py` / `test_intake.py` 覆盖
+  `test_actions_start_execute.py` / `test_intake.py` 覆盖
 - **不修** `state.TRANSITIONS` / engine.py / actions —— 纯加测，不改产线代码
 - **不为** sweep 测试加入 stage_runs 副作用断言 —— 那是 `test_store_stage_runs.py`
   的范围；本 sweep 只校"engine.step 把表里声明的每条 transition 都跑得通"

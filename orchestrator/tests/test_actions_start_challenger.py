@@ -79,9 +79,9 @@ async def test_start_challenger_forwards_user_hint_tags(monkeypatch):
     _patch_pr_links_empty(monkeypatch)
 
     out = await start_challenger.start_challenger(
-        body=_make_body(issue_id="analyze-1"),
+        body=_make_body(issue_id="execute-1"),
         req_id="REQ-X",
-        tags=["analyze", "REQ-X", "repo:phona/foo", "ux:fast-track"],
+        tags=["execute", "REQ-X", "repo:phona/foo", "ux:fast-track"],
         ctx={"branch": "feat/REQ-X"},
     )
     assert out["challenger_issue_id"] == "ch-new-1"
@@ -92,7 +92,7 @@ async def test_start_challenger_forwards_user_hint_tags(monkeypatch):
     # role / REQ id / parent-id 在前
     assert tags[0] == "challenger"
     assert tags[1] == "REQ-X"
-    assert tags[2] == "parent-id:analyze-1"
+    assert tags[2] == "parent-id:execute-1"
     # 后面是 hint（无 pr-link）
     assert tags[3:] == ["repo:phona/foo", "ux:fast-track"]
 
@@ -104,11 +104,11 @@ async def test_start_challenger_strips_managed_from_forwarded(monkeypatch):
     _patch_pr_links_empty(monkeypatch)
 
     await start_challenger.start_challenger(
-        body=_make_body(issue_id="analyze-1"),
+        body=_make_body(issue_id="execute-1"),
         req_id="REQ-X",
         tags=[
-            "analyze", "REQ-X", "result:pass", "challenger",
-            "intent:analyze", "decision:eyJ...", "verify:foo",
+            "execute", "REQ-X", "result:pass", "challenger",
+            "intent:execute", "decision:eyJ...", "verify:foo",
             "pr:phona/foo#1", "repo:phona/foo",
         ],
         ctx={},
@@ -117,13 +117,13 @@ async def test_start_challenger_strips_managed_from_forwarded(monkeypatch):
     tags = kwargs["tags"]
     # 基础 3 段 + 仅 repo hint
     assert tags == [
-        "challenger", "REQ-X", "parent-id:analyze-1",
+        "challenger", "REQ-X", "parent-id:execute-1",
         "repo:phona/foo",
     ]
     assert tags.count("challenger") == 1
     assert tags.count("REQ-X") == 1
     assert "result:pass" not in tags
-    assert "intent:analyze" not in tags
+    assert "intent:execute" not in tags
     assert "pr:phona/foo#1" not in tags
 
 
@@ -141,14 +141,14 @@ async def test_start_challenger_keeps_pr_link_then_hints(monkeypatch):
     )
 
     await start_challenger.start_challenger(
-        body=_make_body(issue_id="analyze-1"),
+        body=_make_body(issue_id="execute-1"),
         req_id="REQ-X",
-        tags=["analyze", "REQ-X", "repo:phona/foo", "ux:fast-track"],
+        tags=["execute", "REQ-X", "repo:phona/foo", "ux:fast-track"],
         ctx={},
     )
     _, kwargs = fake.create_issue.await_args
     assert kwargs["tags"] == [
-        "challenger", "REQ-X", "parent-id:analyze-1",
+        "challenger", "REQ-X", "parent-id:execute-1",
         "pr:phona/foo#42",
         "repo:phona/foo", "ux:fast-track",
     ]
@@ -161,13 +161,13 @@ async def test_start_challenger_no_hint_keeps_base_tags(monkeypatch):
     _patch_pr_links_empty(monkeypatch)
 
     await start_challenger.start_challenger(
-        body=_make_body(issue_id="analyze-1"),
+        body=_make_body(issue_id="execute-1"),
         req_id="REQ-X",
-        tags=["analyze", "REQ-X"],
+        tags=["execute", "REQ-X"],
         ctx={},
     )
     _, kwargs = fake.create_issue.await_args
-    assert kwargs["tags"] == ["challenger", "REQ-X", "parent-id:analyze-1"]
+    assert kwargs["tags"] == ["challenger", "REQ-X", "parent-id:execute-1"]
 
 
 # ─── update_context regression (REQ-actions-ctx-persist-v2) ─────────────────
@@ -184,7 +184,7 @@ async def test_start_challenger_writes_challenger_issue_id_to_ctx(monkeypatch):
     _patch_pr_links_empty(monkeypatch)
 
     out = await start_challenger.start_challenger(
-        body=_make_body(issue_id="analyze-1"),
+        body=_make_body(issue_id="execute-1"),
         req_id="REQ-CTX",
         tags=[],
         ctx={},
@@ -207,7 +207,7 @@ async def test_start_challenger_slug_hit_writes_ctx(monkeypatch):
     )
 
     out = await start_challenger.start_challenger(
-        body=_make_body(issue_id="analyze-1"),
+        body=_make_body(issue_id="execute-1"),
         req_id="REQ-SLUG",
         tags=[],
         ctx={},

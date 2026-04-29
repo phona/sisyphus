@@ -44,7 +44,7 @@ async def test_active_req_keeps_namespace(monkeypatch, mock_controller):
     """非终态 REQ 的 accept namespace 保留。"""
     pool = _FakePool([
         _row("REQ-1", "accept-running"),
-        _row("REQ-2", "analyzing"),
+        _row("REQ-2", "executing"),
     ])
     monkeypatch.setattr("orchestrator.accept_env_gc.db.get_pool", lambda: pool)
     mock_controller.list_accept_env_namespaces = AsyncMock(
@@ -98,7 +98,7 @@ async def test_escalated_req_cleans_namespace(monkeypatch, mock_controller):
 async def test_orphan_namespace_cleaned(monkeypatch, mock_controller):
     """req_state 中找不到的 REQ（orphan）的 namespace 也清。"""
     pool = _FakePool([
-        _row("REQ-1", "analyzing"),
+        _row("REQ-1", "executing"),
     ])
     monkeypatch.setattr("orchestrator.accept_env_gc.db.get_pool", lambda: pool)
     mock_controller.list_accept_env_namespaces = AsyncMock(
@@ -139,7 +139,7 @@ async def test_skips_when_no_controller(monkeypatch):
 @pytest.mark.asyncio
 async def test_gc_once_updates_last_result_with_ran_at(monkeypatch, mock_controller):
     """gc_once 正常执行后 _last_gc_result 含 ran_at。"""
-    pool = _FakePool([_row("REQ-1", "analyzing")])
+    pool = _FakePool([_row("REQ-1", "executing")])
     monkeypatch.setattr("orchestrator.accept_env_gc.db.get_pool", lambda: pool)
     mock_controller.list_accept_env_namespaces = AsyncMock(return_value=[])
 

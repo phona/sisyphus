@@ -4,7 +4,7 @@ description: >-
   Every BKD issue sisyphus creates for a REQ MUST carry a `pr:<owner>/<repo>#<N>`
   tag (one per repo PR) so that humans viewing the issue in BKD UI can navigate
   directly to the GitHub PR. Discovery is lazy + cached in req_state.context;
-  the analyze issue (created before PRs exist) is backfilled the first time PRs
+  the execute issue (created before PRs exist) is backfilled the first time PRs
   are discovered.
 
 inputs:
@@ -28,7 +28,7 @@ side_effects_on_first_discovery:
   - context_patch_keys:
       - pr_links             # value MUST be list[{repo, number, url}]
   - bkd_issue_tags_added_via_backfill:
-      # Iterate over known issue ids in ctx (analyze_issue_id, staging_test_issue_id,
+      # Iterate over known issue ids in ctx (execute_issue_id, staging_test_issue_id,
       # pr_ci_watch_issue_id, accept_issue_id, archive_issue_id) and PATCH each with
       # `pr:owner/repo#N` for every found PR.
       - "pr:<owner>/<repo>#<N>"
@@ -71,9 +71,9 @@ callsite_obligations:
     - actions/create_accept (BKD agent dispatch, phase 2)
     - actions/done_archive
     - actions/start_challenger
-  # actions/start_analyze and start_analyze_with_finalized_intent do NOT call
+  # actions/start_execute and start_execute_with_finalized_intent do NOT call
   # ensure_pr_links_in_ctx (PRs do not exist yet at create time), but MUST
-  # stash analyze_issue_id into ctx so backfill can find the analyze issue
+  # stash execute_issue_id into ctx so backfill can find the execute issue
   # later.
 
 failure_modes:

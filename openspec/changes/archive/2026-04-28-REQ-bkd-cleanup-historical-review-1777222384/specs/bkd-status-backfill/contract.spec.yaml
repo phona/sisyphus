@@ -3,7 +3,7 @@ version: 1
 description: >-
   One-shot maintenance CLI that PATCHes BKD sub-agent issues stuck at
   statusId='review' to statusId='done'. Targets only role-tagged issues
-  (verifier / fixer / analyze / challenger / accept-agent / done-archive)
+  (verifier / fixer / execute / challenger / accept-agent / done-archive)
   whose sessionStatus != 'running' AND that carry a REQ-* tag. Intent
   issues (no role tag) and live sessions are protected.
 
@@ -47,7 +47,7 @@ decision_logic:
     - if issue.statusId != "review": skip ("not-review")
     - elif issue.sessionStatus == "running": skip ("session-running")
     - elif first_role_tag(issue.tags) is None: skip ("no-role-tag")
-        # role tag set: verifier / fixer / analyze / challenger / accept-agent / done-archive
+        # role tag set: verifier / fixer / execute / challenger / accept-agent / done-archive
     - elif extract_req_tag(issue.tags) is None: skip ("no-req-tag")
     - else: target (PATCH to done)
 

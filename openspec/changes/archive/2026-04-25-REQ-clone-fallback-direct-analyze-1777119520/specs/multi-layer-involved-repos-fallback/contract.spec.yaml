@@ -79,11 +79,11 @@ config:
       single-repo deployments (sisyphus self-dogfood, single-repo lab) opt in.
 
 callers:
-  - module: orchestrator.actions.start_analyze
-    function: start_analyze
+  - module: orchestrator.actions.start_execute
+    function: start_execute
     must_pass: ["tags=tags", "default_repos=settings.default_involved_repos"]
-  - module: orchestrator.actions.start_analyze_with_finalized_intent
-    function: start_analyze_with_finalized_intent
+  - module: orchestrator.actions.start_execute_with_finalized_intent
+    function: start_execute_with_finalized_intent
     must_pass: ["tags=tags", "default_repos=settings.default_involved_repos"]
 
 invariants:

@@ -7,9 +7,9 @@ from __future__ import annotations
 from orchestrator.prompts import render
 
 
-def _render_analyze() -> str:
+def _render_execute() -> str:
     return render(
-        "analyze.md.j2",
+        "execute.md.j2",
         req_id="REQ-x",
         project_id="proj-1",
         project_alias="proj-1",
@@ -19,21 +19,21 @@ def _render_analyze() -> str:
     )
 
 
-def test_analyze_prompt_requires_gh_pr_create_with_sisyphus_label() -> None:
-    """SAL-S5: rendered analyze prompt MUST contain
+def test_execute_prompt_requires_gh_pr_create_with_sisyphus_label() -> None:
+    """SAL-S5: rendered execute prompt MUST contain
     `gh label create sisyphus` (idempotent ensure-label) and `--label sisyphus`
     (so every PR carries the pipeline-identity label).
     """
-    text = _render_analyze()
+    text = _render_execute()
     assert "gh label create sisyphus" in text, (
-        "analyze.md.j2 must instruct agents to idempotently create the "
+        "execute.md.j2 must instruct agents to idempotently create the "
         "`sisyphus` GitHub label before `gh pr create`. Without `gh label "
         "create --force` the first PR in a repo lacking the label fails "
         "with `pull request create: could not add label: 'sisyphus' not "
         "found` (SAL-S5)."
     )
     assert "--label sisyphus" in text, (
-        "analyze.md.j2 must instruct agents to pass `--label sisyphus` to "
+        "execute.md.j2 must instruct agents to pass `--label sisyphus` to "
         "`gh pr create` so every sisyphus-opened PR is identifiable in "
         "GitHub UI / dashboards (SAL-S5)."
     )
@@ -41,11 +41,11 @@ def test_analyze_prompt_requires_gh_pr_create_with_sisyphus_label() -> None:
 
 def test_tools_whitelist_curl_post_example_includes_sisyphus_tag() -> None:
     """SAL-S6: the curl POST sub-issue example in tools_whitelist.md.j2
-    (included from analyze.md.j2 via Jinja {% include %}) MUST show the
+    (included from execute.md.j2 via Jinja {% include %}) MUST show the
     `sisyphus` tag in its `tags` array, so any sub-agent that copies the
     example automatically inherits the label.
     """
-    text = _render_analyze()
+    text = _render_execute()
     # The curl POST example block:
     #   curl -sS -X POST http://localhost:3000/api/projects/$PROJECT/issues
     # ...then the `-d` JSON body must show "sisyphus" in tags.

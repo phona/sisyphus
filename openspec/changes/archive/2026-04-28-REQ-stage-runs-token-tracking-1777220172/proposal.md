@@ -6,7 +6,7 @@
 model, started/ended timestamps, outcome) but **does not record which BKD
 session actually executed it**. The Metabase dashboards driven off `stage_runs`
 (M14e + M7) can compute aggregate stats — pass rate, p50/p95 duration, fixer
-churn — but a row that says "REQ-foo's `analyze` stage ran for 12 minutes and
+churn — but a row that says "REQ-foo's `execute` stage ran for 12 minutes and
 escalated" gives no path to inspect what that agent was thinking. Pulling up
 the corresponding BKD chat today requires:
 
@@ -51,7 +51,7 @@ handlers, and webhook routing logic are unchanged.
   won't touch closed rows). Returns the row id stamped, or None.
 - **`orchestrator/src/orchestrator/engine.py`** — promote the existing
   module-private `_STATE_TO_STAGE` to public `STATE_TO_STAGE`; export new
-  `AGENT_STAGES = frozenset({"analyze", "verifier", "fixer", "accept",
+  `AGENT_STAGES = frozenset({"execute", "verifier", "fixer", "accept",
   "archive"})` so the webhook can decide whether the current stage is BKD-agent
   driven (worth stamping) or mechanical (skip).
 - **`orchestrator/src/orchestrator/webhook.py`** — extend the existing BKD

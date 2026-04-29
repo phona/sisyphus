@@ -60,7 +60,7 @@ async def test_create_issue_payload_shape(monkeypatch):
     client._http = FakeHttp()  # type: ignore[assignment]
 
     issue = await client.create_issue(
-        "myproj", "Add /version", ["intent:analyze", "REQ-1"],
+        "myproj", "Add /version", ["intent:execute", "REQ-1"],
     )
 
     assert captured["url"] == "https://bkd.example/api/projects/myproj/issues"
@@ -71,7 +71,7 @@ async def test_create_issue_payload_shape(monkeypatch):
         "title": "Add /version",
         "statusId": "todo",
         "useWorktree": True,
-        "tags": ["sisyphus", "intent:analyze", "REQ-1"],
+        "tags": ["sisyphus", "intent:execute", "REQ-1"],
     }
     assert issue.id == "new-1"
 
@@ -121,8 +121,8 @@ async def test_create_issue_auto_injects_sisyphus_tag():
 
     client = BKDRestClient("https://bkd.example/api", "tok")
     client._http = FakeHttp()  # type: ignore[assignment]
-    await client.create_issue("p", "T", ["analyze", "REQ-1"])
-    assert captured["json"]["tags"] == ["sisyphus", "analyze", "REQ-1"]
+    await client.create_issue("p", "T", ["execute", "REQ-1"])
+    assert captured["json"]["tags"] == ["sisyphus", "execute", "REQ-1"]
 
 
 @pytest.mark.asyncio
@@ -143,8 +143,8 @@ async def test_create_issue_does_not_duplicate_sisyphus_tag():
 
     client = BKDRestClient("https://bkd.example/api", "tok")
     client._http = FakeHttp()  # type: ignore[assignment]
-    await client.create_issue("p", "T", ["sisyphus", "analyze", "REQ-1"])
-    assert captured["json"]["tags"] == ["sisyphus", "analyze", "REQ-1"]
+    await client.create_issue("p", "T", ["sisyphus", "execute", "REQ-1"])
+    assert captured["json"]["tags"] == ["sisyphus", "execute", "REQ-1"]
 
 
 def test_ensure_sisyphus_tag_helper_idempotent():
@@ -179,9 +179,9 @@ async def test_mcp_create_issue_auto_injects_sisyphus_tag():
     client.call = _fake_call  # type: ignore[assignment,method-assign]
     client._http.aclose = AsyncMock()  # avoid real httpx close
 
-    await client.create_issue("p", "T", ["analyze"])
+    await client.create_issue("p", "T", ["execute"])
     assert captured["tool"] == "create-issue"
-    assert captured["arguments"]["tags"] == ["sisyphus", "analyze"]
+    assert captured["arguments"]["tags"] == ["sisyphus", "execute"]
 
     # idempotent
     await client.create_issue("p", "T", ["sisyphus", "x"])
@@ -370,7 +370,7 @@ def test_to_issue_extracts_external_session_id():
 
     issue = _to_issue({
         "id": "i1", "projectId": "p", "issueNumber": 1,
-        "title": "t", "statusId": "working", "tags": ["analyze"],
+        "title": "t", "statusId": "working", "tags": ["execute"],
         "externalSessionId": "a742034b-6fb0-4047-be96-d5431dc1f252",
     })
     assert issue.external_session_id == "a742034b-6fb0-4047-be96-d5431dc1f252"
@@ -397,8 +397,8 @@ async def test_get_issue_returns_external_session_id_via_rest():
                 "success": True,
                 "data": {
                     "id": "i1", "projectId": "p", "issueNumber": 1,
-                    "title": "[REQ-x] [ANALYZE]", "statusId": "working",
-                    "tags": ["analyze", "REQ-x"],
+                    "title": "[REQ-x] [EXECUTE]", "statusId": "working",
+                    "tags": ["execute", "REQ-x"],
                     "externalSessionId": "sess-abc",
                 },
             }

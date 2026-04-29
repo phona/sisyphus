@@ -3,10 +3,10 @@ version: "1.0"
 description: |
   Two互补的形状契约：
 
-  (A) `start_analyze` 在 ensure_runner 后 server-side clone
+  (A) `start_execute` 在 ensure_runner 后 server-side clone
       `intake_finalized_intent.involved_repos` 到 runner pod 的
       `/workspace/source/<basename>/`（调 `/opt/sisyphus/scripts/sisyphus-clone-repos.sh`），
-      失败 → emit VERIFY_ESCALATE，不打 analyze-agent。
+      失败 → emit VERIFY_ESCALATE，不打 execute-agent。
 
   (B) `pr_ci_watch.watch_pr_ci` 拒绝从 `SISYPHUS_BUSINESS_REPO` env 偷读
       fallback repo —— `repos=None` 直接 ValueError；`create_pr_ci_watch`
@@ -23,7 +23,7 @@ source_of_truth_chain:
   intake_to_clone:
     description: |
       ctx.intake_finalized_intent.involved_repos 是真理的源头。
-      webhook.py 在 INTAKE_PASS 时已落到 ctx；start_analyze 系列 action 直接读。
+      webhook.py 在 INTAKE_PASS 时已落到 ctx；start_execute 系列 action 直接读。
     fields:
       - "ctx.intake_finalized_intent.involved_repos: list[str]   # primary"
       - "ctx.involved_repos: list[str]                            # fallback (alt providers)"
@@ -80,7 +80,7 @@ env_var_removal:
 failure_paths:
   clone_failure:
     cause: "sisyphus-clone-repos.sh exits non-zero (auth / typo / network)"
-    handler: "start_analyze* return {'emit': VERIFY_ESCALATE, 'reason': 'clone failed ...'}"
+    handler: "start_execute* return {'emit': VERIFY_ESCALATE, 'reason': 'clone failed ...'}"
     state_outcome: "engine routes to ESCALATED via VERIFY_ESCALATE event"
     rationale: |
       Clone 配置错（仓名打错、token 失效）retry 没用；agent 在空 PVC 里也
@@ -110,6 +110,6 @@ invariants:
       REQ-checker-empty-source-1777113775 已经把"`/workspace/source` 空 →
       silent-pass" 在 mechanical checker 那一层关掉。本 REQ 把
       "ctx 没 repos → 偷读全局 env" 在 watch-pr-ci 这层关掉，并把"agent
-      自己 clone 才有 source" 在 start_analyze 那层补上。三条加起来：
+      自己 clone 才有 source" 在 start_execute 那层补上。三条加起来：
       no source dir / no repos / no clone = 三种 misconfig 都显式失败而不
       是 silent-pass。

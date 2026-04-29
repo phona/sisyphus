@@ -170,13 +170,13 @@ async def test_s2_deterministic_checker_ended_session_escalates(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_s3_autonomous_bounded_running_not_escalated(monkeypatch):
-    """WSPF-S3: ANALYZING + session=running + 任意长 stuck → policy.stuck_sec=None → skip."""
+    """WSPF-S3: EXECUTING + session=running + 任意长 stuck → policy.stuck_sec=None → skip."""
     from orchestrator import watchdog
     from orchestrator.state import ReqState
 
     pool = _FakePool(rows=[
         _make_row(
-            ReqState.ANALYZING.value,
+            ReqState.EXECUTING.value,
             req_id="REQ-s3",
             ctx={"intent_issue_id": "intent-s3"},
             stuck_sec=10000,
@@ -193,7 +193,7 @@ async def test_s3_autonomous_bounded_running_not_escalated(monkeypatch):
     assert step_calls == []
     assert art_calls == []
     # 验证 policy 形状
-    policy = watchdog._STAGE_POLICY[ReqState.ANALYZING]
+    policy = watchdog._STAGE_POLICY[ReqState.EXECUTING]
     assert policy is not None and policy.stuck_sec is None
 
 
@@ -232,13 +232,13 @@ async def test_s3b_staging_test_running_not_escalated(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_s4_autonomous_bounded_ended_session_escalates(monkeypatch):
-    """WSPF-S4: ANALYZING + stuck=320 (≥ ended_sec=300) + session=failed → escalate."""
+    """WSPF-S4: EXECUTING + stuck=320 (≥ ended_sec=300) + session=failed → escalate."""
     from orchestrator import watchdog
     from orchestrator.state import Event, ReqState
 
     pool = _FakePool(rows=[
         _make_row(
-            ReqState.ANALYZING.value,
+            ReqState.EXECUTING.value,
             req_id="REQ-s4",
             ctx={"intent_issue_id": "intent-s4"},
             stuck_sec=320,
@@ -254,7 +254,7 @@ async def test_s4_autonomous_bounded_ended_session_escalates(monkeypatch):
     assert result == {"checked": 1, "escalated": 1}
     assert len(step_calls) == 1
     assert step_calls[0]["event"] == Event.SESSION_FAILED
-    assert step_calls[0]["cur_state"] == ReqState.ANALYZING
+    assert step_calls[0]["cur_state"] == ReqState.EXECUTING
 
 
 # ─── WSPF-S5: external-poll running under stuck_sec NOT escalated ───────────

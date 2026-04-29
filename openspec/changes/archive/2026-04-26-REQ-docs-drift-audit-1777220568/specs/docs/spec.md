@@ -65,7 +65,7 @@ those docs resolves to a file or symbol that exists in the repository.
 #### Scenario: DOCS-S6 api-tag-management-spec describes BKD router tags
 
 - **GIVEN** `router.py` reads BKD issue tags such as `intent:intake`,
-  `intent:analyze`, `analyze`, `spec`, `challenger`, `dev`, `staging-test`,
+  `intent:execute`, `execute`, `spec`, `challenger`, `dev`, `staging-test`,
   `pr-ci`, `accept`, `verifier`, `fixer`, `result:pass`, `result:fail`,
   `decision:<urlsafe-base64-json>`, `parent-id:<id>`, `parent:<stage>`,
   `round-N`, `target:<repo>`, `REQ-<slug>`

@@ -7,7 +7,7 @@ Scenarios:
   WSP-S1  INTAKING + session ended + no result tag → no escalation (SQL pre-filter)
   WSP-S2  INTAKING + session running → no escalation (SQL pre-filter)
   WSP-S3  INTAKING + session ended + result:pass → no escalation (SQL pre-filter)
-  WSP-S4  ANALYZING stuck + session=failed → still escalates
+  WSP-S4  EXECUTING stuck + session=failed → still escalates
   WSP-S5  SQL pre-filter args include "intaking"
   WSP-S6  _SESSION_END_SIGNALS no longer lists watchdog.intake_no_result_tag
 """
@@ -200,28 +200,28 @@ async def test_s3_intaking_session_ended_result_pass_no_escalation(monkeypatch):
     )
 
 
-# ─── WSP-S4: ANALYZING + session=failed → still escalates ────────────────────
+# ─── WSP-S4: EXECUTING + session=failed → still escalates ────────────────────
 
 
-async def test_s4_analyzing_stuck_session_failed_still_escalates(monkeypatch):
-    """WSP-S4: ANALYZING past threshold with session_status=failed MUST escalate.
+async def test_s4_executing_stuck_session_failed_still_escalates(monkeypatch):
+    """WSP-S4: EXECUTING past threshold with session_status=failed MUST escalate.
 
-    ANALYZING is not in _NO_WATCHDOG_STATES, so it passes the SQL pre-filter.
-    engine.step MUST be called with event=SESSION_FAILED, cur_state=ANALYZING,
+    EXECUTING is not in _NO_WATCHDOG_STATES, so it passes the SQL pre-filter.
+    engine.step MUST be called with event=SESSION_FAILED, cur_state=EXECUTING,
     and body.event="watchdog.stuck".
     """
     from orchestrator import engine, watchdog
     from orchestrator.state import Event, ReqState
     from orchestrator.store import artifact_checks, db
 
-    analyzing_row = _make_row(
-        state="analyzing",
+    executing_row = _make_row(
+        state="executing",
         req_id="REQ-s4",
         project_id="proj-s4",
         context={"intent_issue_id": "issue-s4"},
         stuck_sec=7200,
     )
-    pool = _RecordingPool(fetch_return=[analyzing_row])
+    pool = _RecordingPool(fetch_return=[executing_row])
     step_calls: list = []
 
     monkeypatch.setattr(db, "get_pool", lambda: pool)
@@ -254,15 +254,15 @@ async def test_s4_analyzing_stuck_session_failed_still_escalates(monkeypatch):
     result = await watchdog._tick()
 
     assert step_calls, (
-        "WSP-S4: engine.step MUST be called for ANALYZING + session=failed. "
-        "ANALYZING is not in _NO_WATCHDOG_STATES and must remain watchdog-eligible."
+        "WSP-S4: engine.step MUST be called for EXECUTING + session=failed. "
+        "EXECUTING is not in _NO_WATCHDOG_STATES and must remain watchdog-eligible."
     )
     call = step_calls[0]
     assert call.get("event") == Event.SESSION_FAILED, (
         f"WSP-S4: engine.step event MUST be SESSION_FAILED; got {call.get('event')!r}"
     )
-    assert call.get("cur_state") == ReqState.ANALYZING, (
-        f"WSP-S4: cur_state MUST be ANALYZING; got {call.get('cur_state')!r}"
+    assert call.get("cur_state") == ReqState.EXECUTING, (
+        f"WSP-S4: cur_state MUST be EXECUTING; got {call.get('cur_state')!r}"
     )
     body = call.get("body")
     assert body is not None, "WSP-S4: body must be passed to engine.step"

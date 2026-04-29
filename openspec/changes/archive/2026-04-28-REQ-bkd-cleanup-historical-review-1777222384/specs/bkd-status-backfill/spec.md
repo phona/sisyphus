@@ -8,7 +8,7 @@ The `orchestrator.maintenance.backfill_bkd_review_stuck` CLI SHALL list every
 BKD issue in the target project and select for backfill **only** those issues
 whose `statusId == "review"` AND whose `sessionStatus` is not `"running"` AND
 whose tag set contains exactly one of the recognised role tags
-(`verifier`, `fixer`, `analyze`, `challenger`, `accept-agent`, `done-archive`)
+(`verifier`, `fixer`, `execute`, `challenger`, `accept-agent`, `done-archive`)
 AND whose tag set contains at least one tag matching the `REQ-*` prefix. Any
 issue missing a role tag MUST NOT be patched — this protects user-created
 intent issues from being silently archived. Any issue without a `REQ-*` tag

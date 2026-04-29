@@ -9,7 +9,7 @@
 
 ## Stage: implementation
 
-- [x] `orchestrator/src/orchestrator/prompts/analyze.md.j2`：3 处 `phona/repo-a` → `<owner>/repo-a`，
+- [x] `orchestrator/src/orchestrator/prompts/execute.md.j2`：3 处 `phona/repo-a` → `<owner>/repo-a`，
   2 处 "ttpos-ci 标准" → "Makefile ci 契约（详见 docs/integration-contracts.md）"
 - [x] `orchestrator/src/orchestrator/prompts/done_archive.md.j2`：5 处 `phona/repo-a` /
   `phona/repo-b` / `phona/xxx` → `<owner>/repo-a` / `<owner>/repo-b` / `<owner>/repo`

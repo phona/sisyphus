@@ -1,6 +1,6 @@
-"""checkers/analyze_artifact_check.py 单测：mock RunnerController，验 CheckResult
+"""checkers/execute_artifact_check.py 单测：mock RunnerController，验 CheckResult
 字段 + empty-source guard / 0-eligible guard / proposal/tasks/spec literals
-（REQ-analyze-artifact-check-1777254586）。
+（REQ-execute-artifact-check-1777254586）。
 
 跟 test_checkers_spec_lint.py 同结构。
 """
@@ -11,9 +11,9 @@ import asyncio
 import pytest
 
 from orchestrator.checkers._types import CheckResult
-from orchestrator.checkers.analyze_artifact_check import (
+from orchestrator.checkers.execute_artifact_check import (
     _build_cmd,
-    run_analyze_artifact_check,
+    run_execute_artifact_check,
 )
 from orchestrator.k8s_runner import ExecResult
 
@@ -31,10 +31,10 @@ def make_fake_controller(exit_code: int, stdout: str = "", stderr: str = "", dur
 async def test_run_pass(monkeypatch):
     FakeRC = make_fake_controller(exit_code=0, stdout="ok\n", stderr="", duration=2.0)
     monkeypatch.setattr(
-        "orchestrator.checkers.analyze_artifact_check.k8s_runner.get_controller",
+        "orchestrator.checkers.execute_artifact_check.k8s_runner.get_controller",
         lambda: FakeRC(),
     )
-    result = await run_analyze_artifact_check("REQ-1")
+    result = await run_execute_artifact_check("REQ-1")
 
     assert isinstance(result, CheckResult)
     assert result.passed is True
@@ -53,10 +53,10 @@ async def test_run_fail(monkeypatch):
         duration=3.1,
     )
     monkeypatch.setattr(
-        "orchestrator.checkers.analyze_artifact_check.k8s_runner.get_controller",
+        "orchestrator.checkers.execute_artifact_check.k8s_runner.get_controller",
         lambda: FakeRC(),
     )
-    result = await run_analyze_artifact_check("REQ-2")
+    result = await run_execute_artifact_check("REQ-2")
 
     assert result.passed is False
     assert result.exit_code == 1
@@ -71,7 +71,7 @@ async def test_run_timeout(monkeypatch):
             return ExecResult(exit_code=0, stdout="", stderr="", duration_sec=0)
 
     monkeypatch.setattr(
-        "orchestrator.checkers.analyze_artifact_check.k8s_runner.get_controller",
+        "orchestrator.checkers.execute_artifact_check.k8s_runner.get_controller",
         lambda: SlowRC(),
     )
 
@@ -84,11 +84,11 @@ async def test_run_timeout(monkeypatch):
             raise TimeoutError() from None
 
     monkeypatch.setattr(
-        "orchestrator.checkers.analyze_artifact_check.asyncio.wait_for",
+        "orchestrator.checkers.execute_artifact_check.asyncio.wait_for",
         fast_wait_for,
     )
 
-    result = await run_analyze_artifact_check("REQ-3", timeout_sec=1)
+    result = await run_execute_artifact_check("REQ-3", timeout_sec=1)
     assert result.passed is False
     assert result.exit_code == -1
     assert "超时" in result.stderr_tail
@@ -97,14 +97,14 @@ async def test_run_timeout(monkeypatch):
 def test_build_cmd_workspace_source_existence_guard():
     cmd = _build_cmd("REQ-X")
     assert "[ ! -d /workspace/source ]" in cmd
-    assert "FAIL analyze-artifact-check: /workspace/source missing" in cmd
+    assert "FAIL execute-artifact-check: /workspace/source missing" in cmd
 
 
 def test_build_cmd_repo_count_zero_guard():
     cmd = _build_cmd("REQ-X")
     assert "find /workspace/source -mindepth 1 -maxdepth 1 -type d" in cmd
     assert '"$repo_count" -eq 0' in cmd
-    assert "FAIL analyze-artifact-check: /workspace/source empty" in cmd
+    assert "FAIL execute-artifact-check: /workspace/source empty" in cmd
 
 
 def test_build_cmd_zero_eligible_guard():
@@ -165,15 +165,15 @@ def _make_seq_controller(*results: ExecResult):
 @pytest.mark.asyncio
 async def test_recovers_from_dns_flake(monkeypatch):
     monkeypatch.setattr(
-        "orchestrator.checkers.analyze_artifact_check.settings.checker_infra_flake_retry_enabled",
+        "orchestrator.checkers.execute_artifact_check.settings.checker_infra_flake_retry_enabled",
         True,
     )
     monkeypatch.setattr(
-        "orchestrator.checkers.analyze_artifact_check.settings.checker_infra_flake_retry_max",
+        "orchestrator.checkers.execute_artifact_check.settings.checker_infra_flake_retry_max",
         1,
     )
     monkeypatch.setattr(
-        "orchestrator.checkers.analyze_artifact_check.settings.checker_infra_flake_retry_backoff_sec",
+        "orchestrator.checkers.execute_artifact_check.settings.checker_infra_flake_retry_backoff_sec",
         0,
     )
     FakeRC = _make_seq_controller(
@@ -184,10 +184,10 @@ async def test_recovers_from_dns_flake(monkeypatch):
         ExecResult(exit_code=0, stdout="ok\n", stderr="", duration_sec=2.5),
     )
     monkeypatch.setattr(
-        "orchestrator.checkers.analyze_artifact_check.k8s_runner.get_controller",
+        "orchestrator.checkers.execute_artifact_check.k8s_runner.get_controller",
         lambda: FakeRC(),
     )
-    result = await run_analyze_artifact_check("REQ-X")
+    result = await run_execute_artifact_check("REQ-X")
     assert result.passed is True
     assert result.attempts == 2
     assert result.reason is not None
@@ -198,30 +198,30 @@ async def test_recovers_from_dns_flake(monkeypatch):
 @pytest.mark.asyncio
 async def test_does_not_retry_real_artifact_failure(monkeypatch):
     monkeypatch.setattr(
-        "orchestrator.checkers.analyze_artifact_check.settings.checker_infra_flake_retry_enabled",
+        "orchestrator.checkers.execute_artifact_check.settings.checker_infra_flake_retry_enabled",
         True,
     )
     monkeypatch.setattr(
-        "orchestrator.checkers.analyze_artifact_check.settings.checker_infra_flake_retry_max",
+        "orchestrator.checkers.execute_artifact_check.settings.checker_infra_flake_retry_max",
         2,
     )
     monkeypatch.setattr(
-        "orchestrator.checkers.analyze_artifact_check.settings.checker_infra_flake_retry_backoff_sec",
+        "orchestrator.checkers.execute_artifact_check.settings.checker_infra_flake_retry_backoff_sec",
         0,
     )
     FakeRC = _make_seq_controller(
         ExecResult(
             exit_code=1,
             stdout="",
-            stderr="=== FAIL analyze-artifact-check: no eligible repo has openspec/changes/REQ-X/tasks.md with at least one Markdown checkbox ===\n",
+            stderr="=== FAIL execute-artifact-check: no eligible repo has openspec/changes/REQ-X/tasks.md with at least one Markdown checkbox ===\n",
             duration_sec=0.5,
         ),
     )
     monkeypatch.setattr(
-        "orchestrator.checkers.analyze_artifact_check.k8s_runner.get_controller",
+        "orchestrator.checkers.execute_artifact_check.k8s_runner.get_controller",
         lambda: FakeRC(),
     )
-    result = await run_analyze_artifact_check("REQ-X")
+    result = await run_execute_artifact_check("REQ-X")
     assert result.passed is False
     assert result.attempts == 1
     assert result.reason is None

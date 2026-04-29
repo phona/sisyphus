@@ -6,7 +6,7 @@ In the sisyphus orchestrator, when sub-agent issues (analyze, challenger, fixer,
 
 1. `_push_upstream_status` in `webhook.py` executes only once (fire-and-forget). Exceptions are only logged at warning level without retry.
 2. If the PATCH fails (network jitter, BKD 5xx, race condition with BKD auto status changes), the sub-agent issue remains stuck in "review" forever.
-3. Subsequent state transitions (ANALYZE_DONE -> artifact check -> spec lint -> ...) do not go back to sync previously completed sub-agent issues.
+3. Subsequent state transitions (EXECUTE_DONE -> artifact check -> spec lint -> ...) do not go back to sync previously completed sub-agent issues.
 
 This causes the BKD kanban "review" column to be polluted with large numbers of false-positive completed issues, leading users to believe there are many problems requiring manual intervention.
 

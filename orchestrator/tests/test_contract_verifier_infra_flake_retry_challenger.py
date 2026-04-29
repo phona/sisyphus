@@ -13,7 +13,7 @@ Scenarios covered:
            infra_retry_count increments to 1, CAS to STAGING_TEST_RUNNING, create_staging_test called
   VFR-S3  apply_verify_infra_retry, count=2 (= verifier_infra_retry_cap=2) →
            returns emit=verify.escalate, reason=infra-retry-cap
-  VFR-S4  apply_verify_infra_retry, verifier_stage=analyze (not in _RETRY_ROUTING) →
+  VFR-S4  apply_verify_infra_retry, verifier_stage=execute (not in _RETRY_ROUTING) →
            returns emit=verify.escalate, logs stage_not_retryable
   VFR-S5  validate_decision: action=retry + fixer=dev (non-null) → MUST fail validation
   VFR-S6  decision_to_event: action=retry → Event.VERIFY_INFRA_RETRY
@@ -274,7 +274,7 @@ async def test_vfr_s3_at_cap_emits_verify_escalate_with_infra_retry_cap_reason()
 
 @pytest.mark.asyncio
 async def test_vfr_s4_non_retryable_stage_emits_verify_escalate() -> None:
-    """VFR-S4: verifier_stage=analyze (not in _RETRY_ROUTING) →
+    """VFR-S4: verifier_stage=execute (not in _RETRY_ROUTING) →
     MUST return emit=verify.escalate; MUST NOT CAS or call create action."""
     from orchestrator.actions._verifier import apply_verify_infra_retry
     from orchestrator.state import Event
@@ -288,8 +288,8 @@ async def test_vfr_s4_non_retryable_stage_emits_verify_escalate() -> None:
         result = await apply_verify_infra_retry(
             body=_make_body_obj(),
             req_id=_REQ_ID,
-            tags=["verifier", _REQ_ID, "verify:analyze"],
-            ctx={"verifier_stage": "analyze", "infra_retry_count": 0},
+            tags=["verifier", _REQ_ID, "verify:execute"],
+            ctx={"verifier_stage": "execute", "infra_retry_count": 0},
         )
 
     assert isinstance(result, dict), (

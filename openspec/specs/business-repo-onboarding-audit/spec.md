@@ -5,12 +5,12 @@ TBD - created by archiving change REQ-audit-business-repo-makefile-1777125538. U
 ## Requirements
 ### Requirement: source repo onboarding audit MUST verify all six ttpos-ci targets exist
 
-The onboarding audit SHALL verify that a candidate source repo's `Makefile` (or include chain) defines all six ttpos-ci standard targets before that repo joins `involved_repos`. A source repo joining sisyphus's `involved_repos` (whether via `default_involved_repos` or per-REQ explicit declaration) MUST pass this audit before its first analyze REQ. The audit MUST cover all six standard targets:
+The onboarding audit SHALL verify that a candidate source repo's `Makefile` (or include chain) defines all six ttpos-ci standard targets before that repo joins `involved_repos`. A source repo joining sisyphus's `involved_repos` (whether via `default_involved_repos` or per-REQ explicit declaration) MUST pass this audit before its first execute REQ. The audit MUST cover all six standard targets:
 `ci-env`, `ci-setup`, `ci-lint`, `ci-unit-test`, `ci-integration-test`, and
 `ci-build`. A repo missing any target MUST be flagged GAP in the audit output and
 MUST NOT be added to involved_repos until the gap is closed by a separate
 follow-up REQ. This is a documentation-checklist requirement enforced manually
-by the analyze-agent at onboarding time, not a runtime sisyphus check.
+by the execute-agent at onboarding time, not a runtime sisyphus check.
 
 #### Scenario: AUDIT-S1 audit passes when all six targets resolve via root Makefile or include chain
 
@@ -125,7 +125,7 @@ their own Makefile / workflow shape.
 
 #### Scenario: AUDIT-S10 audit report contains the matrix
 
-- **GIVEN** an audit report markdown produced by the analyze-agent
+- **GIVEN** an audit report markdown produced by the execute-agent
 - **WHEN** a reviewer reads it
 - **THEN** there is a heading-level section containing a matrix table whose
   rows are audited targets and whose columns are audited repos, with each cell

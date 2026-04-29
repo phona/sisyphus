@@ -10,7 +10,7 @@ sub-agent 类型的 issue（不是 user 创的 intent issue）：
   上**故意**把 BKD status 推到 "review"（让用户能看到待 follow-up 的入口），但当
   REQ 后续被 admin 推 done / pr-merged-override 短路终态后，原 verifier issue 的
   BKD status 没有被反向收尾，永久留在 "review"
-- 3 条 `fixer` + `sessionStatus='failed'` / 2 条 `analyze` + `sessionStatus='failed'` /
+- 3 条 `fixer` + `sessionStatus='failed'` / 2 条 `execute` + `sessionStatus='failed'` /
   1 条 `challenger` + `sessionStatus='failed'` —— webhook 的 `_push_upstream_status`
   只在 `body.event == 'session.completed'` 才推（webhook.py:233），`session.failed`
   不推；BKD agent 失败后 statusId 维持原值（多半是预先被 follow-up 之前的
@@ -52,7 +52,7 @@ uv run python -m orchestrator.maintenance.backfill_bkd_review_stuck \
 def is_safe_target(issue) -> tuple[bool, str]:
     if issue.statusId != "review":     return (False, "not-review")
     if issue.sessionStatus == "running":return (False, "session-running")
-    role = first_role_tag(issue.tags)  # verifier / fixer / analyze / challenger / accept-agent / done-archive
+    role = first_role_tag(issue.tags)  # verifier / fixer / execute / challenger / accept-agent / done-archive
     if role is None:                   return (False, "no-role-tag")  # 保护 user 创的 intent issue
     if not has_req_tag(issue.tags):    return (False, "no-req-tag")   # 防误伤无 REQ 关联的孤儿
     return (True, f"role={role};session={issue.sessionStatus}")

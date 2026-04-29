@@ -23,10 +23,10 @@ from enum import StrEnum
 
 
 class ReqState(StrEnum):
-    INIT = "init"                               # 还没 analyze / 待初始化
+    INIT = "init"                               # 还没 execute / 待初始化
     INTAKING = "intaking"                       # intake-agent 在跑（多轮 BKD chat 澄清 + 写 finalized intent）
-    ANALYZING = "analyzing"                     # analyze-agent 在跑
-    ANALYZE_ARTIFACT_CHECKING = "analyze-artifact-checking"  # 机械校 analyze 产物（proposal/tasks/spec.md 存在 + 非空）
+    EXECUTING = "executing"                     # execute-agent 在跑
+    EXECUTE_ARTIFACT_CHECKING = "execute-artifact-checking"  # 机械校 execute 产物（proposal/tasks/spec.md 存在 + 非空）
     SPEC_LINT_RUNNING = "spec-lint-running"     # openspec validate 检查（sisyphus 下发 runner 任务）
     CHALLENGER_RUNNING = "challenger-running"   # M18：challenger-agent 读 spec 写 contract test（黑盒，不看 dev 代码）
     DEV_CROSS_CHECK_RUNNING = "dev-cross-check-running"  # 开发交叉验证（sisyphus 下发 runner 任务）
@@ -47,10 +47,10 @@ class Event(StrEnum):
     INTENT_INTAKE = "intent.intake"                 # 人在 BKD 打 intent:intake tag → 起 intake-agent 澄清需求
     INTAKE_PASS = "intake.pass"                     # intake-agent 完 + finalized intent JSON ok
     INTAKE_FAIL = "intake.fail"                     # intake-agent 异常 / 用户放弃
-    INTENT_ANALYZE = "intent.analyze"               # 人在 BKD 打 intent:analyze tag（旧入口，现支持 init:STATE）
-    ANALYZE_DONE = "analyze.done"                   # analyze-agent 完成
-    ANALYZE_ARTIFACT_CHECK_PASS = "analyze-artifact-check.pass"   # 机械校 analyze 产物（proposal/tasks/spec.md）通过
-    ANALYZE_ARTIFACT_CHECK_FAIL = "analyze-artifact-check.fail"   # 机械校 analyze 产物失败 → verifier
+    INTENT_EXECUTE = "intent.execute"               # 人在 BKD 打 intent:execute tag（旧入口，现支持 init:STATE）
+    EXECUTE_DONE = "execute.done"                   # execute-agent 完成
+    EXECUTE_ARTIFACT_CHECK_PASS = "execute-artifact-check.pass"   # 机械校 execute 产物（proposal/tasks/spec.md）通过
+    EXECUTE_ARTIFACT_CHECK_FAIL = "execute-artifact-check.fail"   # 机械校 execute 产物失败 → verifier
     SPEC_LINT_PASS = "spec-lint.pass"               # openspec validate 通过
     SPEC_LINT_FAIL = "spec-lint.fail"               # openspec validate 失败 → verifier
     CHALLENGER_PASS = "challenger.pass"             # M18：challenger 写完 contract test 推 feat 分支
@@ -95,47 +95,47 @@ class Transition:
 # 没列出的组合 = 非法 transition（webhook 收到时 skip + log）
 TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     # ─── 主链 happy path ─────────────────────────────────────────────────
-    # intake → analyze 两阶段物理隔离：intent:intake tag 走 INTAKING，跳过直接用 intent:analyze
+    # intake → execute 两阶段物理隔离：intent:intake tag 走 INTAKING，跳过直接用 intent:execute
     (ReqState.INIT, Event.INTENT_INTAKE):
         Transition(ReqState.INTAKING, "start_intake",
                    "intent:intake → 启动澄清 agent，brainstorm + finalize intent"),
 
     (ReqState.INTAKING, Event.INTAKE_PASS):
-        Transition(ReqState.ANALYZING, "start_analyze_with_finalized_intent",
-                   "intake done → analyze 接力（新 BKD issue，嵌入 finalized intent）"),
+        Transition(ReqState.EXECUTING, "start_execute_with_finalized_intent",
+                   "intake done → execute 接力（新 BKD issue，嵌入 finalized intent）"),
 
     (ReqState.INTAKING, Event.INTAKE_FAIL):
         Transition(ReqState.ESCALATED, "escalate", "intake failed / 用户放弃"),
 
-    (ReqState.INIT, Event.INTENT_ANALYZE):
-        Transition(ReqState.ANALYZING, "start_analyze", "kick off"),
+    (ReqState.INIT, Event.INTENT_EXECUTE):
+        Transition(ReqState.EXECUTING, "start_execute", "kick off"),
 
-    # start_analyze 内部判 escalate（如 clone_involved_repos 失败 → emit VERIFY_ESCALATE）
-    # 没这条 transition 会被 engine.illegal_transition 吞掉，REQ 卡 ANALYZING 60min
+    # start_execute 内部判 escalate（如 clone_involved_repos 失败 → emit VERIFY_ESCALATE）
+    # 没这条 transition 会被 engine.illegal_transition 吞掉，REQ 卡 EXECUTING 60min
     # 才靠 watchdog auto_resume，浪费一轮 BKD agent token；实证 2026-04-26 REQ-ttpos-pat-validate。
-    (ReqState.ANALYZING, Event.VERIFY_ESCALATE):
+    (ReqState.EXECUTING, Event.VERIFY_ESCALATE):
         Transition(ReqState.ESCALATED, "escalate",
-                   "start_analyze 内部判 escalate（clone failed 等）"),
+                   "start_execute 内部判 escalate（clone failed 等）"),
 
-    # 同理 start_analyze_with_finalized_intent (INTAKING → ANALYZING via INTAKE_PASS) 内部
+    # 同理 start_execute_with_finalized_intent (INTAKING → EXECUTING via INTAKE_PASS) 内部
     # 也可能 emit VERIFY_ESCALATE（intent 缺字段 / clone failed）。补 INTAKING 那条避免漏。
     (ReqState.INTAKING, Event.VERIFY_ESCALATE):
         Transition(ReqState.ESCALATED, "escalate",
-                   "start_analyze_with_finalized_intent 内部判 escalate"),
+                   "start_execute_with_finalized_intent 内部判 escalate"),
 
-    # REQ-analyze-artifact-check-1777254586：analyze done 后先机械校 proposal/tasks/spec.md
+    # REQ-execute-artifact-check-1777254586：execute done 后先机械校 proposal/tasks/spec.md
     # 是否真存在 + 非空，再放进 spec_lint。防 agent 自报 pass 但产物全空。
-    (ReqState.ANALYZING, Event.ANALYZE_DONE):
-        Transition(ReqState.ANALYZE_ARTIFACT_CHECKING, "create_analyze_artifact_check",
-                   "下发 analyze 产物结构性检查（proposal.md / tasks.md / spec.md 存在 + 非空）"),
+    (ReqState.EXECUTING, Event.EXECUTE_DONE):
+        Transition(ReqState.EXECUTE_ARTIFACT_CHECKING, "create_execute_artifact_check",
+                   "下发 execute 产物结构性检查（proposal.md / tasks.md / spec.md 存在 + 非空）"),
 
-    (ReqState.ANALYZE_ARTIFACT_CHECKING, Event.ANALYZE_ARTIFACT_CHECK_PASS):
+    (ReqState.EXECUTE_ARTIFACT_CHECKING, Event.EXECUTE_ARTIFACT_CHECK_PASS):
         Transition(ReqState.SPEC_LINT_RUNNING, "create_spec_lint",
-                   "analyze 产物齐 → 下发 openspec validate 任务"),
+                   "execute 产物齐 → 下发 openspec validate 任务"),
 
-    (ReqState.ANALYZE_ARTIFACT_CHECKING, Event.ANALYZE_ARTIFACT_CHECK_FAIL):
-        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_analyze_artifact_check_fail",
-                   "analyze 产物不全 → verifier"),
+    (ReqState.EXECUTE_ARTIFACT_CHECKING, Event.EXECUTE_ARTIFACT_CHECK_FAIL):
+        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_execute_artifact_check_fail",
+                   "execute 产物不全 → verifier"),
 
     (ReqState.SPEC_LINT_RUNNING, Event.SPEC_LINT_PASS):
         Transition(ReqState.CHALLENGER_RUNNING, "start_challenger",
@@ -286,8 +286,8 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     **{
         (st, Event.SESSION_FAILED): Transition(st, "escalate", "session crash → auto-resume or escalate")
         for st in [
-            ReqState.INTAKING, ReqState.ANALYZING,
-            ReqState.ANALYZE_ARTIFACT_CHECKING,
+            ReqState.INTAKING, ReqState.EXECUTING,
+            ReqState.EXECUTE_ARTIFACT_CHECKING,
             ReqState.SPEC_LINT_RUNNING, ReqState.CHALLENGER_RUNNING,
             ReqState.DEV_CROSS_CHECK_RUNNING,
             ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,

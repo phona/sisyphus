@@ -30,8 +30,8 @@ REQ-watchdog-stage-policy-1777269909（PR #161）只完成了 [docs/user-feedbac
 | stage type | 默认 policy | 例 state |
 |---|---|---|
 | `human-loop-conversation` | `None`（SQL 预过滤） | `INTAKING` |
-| `deterministic-checker` | `ended=300, stuck=300` | `SPEC_LINT_RUNNING` / `DEV_CROSS_CHECK_RUNNING` / `ANALYZE_ARTIFACT_CHECKING` |
-| `autonomous-bounded` | `ended=300, stuck=None` | `ANALYZING` / `CHALLENGER_RUNNING` / `ACCEPT_RUNNING` / `ACCEPT_TEARING_DOWN` / `ARCHIVING` / `FIXER_RUNNING` / `REVIEW_RUNNING` |
+| `deterministic-checker` | `ended=300, stuck=300` | `SPEC_LINT_RUNNING` / `DEV_CROSS_CHECK_RUNNING` / `EXECUTE_ARTIFACT_CHECKING` |
+| `autonomous-bounded` | `ended=300, stuck=None` | `EXECUTING` / `CHALLENGER_RUNNING` / `ACCEPT_RUNNING` / `ACCEPT_TEARING_DOWN` / `ARCHIVING` / `FIXER_RUNNING` / `REVIEW_RUNNING` |
 | `external-poll` | `ended=300, stuck=14400` | `PR_CI_RUNNING` |
 
 `STAGING_TEST_RUNNING` 名义上是 deterministic-checker（kubectl exec），但单/集成
@@ -73,7 +73,7 @@ REQ-watchdog-stage-policy-1777269909（PR #161）只完成了 [docs/user-feedbac
   3. 真要 per-deployment override，操作员仍可改全局 `watchdog_*_threshold_sec`
      压低/抬高所有 unmapped fallback；或开新 REQ 调表（这才是受控变更）
 - **autonomous-bounded `stuck_sec=None`，不跟 design doc 的 30min**：design doc 用
-  30min 作建议，但既有 `config.py:186` 注释明确写 "sonnet analyze long tail 经常
+  30min 作建议，但既有 `config.py:186` 注释明确写 "sonnet execute long tail 经常
   25-35min；30 min 阈值会 false-escalate 大量 dogfood REQ"。先把框架立起来，slow
   lane 默认仍是 None（保留当前"不杀 running"语义），后续运维数据驱动决定是否压低。
 - **`STAGING_TEST_RUNNING` 单独归"宽松 deterministic"档**：理论是 mechanical checker

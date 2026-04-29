@@ -10,10 +10,10 @@
       `PrLink` dataclass、`from_ctx` / `pr_link_tags` helpers、
       `_discover_repos_via_runner` / `discover_pr_links` /
       `ensure_pr_links_in_ctx`（缓存 + 持久化 + 回填 ctx 里已知 issue id 的 tag）
-- [x] orchestrator/src/orchestrator/actions/start_analyze.py：
-      stash `analyze_issue_id = body.issueId` 到 ctx（backfill 用）
-- [x] orchestrator/src/orchestrator/actions/start_analyze_with_finalized_intent.py：
-      stash `analyze_issue_id = issue.id`（同上）
+- [x] orchestrator/src/orchestrator/actions/start_execute.py：
+      stash `execute_issue_id = body.issueId` 到 ctx（backfill 用）
+- [x] orchestrator/src/orchestrator/actions/start_execute_with_finalized_intent.py：
+      stash `execute_issue_id = issue.id`（同上）
 - [x] orchestrator/src/orchestrator/actions/_verifier.py：
       `invoke_verifier` / `start_fixer` create_issue 前调 helper 注入 `pr:*` tag
 - [x] orchestrator/src/orchestrator/actions/create_staging_test.py：

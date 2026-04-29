@@ -54,7 +54,7 @@ ENV PATH="/usr/local/go/bin:/root/go/bin:$PATH" \
 
 # ─── 4. openspec CLI ─────────────────────────────────────────────────────
 # 真包名是 @fission-ai/openspec（旧 Dockerfile 装的 @fission-codes/openspec 不存在，
-# 退回 openspec 是 npm 上的占位空包，REQ-997 analyze 暴露的）
+# 退回 openspec 是 npm 上的占位空包，REQ-997 execute 暴露的）
 RUN npm install -g @fission-ai/openspec@latest && openspec --version
 
 # ─── 4b. uv（sisyphus 自 dogfood + Python 业务仓 Makefile 用 uv run 必装） ─────

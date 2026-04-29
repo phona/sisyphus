@@ -8,18 +8,18 @@ from orchestrator.state import TRANSITIONS, Event, ReqState, decide, dump_transi
 # 反向声明：列出 happy path 全链 + 关键分支，验 next_state 和 action。
 EXPECTED = [
     # state, event, next_state, action
-    # INTAKING 路径：intent:intake → INTAKING → ANALYZING（新建 analyze issue）
+    # INTAKING 路径：intent:intake → INTAKING → EXECUTING（新建 execute issue）
     (ReqState.INIT,                 Event.INTENT_INTAKE,       ReqState.INTAKING,            "start_intake"),
-    (ReqState.INTAKING,             Event.INTAKE_PASS,         ReqState.ANALYZING,           "start_analyze_with_finalized_intent"),
+    (ReqState.INTAKING,             Event.INTAKE_PASS,         ReqState.EXECUTING,           "start_execute_with_finalized_intent"),
     (ReqState.INTAKING,             Event.INTAKE_FAIL,         ReqState.ESCALATED,           "escalate"),
-    (ReqState.INIT,                 Event.INTENT_ANALYZE,      ReqState.ANALYZING,           "start_analyze"),
+    (ReqState.INIT,                 Event.INTENT_EXECUTE,      ReqState.EXECUTING,           "start_execute"),
     # 内部 emit verify.escalate 路径（clone_involved_repos 失败等）
-    (ReqState.ANALYZING,            Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
+    (ReqState.EXECUTING,            Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
     (ReqState.INTAKING,             Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
-    # REQ-analyze-artifact-check-1777254586：analyze done 走 artifact check 再到 spec_lint
-    (ReqState.ANALYZING,            Event.ANALYZE_DONE,                 ReqState.ANALYZE_ARTIFACT_CHECKING, "create_analyze_artifact_check"),
-    (ReqState.ANALYZE_ARTIFACT_CHECKING, Event.ANALYZE_ARTIFACT_CHECK_PASS, ReqState.SPEC_LINT_RUNNING, "create_spec_lint"),
-    (ReqState.ANALYZE_ARTIFACT_CHECKING, Event.ANALYZE_ARTIFACT_CHECK_FAIL, ReqState.REVIEW_RUNNING,    "invoke_verifier_for_analyze_artifact_check_fail"),
+    # REQ-execute-artifact-check-1777254586：execute done 走 artifact check 再到 spec_lint
+    (ReqState.EXECUTING,            Event.EXECUTE_DONE,                 ReqState.EXECUTE_ARTIFACT_CHECKING, "create_execute_artifact_check"),
+    (ReqState.EXECUTE_ARTIFACT_CHECKING, Event.EXECUTE_ARTIFACT_CHECK_PASS, ReqState.SPEC_LINT_RUNNING, "create_spec_lint"),
+    (ReqState.EXECUTE_ARTIFACT_CHECKING, Event.EXECUTE_ARTIFACT_CHECK_FAIL, ReqState.REVIEW_RUNNING,    "invoke_verifier_for_execute_artifact_check_fail"),
     (ReqState.SPEC_LINT_RUNNING,    Event.SPEC_LINT_PASS,      ReqState.CHALLENGER_RUNNING,  "start_challenger"),
     (ReqState.SPEC_LINT_RUNNING,    Event.SPEC_LINT_FAIL,      ReqState.REVIEW_RUNNING,      "invoke_verifier_for_spec_lint_fail"),
     # M18: challenger between spec_lint and dev_cross_check
@@ -74,8 +74,8 @@ def test_session_failed_routes_to_escalate_action_all_running_states():
     所以这里只验 action 名 + transition 存在，不再要求 next_state == ESCALATED。
     """
     running = [
-        ReqState.INTAKING, ReqState.ANALYZING,
-        ReqState.ANALYZE_ARTIFACT_CHECKING,
+        ReqState.INTAKING, ReqState.EXECUTING,
+        ReqState.EXECUTE_ARTIFACT_CHECKING,
         ReqState.SPEC_LINT_RUNNING, ReqState.DEV_CROSS_CHECK_RUNNING,
         ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
         ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
@@ -220,9 +220,9 @@ def test_v02_no_legacy_ci_events():
 
 
 def test_m12_dropped_pending_human_state_and_event():
-    """M12：砍 M6 admission → ANALYZING_PENDING_HUMAN state / ANALYZE_PENDING_HUMAN event 彻底删。
+    """M12：砍 M6 admission → EXECUTING_PENDING_HUMAN state / EXECUTE_PENDING_HUMAN event 彻底删。
 
-    sisyphus 不再卡 analyze 阶段歧义；agent 自己在 BKD chat 里跟 user 谈。
+    sisyphus 不再卡 execute 阶段歧义；agent 自己在 BKD chat 里跟 user 谈。
     """
     state_values = {s.value for s in ReqState}
     assert "analyzing-pending-human" not in state_values

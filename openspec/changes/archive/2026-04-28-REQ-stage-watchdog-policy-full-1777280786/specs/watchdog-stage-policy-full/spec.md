@@ -51,8 +51,8 @@ that import this set continue to work unchanged.
 
 #### Scenario: WSPF-S3 autonomous-bounded stage running indefinitely is NOT escalated (stuck_sec=None)
 
-- **GIVEN** a REQ in state `ANALYZING` with `stuck_sec_actual=10000` (~3h)
-- **AND** `_STAGE_POLICY[ReqState.ANALYZING].stuck_sec is None`
+- **GIVEN** a REQ in state `EXECUTING` with `stuck_sec_actual=10000` (~3h)
+- **AND** `_STAGE_POLICY[ReqState.EXECUTING].stuck_sec is None`
 - **AND** BKD reports `session_status="running"`
 - **WHEN** `watchdog._tick()` runs
 - **THEN** `engine.step` MUST NOT be called for this row
@@ -60,12 +60,12 @@ that import this set continue to work unchanged.
 
 #### Scenario: WSPF-S4 autonomous-bounded stage with ended session escalates after ended_sec
 
-- **GIVEN** a REQ in state `ANALYZING` with `stuck_sec_actual=320`
-- **AND** `_STAGE_POLICY[ReqState.ANALYZING].ended_sec == 300`
+- **GIVEN** a REQ in state `EXECUTING` with `stuck_sec_actual=320`
+- **AND** `_STAGE_POLICY[ReqState.EXECUTING].ended_sec == 300`
 - **AND** BKD reports `session_status="failed"`
 - **WHEN** `watchdog._tick()` runs
 - **THEN** `engine.step` MUST be called once with `event=SESSION_FAILED` and
-  `cur_state=ReqState.ANALYZING`
+  `cur_state=ReqState.EXECUTING`
 
 #### Scenario: WSPF-S5 external-poll stage running long but under stuck_sec is NOT escalated
 

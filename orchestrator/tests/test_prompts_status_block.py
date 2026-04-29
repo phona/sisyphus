@@ -3,7 +3,7 @@
 Covers spec scenarios BISB-S1..S7 in
 ``openspec/changes/REQ-ux-status-block-1777257283/specs/bkd-intent-status-block/spec.md``.
 The partial under test renders a markdown ``## REQ Status`` table that gets
-included at the top of ``intake.md.j2`` and ``analyze.md.j2``.
+included at the top of ``intake.md.j2`` and ``execute.md.j2``.
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def test_bisb_s1_partial_renders_seven_rows_when_every_field_set() -> None:
     """BISB-S1: full table, 7 data rows in documented order."""
     sb = {
         "req_id": "REQ-foo",
-        "stage": "analyze",
+        "stage": "execute",
         "bkd_intent_issue_url": "https://bkd.example/projects/p/issues/iss-1",
         "cloned_repos": ["phona/sisyphus", "ZonEaseTech/ttpos-server-go"],
         "pr_links_inline":
@@ -49,7 +49,7 @@ def test_bisb_s1_partial_renders_seven_rows_when_every_field_set() -> None:
         "BKD intent issue", "Pre-cloned repos", "Linked PRs",
     ]
     assert "`REQ-foo`" in out
-    assert "`analyze`" in out
+    assert "`execute`" in out
     assert "`feat/REQ-foo`" in out
     assert "`runner-req-foo`" in out
     assert "[open](https://bkd.example/projects/p/issues/iss-1)" in out
@@ -84,16 +84,16 @@ def test_bisb_s2_partial_omits_optional_rows_when_unset() -> None:
 # ── BISB-S3 ────────────────────────────────────────────────────────────────
 
 
-def test_bisb_s3_analyze_prompt_status_block_above_tools_whitelist() -> None:
-    """BISB-S3: rendered analyze prompt has ## REQ Status before ## 工具白名单."""
+def test_bisb_s3_execute_prompt_status_block_above_tools_whitelist() -> None:
+    """BISB-S3: rendered execute prompt has ## REQ Status before ## 工具白名单."""
     sb = build_status_block_ctx(
         req_id="REQ-foo",
-        stage="analyze",
+        stage="execute",
         bkd_intent_issue_url="https://bkd.example/projects/p/issues/iss-1",
         cloned_repos=["phona/sisyphus"],
     )
     out = render(
-        "analyze.md.j2",
+        "execute.md.j2",
         req_id="REQ-foo",
         project_id="proj-1",
         project_alias="proj-1",
@@ -105,7 +105,7 @@ def test_bisb_s3_analyze_prompt_status_block_above_tools_whitelist() -> None:
     )
     idx_status = out.find("## REQ Status")
     idx_tools = out.find("## 工具白名单")
-    assert idx_status >= 0, "## REQ Status missing from rendered analyze prompt"
+    assert idx_status >= 0, "## REQ Status missing from rendered execute prompt"
     assert idx_tools > idx_status, (idx_status, idx_tools)
     assert "Pre-cloned repos" in out
     assert "phona/sisyphus" in out
@@ -150,7 +150,7 @@ def test_bisb_s5_pr_urls_renders_clickable_inline_links() -> None:
     """BISB-S5: pr_urls dict → clickable per-repo markdown links, comma-joined."""
     sb = build_status_block_ctx(
         req_id="REQ-foo",
-        stage="analyze",
+        stage="execute",
         pr_urls={
             "phona/sisyphus": "https://github.com/phona/sisyphus/pull/42",
             "ZonEaseTech/ttpos-server-go":
@@ -203,8 +203,8 @@ def test_bisb_s7_omitted_status_block_kwarg_is_noop_for_backwards_compat() -> No
         "aissh_server_id": "srv-1",
         "bkd_intent_issue_url": "https://bkd.example/projects/p/issues/iss-1",
     }
-    out_omitted = render("analyze.md.j2", **base)
-    out_none = render("analyze.md.j2", status_block=None, **base)
+    out_omitted = render("execute.md.j2", **base)
+    out_none = render("execute.md.j2", status_block=None, **base)
     assert out_omitted.strip() == out_none.strip()
     assert "## REQ Status" not in out_omitted
     assert "## REQ Status" not in out_none

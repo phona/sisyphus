@@ -11,7 +11,7 @@
 - [x] store/dispatch_slugs.py (get / put)
 - [x] invoke_verifier slug guard
 - [x] start_fixer slug guard
-- [x] start_analyze_with_finalized_intent slug guard
+- [x] start_execute_with_finalized_intent slug guard
 - [x] done_archive slug guard
 - [x] create_accept slug guard
 - [x] create_staging_test (_dispatch_bkd_agent) slug guard

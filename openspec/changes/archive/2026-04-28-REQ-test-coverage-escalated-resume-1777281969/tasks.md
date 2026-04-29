@@ -15,10 +15,10 @@
   - 9 条 case 一一对应 ERT-S1..ERT-S9 scenario
   - 所有 case 用 `pytest.mark.asyncio`，不依赖真 DB / BKD / K8s
 - [x] ERT-S1：(INIT, INTENT_INTAKE) → INTAKING + start_intake
-- [x] ERT-S2：(INTAKING, INTAKE_PASS) → ANALYZING + start_analyze_with_finalized_intent
+- [x] ERT-S2：(INTAKING, INTAKE_PASS) → EXECUTING + start_execute_with_finalized_intent
 - [x] ERT-S3：(INTAKING, INTAKE_FAIL) → ESCALATED + escalate + cleanup_runner
 - [x] ERT-S4：(INTAKING, VERIFY_ESCALATE) → ESCALATED + escalate + cleanup_runner
-- [x] ERT-S5：(ANALYZING, VERIFY_ESCALATE) → ESCALATED + escalate + cleanup_runner
+- [x] ERT-S5：(EXECUTING, VERIFY_ESCALATE) → ESCALATED + escalate + cleanup_runner
 - [x] ERT-S6：(PR_CI_RUNNING, PR_CI_TIMEOUT) → ESCALATED + escalate + cleanup_runner
 - [x] ERT-S7：ESCALATED + VERIFY_PASS 端到端 resume（apply_verify_pass 内部 CAS + chain emit → PR_CI_RUNNING）
 - [x] ERT-S8：ESCALATED + VERIFY_FIX_NEEDED tag 透传 → FIXER_RUNNING

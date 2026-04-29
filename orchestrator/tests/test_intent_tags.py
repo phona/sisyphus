@@ -85,10 +85,10 @@ def test_filter_strips_all_managed_exact():
 def test_filter_strips_all_managed_prefixes():
     """UTI-S2: 各前缀 + 后缀 → 空列表。"""
     tags = [
-        "intent:analyze", "result:pass", "pr-ci:pass",
+        "intent:execute", "result:pass", "pr-ci:pass",
         "verify:dev_cross_check", "trigger:fail",
         "decision:eyJhY3Rpb24iOiJwYXNzIn0=",
-        "fixer:dev", "parent:analyze", "parent-id:abc123",
+        "fixer:dev", "parent:execute", "parent-id:abc123",
         "parent-stage:spec_lint", "target:phona/foo",
         "round-3", "pr:phona/foo#42",
     ]
@@ -126,7 +126,7 @@ def test_filter_de_duplicates_survivors():
 def test_filter_mixed_managed_and_hint():
     """UTI-S6: 混合输入 → 只剩 hint。"""
     tags = [
-        "intent:analyze", "REQ-foo-1234", "analyze",
+        "intent:execute", "REQ-foo-1234", "execute",
         "repo:phona/foo", "ux:fast-track",
         "result:pass", "pr:phona/foo#1",
     ]
@@ -154,7 +154,7 @@ def test_filter_skips_invalid_entries():
 def test_filter_is_idempotent():
     """UTI-S8: filter(filter(x)) == filter(x)。"""
     tags = [
-        "intent:analyze", "REQ-foo", "analyze", "repo:foo/bar",
+        "intent:execute", "REQ-foo", "execute", "repo:foo/bar",
         "ux:fast-track", "repo:foo/bar",
     ]
     once = filter_propagatable_intent_tags(tags)
@@ -166,5 +166,5 @@ def test_filter_is_idempotent():
 def test_filter_strips_leading_trailing_whitespace_then_filters():
     """前后 whitespace 不应让 hint tag 漏检 / 保留 stripped 形式。"""
     # 注意：is_sisyphus_managed_tag 内部 strip 后比对，但 filter 自己用 strip 后值入 out
-    tags = ["  ux:fast-track  ", "  intent:analyze  "]
+    tags = ["  ux:fast-track  ", "  intent:execute  "]
     assert filter_propagatable_intent_tags(tags) == ["ux:fast-track"]

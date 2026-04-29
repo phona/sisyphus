@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     accept_env_gc_interval_sec: int = 900    # 15min
 
     # ─── Admission gate（fresh REQ entry rate-limit）────────────────────────
-    # 同时跑的 REQ 上限：start_intake / start_analyze 进门时数 req_state 里非
+    # 同时跑的 REQ 上限：start_intake / start_execute 进门时数 req_state 里非
     # 终态行（exclude init/done/escalated/gh-incident-open + 自身），>= cap 直接
     # escalate。0 = 关闭。默认 10：vm-node04 6 GiB RAM、runner request 512Mi，
     # 10 个并发是调度器开始挤兑前的舒适上限。
@@ -117,7 +117,7 @@ class Settings(BaseSettings):
     # 临时跳过某 stage：对应 create_* action 不调 BKD agent，直接 emit *.done/.pass
     # 用于：ttpos-arch-lab 没接 → skip_accept；调试状态机 → skip 全部
     # 生产环境全设 false
-    skip_analyze: bool = False        # analyze.done
+    skip_execute: bool = False        # execute.done
     skip_spec: bool = False           # spec.all-passed (跳整 spec stage)
     skip_dev: bool = False            # dev.done
     # v0.2：新 stage 替换 ci-unit/ci-int
@@ -162,8 +162,8 @@ class Settings(BaseSettings):
     # sisyphus 起的 agent 用哪个模型（verifier / fixer / accept / pr_ci_watch /
     # staging_test）。None = 用 BKD per-engine 默认（opus）。
     # 默认 claude-sonnet-4-6（成本低于 opus；测试 helm values 可覆盖成 'claude-haiku-4-5'）。
-    # 注意：analyze agent 的 model 是 user 创 intent issue 时定的，sisyphus 不控；
-    # analyze fan out 的 sub-issue model 由 analyze prompt 自己控（见 analyze.md.j2）。
+    # 注意：execute agent 的 model 是 user 创 intent issue 时定的，sisyphus 不控；
+    # execute fan out 的 sub-issue model 由 execute prompt 自己控（见 execute.md.j2）。
     agent_model: str | None = "claude-opus-4-7[1m]"  # 实证：sonnet 在 code scope (single-file Dockerfile / new module) 跑 60-100min 反复 escalate，retry-token 总成本反而高于 opus 一次过；docs scope 仍可手动指定 sonnet (per-REQ model param)
 
     # ─── aissh-tao MCP server id (vm-node04) ─────────────────────────────
@@ -172,11 +172,11 @@ class Settings(BaseSettings):
     # vm-node04 默认 id 见 runner_container.md.j2 的 fallback。helm values 可覆盖。
     aissh_server_id: str = "5b25f0cd-4fef-4a1f-a4c0-14ecf1395d84"
 
-    # ─── REQ-clone-fallback-direct-analyze-1777119520：multi-layer involved_repos
-    # 的 last-resort fallback 层（L4）。直接 analyze 路径（无 intake）+ ctx 没
+    # ─── REQ-clone-fallback-direct-execute-1777119520：multi-layer involved_repos
+    # 的 last-resort fallback 层（L4）。直接 execute 路径（无 intake）+ ctx 没
     # involved_repos + tags 也没 `repo:<org>/<name>` → 用这里的 default 喂 server-side
     # clone helper。单仓部署（如 sisyphus 自 dogfood）配 `phona/sisyphus` 一条即可，
-    # 直接 analyze 入口就能 auto-clone；多仓 / 跨项目部署留空（Field default_factory），
+    # 直接 execute 入口就能 auto-clone；多仓 / 跨项目部署留空（Field default_factory），
     # 强制用户走 intake 或在 intent issue 上挂 `repo:` tag 显式声明。
     # env：`SISYPHUS_DEFAULT_INVOLVED_REPOS=phona/sisyphus,phona/foo`（逗号分隔）
     # 或 JSON 数组 `["phona/sisyphus","phona/foo"]`。
@@ -195,8 +195,8 @@ class Settings(BaseSettings):
     # 失败不发 webhook 的场景（M4 retry policy 假设"失败事件总会到"被打破）。
     watchdog_enabled: bool = True             # 默认开（兜底必须开）
     watchdog_interval_sec: int = 60           # 每 60s 扫一次
-    watchdog_stuck_threshold_sec: int = 3600  # 60 min — sonnet analyze long tail 经常 25-35min；30 min 阈值会 false-escalate 大量 dogfood REQ；60 min 仍能兜真死
-    # 2026-04-27 REQ-bkd-analyze-hang-debug-1777247423: ended-session fast lane。
+    watchdog_stuck_threshold_sec: int = 3600  # 60 min — sonnet execute long tail 经常 25-35min；30 min 阈值会 false-escalate 大量 dogfood REQ；60 min 仍能兜真死
+    # 2026-04-27 REQ-bkd-execute-hang-debug-1777247423: ended-session fast lane。
     # SQL 预滤用 min(ended, stuck)，session_status != "running" 一旦 stuck >= ended 阈值
     # 立即 escalate；session_status == "running" 仍由 in-loop 跳过（不受影响）。
     # 把 "BKD agent 死了但没发 session.failed webhook" 的兜底从 60min 缩到 5min。

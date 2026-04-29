@@ -16,7 +16,7 @@
 - [x] 跑 `make ci-lint`（ruff 全过）
 
 ## Stage: backfill 实跑
-- [x] `--dry-run` 列出 candidates 落 PR description（46 条，分布 40 verifier / 3 fixer / 2 analyze / 1 challenger）
+- [x] `--dry-run` 列出 candidates 落 PR description（46 条，分布 40 verifier / 3 fixer / 2 execute / 1 challenger）
 - [ ] `--apply` 实跑（**等 user 显式授权后跑**，本次 sandbox 拦了 mass-write；script 已就绪，跑法在 PR description）
 
 ## Stage: PR

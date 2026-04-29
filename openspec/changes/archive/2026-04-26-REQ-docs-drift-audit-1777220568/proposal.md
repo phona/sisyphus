@@ -3,7 +3,7 @@
 ## Why
 
 Code has moved through M16 (cut spec/dev fanout, "for-each-repo" multi-repo
-checkers), M17 (analyze-agent全责交付，sisyphus 不再起 spec/dev BKD 子 agent), and
+checkers), M17 (execute-agent全责交付，sisyphus 不再起 spec/dev BKD 子 agent), and
 M18 (challenger-agent 黑盒读 spec 写 contract test). Several authoritative docs
 (`README.md`, `CLAUDE.md`, `docs/architecture.md`, `docs/state-machine.md`,
 `docs/prompts.md`, `docs/api-tag-management-spec.md`,
@@ -45,7 +45,7 @@ The goal is to make these docs match the code today; no behavior change.
   CHALLENGER_FAIL rows; correct counts (17 / 27); update mermaid to include
   CHALLENGER; drop stale `dev.done` event row.
 - **docs/prompts.md** — replace `spec.md.j2` / `dev.md.j2` rows with current
-  reality (analyze-agent and its sub-agents own spec + dev); list all 14
+  reality (execute-agent and its sub-agents own spec + dev); list all 14
   verifier stage_trigger pairs (analyze, accept, challenger, dev_cross_check,
   pr_ci, spec_lint, staging_test) with `_audit.md.j2` partial added; remove
   references to non-existent `actions/fanout_specs.py` / `actions/create_dev.py`.

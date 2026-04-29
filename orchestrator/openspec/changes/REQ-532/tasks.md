@@ -14,7 +14,7 @@
   - MREPO-ESCALATE-S1: per-repo GH incident
   - MREPO-STATE-S1..S3: ctx fields for multi-repo
   - MREPO-SUPERSEDE-S1: per-repo openspec supersede
-  - MREPO-INTAKE-S1: start_analyze_with_finalized_intent multi-repo clone
+  - MREPO-INTAKE-S1: start_execute_with_finalized_intent multi-repo clone
 - [x] ruff lint + format pass
 - [x] All 38 tests pass
 - [x] Related existing contract tests still pass (no regression)

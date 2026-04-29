@@ -20,7 +20,7 @@ from .verifier_parser import extract_decision_robust
 log = __import__("structlog").get_logger(__name__)
 
 REQ_ID_RE = re.compile(r"^REQ-[\w-]+$")
-# M16：砍 spec 双 fanout，单 tag=spec；analyze-agent 想要多 spec 自己再开 issue
+# M16：砍 spec 双 fanout，单 tag=spec；execute-agent 想要多 spec 自己再开 issue
 SPEC_TAGS = {"spec"}
 # v0.2 新增：stage tag 用于区分 agent role
 # staging-test / pr-ci / accept 都走 result:* tag 判 pass/fail
@@ -208,8 +208,8 @@ def derive_event(event_type: str, tags: Iterable[str]) -> Event | None:
     if event_type == "issue.updated":
         if "intent:intake" in tagset and "intake" not in tagset:
             return Event.INTENT_INTAKE
-        if "intent:analyze" in tagset and "analyze" not in tagset:
-            return Event.INTENT_ANALYZE
+        if "intent:execute" in tagset and "execute" not in tagset:
+            return Event.INTENT_EXECUTE
         # ─── race fallback ────────────────────────────────────────────────
         # BKD 实证：agent 有时在 session.completed 之后才 PATCH result tag，
         # 那次 session.completed 的 tags 不含 result:* → router 漏 fire 主链事件。
@@ -301,8 +301,8 @@ def derive_event(event_type: str, tags: Iterable[str]) -> Event | None:
             return Event.ACCEPT_FAIL
         return None
 
-    if "analyze" in tagset:
-        return Event.ANALYZE_DONE
+    if "execute" in tagset:
+        return Event.EXECUTE_DONE
 
     return None
 

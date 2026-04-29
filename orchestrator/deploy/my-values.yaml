@@ -35,7 +35,7 @@ env:
   log_json: true
   bkd_base_url: https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api
   workdir_root: /var/sisyphus-ci
-  skip_analyze: false
+  skip_execute: false
   skip_spec: false
   skip_dev: false
   skip_staging_test: false

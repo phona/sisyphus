@@ -9,7 +9,7 @@ description: |
 
   An `issue.updated` event is treated as relevant when it carries either:
     - a REQ-* tag (relates to an existing tracked workflow), OR
-    - an `intent:intake` / `intent:analyze` tag (entry point for a new REQ).
+    - an `intent:intake` / `intent:execute` tag (entry point for a new REQ).
   Otherwise, the handler short-circuits to skip.
 
   This filter coexists with the existing `session.completed`-without-REQ-tag
@@ -29,7 +29,7 @@ webhook:
       - "body.event == 'issue.updated'"
       - "router.extract_req_id(tags) is None"
       - "'intent:intake' not in tags"
-      - "'intent:analyze' not in tags"
+      - "'intent:execute' not in tags"
     session_completed_branch:
       - "body.event == 'session.completed'"
       - "router.extract_req_id(tags) is None"
@@ -47,7 +47,7 @@ webhook:
 
 intent_entry_tags:
   - "intent:intake"
-  - "intent:analyze"
+  - "intent:execute"
   semantics: |
     These two tags are the legitimate entry points for new REQ creation via
     issue.updated. The handler MUST allow them through the noise filter even

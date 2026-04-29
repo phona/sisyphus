@@ -102,37 +102,37 @@ async def _run_single_transition(
 
 
 # ───────────────────────────────────────────────────────────────────────
-# MCT-S1：(INIT, INTENT_ANALYZE) → ANALYZING + start_analyze
+# MCT-S1：(INIT, INTENT_EXECUTE) → EXECUTING + start_execute
 # ───────────────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
-async def test_mct_s1_init_intent_analyze_to_analyzing(stub_actions):
+async def test_mct_s1_init_intent_execute_to_executing(stub_actions):
     """Spec MCT-S1: 主链入口，REQ 离开 INIT 必经此路。"""
     await _run_single_transition(
         stub_actions=stub_actions,
         cur_state=ReqState.INIT,
-        event=Event.INTENT_ANALYZE,
-        expected_next_state=ReqState.ANALYZING,
-        expected_action="start_analyze",
+        event=Event.INTENT_EXECUTE,
+        expected_next_state=ReqState.EXECUTING,
+        expected_action="start_execute",
     )
 
 
 # ───────────────────────────────────────────────────────────────────────
-# MCT-S2：(ANALYZING, ANALYZE_DONE) → ANALYZE_ARTIFACT_CHECKING + create_analyze_artifact_check
+# MCT-S2：(EXECUTING, EXECUTE_DONE) → EXECUTE_ARTIFACT_CHECKING + create_execute_artifact_check
 # ───────────────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
-async def test_mct_s2_analyzing_done_to_artifact_checking(stub_actions):
-    """Spec MCT-S2: REQ-analyze-artifact-check 引入的产物结构性检查关口。"""
+async def test_mct_s2_executing_done_to_artifact_checking(stub_actions):
+    """Spec MCT-S2: REQ-execute-artifact-check 引入的产物结构性检查关口。"""
     await _run_single_transition(
         stub_actions=stub_actions,
-        cur_state=ReqState.ANALYZING,
-        event=Event.ANALYZE_DONE,
-        expected_next_state=ReqState.ANALYZE_ARTIFACT_CHECKING,
-        expected_action="create_analyze_artifact_check",
+        cur_state=ReqState.EXECUTING,
+        event=Event.EXECUTE_DONE,
+        expected_next_state=ReqState.EXECUTE_ARTIFACT_CHECKING,
+        expected_action="create_execute_artifact_check",
     )
 
 
 # ───────────────────────────────────────────────────────────────────────
-# MCT-S3：(ANALYZE_ARTIFACT_CHECKING, ANALYZE_ARTIFACT_CHECK_PASS)
+# MCT-S3：(EXECUTE_ARTIFACT_CHECKING, EXECUTE_ARTIFACT_CHECK_PASS)
 #         → SPEC_LINT_RUNNING + create_spec_lint
 # ───────────────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
@@ -140,8 +140,8 @@ async def test_mct_s3_artifact_check_pass_to_spec_lint(stub_actions):
     """Spec MCT-S3: 产物齐 → 进入机械 checker 阶段。"""
     await _run_single_transition(
         stub_actions=stub_actions,
-        cur_state=ReqState.ANALYZE_ARTIFACT_CHECKING,
-        event=Event.ANALYZE_ARTIFACT_CHECK_PASS,
+        cur_state=ReqState.EXECUTE_ARTIFACT_CHECKING,
+        event=Event.EXECUTE_ARTIFACT_CHECK_PASS,
         expected_next_state=ReqState.SPEC_LINT_RUNNING,
         expected_action="create_spec_lint",
     )
@@ -280,8 +280,8 @@ async def test_mct_chain_full_main_chain_via_emit(stub_actions):
     """Spec MCT-CHAIN: 10 个 stub action 各 emit 下一事件，单次 engine.step 推完整条主链。
 
     主链（post-REQ-archive-automation）：
-      INIT --INTENT_ANALYZE--> ANALYZING --ANALYZE_DONE-->
-      ANALYZE_ARTIFACT_CHECKING --ANALYZE_ARTIFACT_CHECK_PASS-->
+      INIT --INTENT_EXECUTE--> EXECUTING --EXECUTE_DONE-->
+      EXECUTE_ARTIFACT_CHECKING --EXECUTE_ARTIFACT_CHECK_PASS-->
       SPEC_LINT_RUNNING --SPEC_LINT_PASS-->
       CHALLENGER_RUNNING --CHALLENGER_PASS-->
       DEV_CROSS_CHECK_RUNNING --DEV_CROSS_CHECK_PASS-->
@@ -299,8 +299,8 @@ async def test_mct_chain_full_main_chain_via_emit(stub_actions):
 
     # action_name → next event 串成完整主链
     action_to_next_event: dict[str, Event] = {
-        "start_analyze":                 Event.ANALYZE_DONE,
-        "create_analyze_artifact_check": Event.ANALYZE_ARTIFACT_CHECK_PASS,
+        "start_execute":                 Event.EXECUTE_DONE,
+        "create_execute_artifact_check": Event.EXECUTE_ARTIFACT_CHECK_PASS,
         "create_spec_lint":              Event.SPEC_LINT_PASS,
         "start_challenger":              Event.CHALLENGER_PASS,
         "create_dev_cross_check":        Event.DEV_CROSS_CHECK_PASS,
@@ -323,13 +323,13 @@ async def test_mct_chain_full_main_chain_via_emit(stub_actions):
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.INIT.value)})
     result = await engine.step(
         pool,
-        body=_body(issueId="x", projectId="p", event="intent.analyze"),
+        body=_body(issueId="x", projectId="p", event="intent.execute"),
         req_id="REQ-1",
         project_id="p",
         tags=["main-chain", "REQ-1"],
         cur_state=ReqState.INIT,
         ctx={},
-        event=Event.INTENT_ANALYZE,
+        event=Event.INTENT_EXECUTE,
     )
 
     # 1) 全 10 个 stub action 各调一次（顺序按主链）
@@ -351,6 +351,6 @@ async def test_mct_chain_full_main_chain_via_emit(stub_actions):
         if not cur:
             break
 
-    # 4) 顶层 step 是 start_analyze（INIT 入口）
-    assert result["action"] == "start_analyze"
-    assert result["next_state"] == ReqState.ANALYZING.value
+    # 4) 顶层 step 是 start_execute（INIT 入口）
+    assert result["action"] == "start_execute"
+    assert result["next_state"] == ReqState.EXECUTING.value

@@ -73,7 +73,7 @@ Body (optional): {"reason": "字符串，可选"}
    event=admin.complete, action=null）以便 `req_summary` view 看得到这次操作。
 5. **拒绝 non-ESCALATED**：`state != ReqState.ESCALATED` → HTTPException(409)。设计取舍：
    "complete 任意 state" 听起来更通用，但实际只在 escalated 后才有意义；放开 in-flight
-   REQ 的 complete 入口会让 admin 误把 ANALYZING 直接 done 而 runner 还在跑 prompt。
+   REQ 的 complete 入口会让 admin 误把 EXECUTING 直接 done 而 runner 还在跑 prompt。
    想要"任意 state → terminal"的人应当先 `escalate` 再 `complete`，两步操作意图明确。
 
 ### 与现有 endpoints 的对比

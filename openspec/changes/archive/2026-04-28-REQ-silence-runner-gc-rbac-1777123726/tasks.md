@@ -29,4 +29,4 @@
 - [x] `git push origin feat/REQ-silence-runner-gc-rbac-1777123726`
 - [x] `gh pr create` with proposal summary + verification plan
 
-owner: analyze-agent
+owner: execute-agent

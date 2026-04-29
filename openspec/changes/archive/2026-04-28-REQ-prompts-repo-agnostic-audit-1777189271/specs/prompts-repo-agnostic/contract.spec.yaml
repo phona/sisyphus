@@ -83,7 +83,7 @@ invariants:
     rule: |
       In challenger.md.j2, every `/workspace/source/<spec_home_repo>` path
       MUST be rewritten to `/workspace/source/<spec_home_repo_basename>`,
-      because `<spec_home_repo>` is in `<owner>/<repo>` form per the analyze /
+      because `<spec_home_repo>` is in `<owner>/<repo>` form per the execute /
       done_archive convention, but `scripts/sisyphus-clone-repos.sh` clones to
       `<basename>` not `<owner>/<repo>`.
     rationale: |

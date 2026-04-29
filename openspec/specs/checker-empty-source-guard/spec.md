@@ -33,13 +33,13 @@ that actually invokes `openspec validate` and `check-scenario-refs.sh`
 `openspec/changes/<REQ>/` directory). After the loop, if `ran -eq 0`, the
 script MUST exit with code 1 and stderr MUST contain the literal substring
 `FAIL spec_lint` and `0 source repos eligible`. This refuses the silent-pass
-where every cloned repo is skipped because the analyze-agent did not push a
+where every cloned repo is skipped because the execute-agent did not push a
 feat branch with the required openspec artifact.
 
 #### Scenario: CESG-S3 spec_lint exits non-zero when no repo has feat/<REQ> + openspec/changes/<REQ>/
 
 - **GIVEN** `/workspace/source/repo-a` exists (real git repo) but has no
-  `feat/REQ-X` branch on origin (analyze-agent failed to push)
+  `feat/REQ-X` branch on origin (execute-agent failed to push)
 - **WHEN** the spec_lint shell template runs against `REQ-X`
 - **THEN** the per-repo skip path triggers (`[skip] repo-a: no feat branch`),
   and after the loop the `ran=0` guard fires with exit code 1 and stderr
@@ -85,7 +85,7 @@ shadowed by Guard C's misleading "0 source repos eligible" message.
 #### Scenario: CNFB-S1 dev_cross_check fails loud when single cloned repo has no feat branch
 
 - **GIVEN** `/workspace/source/repo-a` exists as a real git repo with no
-  remote (so `git fetch origin feat/REQ-X` exits non-zero) — analyze-agent
+  remote (so `git fetch origin feat/REQ-X` exits non-zero) — execute-agent
   declared the repo involved but failed to push
 - **WHEN** the dev_cross_check shell template runs against `REQ-X`
 - **THEN** the template MUST set `fail=1`, emit stderr containing the literal
@@ -97,7 +97,7 @@ shadowed by Guard C's misleading "0 source repos eligible" message.
 
 - **GIVEN** `/workspace/source/repo-a` exists with `feat/REQ-X` branch
   successfully checked out from origin AND a `Makefile` that lacks any
-  `^ci-lint:` target (mis-configured source repo, NOT analyze-agent's failure)
+  `^ci-lint:` target (mis-configured source repo, NOT execute-agent's failure)
 - **WHEN** the dev_cross_check shell template runs against `REQ-X`
 - **THEN** the repo hits the existing `[skip] repo-a: no make ci-lint target`
   branch, `ran` stays 0, `fail` stays 0, and the post-loop Guard C fires
@@ -148,7 +148,7 @@ misleading "0 source repos eligible" message.
 #### Scenario: CNFB-S2 staging_test fails loud when single cloned repo has no feat branch
 
 - **GIVEN** `/workspace/source/repo-a` exists as a real git repo with no
-  remote (so `git fetch origin feat/REQ-X` exits non-zero) — analyze-agent
+  remote (so `git fetch origin feat/REQ-X` exits non-zero) — execute-agent
   declared the repo involved but failed to push
 - **WHEN** the staging_test shell template runs against `REQ-X`
 - **THEN** the template MUST set `fail=1`, emit stderr containing the literal

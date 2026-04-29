@@ -50,7 +50,7 @@ async def start_challenger(*, body, req_id, tags, ctx):
         req_id=req_id, branch=branch_for_links, ctx=ctx, project_id=proj,
     )
     extra_tags = pr_links.pr_link_tags(links)
-    # REQ-ux-tags-injection-1777257283: forward user hint tags from the analyze
+    # REQ-ux-tags-injection-1777257283: forward user hint tags from the execute
     # issue (body.tags) so challenger keeps multi-repo / UX context.
     forwarded = filter_propagatable_intent_tags(tags)
 

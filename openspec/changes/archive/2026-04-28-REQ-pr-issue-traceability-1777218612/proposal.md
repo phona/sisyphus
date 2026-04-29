@@ -4,14 +4,14 @@
 
 A single sisyphus REQ surfaces in three different places:
 
-1. **GitHub PR** — `feat/<REQ>` branch on each involved source repo, opened by analyze-agent.
+1. **GitHub PR** — `feat/<REQ>` branch on each involved source repo, opened by execute-agent.
 2. **GitHub issue** — incident issue opened by `gh_incident.open_incident` when the REQ enters ESCALATED.
-3. **BKD issue** — agent-execution sessions on the BKD board (intake / analyze / accept / fixer / etc).
+3. **BKD issue** — agent-execution sessions on the BKD board (intake / execute / accept / fixer / etc).
 
 Today the operator has to copy raw IDs between tabs to navigate. Concrete pain:
 
 - The GH incident body says `**BKD intent issue**: \`p2ouk4kg\`` — not a URL. Operators paste the id into the BKD UI by hand. `req_state.context.intent_issue_id` exists, but the BKD frontend URL is never assembled.
-- PR descriptions written by analyze-agent freeform sometimes mention REQ id, sometimes don't, never include a clickable link to the BKD session that produced them. There is no PR-body template / contract.
+- PR descriptions written by execute-agent freeform sometimes mention REQ id, sometimes don't, never include a clickable link to the BKD session that produced them. There is no PR-body template / contract.
 - `req_state.context` knows the BKD issue ids (`intent_issue_id`, `accept_issue_id`, `pr_ci_watch_issue_id`, `archive_issue_id`) but never persists the GitHub PR URLs — `pr_ci_watch` already calls `_get_pr_info` which returns `html_url` but the URL is dropped.
 - Metabase Q05 (`05-active-req-overview.sql`) shows `req_id` and `state` but no clickable navigation. Drilling from the dashboard into a REQ requires a separate tab juggle.
 
@@ -47,9 +47,9 @@ embedding sites. No state-machine change, no new BKD agent, no new check.
     only when `pr_urls` non-empty).
 - **`escalate.escalate`**: pull `bkd_intent_url` and `pr_urls` from `ctx` and
   pass through to every `open_incident` call.
-- **`start_analyze`**: pass `bkd_intent_issue_url` template var to
-  `analyze.md.j2`.
-- **`analyze.md.j2`**: append a "PR body footer" section instructing the
+- **`start_execute`**: pass `bkd_intent_issue_url` template var to
+  `execute.md.j2`.
+- **`execute.md.j2`**: append a "PR body footer" section instructing the
   agent to include a fixed sisyphus-cross-link block verbatim in every PR
   body it opens, with REQ id, BKD issue URL, and a `<!-- sisyphus:cross-link
   ... -->` HTML comment for downstream tooling to detect.

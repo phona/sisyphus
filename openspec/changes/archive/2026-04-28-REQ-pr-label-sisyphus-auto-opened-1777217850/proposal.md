@@ -4,11 +4,11 @@
 
 sisyphus pipeline 会自动开两类对外可见的工件：
 
-1. **GitHub Pull Requests** —— 由 analyze-agent（以及它派生的 sub-agent）在 dev 阶段
+1. **GitHub Pull Requests** —— 由 execute-agent（以及它派生的 sub-agent）在 dev 阶段
    通过 `gh pr create` 推到每个被改的 source repo。
 2. **BKD issues** —— 既由 orchestrator 程序通过 `bkd.create_issue` 自动开
-   （analyze / staging-test / pr-ci-watch / accept / done-archive / verifier / fixer /
-   challenger 八个角色），也由 analyze-agent 自己 fan-out 时通过
+   （execute / staging-test / pr-ci-watch / accept / done-archive / verifier / fixer /
+   challenger 八个角色），也由 execute-agent 自己 fan-out 时通过
    `curl POST /api/projects/{alias}/issues` 开 sub-issue。
 
 现状这些 PR / issue **没有任何统一标识表明它们来自 sisyphus**。
@@ -32,7 +32,7 @@ Metabase 看板（M7 / M14e）想筛"sisyphus pipeline 自己跑出来的工件"
 作为后段）。同样改 `bkd_mcp.py` `BKDMcpClient.create_issue` 保持 transport 一致。
 
 **为什么放客户端层而不是每个 callsite**：sisyphus 现有 8 处
-`bkd.create_issue` 调用（actions/start_analyze_with_finalized_intent.py,
+`bkd.create_issue` 调用（actions/start_execute_with_finalized_intent.py,
 actions/create_staging_test.py, actions/create_pr_ci_watch.py,
 actions/create_accept.py, actions/done_archive.py,
 actions/_verifier.py ×2, actions/start_challenger.py），将来还会再加。客户端层
@@ -42,9 +42,9 @@ actions/_verifier.py ×2, actions/start_challenger.py），将来还会再加。
 BKD UI 手动开，sisyphus 只 `update_issue` 改 title + tags）的特例 —— 显式
 在 `tags=[..., "sisyphus"]` 里加上即可。
 
-### 2. analyze-agent 开 PR / 开 sub-issue：在 prompt 里硬性要求
+### 2. execute-agent 开 PR / 开 sub-issue：在 prompt 里硬性要求
 
-`orchestrator/src/orchestrator/prompts/analyze.md.j2` 新增一节
+`orchestrator/src/orchestrator/prompts/execute.md.j2` 新增一节
 `Stage: PR sisyphus 标识`：
 
 - **GitHub PR**：开 PR 前必须先 `gh label create sisyphus --color "6E5494" --description
@@ -90,11 +90,11 @@ POST sub-issue 例子也改成包含 `"sisyphus"`，避免 agent 复制粘贴漏
 ## 影响面
 
 - 改 2 个 Python 模块（`bkd_rest.py` / `bkd_mcp.py`）+ 1 个 action
-  （`start_intake.py`）+ 2 个 Jinja2 prompt（`analyze.md.j2` /
+  （`start_intake.py`）+ 2 个 Jinja2 prompt（`execute.md.j2` /
   `_shared/tools_whitelist.md.j2`）。不改 router / state / engine / checker /
   helm chart / migrations。
 - 测试：`tests/test_bkd_rest.py::test_create_issue_payload_shape` 当前断言
-  `tags == ["intent:analyze", "REQ-1"]`，需要更新为预期前置 `"sisyphus"`。
+  `tags == ["intent:execute", "REQ-1"]`，需要更新为预期前置 `"sisyphus"`。
   新增 4 条单测覆盖：注入 + 已含时不重复 + intake 路径含 sisyphus + 渲染后
   prompt 含 `--label sisyphus` 与 `gh label create sisyphus`。
 - 不改 BKD REST 调用 contract / tool whitelist 范围。

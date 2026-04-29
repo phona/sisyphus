@@ -1,53 +1,53 @@
-# analyze-artifact-check Specification
+# execute-artifact-check Specification
 
 ## Purpose
-TBD - created by archiving change REQ-analyze-artifact-check-1777254586. Update Purpose after archive.
+TBD - created by archiving change REQ-execute-artifact-check-1777254586. Update Purpose after archive.
 ## Requirements
-### Requirement: analyze post-artifact-check stage gates ANALYZE_DONE → SPEC_LINT_RUNNING
+### Requirement: execute post-artifact-check stage gates EXECUTE_DONE → SPEC_LINT_RUNNING
 
 The orchestrator state machine SHALL insert a mechanical post-artifact-check stage
-between `ANALYZING` and `SPEC_LINT_RUNNING`. After the analyze BKD agent emits
-`ANALYZE_DONE`, the system MUST transition to a new state
-`ANALYZE_ARTIFACT_CHECKING` and dispatch the `create_analyze_artifact_check`
-action; only after that action emits `ANALYZE_ARTIFACT_CHECK_PASS` SHALL the
+between `EXECUTING` and `SPEC_LINT_RUNNING`. After the execute BKD agent emits
+`EXECUTE_DONE`, the system MUST transition to a new state
+`EXECUTE_ARTIFACT_CHECKING` and dispatch the `create_execute_artifact_check`
+action; only after that action emits `EXECUTE_ARTIFACT_CHECK_PASS` SHALL the
 state machine advance to `SPEC_LINT_RUNNING`. On
-`ANALYZE_ARTIFACT_CHECK_FAIL` the state SHALL move to `REVIEW_RUNNING` and the
-`invoke_verifier_for_analyze_artifact_check_fail` action SHALL be dispatched.
+`EXECUTE_ARTIFACT_CHECK_FAIL` the state SHALL move to `REVIEW_RUNNING` and the
+`invoke_verifier_for_execute_artifact_check_fail` action SHALL be dispatched.
 
-#### Scenario: AAC-S1 happy path inserts the new stage between analyze and spec_lint
+#### Scenario: AAC-S1 happy path inserts the new stage between execute and spec_lint
 - **GIVEN** the state machine module `orchestrator.state`
 - **WHEN** a static reader inspects the `TRANSITIONS` table
-- **THEN** the entry for `(ANALYZING, ANALYZE_DONE)` MUST point to
-  `next_state=ANALYZE_ARTIFACT_CHECKING` with `action="create_analyze_artifact_check"`,
-  AND a separate entry `(ANALYZE_ARTIFACT_CHECKING, ANALYZE_ARTIFACT_CHECK_PASS)`
+- **THEN** the entry for `(EXECUTING, EXECUTE_DONE)` MUST point to
+  `next_state=EXECUTE_ARTIFACT_CHECKING` with `action="create_execute_artifact_check"`,
+  AND a separate entry `(EXECUTE_ARTIFACT_CHECKING, EXECUTE_ARTIFACT_CHECK_PASS)`
   MUST point to `next_state=SPEC_LINT_RUNNING` with `action="create_spec_lint"`.
-  The legacy direct transition `(ANALYZING, ANALYZE_DONE) → SPEC_LINT_RUNNING`
+  The legacy direct transition `(EXECUTING, EXECUTE_DONE) → SPEC_LINT_RUNNING`
   MUST no longer exist.
 
 #### Scenario: AAC-S2 fail routes through verifier with the dedicated handler
 - **GIVEN** the state machine module
-- **WHEN** the entry for `(ANALYZE_ARTIFACT_CHECKING, ANALYZE_ARTIFACT_CHECK_FAIL)`
+- **WHEN** the entry for `(EXECUTE_ARTIFACT_CHECKING, EXECUTE_ARTIFACT_CHECK_FAIL)`
   is read
 - **THEN** it MUST have `next_state=REVIEW_RUNNING` with
-  `action="invoke_verifier_for_analyze_artifact_check_fail"`,
+  `action="invoke_verifier_for_execute_artifact_check_fail"`,
   AND the action handler MUST be registered in `actions._verifier`,
-  AND `_STAGES` in `_verifier.py` MUST contain `"analyze_artifact_check"` so
-  `invoke_verifier(stage="analyze_artifact_check", trigger="fail")` is accepted.
+  AND `_STAGES` in `_verifier.py` MUST contain `"execute_artifact_check"` so
+  `invoke_verifier(stage="execute_artifact_check", trigger="fail")` is accepted.
 
 #### Scenario: AAC-S3 SESSION_FAILED self-loop covers the new state
 - **GIVEN** the state machine module
 - **WHEN** the SESSION_FAILED self-loop dictionary in `TRANSITIONS` is enumerated
-- **THEN** `ANALYZE_ARTIFACT_CHECKING` MUST be one of the states whose
+- **THEN** `EXECUTE_ARTIFACT_CHECKING` MUST be one of the states whose
   `(state, SESSION_FAILED)` entry maps to `Transition(state, "escalate", ...)`,
   matching the pattern used for the other `*_RUNNING` states.
 
-### Requirement: artifact-check shell verifies analyze deliverables in every involved repo
+### Requirement: artifact-check shell verifies execute deliverables in every involved repo
 
-`checkers.analyze_artifact_check._build_cmd(req_id)` SHALL produce a POSIX shell
+`checkers.execute_artifact_check._build_cmd(req_id)` SHALL produce a POSIX shell
 script that, when executed inside the runner pod, MUST:
 
 1. Refuse to silent-pass when `/workspace/source` is missing or contains zero
-   subdirectories (exit 1 with a `=== FAIL analyze-artifact-check: ... ===` marker
+   subdirectories (exit 1 with a `=== FAIL execute-artifact-check: ... ===` marker
    on stderr).
 2. Iterate every `/workspace/source/*/`, attempt
    `git fetch origin feat/<REQ>` then `git checkout -B feat/<REQ> origin/feat/<REQ>`.
@@ -71,16 +71,16 @@ script that, when executed inside the runner pod, MUST:
    (4) and (5) hold.
 
 #### Scenario: AAC-S4 build_cmd guards /workspace/source missing and empty
-- **GIVEN** `checkers.analyze_artifact_check._build_cmd("REQ-X")` returns string `cmd`
+- **GIVEN** `checkers.execute_artifact_check._build_cmd("REQ-X")` returns string `cmd`
 - **WHEN** a static reader greps `cmd`
 - **THEN** `cmd` MUST contain `[ ! -d /workspace/source ]` AND
-  `FAIL analyze-artifact-check: /workspace/source missing` AND
+  `FAIL execute-artifact-check: /workspace/source missing` AND
   `find /workspace/source -mindepth 1 -maxdepth 1 -type d` AND
-  `"$repo_count" -eq 0` AND `FAIL analyze-artifact-check: /workspace/source empty`,
+  `"$repo_count" -eq 0` AND `FAIL execute-artifact-check: /workspace/source empty`,
   matching the empty-source guard pattern from `spec_lint._build_cmd`.
 
 #### Scenario: AAC-S5 build_cmd checks proposal/tasks/spec/checkbox literals
-- **GIVEN** `checkers.analyze_artifact_check._build_cmd("REQ-X")` returns string `cmd`
+- **GIVEN** `checkers.execute_artifact_check._build_cmd("REQ-X")` returns string `cmd`
 - **WHEN** a static reader greps `cmd`
 - **THEN** `cmd` MUST contain literal references to
   `openspec/changes/REQ-X/proposal.md`, `openspec/changes/REQ-X/tasks.md`,
@@ -89,33 +89,33 @@ script that, when executed inside the runner pod, MUST:
   AND `git fetch origin "feat/REQ-X"`.
 
 #### Scenario: AAC-S6 build_cmd refuses 0 eligible repos
-- **GIVEN** `checkers.analyze_artifact_check._build_cmd("REQ-X")` returns string `cmd`
+- **GIVEN** `checkers.execute_artifact_check._build_cmd("REQ-X")` returns string `cmd`
 - **WHEN** a static reader greps `cmd`
 - **THEN** `cmd` MUST contain `ran=0` AND `ran=$((ran+1))` AND `"$ran" -eq 0`
   AND a marker string like `0 source repos eligible` (mirroring spec_lint),
   AND it MUST end with `[ $fail -eq 0 ]` so the final exit code reflects the
   aggregated check status.
 
-### Requirement: artifact_checks row is written for every analyze_artifact_check run
+### Requirement: artifact_checks row is written for every execute_artifact_check run
 
-`actions.create_analyze_artifact_check` SHALL invoke
-`checkers.analyze_artifact_check.run_analyze_artifact_check`, write the resulting
-`CheckResult` to the `artifact_checks` table with `stage="analyze-artifact-check"`,
-and MUST emit `ANALYZE_ARTIFACT_CHECK_PASS` on success or
-`ANALYZE_ARTIFACT_CHECK_FAIL` on any non-zero exit / timeout / unhandled
+`actions.create_execute_artifact_check` SHALL invoke
+`checkers.execute_artifact_check.run_execute_artifact_check`, write the resulting
+`CheckResult` to the `artifact_checks` table with `stage="execute-artifact-check"`,
+and MUST emit `EXECUTE_ARTIFACT_CHECK_PASS` on success or
+`EXECUTE_ARTIFACT_CHECK_FAIL` on any non-zero exit / timeout / unhandled
 exception.
 
 #### Scenario: AAC-S7 pass writes artifact_checks then emits PASS event
 - **GIVEN** a fake K8s controller that returns `exit_code=0` for the runner exec
-- **WHEN** `create_analyze_artifact_check.create_analyze_artifact_check(...)` is awaited
+- **WHEN** `create_execute_artifact_check.create_execute_artifact_check(...)` is awaited
 - **THEN** `artifact_checks.insert_check` MUST have been called once with
-  `stage="analyze-artifact-check"` and `result.passed=True`,
-  AND the action's return dict MUST contain `"emit": "analyze-artifact-check.pass"`.
+  `stage="execute-artifact-check"` and `result.passed=True`,
+  AND the action's return dict MUST contain `"emit": "execute-artifact-check.pass"`.
 
 #### Scenario: AAC-S8 non-zero exit emits FAIL event with non-zero exit_code
 - **GIVEN** a fake K8s controller that returns `exit_code=1` with marker stderr
-- **WHEN** `create_analyze_artifact_check.create_analyze_artifact_check(...)` is awaited
+- **WHEN** `create_execute_artifact_check.create_execute_artifact_check(...)` is awaited
 - **THEN** the action's return dict MUST contain
-  `"emit": "analyze-artifact-check.fail"`, `"passed": False`, and `"exit_code": 1`,
+  `"emit": "execute-artifact-check.fail"`, `"passed": False`, and `"exit_code": 1`,
   AND `artifact_checks.insert_check` MUST still have been called once.
 

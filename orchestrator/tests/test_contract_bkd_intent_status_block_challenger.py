@@ -7,7 +7,7 @@ Black-box contracts derived exclusively from:
 Scenarios covered:
   BISB-S1  partial renders 7-row table when every field is set
   BISB-S2  partial omits optional rows when inputs are unset
-  BISB-S3  analyze prompt opens with status block above tools_whitelist
+  BISB-S3  execute prompt opens with status block above tools_whitelist
   BISB-S4  intake prompt opens with status block and omits cloned_repos
   BISB-S5  linked PRs row formats pr_urls via format_pr_links_inline
   BISB-S6  helper collapses empty inputs to None for clean row drop
@@ -23,9 +23,9 @@ def _render_partial(status_block) -> str:
     return render("_shared/status_block.md.j2", status_block=status_block)
 
 
-def _render_analyze(**extra) -> str:
+def _render_execute(**extra) -> str:
     return render(
-        "analyze.md.j2",
+        "execute.md.j2",
         req_id="REQ-foo",
         project_id="proj-1",
         project_alias="proj-1",
@@ -55,7 +55,7 @@ def _render_intake(**extra) -> str:
 def test_bisb_s1_partial_renders_7row_table_all_fields_set() -> None:
     ctx = build_status_block_ctx(
         req_id="REQ-foo",
-        stage="analyze",
+        stage="execute",
         bkd_intent_issue_url="https://bkd.example/projects/p/issues/iss-1",
         cloned_repos=["phona/sisyphus", "ZonEaseTech/ttpos-server-go"],
         pr_urls={"phona/sisyphus": "https://github.com/phona/sisyphus/pull/123"},
@@ -70,7 +70,7 @@ def test_bisb_s1_partial_renders_7row_table_all_fields_set() -> None:
         assert field in out, f"BISB-S1: expected row '{field}' missing from partial output"
 
     assert "`REQ-foo`" in out, "BISB-S1: REQ row must contain `REQ-foo`"
-    assert "`analyze`" in out, "BISB-S1: Stage row must contain `analyze`"
+    assert "`execute`" in out, "BISB-S1: Stage row must contain `execute`"
     assert "`feat/REQ-foo`" in out, "BISB-S1: Branch row must contain `feat/REQ-foo`"
     assert "`runner-req-foo`" in out, "BISB-S1: Runner Pod row must contain `runner-req-foo`"
     assert "https://bkd.example/projects/p/issues/iss-1" in out, (
@@ -109,31 +109,31 @@ def test_bisb_s2_partial_omits_optional_rows_when_unset() -> None:
 
 
 # ---------------------------------------------------------------------------
-# BISB-S3  analyze prompt opens with status block above tools_whitelist
+# BISB-S3  execute prompt opens with status block above tools_whitelist
 # ---------------------------------------------------------------------------
 
-def test_bisb_s3_analyze_prompt_status_block_above_tools_whitelist() -> None:
+def test_bisb_s3_execute_prompt_status_block_above_tools_whitelist() -> None:
     sb = build_status_block_ctx(
         req_id="REQ-foo",
-        stage="analyze",
+        stage="execute",
         bkd_intent_issue_url="https://bkd.example/projects/p/issues/iss-1",
         cloned_repos=["phona/sisyphus"],
     )
-    out = _render_analyze(status_block=sb)
+    out = _render_execute(status_block=sb)
 
     assert "## REQ Status" in out, (
-        "BISB-S3: analyze prompt must contain '## REQ Status'"
+        "BISB-S3: execute prompt must contain '## REQ Status'"
     )
     idx_status = out.index("## REQ Status")
     assert "## 工具白名单" in out, (
-        "BISB-S3: analyze prompt must contain '## 工具白名单'"
+        "BISB-S3: execute prompt must contain '## 工具白名单'"
     )
     idx_whitelist = out.index("## 工具白名单")
     assert idx_status < idx_whitelist, (
-        "BISB-S3: '## REQ Status' must appear before '## 工具白名单' in analyze prompt"
+        "BISB-S3: '## REQ Status' must appear before '## 工具白名单' in execute prompt"
     )
     assert "Pre-cloned repos" in out, (
-        "BISB-S3: analyze prompt must contain 'Pre-cloned repos' row with value"
+        "BISB-S3: execute prompt must contain 'Pre-cloned repos' row with value"
     )
 
 
@@ -181,7 +181,7 @@ def test_bisb_s4_intake_prompt_status_block_omits_cloned_repos() -> None:
 def test_bisb_s5_pr_urls_formatted_as_inline_links() -> None:
     ctx = build_status_block_ctx(
         req_id="REQ-foo",
-        stage="analyze",
+        stage="execute",
         pr_urls={
             "phona/sisyphus": "https://github.com/phona/sisyphus/pull/42",
             "ZonEaseTech/ttpos-server-go": "https://github.com/ZonEaseTech/ttpos-server-go/pull/7",
@@ -249,8 +249,8 @@ def test_bisb_s6_helper_collapses_empty_inputs_to_none() -> None:
 # ---------------------------------------------------------------------------
 
 def test_bisb_s7_omitted_status_block_is_noop() -> None:
-    out_with_none = _render_analyze(status_block=None)
-    out_without = _render_analyze()
+    out_with_none = _render_execute(status_block=None)
+    out_without = _render_execute()
 
     assert out_with_none.strip() == out_without.strip(), (
         "BISB-S7: rendering with status_block=None and without status_block kwarg "

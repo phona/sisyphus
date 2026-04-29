@@ -50,11 +50,11 @@ other than `escalated`. The error body MUST include the current state
 name and a hint pointing at `/admin/req/{req_id}/escalate` as the
 prerequisite step. This precondition prevents accidentally re-firing
 verifier events on an in-flight stage that already has a transition
-queued (e.g. ANALYZING during a running BKD analyze-agent session).
+queued (e.g. EXECUTING during a running BKD execute-agent session).
 
 #### Scenario: ARE-S3 calling resume on an in-flight REQ returns 409
 
-- **GIVEN** a REQ row with `state='analyzing'`
+- **GIVEN** a REQ row with `state='executing'`
 - **WHEN** the client sends `POST /admin/req/REQ-X/resume` with body
   `{"action": "pass"}`
 - **THEN** the response MUST be 409 with detail containing the literal

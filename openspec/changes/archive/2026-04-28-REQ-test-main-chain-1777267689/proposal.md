@@ -4,7 +4,7 @@
 
 `orchestrator/src/orchestrator/state.py` 把状态机权威 transition table 写死，
 `engine.step` 是唯一的推进器。**主链 happy path** 11 条 transition（INIT →
-ANALYZING → ANALYZE_ARTIFACT_CHECKING → SPEC_LINT_RUNNING → CHALLENGER_RUNNING →
+EXECUTING → EXECUTE_ARTIFACT_CHECKING → SPEC_LINT_RUNNING → CHALLENGER_RUNNING →
 DEV_CROSS_CHECK_RUNNING → STAGING_TEST_RUNNING → PR_CI_RUNNING → ACCEPT_RUNNING
 → ACCEPT_TEARING_DOWN → ARCHIVING → DONE）覆盖**整个 REQ 生命周期**：任何一条
 推进失败都会让 REQ 卡死或漏走 stage。
@@ -44,9 +44,9 @@ test_state 的静态断言也通过——在线上要等 Q12/Q13 看板 orphan s
 
 | ID | (state, event) | 期望 next_state | action |
 |---|---|---|---|
-| MCT-S1 | (INIT, INTENT_ANALYZE) | ANALYZING | `start_analyze` |
-| MCT-S2 | (ANALYZING, ANALYZE_DONE) | ANALYZE_ARTIFACT_CHECKING | `create_analyze_artifact_check` |
-| MCT-S3 | (ANALYZE_ARTIFACT_CHECKING, ANALYZE_ARTIFACT_CHECK_PASS) | SPEC_LINT_RUNNING | `create_spec_lint` |
+| MCT-S1 | (INIT, INTENT_EXECUTE) | EXECUTING | `start_execute` |
+| MCT-S2 | (EXECUTING, EXECUTE_DONE) | EXECUTE_ARTIFACT_CHECKING | `create_execute_artifact_check` |
+| MCT-S3 | (EXECUTE_ARTIFACT_CHECKING, EXECUTE_ARTIFACT_CHECK_PASS) | SPEC_LINT_RUNNING | `create_spec_lint` |
 | MCT-S4 | (SPEC_LINT_RUNNING, SPEC_LINT_PASS) | CHALLENGER_RUNNING | `start_challenger` |
 | MCT-S5 | (CHALLENGER_RUNNING, CHALLENGER_PASS) | DEV_CROSS_CHECK_RUNNING | `create_dev_cross_check` |
 | MCT-S6 | (DEV_CROSS_CHECK_RUNNING, DEV_CROSS_CHECK_PASS) | STAGING_TEST_RUNNING | `create_staging_test` |
@@ -57,7 +57,7 @@ test_state 的静态断言也通过——在线上要等 Q12/Q13 看板 orphan s
 | MCT-S11 | (ARCHIVING, ARCHIVE_DONE) | DONE | `None` (no-op terminal) |
 
 额外加一条 end-to-end 串联用例 MCT-CHAIN：用 stub action 每条都 `return
-{"emit": "<next-event>"}`，从 `(INIT, INTENT_ANALYZE)` 进 engine.step，验它能
+{"emit": "<next-event>"}`，从 `(INIT, INTENT_EXECUTE)` 进 engine.step，验它能
 一路链式推到 DONE，11 个 stub action 各被调用一次，最终 row 状态为 `done`。这
 条用例覆盖"emit chain 在主链全长跑得通"——`test_engine.py` 现有 chain 测试只
 跨 1 步，深链 chain 没人验证。
@@ -71,7 +71,7 @@ test_state 的静态断言也通过——在线上要等 Q12/Q13 看板 orphan s
 - ❌ 不改 `engine.py` / `state.py` / 任何 prod 代码：纯测试增量
 - ❌ 不写 fail-path（fail 路径已由 test_state.py 静态映射覆盖；fail action
   dispatch 由 test_actions_smoke 覆盖；fail → verifier 链由 test_verifier.py 覆盖）
-- ❌ 不写 INTAKING 入口（INTAKING → ANALYZING 已在 test_state.py 静态覆盖；
+- ❌ 不写 INTAKING 入口（INTAKING → EXECUTING 已在 test_state.py 静态覆盖；
   本 REQ 聚焦"主线 11 步" + 一条端到端 chain）
 - ❌ 不写 integration test（M18 challenger 写）
 

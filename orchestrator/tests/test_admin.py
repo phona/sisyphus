@@ -101,7 +101,7 @@ async def test_force_escalate_marks_escalated_and_triggers_cleanup(monkeypatch):
     monkeypatch.setattr(admin_mod, "_verify_token", lambda x: None)
 
     row = _Row(
-        req_id="REQ-X", project_id="p", state=ReqState.ANALYZING,
+        req_id="REQ-X", project_id="p", state=ReqState.EXECUTING,
         context={}, history=[],
         created_at=_dt.now(UTC), updated_at=_dt.now(UTC),
     )
@@ -120,7 +120,7 @@ async def test_force_escalate_marks_escalated_and_triggers_cleanup(monkeypatch):
     pool = FakePool()
     monkeypatch.setattr("orchestrator.admin.db.get_pool", lambda: pool)
 
-    # ANALYZING は STATE_TO_STAGE に含まれるので close_latest_stage_run が呼ばれる
+    # EXECUTING は STATE_TO_STAGE に含まれるので close_latest_stage_run が呼ばれる
     async def _fake_close(_pool, req_id, stage, *, outcome, fail_reason=None):
         pass
     monkeypatch.setattr("orchestrator.admin.stage_runs.close_latest_stage_run", _fake_close)
@@ -136,7 +136,7 @@ async def test_force_escalate_marks_escalated_and_triggers_cleanup(monkeypatch):
 
     result = await force_escalate("REQ-X", authorization="Bearer x")
 
-    assert result == {"action": "force_escalated", "from_state": "analyzing", "kind": "admin"}
+    assert result == {"action": "force_escalated", "from_state": "executing", "kind": "admin"}
     # SQL UPDATE 跑了一次
     assert len(executed) == 1
     sql, _args = executed[0]
@@ -319,15 +319,15 @@ async def test_complete_noop_when_already_done(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_complete_409_when_not_escalated(monkeypatch):
-    """ACE-S3: state=analyzing → 409 with hint about /escalate first."""
+    """ACE-S3: state=executing → 409 with hint about /escalate first."""
     pool = _FakePool()
-    row = _FakeRow(req_id="REQ-X", project_id="p", state=ReqState.ANALYZING)
+    row = _FakeRow(req_id="REQ-X", project_id="p", state=ReqState.EXECUTING)
     _bypass_auth_and_pool(monkeypatch, pool, row=row)
 
     with pytest.raises(HTTPException) as ei:
         await complete_req("REQ-X", body=None, authorization="Bearer x")
     assert ei.value.status_code == 409
-    assert "analyzing" in ei.value.detail
+    assert "executing" in ei.value.detail
     assert "/escalate" in ei.value.detail
     assert pool.executed == []
 
@@ -554,9 +554,9 @@ async def test_resume_404_when_not_found(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_resume_409_when_not_escalated(monkeypatch):
-    """ARE-S3: state=analyzing → 409 with hint about /escalate first."""
+    """ARE-S3: state=executing → 409 with hint about /escalate first."""
     pool = _FakePool()
-    row = _FakeRow(req_id="REQ-X", project_id="p", state=ReqState.ANALYZING)
+    row = _FakeRow(req_id="REQ-X", project_id="p", state=ReqState.EXECUTING)
     _bypass_auth_pool_and_update(monkeypatch, pool, row=row)
 
     step_calls: list = []
@@ -571,7 +571,7 @@ async def test_resume_409_when_not_escalated(monkeypatch):
             "REQ-X", body=ResumeBody(action="pass"), authorization="Bearer x",
         )
     assert ei.value.status_code == 409
-    assert "analyzing" in ei.value.detail
+    assert "executing" in ei.value.detail
     assert "/escalate" in ei.value.detail
     assert step_calls == []
 
@@ -819,7 +819,7 @@ async def test_force_escalate_closes_current_stage_run(monkeypatch):
     monkeypatch.setattr(admin_mod, "_verify_token", lambda x: None)
 
     row = _Row(
-        req_id="REQ-X", project_id="p", state=ReqState.ANALYZING,
+        req_id="REQ-X", project_id="p", state=ReqState.EXECUTING,
         context={}, history=[],
         created_at=_dt.now(UTC), updated_at=_dt.now(UTC),
     )
@@ -865,9 +865,9 @@ async def test_force_escalate_closes_current_stage_run(monkeypatch):
 
     result = await force_escalate("REQ-X", authorization="Bearer x")
 
-    assert result == {"action": "force_escalated", "from_state": "analyzing", "kind": "admin"}
-    # close_latest_stage_run 调了一次：req_id, stage="analyze", outcome="escalated"
-    assert close_calls == [("REQ-X", "analyze", "escalated", "admin-force-escalate")], (
+    assert result == {"action": "force_escalated", "from_state": "executing", "kind": "admin"}
+    # close_latest_stage_run 调了一次：req_id, stage="execute", outcome="escalated"
+    assert close_calls == [("REQ-X", "execute", "escalated", "admin-force-escalate")], (
         "force_escalate must call close_latest_stage_run with the stage derived "
         "from STATE_TO_STAGE, outcome='escalated', fail_reason='admin-force-escalate'"
     )
@@ -1000,7 +1000,7 @@ async def test_force_escalate_custom_kind_in_sql_and_response(monkeypatch):
 
     pool = _FakePool()
     row = _FakeRow(
-        req_id="REQ-X", project_id="p", state=ReqState.ANALYZING,
+        req_id="REQ-X", project_id="p", state=ReqState.EXECUTING,
         context={"intent_issue_id": "issue-abc"},
     )
     _bypass_auth_pool_for_escalate(monkeypatch, pool, row)
@@ -1009,7 +1009,7 @@ async def test_force_escalate_custom_kind_in_sql_and_response(monkeypatch):
         "REQ-X", body=EscalateBody(kind="infra-flake"), authorization="Bearer x",
     )
 
-    assert result == {"action": "force_escalated", "from_state": "analyzing", "kind": "infra-flake"}
+    assert result == {"action": "force_escalated", "from_state": "executing", "kind": "infra-flake"}
     assert len(pool.executed) == 1
     _sql, args = pool.executed[0]
     ctx = _json.loads(args[1])
@@ -1021,7 +1021,7 @@ async def test_force_escalate_bkd_sync_called_with_correct_args(monkeypatch):
     """EKS-S4: BKD sync 在 SQL UPDATE 后调用，传 add=[escalated, reason:<kind>] + status_id=review。"""
     pool = _FakePool()
     row = _FakeRow(
-        req_id="REQ-X", project_id="myproj", state=ReqState.ANALYZING,
+        req_id="REQ-X", project_id="myproj", state=ReqState.EXECUTING,
         context={"intent_issue_id": "intent-123"},
     )
     bkd_calls: list = []
@@ -1045,7 +1045,7 @@ async def test_force_escalate_bkd_uses_req_id_fallback_when_no_intent_issue(monk
     """EKS-S5: ctx 没 intent_issue_id → fallback 用 req_id。"""
     pool = _FakePool()
     row = _FakeRow(
-        req_id="REQ-X", project_id="p", state=ReqState.ANALYZING,
+        req_id="REQ-X", project_id="p", state=ReqState.EXECUTING,
         context={},  # 没 intent_issue_id
     )
     bkd_calls: list = []
@@ -1063,7 +1063,7 @@ async def test_force_escalate_bkd_failure_does_not_block(monkeypatch):
 
     pool = _FakePool()
     row = _FakeRow(
-        req_id="REQ-X", project_id="p", state=ReqState.ANALYZING,
+        req_id="REQ-X", project_id="p", state=ReqState.EXECUTING,
         context={},
     )
     from orchestrator import admin as admin_mod

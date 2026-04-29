@@ -2,11 +2,11 @@
 
 ## Why
 
-Sisyphus today admits every `intent:intake` / `intent:analyze` webhook into a
+Sisyphus today admits every `intent:intake` / `intent:execute` webhook into a
 running REQ unconditionally. Two failure modes follow on the single-node K3s
 deployment (vm-node04, ~6 GiB RAM, ~50 GB ephemeral):
 
-1. **Concurrent runner storm.** A burst of new REQs (e.g. an analyze-agent
+1. **Concurrent runner storm.** A burst of new REQs (e.g. an execute-agent
    creating multiple sub-issues, or a user pasting a batch of intents) creates
    a per-REQ runner Pod for each. Each Pod requests `512Mi` and limits to
    `8Gi`; the K8s scheduler eventually `FailedScheduling: Insufficient memory`
@@ -25,7 +25,7 @@ ensures the runner Pod and dispatches the BKD agent.
 ## What Changes
 
 Add a single admission gate that runs at the **fresh-entry actions only**
-(`start_intake`, `start_analyze`). When a check fails, the action emits
+(`start_intake`, `start_execute`). When a check fails, the action emits
 `VERIFY_ESCALATE` with a specific `escalated_reason`, and the existing
 state-machine path puts the REQ into `ESCALATED` so a human can re-trigger
 once capacity frees up. We do not retry automatically — that matches the
@@ -53,11 +53,11 @@ and makes the rejection visible on the BKD board.
     before the GC starts evicting PVCs.
 
 - **`orchestrator/src/orchestrator/actions/start_intake.py`** and
-  **`start_analyze.py`** — at the very top, before `ensure_runner` /
+  **`start_execute.py`** — at the very top, before `ensure_runner` /
   `ensure_runner` + clone, call `check_admission`. On rejection set
   `ctx.escalated_reason` (`rate-limit:inflight-cap-exceeded` or
   `rate-limit:disk-pressure`) and return `{"emit": "verify.escalate",
-  "reason": "..."}`. `start_analyze_with_finalized_intent` is **not**
+  "reason": "..."}`. `start_execute_with_finalized_intent` is **not**
   gated — it is a continuation of an already-admitted intake REQ; gating
   it would punish a REQ for capacity arriving between intake and analyze.
 
@@ -65,15 +65,15 @@ and makes the rejection visible on the BKD board.
   - new `orchestrator/tests/test_admission.py` covering the decision
     function (cap on/off, count just below / at / above cap, disk under /
     over threshold, disk RBAC-denied, no-controller in dev).
-  - `orchestrator/tests/test_actions_start_analyze.py` gains a denial test
-    that locks in the escalate emit for `start_analyze`.
+  - `orchestrator/tests/test_actions_start_execute.py` gains a denial test
+    that locks in the escalate emit for `start_execute`.
   - `orchestrator/tests/test_intake.py` gains the same for `start_intake`.
 
 ## Impact
 
 - **Affected specs**: new capability `orch-rate-limit` (purely additive).
 - **Affected code**: `orchestrator/src/orchestrator/admission.py` (new),
-  `config.py`, `actions/start_intake.py`, `actions/start_analyze.py`, the
+  `config.py`, `actions/start_intake.py`, `actions/start_execute.py`, the
   three test modules above.
 - **Deployment / migration**: zero ops — orchestrator rollout-restart picks
   up the new module. Defaults (`cap=10`, `disk=0.75`) are chosen so an

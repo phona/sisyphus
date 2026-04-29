@@ -1,12 +1,12 @@
-"""bkd_snapshot 同步 + intent:analyze / intent:intake orphan 恢复。
+"""bkd_snapshot 同步 + intent:execute / intent:intake orphan 恢复。
 
 两件事跑在同一个 5min 后台 task：
 
 1. **bkd_snapshot UPSERT**（观测系数据）：定时拉每个已知 project 的 BKD list-issues，
    写到 `sisyphus_obs.bkd_snapshot`。这块只在 obs pool 配置时跑。
 
-2. **orphan 恢复**（恢复路径）：webhook 是 INTENT_ANALYZE / INTENT_INTAKE 的唯一入口；
-   如果用户打 `intent:analyze` 或 `intent:intake` tag 那一发 webhook 在 sisyphus 重启 /
+2. **orphan 恢复**（恢复路径）：webhook 是 INTENT_EXECUTE / INTENT_INTAKE 的唯一入口；
+   如果用户打 `intent:execute` 或 `intent:intake` tag 那一发 webhook 在 sisyphus 重启 /
    BKD 抖动时丢了，REQ 就永远卡在没 req_state 行的状态。snapshot 顺手扫一下，发现 BKD
    有 intent tag 但 req_state 没行的 issue，自己合成 webhook body 调 engine.step 把事件
    补发出去。这块跟 obs pool 无关，永远跑。
@@ -52,7 +52,7 @@ def _parse_iso(s: str | None) -> datetime | None:
 log = structlog.get_logger(__name__)
 
 _STAGE_FROM_TAGS = (
-    "analyze",
+    "execute",
     # M16 起新 issue 走 "spec"；保留 contract-spec/acceptance-spec 识别历史数据
     "spec", "contract-spec", "acceptance-spec",
     "dev", "ci",
@@ -110,7 +110,7 @@ _BKD_TERMINAL_STATUSES = frozenset({"done", "cancelled"})
 def _make_recovery_body(issue: Issue, project_id: str) -> Any:
     """合成 webhook 形 body 给 engine.step / actions 用。
 
-    engine.step 只读 `getattr(body, "issueId", None)` 落 obs；start_analyze 读
+    engine.step 只读 `getattr(body, "issueId", None)` 落 obs；start_execute 读
     `body.projectId` / `body.issueId` / `body.title`。给齐 WebhookBody 主要字段
     避免后续 action 加新依赖时漏字段。
     """
@@ -133,7 +133,7 @@ async def _trigger_orphan_intent_intake(
 ) -> int:
     """对每个 BKD issue：若是 intent:intake 入口但 req_state 还没行 → 起 INTENT_INTAKE。
 
-    返回成功 trigger 的条数。幂等逻辑与 _trigger_orphan_intent_analyze 相同。
+    返回成功 trigger 的条数。幂等逻辑与 _trigger_orphan_intent_execute 相同。
     """
     triggered = 0
     for issue in issues:
@@ -194,26 +194,26 @@ async def _trigger_orphan_intent_intake(
     return triggered
 
 
-async def _trigger_orphan_intent_analyze(
+async def _trigger_orphan_intent_execute(
     main_pool, project_id: str, issues: list[Issue],
 ) -> int:
-    """对每个 BKD issue：若是 intent:analyze 入口但 req_state 还没行 → 起 INTENT_ANALYZE。
+    """对每个 BKD issue：若是 intent:execute 入口但 req_state 还没行 → 起 INTENT_EXECUTE。
 
     返回成功 trigger 的条数。
 
     幂等：
     - `req_state.insert_init` 用 ON CONFLICT DO NOTHING，并发 webhook 不会双插
-    - `engine.step` 内部 `cas_transition(INIT, ANALYZING)` 失败时 skip，并发推进无副作用
-    - `start_analyze` 跑成功后会给 BKD issue 加 `analyze` tag —— 下个 tick 这个 issue
+    - `engine.step` 内部 `cas_transition(INIT, EXECUTING)` 失败时 skip，并发推进无副作用
+    - `start_execute` 跑成功后会给 BKD issue 加 `execute` tag —— 下个 tick 这个 issue
       不再被识别为 orphan
     """
     triggered = 0
     for issue in issues:
         tags = issue.tags or []
-        if "intent:analyze" not in tags:
+        if "intent:execute" not in tags:
             continue
-        # 已经被 start_analyze rebrand 过，不是 orphan
-        if "analyze" in tags:
+        # 已经被 start_execute rebrand 过，不是 orphan
+        if "execute" in tags:
             continue
         # 用户已 close → 不要起死回生
         if issue.status_id in _BKD_TERMINAL_STATUSES:
@@ -228,7 +228,7 @@ async def _trigger_orphan_intent_analyze(
             continue
 
         log.info(
-            "snapshot.orphan_intent_analyze.detected",
+            "snapshot.orphan_intent_execute.detected",
             req_id=req_id, issue_id=issue.id, project_id=project_id,
         )
         try:
@@ -244,7 +244,7 @@ async def _trigger_orphan_intent_analyze(
             if row is None:
                 # insert_init 跑完还拿不到行 → DB 异常，下 tick 再试
                 log.warning(
-                    "snapshot.orphan_intent_analyze.row_missing_post_insert",
+                    "snapshot.orphan_intent_execute.row_missing_post_insert",
                     req_id=req_id, issue_id=issue.id,
                 )
                 continue
@@ -257,13 +257,13 @@ async def _trigger_orphan_intent_analyze(
                 tags=list(tags),
                 cur_state=row.state,
                 ctx=row.context,
-                event=Event.INTENT_ANALYZE,
+                event=Event.INTENT_EXECUTE,
             )
             triggered += 1
         except Exception as e:
             # 单个 issue 出错不能拖垮整轮 —— 下 tick 重试
             log.warning(
-                "snapshot.orphan_intent_analyze.failed",
+                "snapshot.orphan_intent_execute.failed",
                 req_id=req_id, issue_id=issue.id,
                 project_id=project_id, error=str(e),
             )
@@ -312,14 +312,14 @@ async def sync_once() -> int:
                     project_id=project_id, error=str(e),
                 )
 
-            # ─── orphan intent:analyze 恢复（与 obs pool 无关）─────────────
+            # ─── orphan intent:execute 恢复（与 obs pool 无关）─────────────
             try:
-                orphans_triggered += await _trigger_orphan_intent_analyze(
+                orphans_triggered += await _trigger_orphan_intent_execute(
                     main_pool, project_id, issues,
                 )
             except Exception as e:
                 log.warning(
-                    "snapshot.orphan_analyze_pass_failed",
+                    "snapshot.orphan_execute_pass_failed",
                     project_id=project_id, error=str(e),
                 )
 

@@ -37,7 +37,7 @@ The system SHALL return `None` (silently skip) from `derive_event` when a
 `session.completed` event carries a known stage tag but no recognized result tag. This MUST
 NOT produce a `SESSION_FAILED` event. Known stage tags that require a result tag are:
 `challenger`, `staging-test`, `accept`, `pr-ci`, and `intake`. Tags that never require a
-result tag are: `fixer`, `analyze`, `done-archive`.
+result tag are: `fixer`, `execute`, `done-archive`.
 
 #### Scenario: RSCA-S4 challenger without result returns None
 

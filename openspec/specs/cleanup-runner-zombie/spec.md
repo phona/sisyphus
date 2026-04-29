@@ -22,14 +22,14 @@ treats `escalated` REQs within retention as active and skips them in
 
 #### Scenario: FRE-S1 force_escalate on in-flight REQ schedules cleanup task with ESCALATED terminal state
 
-- **GIVEN** a REQ row with `state='analyzing'` exists in `req_state` and
+- **GIVEN** a REQ row with `state='executing'` exists in `req_state` and
   the K8s runner controller is initialized
 - **WHEN** the client sends `POST /admin/req/REQ-X/escalate` with a valid
   Bearer token
 - **THEN** the endpoint MUST execute one SQL UPDATE setting
   `state='escalated'` on the row keyed by `req_id='REQ-X'`
 - **AND** the response MUST be 200 with JSON body containing
-  `action == "force_escalated"` and `from_state == "analyzing"`
+  `action == "force_escalated"` and `from_state == "executing"`
 - **AND** an `asyncio.Task` running
   `engine._cleanup_runner_on_terminal('REQ-X', ReqState.ESCALATED)`
   MUST be scheduled (fire-and-forget) before the endpoint returns,
@@ -90,7 +90,7 @@ inspect it.
 
 #### Scenario: FRE-S4 cleanup task argument is ReqState.ESCALATED so retain_pvc=True semantics apply
 
-- **GIVEN** a REQ row with `state='analyzing'` exists
+- **GIVEN** a REQ row with `state='executing'` exists
 - **WHEN** the client sends `POST /admin/req/REQ-X/escalate`
 - **THEN** the scheduled cleanup task MUST be invoked with
   `terminal_state == ReqState.ESCALATED`

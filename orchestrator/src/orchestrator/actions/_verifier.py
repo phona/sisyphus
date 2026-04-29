@@ -40,9 +40,9 @@ log = structlog.get_logger(__name__)
 
 
 # 支持的 stage 名（对应 prompts/verifier/{stage}_{trigger}.md.j2）
-# 包括 agent stage（analyze）和 checker stage（spec_lint / dev_cross_check / staging_test / pr_ci）
+# 包括 agent stage（execute）和 checker stage（spec_lint / dev_cross_check / staging_test / pr_ci）
 _STAGES = {
-    "analyze", "analyze_artifact_check", "spec_lint", "challenger",
+    "execute", "execute_artifact_check", "spec_lint", "challenger",
     "dev_cross_check", "staging_test", "pr_ci", "accept",
 }
 
@@ -50,7 +50,7 @@ _STAGES = {
 Trigger = Literal["success", "fail"]
 
 # stage → decision=retry 时要 CAS 回的 stage_running state + 重新 dispatch 的 create action 名。
-# 只覆盖机械 checker stage（runner pod kubectl-exec / GHA 轮询），不含 analyze/accept/challenger。
+# 只覆盖机械 checker stage（runner pod kubectl-exec / GHA 轮询），不含 execute/accept/challenger。
 _RETRY_ROUTING: dict[str, tuple[ReqState, str]] = {
     "staging_test":    (ReqState.STAGING_TEST_RUNNING,    "create_staging_test"),
     "dev_cross_check": (ReqState.DEV_CROSS_CHECK_RUNNING, "create_dev_cross_check"),
@@ -62,9 +62,9 @@ _RETRY_ROUTING: dict[str, tuple[ReqState, str]] = {
 # 用于 apply_verify_pass 手工把 state 从 REVIEW_RUNNING 回推到对应 stage_running，
 # 随后链式 emit 该 stage 的 done/pass 事件走原 transition。
 _PASS_ROUTING: dict[str, tuple[ReqState, Event]] = {
-    "analyze":                 (ReqState.ANALYZING,                Event.ANALYZE_DONE),
-    "analyze_artifact_check":  (ReqState.ANALYZE_ARTIFACT_CHECKING,
-                                Event.ANALYZE_ARTIFACT_CHECK_PASS),
+    "execute":                 (ReqState.EXECUTING,                Event.EXECUTE_DONE),
+    "execute_artifact_check":  (ReqState.EXECUTE_ARTIFACT_CHECKING,
+                                Event.EXECUTE_ARTIFACT_CHECK_PASS),
     "spec_lint":               (ReqState.SPEC_LINT_RUNNING,        Event.SPEC_LINT_PASS),
     "challenger":              (ReqState.CHALLENGER_RUNNING,       Event.CHALLENGER_PASS),
     "dev_cross_check":         (ReqState.DEV_CROSS_CHECK_RUNNING,  Event.DEV_CROSS_CHECK_PASS),
@@ -89,7 +89,7 @@ async def invoke_verifier(
     """起一个 BKD verifier-agent issue，异步等 session.completed 推进状态机。
 
     Args:
-        stage: 被审阶段名（analyze/spec/dev/staging_test/pr_ci/accept）
+        stage: 被审阶段名（execute/spec/dev/staging_test/pr_ci/accept）
         trigger: "success"=机械 checker 过 / agent 跑完；"fail"=checker 红 / agent 报错
         req_id / project_id: 绑定 REQ
         artifact_paths: 可选，给 prompt 提示 agent 要看哪些产物（spec / 日志）
@@ -132,7 +132,7 @@ async def invoke_verifier(
 
     # PR-link tag 注入（REQ-issue-link-pr-quality-base-1777218242）：
     # verifier issue 在 dev 之后才创建，PR 已存在 → 第一次成功 discover 时
-    # 同时回填 ctx 里 analyze_issue_id 等已有 sisyphus issue 的 tag。
+    # 同时回填 ctx 里 execute_issue_id 等已有 sisyphus issue 的 tag。
     branch = (ctx or {}).get("branch") or f"feat/{req_id}"
     links = await pr_links.ensure_pr_links_in_ctx(
         req_id=req_id, branch=branch, ctx=ctx, project_id=project_id,
@@ -480,16 +480,16 @@ async def invoke_verifier_for_dev_cross_check_fail(*, body, req_id, tags, ctx):
     )
 
 
-@register("invoke_verifier_for_analyze_artifact_check_fail", idempotent=False)
-async def invoke_verifier_for_analyze_artifact_check_fail(*, body, req_id, tags, ctx):
-    """ANALYZE_ARTIFACT_CHECK_FAIL → 起 verifier-agent(stage=analyze_artifact_check, trigger=fail)。
+@register("invoke_verifier_for_execute_artifact_check_fail", idempotent=False)
+async def invoke_verifier_for_execute_artifact_check_fail(*, body, req_id, tags, ctx):
+    """EXECUTE_ARTIFACT_CHECK_FAIL → 起 verifier-agent(stage=execute_artifact_check, trigger=fail)。
 
-    REQ-analyze-artifact-check-1777254586：analyze 产物结构性校验失败。verifier
+    REQ-execute-artifact-check-1777254586：execute 产物结构性校验失败。verifier
     通常应判 escalate（agent 自报 pass 但产物缺失，是 LLM 抽风类失败），少数
     情况是 agent 写了 spec 漏了 proposal/tasks → 可判 fix + fixer=spec。
     """
     return await _invoke_verifier_fail(
-        stage="analyze_artifact_check", body=body, req_id=req_id, ctx=ctx,
+        stage="execute_artifact_check", body=body, req_id=req_id, ctx=ctx,
     )
 
 
@@ -515,7 +515,7 @@ async def apply_verify_infra_retry(*, body, req_id, tags, ctx):
     - >= cap → emit VERIFY_ESCALATE（reason=infra-retry-cap）让人介入。
 
     仅覆盖机械 checker stage（staging_test / dev_cross_check / spec_lint / pr_ci）。
-    其他 stage（analyze / accept / challenger）输出 retry 时也走 escalate，并 log warning。
+    其他 stage（execute / accept / challenger）输出 retry 时也走 escalate，并 log warning。
     """
     from . import REGISTRY  # 延迟导入避免循环
 

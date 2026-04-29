@@ -202,7 +202,7 @@ agent invocation），不该写 stage_runs 行。
 | USR-W3 | PENDING_USER_REVIEW + intent issue.updated + issue.status_id="blocked" | 同 USR-W2 |
 | USR-W4 | PENDING_USER_REVIEW + intent issue.updated + issue.status_id="working" | skip（其他 statusId 不识别） |
 | USR-W5 | PENDING_USER_REVIEW + sub-issue id ≠ intent_issue_id 的 issue.updated | skip（只看 intent issue） |
-| USR-W6 | ANALYZING（非 PENDING）+ intent issue.updated + statusId=done | skip（state 错） |
+| USR-W6 | EXECUTING（非 PENDING）+ intent issue.updated + statusId=done | skip（state 错） |
 
 ### Unit (post_acceptance_report)
 

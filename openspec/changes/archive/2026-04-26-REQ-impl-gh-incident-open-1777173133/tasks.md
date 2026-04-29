@@ -25,4 +25,4 @@
 - [x] git push feat/REQ-impl-gh-incident-open-1777173133
 - [x] gh pr create
 
-owner: analyze-agent (solo, no fan out — single repo, ~80 LoC change, tightly coupled)
+owner: execute-agent (solo, no fan out — single repo, ~80 LoC change, tightly coupled)

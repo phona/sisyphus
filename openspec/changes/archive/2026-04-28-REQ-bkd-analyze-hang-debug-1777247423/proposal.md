@@ -1,4 +1,4 @@
-# REQ-bkd-analyze-hang-debug-1777247423: 60-min watchdog detection floor causes multi-hour analyze hangs
+# REQ-bkd-execute-hang-debug-1777247423: 60-min watchdog detection floor causes multi-hour execute hangs
 
 ## Why
 
@@ -6,7 +6,7 @@
 floor for **any** stuck-stage detection — including the case where the BKD
 session has already ended but no `session.completed` / `session.failed`
 webhook arrived. Sisyphus prod data shows this floor is the dominant cause
-of the user-visible "BKD analyze hangs for 60 minutes" symptom in the REQ
+of the user-visible "BKD execute hangs for 60 minutes" symptom in the REQ
 title.
 
 ### Evidence (sisyphus prod, `artifact_checks` table, 2026-04-25/26)
@@ -52,9 +52,9 @@ and the other 3-hit rows confirm this with span ≈ 7250s
 
 ### Why the floor exists
 
-`config.py:172` says: *"sonnet analyze long tail 经常 25-35min；30 min
+`config.py:172` says: *"sonnet execute long tail 经常 25-35min；30 min
 阈值会 false-escalate 大量 dogfood REQ；60 min 仍能兜真死"*. So 60 min
-was set to avoid false-positive escalates on slow-but-alive analyze
+was set to avoid false-positive escalates on slow-but-alive execute
 sessions. The trade-off works for that one class of sessions, but it
 ignores a structural property of the watchdog: **the code already
 discriminates running from ended sessions** (`watchdog.py:150–165`,
@@ -83,7 +83,7 @@ as the **slow lane safety**:
 
 - **Slow lane** (`watchdog_stuck_threshold_sec`, unchanged 3600s): a row
   whose BKD says `session_status == "running"` is still skipped on every
-  tick. Long-tail real analyze (25–35 min) is unaffected. This setting now
+  tick. Long-tail real execute (25–35 min) is unaffected. This setting now
   has no operational role except as the upper-bound symbolic threshold
   documented in code; we leave it for future "running-but-truly-stuck"
   detection work.

@@ -2,7 +2,7 @@
 
 ## 问题
 
-REQ-clone-fallback-direct-analyze-1777119520 在
+REQ-clone-fallback-direct-execute-1777119520 在
 `orchestrator/src/orchestrator/config.py` 加了
 `default_involved_repos: list[str] = Field(default_factory=list)`（env
 `SISYPHUS_DEFAULT_INVOLVED_REPOS`）作为 4 层 fallback 的最后一层（L4），
@@ -13,7 +13,7 @@ REQ-clone-fallback-direct-analyze-1777119520 在
 
 - helm 装的 sisyphus 实际 `default_involved_repos == []`（pydantic 默认空），
   L4 永远 miss
-- 直接 analyze 入口（`intent:analyze` 一步到位、ctx 无 involved_repos、tags
+- 直接 execute 入口（`intent:execute` 一步到位、ctx 无 involved_repos、tags
   也无 `repo:`）拿不到任何 fallback，回到 prompt 里"agent 自跑 helper"软约束 ——
   正是上一个 REQ 想消掉的痛点
 - 上一个 REQ 的 proposal `## 取舍` 里写的 "单仓部署（sisyphus self-dogfood）
@@ -49,7 +49,7 @@ REQ-clone-fallback-direct-analyze-1777119520 在
 
 - **不**改 Settings 默认 `default_factory=list`。chart-level 默认是部署意见，
   不是代码库意见；多仓部署 / 跨项目部署的 ops 想 override 仍然走 helm values。
-  REQ-clone-fallback-direct-analyze-1777119520 的契约
+  REQ-clone-fallback-direct-execute-1777119520 的契约
   `test_default_involved_repos_setting_exists` 显式锁了 default 必须是 `[]`，
   改了就回归
 - **不**引入通用 `extraEnv` 机制。当前 chart 用具名字段（`env.skip_*`、

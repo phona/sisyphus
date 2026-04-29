@@ -17,12 +17,12 @@ if ! (cd "$repo" && git fetch origin "feat/<REQ>" ... ); then
 fi
 ```
 
-如果 clone helper 给某 REQ 克隆了 2+ 个仓（来自 `involved_repos`），但 analyze-agent
+如果 clone helper 给某 REQ 克隆了 2+ 个仓（来自 `involved_repos`），但 execute-agent
 只往其中一部分推了 feat 分支，其余仓的 `[skip]` 静默放过，`ran > 0` 也会让 Guard C 不
-触发——剩余仓的 ci-lint / 测试通过即整体 PASS，**漏掉**了 analyze-agent 没推的仓的真实
+触发——剩余仓的 ci-lint / 测试通过即整体 PASS，**漏掉**了 execute-agent 没推的仓的真实
 失败。
 
-具体场景：analyze-agent 在 BKD intent 阶段声明 `involved_repos=[A, B]`，sisyphus
+具体场景：execute-agent 在 BKD intent 阶段声明 `involved_repos=[A, B]`，sisyphus
 clone 两个仓到 `/workspace/source/{A,B}/`。agent 只在 repo-A 上做了改动并推到
 `feat/<REQ>`，repo-B 没动。当前：
 - spec_lint：repo-A 通过 + repo-B `[skip]` → ran=1 → PASS（不一定错——见下方对 spec_lint 的豁免）
@@ -65,7 +65,7 @@ spec changes 经常 collapse 到 spec_home repo（详见 CLAUDE.md "B.4 spec hom
 
 dev_cross_check（lint 变更文件） + staging_test（跑 unit + integration）则不同：被
 clone 的仓如果不属于本次改动，根本不会出现在 `involved_repos`；既然 cloned 了，必是
-analyze-agent 声明要改的，必须 push feat 分支。
+execute-agent 声明要改的，必须 push feat 分支。
 
 ## 影响范围
 

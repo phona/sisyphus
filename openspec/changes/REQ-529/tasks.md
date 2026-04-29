@@ -1,6 +1,6 @@
 # REQ-529 Tasks
 
-## Stage: analyze / spec
+## Stage: execute / spec
 - [x] 梳理 state.py 全部 53 条 transition（40 显式 + 13 SESSION_FAILED self-loop）
 - [x] 建立未覆盖清单：PR_MERGED 竞态 3 条、VERIFY_INFRA_RETRY 1 条、ESCALATED 恢复态 3 条值未验、CHALLENGER_RUNNING SESSION_FAILED 漏测
 - [x] 编写 `test_state_transitions_gap.py`（54 个测试函数）

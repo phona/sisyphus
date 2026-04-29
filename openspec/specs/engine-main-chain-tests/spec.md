@@ -3,61 +3,61 @@
 ## Purpose
 TBD - created by archiving change REQ-test-main-chain-1777267689. Update Purpose after archive.
 ## Requirements
-### Requirement: Engine.step advances INIT to ANALYZING on intent.analyze
+### Requirement: Engine.step advances INIT to EXECUTING on intent.analyze
 
 The state-machine engine (`orchestrator/src/orchestrator/engine.py::step`) SHALL
-advance a REQ from `INIT` to `ANALYZING` when it receives the `INTENT_ANALYZE`
-event, and MUST dispatch the registered `start_analyze` action exactly once.
+advance a REQ from `INIT` to `EXECUTING` when it receives the `INTENT_EXECUTE`
+event, and MUST dispatch the registered `start_execute` action exactly once.
 The CAS update MUST persist the new state to the underlying store before the
 action handler runs. This is the canonical entry point for the main-chain
 happy path; if this transition is broken, no REQ ever leaves the `INIT`
 bucket.
 
-#### Scenario: MCT-S1 INIT plus intent.analyze advances to ANALYZING
+#### Scenario: MCT-S1 INIT plus intent.execute advances to EXECUTING
 
-- **GIVEN** a `FakePool` row at state `init` and a stub `start_analyze` action
+- **GIVEN** a `FakePool` row at state `init` and a stub `start_execute` action
   registered in `REGISTRY`
 - **WHEN** `engine.step` is invoked with `cur_state=INIT` and
-  `event=INTENT_ANALYZE`
-- **THEN** the returned dict MUST contain `action="start_analyze"` and
-  `next_state="analyzing"`, the FakePool's row MUST have advanced to
-  `state="analyzing"`, and the stub MUST have been invoked exactly once
+  `event=INTENT_EXECUTE`
+- **THEN** the returned dict MUST contain `action="start_execute"` and
+  `next_state="executing"`, the FakePool's row MUST have advanced to
+  `state="executing"`, and the stub MUST have been invoked exactly once
 
-### Requirement: Engine.step advances ANALYZING to ANALYZE_ARTIFACT_CHECKING on analyze.done
+### Requirement: Engine.step advances EXECUTING to EXECUTE_ARTIFACT_CHECKING on analyze.done
 
-`engine.step` SHALL advance a REQ from `ANALYZING` to
-`ANALYZE_ARTIFACT_CHECKING` when it receives the `ANALYZE_DONE` event, and
-MUST dispatch `create_analyze_artifact_check` exactly once. This transition
+`engine.step` SHALL advance a REQ from `EXECUTING` to
+`EXECUTE_ARTIFACT_CHECKING` when it receives the `EXECUTE_DONE` event, and
+MUST dispatch `create_execute_artifact_check` exactly once. This transition
 inserts the post-analyze artifact gate that prevents agents from self-reporting
 `pass` while leaving `proposal.md` / `tasks.md` / `spec.md` empty
-(REQ-analyze-artifact-check-1777254586).
+(REQ-execute-artifact-check-1777254586).
 
-#### Scenario: MCT-S2 ANALYZING plus analyze.done advances to ANALYZE_ARTIFACT_CHECKING
+#### Scenario: MCT-S2 EXECUTING plus analyze.done advances to EXECUTE_ARTIFACT_CHECKING
 
 - **GIVEN** a `FakePool` row at state `analyzing` and a stub
-  `create_analyze_artifact_check` action registered
-- **WHEN** `engine.step` is invoked with `cur_state=ANALYZING` and
-  `event=ANALYZE_DONE`
+  `create_execute_artifact_check` action registered
+- **WHEN** `engine.step` is invoked with `cur_state=EXECUTING` and
+  `event=EXECUTE_DONE`
 - **THEN** the returned dict MUST contain
-  `action="create_analyze_artifact_check"` and
-  `next_state="analyze-artifact-checking"`, the row MUST be at
-  `state="analyze-artifact-checking"`, and the stub MUST have been called once
+  `action="create_execute_artifact_check"` and
+  `next_state="execute-artifact-checking"`, the row MUST be at
+  `state="execute-artifact-checking"`, and the stub MUST have been called once
 
-### Requirement: Engine.step advances ANALYZE_ARTIFACT_CHECKING to SPEC_LINT_RUNNING on artifact-check pass
+### Requirement: Engine.step advances EXECUTE_ARTIFACT_CHECKING to SPEC_LINT_RUNNING on artifact-check pass
 
-`engine.step` SHALL advance a REQ from `ANALYZE_ARTIFACT_CHECKING` to
+`engine.step` SHALL advance a REQ from `EXECUTE_ARTIFACT_CHECKING` to
 `SPEC_LINT_RUNNING` when the artifact check passes
-(`ANALYZE_ARTIFACT_CHECK_PASS`), and MUST dispatch `create_spec_lint` exactly
-once. This is the gateway from analyze artifact validation into the
+(`EXECUTE_ARTIFACT_CHECK_PASS`), and MUST dispatch `create_spec_lint` exactly
+once. This is the gateway from execute artifact validation into the
 machine-checker stack.
 
-#### Scenario: MCT-S3 ANALYZE_ARTIFACT_CHECKING plus check pass advances to SPEC_LINT_RUNNING
+#### Scenario: MCT-S3 EXECUTE_ARTIFACT_CHECKING plus check pass advances to SPEC_LINT_RUNNING
 
-- **GIVEN** a `FakePool` row at state `analyze-artifact-checking` and a stub
+- **GIVEN** a `FakePool` row at state `execute-artifact-checking` and a stub
   `create_spec_lint` action registered
 - **WHEN** `engine.step` is invoked with
-  `cur_state=ANALYZE_ARTIFACT_CHECKING` and
-  `event=ANALYZE_ARTIFACT_CHECK_PASS`
+  `cur_state=EXECUTE_ARTIFACT_CHECKING` and
+  `event=EXECUTE_ARTIFACT_CHECK_PASS`
 - **THEN** the returned dict MUST contain `action="create_spec_lint"` and
   `next_state="spec-lint-running"`, the row MUST be at
   `state="spec-lint-running"`, and the stub MUST have been called once
@@ -199,7 +199,7 @@ This is the only happy-path transition that lands in a terminal state.
 through all 10 main-chain action transitions when each handler emits the
 next event in the canonical happy-path sequence, ultimately landing the row
 at the terminal `DONE` state. This contract test ensures the full chain
-INIT → ANALYZING → ANALYZE_ARTIFACT_CHECKING → SPEC_LINT_RUNNING →
+INIT → EXECUTING → EXECUTE_ARTIFACT_CHECKING → SPEC_LINT_RUNNING →
 CHALLENGER_RUNNING → DEV_CROSS_CHECK_RUNNING → STAGING_TEST_RUNNING →
 PR_CI_RUNNING → ACCEPT_RUNNING → ACCEPT_TEARING_DOWN → ARCHIVING → DONE
 is internally consistent at runtime, not just statically in the transition
@@ -208,13 +208,13 @@ table.
 #### Scenario: MCT-CHAIN INIT to DONE via 11 chained emits
 
 - **GIVEN** a `FakePool` row at state `init` and ten stub actions registered
-  (`start_analyze`, `create_analyze_artifact_check`, `create_spec_lint`,
+  (`start_execute`, `create_execute_artifact_check`, `create_spec_lint`,
   `start_challenger`, `create_dev_cross_check`, `create_staging_test`,
   `create_pr_ci_watch`, `create_accept`, `teardown_accept_env`,
   `done_archive`), each returning `{"emit": "<next-canonical-event>"}` per
   the main-chain happy path
 - **WHEN** `engine.step` is invoked once at `cur_state=INIT` with
-  `event=INTENT_ANALYZE`
+  `event=INTENT_EXECUTE`
 - **THEN** the call MUST NOT raise, the FakePool's row MUST end at
   `state="done"`, each of the ten action stubs MUST have been called
   exactly once, and the recursion guard MUST NOT have fired

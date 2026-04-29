@@ -5,9 +5,9 @@ Black-box behavioral contracts derived from:
   specs/snapshot-orphan-trigger/spec.md
 
 Scenarios covered:
-  SNAP-ORPHAN-S1  orphan intent:analyze triggers INTENT_ANALYZE
+  SNAP-ORPHAN-S1  orphan intent:execute triggers INTENT_EXECUTE
   SNAP-ORPHAN-S2  issue already tracked in req_state is skipped
-  SNAP-ORPHAN-S3  issue already past entry (analyze tag) is skipped
+  SNAP-ORPHAN-S3  issue already past entry (execute tag) is skipped
   SNAP-ORPHAN-S4  issue in BKD status done is skipped
   SNAP-ORPHAN-S5  orphan recovery runs when obs pool is absent, sync_once returns 0
 """
@@ -55,7 +55,7 @@ def _make_issue(**kw) -> Issue:
         issue_number=9,
         title="Some orphan intent issue",
         status_id="working",
-        tags=["intent:analyze"],
+        tags=["intent:execute"],
         session_status=None,
         description=None,
         created_at="2026-01-01T00:00:00Z",
@@ -135,26 +135,26 @@ class _FakeEngine:
         )
 
 
-# ─── S1: orphan intent:analyze triggers INTENT_ANALYZE ───────────────────────
+# ─── S1: orphan intent:execute triggers INTENT_EXECUTE ───────────────────────
 
 
-async def test_snap_orphan_s1_triggers_intent_analyze(monkeypatch):
-    """SNAP-ORPHAN-S1: issue with intent:analyze, no req_state row → engine.step fired.
+async def test_snap_orphan_s1_triggers_intent_execute(monkeypatch):
+    """SNAP-ORPHAN-S1: issue with intent:execute, no req_state row → engine.step fired.
 
     GIVEN  BKD list returns one issue: id="i-9", issueNumber=9, statusId="working",
-           tags=["intent:analyze"], no matching row in req_state for REQ-9
+           tags=["intent:execute"], no matching row in req_state for REQ-9
     WHEN   snapshot.sync_once() runs for that project
     THEN   req_state.insert_init is called once with req_id="REQ-9",
            context containing intent_issue_id="i-9" and snapshot_recovered=True
-    AND    engine.step is called once with event=INTENT_ANALYZE, cur_state=INIT,
-           body exposing issueId="i-9", projectId, tags containing "intent:analyze"
+    AND    engine.step is called once with event=INTENT_EXECUTE, cur_state=INIT,
+           body exposing issueId="i-9", projectId, tags containing "intent:execute"
     """
     PROJECT = "proj-a"
     issue = _make_issue(
         id="i-9",
         project_id=PROJECT,
         issue_number=9,
-        tags=["intent:analyze"],
+        tags=["intent:execute"],
         status_id="working",
     )
 
@@ -196,8 +196,8 @@ async def test_snap_orphan_s1_triggers_intent_analyze(monkeypatch):
         f"SNAP-ORPHAN-S1: expected engine.step called once, got {fake_engine.step_calls}"
     )
     sc = fake_engine.step_calls[0]
-    assert sc["event"] == Event.INTENT_ANALYZE, (
-        f"SNAP-ORPHAN-S1: event must be INTENT_ANALYZE, got {sc['event']!r}"
+    assert sc["event"] == Event.INTENT_EXECUTE, (
+        f"SNAP-ORPHAN-S1: event must be INTENT_EXECUTE, got {sc['event']!r}"
     )
     assert sc["cur_state"] == ReqState.INIT, (
         f"SNAP-ORPHAN-S1: cur_state must be INIT, got {sc['cur_state']!r}"
@@ -211,8 +211,8 @@ async def test_snap_orphan_s1_triggers_intent_analyze(monkeypatch):
         f"SNAP-ORPHAN-S1: body.projectId must be {PROJECT!r}, got {getattr(body, 'projectId', None)!r}"
     )
     body_tags = getattr(body, "tags", [])
-    assert "intent:analyze" in body_tags, (
-        f"SNAP-ORPHAN-S1: body.tags must contain 'intent:analyze', got {body_tags!r}"
+    assert "intent:execute" in body_tags, (
+        f"SNAP-ORPHAN-S1: body.tags must contain 'intent:execute', got {body_tags!r}"
     )
 
 
@@ -222,7 +222,7 @@ async def test_snap_orphan_s1_triggers_intent_analyze(monkeypatch):
 async def test_snap_orphan_s2_skips_when_already_in_req_state(monkeypatch):
     """SNAP-ORPHAN-S2: issue has REQ-42 tag, req_state.get returns a row → no trigger.
 
-    GIVEN  a BKD issue with tags=["intent:analyze", "REQ-42"] and
+    GIVEN  a BKD issue with tags=["intent:execute", "REQ-42"] and
            req_state.get(pool, "REQ-42") returns a non-None row
     WHEN   snapshot.sync_once() runs
     THEN   req_state.insert_init MUST NOT be called for REQ-42
@@ -233,7 +233,7 @@ async def test_snap_orphan_s2_skips_when_already_in_req_state(monkeypatch):
         id="i-42",
         project_id=PROJECT,
         issue_number=42,
-        tags=["intent:analyze", "REQ-42"],
+        tags=["intent:execute", "REQ-42"],
         status_id="working",
     )
 
@@ -260,13 +260,13 @@ async def test_snap_orphan_s2_skips_when_already_in_req_state(monkeypatch):
     )
 
 
-# ─── S3: analyze tag already present → skip ──────────────────────────────────
+# ─── S3: execute tag already present → skip ──────────────────────────────────
 
 
-async def test_snap_orphan_s3_skips_when_analyze_tag_present(monkeypatch):
-    """SNAP-ORPHAN-S3: tags include 'analyze' → loop must not trigger engine.step.
+async def test_snap_orphan_s3_skips_when_execute_tag_present(monkeypatch):
+    """SNAP-ORPHAN-S3: tags include 'execute' → loop must not trigger engine.step.
 
-    GIVEN  a BKD issue with tags=["intent:analyze", "analyze", "REQ-7"]
+    GIVEN  a BKD issue with tags=["intent:execute", "execute", "REQ-7"]
            (the entry action has already rebranded the issue) and
            req_state.get returns None
     WHEN   snapshot.sync_once() runs
@@ -277,7 +277,7 @@ async def test_snap_orphan_s3_skips_when_analyze_tag_present(monkeypatch):
         id="i-7",
         project_id=PROJECT,
         issue_number=7,
-        tags=["intent:analyze", "analyze", "REQ-7"],
+        tags=["intent:execute", "execute", "REQ-7"],
         status_id="working",
     )
 
@@ -294,7 +294,7 @@ async def test_snap_orphan_s3_skips_when_analyze_tag_present(monkeypatch):
     await snapshot.sync_once()
 
     assert len(fake_engine.step_calls) == 0, (
-        "SNAP-ORPHAN-S3: engine.step MUST NOT be called when 'analyze' tag is present; "
+        "SNAP-ORPHAN-S3: engine.step MUST NOT be called when 'execute' tag is present; "
         f"got {fake_engine.step_calls}"
     )
 
@@ -305,7 +305,7 @@ async def test_snap_orphan_s3_skips_when_analyze_tag_present(monkeypatch):
 async def test_snap_orphan_s4_skips_when_status_done(monkeypatch):
     """SNAP-ORPHAN-S4: issue statusId='done' → loop must not trigger engine.step.
 
-    GIVEN  a BKD issue with tags=["intent:analyze"] and statusId="done"
+    GIVEN  a BKD issue with tags=["intent:execute"] and statusId="done"
            (user explicitly closed it before the webhook could be processed)
     WHEN   snapshot.sync_once() runs
     THEN   engine.step MUST NOT be called
@@ -315,7 +315,7 @@ async def test_snap_orphan_s4_skips_when_status_done(monkeypatch):
         id="i-99",
         project_id=PROJECT,
         issue_number=99,
-        tags=["intent:analyze"],
+        tags=["intent:execute"],
         status_id="done",
     )
 
@@ -355,7 +355,7 @@ async def test_snap_orphan_s5_recovery_runs_without_obs_pool(monkeypatch):
         id="i-9",
         project_id=PROJECT,
         issue_number=9,
-        tags=["intent:analyze"],
+        tags=["intent:execute"],
         status_id="working",
     )
 

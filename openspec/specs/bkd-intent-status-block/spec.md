@@ -6,7 +6,7 @@ TBD - created by archiving change REQ-ux-status-block-1777257283. Update Purpose
 ### Requirement: BKD intent stage prompts SHALL begin with a canonical status block
 
 The orchestrator SHALL render a canonical markdown "REQ Status" section at the
-top of every BKD intent stage prompt (`intake.md.j2` and `analyze.md.j2`). The
+top of every BKD intent stage prompt (`intake.md.j2` and `execute.md.j2`). The
 block MUST consolidate REQ identity, current stage, feat-branch name, runner
 pod name, BKD intent issue URL, pre-cloned repos, and any known linked PRs into
 a single markdown table whose four identity rows (REQ / Stage / Branch / Runner
@@ -18,14 +18,14 @@ section both the agent and human readers encounter.
 #### Scenario: BISB-S1 partial renders a 7-row table when every field is set
 
 - **GIVEN** the partial `_shared/status_block.md.j2` is rendered with
-  `status_block` containing `req_id="REQ-foo"`, `stage="analyze"`,
+  `status_block` containing `req_id="REQ-foo"`, `stage="execute"`,
   `bkd_intent_issue_url="https://bkd.example/projects/p/issues/iss-1"`,
   `cloned_repos=["phona/sisyphus","ZonEaseTech/ttpos-server-go"]`, and
   `pr_links_inline="[phona/sisyphus#123](https://github.com/phona/sisyphus/pull/123)"`
 - **WHEN** the partial is rendered to a string
 - **THEN** the output MUST start with the heading `## REQ Status`
 - **AND** the rendered markdown table MUST contain rows in this order: `REQ`
-  (value `` `REQ-foo` ``), `Stage` (value `` `analyze` ``), `Branch` (value
+  (value `` `REQ-foo` ``), `Stage` (value `` `execute` ``), `Branch` (value
   `` `feat/REQ-foo` ``), `Runner Pod` (value `` `runner-req-foo` ``), `BKD
   intent issue` (clickable link to the URL), `Pre-cloned repos` (comma-joined
   repo basenames), `Linked PRs` (the pre-rendered inline string)
@@ -44,12 +44,12 @@ section both the agent and human readers encounter.
 - **AND** the rendered output MUST NOT contain any empty markdown table cells
   (`| |` or `|  |`)
 
-#### Scenario: BISB-S3 analyze prompt opens with the status block above tools_whitelist
+#### Scenario: BISB-S3 execute prompt opens with the status block above tools_whitelist
 
-- **GIVEN** `analyze.md.j2` is rendered with `req_id="REQ-foo"`,
+- **GIVEN** `execute.md.j2` is rendered with `req_id="REQ-foo"`,
   `cloned_repos=["phona/sisyphus"]`,
   `bkd_intent_issue_url="https://bkd.example/projects/p/issues/iss-1"`, and
-  `status_block=build_status_block_ctx(req_id="REQ-foo", stage="analyze",
+  `status_block=build_status_block_ctx(req_id="REQ-foo", stage="execute",
   bkd_intent_issue_url=..., cloned_repos=...)`
 - **WHEN** the rendered prompt is searched
 - **THEN** the substring `## REQ Status` MUST appear in the output
@@ -98,7 +98,7 @@ section both the agent and human readers encounter.
 
 #### Scenario: BISB-S7 omitted status_block kwarg is a no-op for backwards compat
 
-- **GIVEN** `analyze.md.j2` is rendered without a `status_block` kwarg (the
+- **GIVEN** `execute.md.j2` is rendered without a `status_block` kwarg (the
   variable is therefore Jinja2-undefined / falsy) but with all other kwargs
   identical to a control rendering that does pass `status_block=None`
 - **WHEN** both rendered outputs are compared after stripping leading/trailing

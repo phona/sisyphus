@@ -132,7 +132,7 @@ escalated PVC retention.
 
 - **GIVEN** `_DISK_CHECK_DISABLED` is False AND `node_disk_usage_ratio()`
   raises `ApiException(status=403)` AND a single `req_state` row with
-  `state='analyzing'`
+  `state='executing'`
 - **WHEN** `runner_gc.gc_once()` is awaited
 - **THEN** the result dict MUST contain `disk_pressure == False`
 - **AND** `_DISK_CHECK_DISABLED` MUST be True

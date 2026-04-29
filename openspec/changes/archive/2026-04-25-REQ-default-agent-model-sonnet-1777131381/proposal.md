@@ -31,7 +31,7 @@ env_prefix = `SISYPHUS_`），生产可用 helm 覆盖；测试依旧用 `claude
   helm 只在需要覆盖时才写，保持"只有一个真相"
 - **不**改 `values.dev.yaml` —— dev 环境也受益于 sonnet；如需 haiku 测试
   可在 CI job 的 helm 参数里临时覆盖
-- **不**改 analyze agent 的 model —— analyze agent 由 user 创 intent issue
+- **不**改 execute agent 的 model —— execute agent 由 user 创 intent issue
   时决定，sisyphus 不控（参见代码注释）
 
 ## 取舍

@@ -6,7 +6,7 @@ Black-box contracts derived exclusively from:
 Scenarios:
   BSS-S1  transient BKD error → retry succeeds (exponential backoff 1s, 2s)
   BSS-S2  persistent BKD failure → 3 attempts, warning log, no raise
-  BSS-S3  completed analyze issue stuck in review → patched to done
+  BSS-S3  completed execute issue stuck in review → patched to done
   BSS-S4  verifier issue skipped (preserve escalate resume path)
   BSS-S5  running session skipped
   BSS-S6  non-review status skipped
@@ -226,12 +226,12 @@ def _patch_pool(monkeypatch, pool):
     monkeypatch.setattr("orchestrator.watchdog.db.get_pool", lambda: pool)
 
 
-# ─── BSS-S3: completed analyze issue stuck in review is patched to done ──────
+# ─── BSS-S3: completed execute issue stuck in review is patched to done ──────
 
 
 @pytest.mark.asyncio
-async def test_bss_s3_completed_analyze_patched_to_done(monkeypatch):
-    """BSS-S3: review + completed + analyze + REQ tag → PATCHed to done."""
+async def test_bss_s3_completed_execute_patched_to_done(monkeypatch):
+    """BSS-S3: review + completed + execute + REQ tag → PATCHed to done."""
     from orchestrator import watchdog
 
     pool = _FakePool(rows=[{"project_id": "proj-1"}])
@@ -239,7 +239,7 @@ async def test_bss_s3_completed_analyze_patched_to_done(monkeypatch):
 
     issues = {
         "proj-1": [
-            _make_issue("iss-1", "review", "completed", ["analyze", "REQ-1"]),
+            _make_issue("iss-1", "review", "completed", ["execute", "REQ-1"]),
         ]
     }
     captured = _patch_bkd_for_sync(monkeypatch, issues)
@@ -247,7 +247,7 @@ async def test_bss_s3_completed_analyze_patched_to_done(monkeypatch):
     result = await watchdog._sync_stuck_sub_agent_statuses_tick()
 
     assert ("proj-1", "iss-1", "done") in captured, (
-        "BSS-S3: matching analyze issue MUST be PATCHed to statusId='done'"
+        "BSS-S3: matching execute issue MUST be PATCHed to statusId='done'"
     )
     assert result.get("patched") == 1, (
         f"BSS-S3: patched count MUST be 1; got {result!r}"
@@ -287,7 +287,7 @@ async def test_bss_s4_verifier_issue_skipped(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bss_s5_running_session_skipped(monkeypatch):
-    """BSS-S5: review + running + analyze + REQ tag → NOT PATCHed."""
+    """BSS-S5: review + running + execute + REQ tag → NOT PATCHed."""
     from orchestrator import watchdog
 
     pool = _FakePool(rows=[{"project_id": "proj-1"}])
@@ -295,7 +295,7 @@ async def test_bss_s5_running_session_skipped(monkeypatch):
 
     issues = {
         "proj-1": [
-            _make_issue("iss-run", "review", "running", ["analyze", "REQ-1"]),
+            _make_issue("iss-run", "review", "running", ["execute", "REQ-1"]),
         ]
     }
     captured = _patch_bkd_for_sync(monkeypatch, issues)
@@ -315,7 +315,7 @@ async def test_bss_s5_running_session_skipped(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bss_s6_non_review_status_skipped(monkeypatch):
-    """BSS-S6: done + completed + analyze + REQ tag → NOT PATCHed."""
+    """BSS-S6: done + completed + execute + REQ tag → NOT PATCHed."""
     from orchestrator import watchdog
 
     pool = _FakePool(rows=[{"project_id": "proj-1"}])
@@ -323,7 +323,7 @@ async def test_bss_s6_non_review_status_skipped(monkeypatch):
 
     issues = {
         "proj-1": [
-            _make_issue("iss-done", "done", "completed", ["analyze", "REQ-1"]),
+            _make_issue("iss-done", "done", "completed", ["execute", "REQ-1"]),
         ]
     }
     captured = _patch_bkd_for_sync(monkeypatch, issues)
@@ -343,7 +343,7 @@ async def test_bss_s6_non_review_status_skipped(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bss_s7_no_req_tag_skipped(monkeypatch):
-    """BSS-S7: review + completed + analyze (no REQ tag) → NOT PATCHed."""
+    """BSS-S7: review + completed + execute (no REQ tag) → NOT PATCHed."""
     from orchestrator import watchdog
 
     pool = _FakePool(rows=[{"project_id": "proj-1"}])
@@ -351,7 +351,7 @@ async def test_bss_s7_no_req_tag_skipped(monkeypatch):
 
     issues = {
         "proj-1": [
-            _make_issue("iss-no-req", "review", "completed", ["analyze"]),
+            _make_issue("iss-no-req", "review", "completed", ["execute"]),
         ]
     }
     captured = _patch_bkd_for_sync(monkeypatch, issues)
@@ -379,8 +379,8 @@ async def test_bss_s8_individual_patch_failure_continues(monkeypatch):
 
     issues = {
         "proj-1": [
-            _make_issue("iss-fail", "review", "completed", ["analyze", "REQ-1"]),
-            _make_issue("iss-ok", "review", "completed", ["analyze", "REQ-1"]),
+            _make_issue("iss-fail", "review", "completed", ["execute", "REQ-1"]),
+            _make_issue("iss-ok", "review", "completed", ["execute", "REQ-1"]),
         ]
     }
     captured = _patch_bkd_for_sync(monkeypatch, issues, patch_raises={"proj-1:iss-fail"})
@@ -414,7 +414,7 @@ async def test_bss_s9_multiple_projects_scanned(monkeypatch):
 
     issues = {
         "proj-a": [
-            _make_issue("iss-a", "review", "completed", ["analyze", "REQ-a"], project_id="proj-a"),
+            _make_issue("iss-a", "review", "completed", ["execute", "REQ-a"], project_id="proj-a"),
         ],
         "proj-b": [
             _make_issue("iss-b", "review", "completed", ["fixer", "REQ-b"], project_id="proj-b"),

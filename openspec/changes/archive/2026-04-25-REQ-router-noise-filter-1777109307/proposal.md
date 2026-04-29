@@ -38,8 +38,8 @@ if (
 - `issue.updated` 唯一两种合法触发场景：
   1. **已 tag REQ-N 的 issue 上的更新** —— 如 race fallback 路径（`issue.updated` 看到
      stage tag + result tag 后兜底 fire 主链事件，见 router.py:226-256）
-  2. **用户在 intent issue 上打 `intent:intake` / `intent:analyze` tag** —— 触发新 REQ
-     创建（INTENT_INTAKE / INTENT_ANALYZE 入口）
+  2. **用户在 intent issue 上打 `intent:intake` / `intent:execute` tag** —— 触发新 REQ
+     创建（INTENT_INTAKE / INTENT_EXECUTE 入口）
 - 其他都是噪音，**早 skip 早开**
 
 filter 条件：`issue.updated` 且**没** REQ-N tag 且**没** intent 入口 tag → skip。
@@ -48,7 +48,7 @@ filter 条件：`issue.updated` 且**没** REQ-N tag 且**没** intent 入口 ta
 
 1. 把现有 session filter 旁边的判断重组为更通用的 noise filter 段。
 2. 新增 `has_req_tag = bool(router_lib.extract_req_id(tags))` 和
-   `has_intent_tag = "intent:intake" in tags or "intent:analyze" in tags`。
+   `has_intent_tag = "intent:intake" in tags or "intent:execute" in tags`。
 3. session.completed 路径不变（保持 "没 REQ tag → skip"）。
 4. 新增 issue.updated 路径："没 REQ tag 且没 intent tag → skip"。
 5. 命中时一样：写 mark_processed（让 BKD 不重发）+ return skip + log.debug + 不调
@@ -68,7 +68,7 @@ filter 条件：`issue.updated` 且**没** REQ-N tag 且**没** intent 入口 ta
   改动小。
 - **`init:STATE` tag 不算入合法入口**：实际使用都是 `init:STATE` + `REQ-N` 配对（中流
   注入既有工作流），单独打 `init:STATE` 不带 REQ 就过 filter 没意义；需要这种用法的
-  场景另外加 `intent:analyze` 即可。
+  场景另外加 `intent:execute` 即可。
 
 ## 兼容性
 

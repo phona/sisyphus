@@ -13,11 +13,11 @@ dart CLI commands without duplicating internal build logic. Each target MUST exi
 with code 0 on success and non-zero on failure, consistent with
 `docs/integration-contracts.md §2.1`.
 
-#### Scenario: FMC-S1 ci-lint runs flutter analyze regardless of BASE_REV value
+#### Scenario: FMC-S1 ci-lint runs flutter execute regardless of BASE_REV value
 
 - **GIVEN** the Flutter source repo Makefile is present at root
 - **WHEN** sisyphus dev_cross_check calls `BASE_REV=<sha> make ci-lint`
-- **THEN** `flutter analyze --no-pub` runs on the full project and exits 0 when no issues found; the BASE_REV value is accepted but a full scan is performed (flutter analyze has no --new-from-rev equivalent)
+- **THEN** `flutter execute --no-pub` runs on the full project and exits 0 when no issues found; the BASE_REV value is accepted but a full scan is performed (flutter execute has no --new-from-rev equivalent)
 
 #### Scenario: FMC-S2 ci-unit-test succeeds without device or emulator
 
@@ -34,7 +34,7 @@ with code 0 on success and non-zero on failure, consistent with
 #### Scenario: FMC-S4 Flutter source repo is cloned to convention path for accept stage
 
 - **GIVEN** `ZonEaseTech/ttpos-flutter` is listed in `involved_repos` of the BKD intent issue
-- **WHEN** sisyphus start_analyze dispatches the analyze-agent
+- **WHEN** sisyphus start_execute dispatches the execute-agent
 - **THEN** the repo is cloned to `/workspace/source/ttpos-flutter/` in the runner pod; the arch-lab integration repo's `apk/build.sh` can reference `TTPOS_FLUTTER_REPO=/workspace/source/ttpos-flutter` to build the APK during accept stage without the Flutter source repo providing `accept-env-up`
 
 ### Requirement: Cookbook MUST document the relationship between Flutter source repo and arch-lab integration repo

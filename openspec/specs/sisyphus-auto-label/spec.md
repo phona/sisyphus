@@ -10,21 +10,21 @@ Every BKD issue created by sisyphus orchestrator code (any path that ultimately 
 #### Scenario: SAL-S1 BKDRestClient.create_issue auto-injects sisyphus when caller omits it
 
 - **GIVEN** a `BKDRestClient` instance with a fake HTTP layer
-- **WHEN** the test calls `await client.create_issue("p", "T", ["analyze", "REQ-1"])`
+- **WHEN** the test calls `await client.create_issue("p", "T", ["execute", "REQ-1"])`
 - **THEN** the request body POSTed to `/projects/p/issues` MUST contain
-  `tags: ["sisyphus", "analyze", "REQ-1"]` in that order
+  `tags: ["sisyphus", "execute", "REQ-1"]` in that order
 
 #### Scenario: SAL-S2 BKDRestClient.create_issue is idempotent when caller already includes sisyphus
 
 - **GIVEN** a `BKDRestClient` instance with a fake HTTP layer
-- **WHEN** the test calls `await client.create_issue("p", "T", ["sisyphus", "analyze", "REQ-1"])`
+- **WHEN** the test calls `await client.create_issue("p", "T", ["sisyphus", "execute", "REQ-1"])`
 - **THEN** the request body POSTed MUST contain
-  `tags: ["sisyphus", "analyze", "REQ-1"]` exactly (no duplicate `"sisyphus"`)
+  `tags: ["sisyphus", "execute", "REQ-1"]` exactly (no duplicate `"sisyphus"`)
 
 #### Scenario: SAL-S3 BKDMcpClient.create_issue auto-injects sisyphus
 
 - **GIVEN** a `BKDMcpClient` instance with a fake `call` method capturing args
-- **WHEN** the test calls `await client.create_issue("p", "T", ["analyze"])`
+- **WHEN** the test calls `await client.create_issue("p", "T", ["execute"])`
 - **THEN** the captured `tags` argument MUST contain `"sisyphus"` (and not duplicate it)
 
 ### Requirement: start_intake MUST tag the intent issue with `sisyphus`
@@ -43,20 +43,20 @@ be uniformly identifiable alongside all other sisyphus-managed issues.
 - **THEN** the captured `update_issue` call's `tags` keyword argument MUST contain
   `"sisyphus"`, alongside the existing `"intake"` and `<req_id>` tags
 
-### Requirement: analyze.md.j2 MUST instruct agents to label every PR with `sisyphus`
+### Requirement: execute.md.j2 MUST instruct agents to label every PR with `sisyphus`
 
-`orchestrator/src/orchestrator/prompts/analyze.md.j2` SHALL contain explicit
-instructions that the analyze-agent (and any sub-agent it dispatches) MUST attach
+`orchestrator/src/orchestrator/prompts/execute.md.j2` SHALL contain explicit
+instructions that the execute-agent (and any sub-agent it dispatches) MUST attach
 the GitHub label `sisyphus` to every Pull Request it opens. The instructions MUST
 be concrete enough that an LLM reading the rendered prompt can execute them without
 guessing: there MUST be both a `gh label create sisyphus ... --force` invocation
 shown (idempotent, ensures the label exists in the target repo before PR creation)
 and a `gh pr create --label sisyphus ...` invocation shown.
 
-#### Scenario: SAL-S5 rendered analyze prompt contains gh label create + gh pr create --label sisyphus
+#### Scenario: SAL-S5 rendered execute prompt contains gh label create + gh pr create --label sisyphus
 
-- **GIVEN** the analyze prompt rendered with a sample REQ id
-  (e.g. via `orchestrator.prompts.render("analyze.md.j2", req_id="REQ-x", ...)`)
+- **GIVEN** the execute prompt rendered with a sample REQ id
+  (e.g. via `orchestrator.prompts.render("execute.md.j2", req_id="REQ-x", ...)`)
 - **WHEN** the test searches the rendered string
 - **THEN** the rendered text MUST contain the literal substring
   `gh label create sisyphus`
@@ -76,7 +76,7 @@ that any sisyphus-launched sub-issue's `tags` array MUST include `"sisyphus"`.
 #### Scenario: SAL-S6 rendered tools_whitelist contains sisyphus in curl POST example
 
 - **GIVEN** the tools_whitelist partial rendered (e.g. via the same Jinja env that
-  renders `analyze.md.j2`, which includes it)
+  renders `execute.md.j2`, which includes it)
 - **WHEN** the test inspects the rendered text around the line
   `curl -sS -X POST http://localhost:3000/api/projects/$PROJECT/issues`
 - **THEN** the example payload's `tags` array MUST include the literal string

@@ -3,7 +3,7 @@
 helm chart MUST ship `env.default_involved_repos: [phona/sisyphus]` and the
 configmap template MUST conditionally inject `SISYPHUS_DEFAULT_INVOLVED_REPOS`
 as JSON, so a fresh `helm install` of this chart (sisyphus self-deployment)
-gives the orchestrator Pod the L4 fallback that REQ-clone-fallback-direct-analyze-1777119520
+gives the orchestrator Pod the L4 fallback that REQ-clone-fallback-direct-execute-1777119520
 made the Settings field load.
 
 Scenarios covered:

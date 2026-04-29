@@ -180,9 +180,9 @@ async def test_mrepo_clone_s8_no_controller_returns_none_none():
 
 
 @pytest.mark.asyncio
-async def test_mrepo_clone_s9_start_analyze_passes_tags_and_default():
-    """MREPO-CLONE-S9: start_analyze passes tags + default_involved_repos to helper."""
-    from orchestrator.actions import start_analyze as sa
+async def test_mrepo_clone_s9_start_execute_passes_tags_and_default():
+    """MREPO-CLONE-S9: start_execute passes tags + default_involved_repos to helper."""
+    from orchestrator.actions import start_execute as sa
 
     clone_calls: list[dict] = []
 
@@ -223,7 +223,7 @@ async def test_mrepo_clone_s9_start_analyze_passes_tags_and_default():
         patch.object(sa, "render", return_value="prompt"),
     ):
         body = MagicMock(projectId="P", issueId="I")
-        await sa.start_analyze(
+        await sa.start_execute(
             body=body,
             req_id="REQ-x",
             tags=["repo:phona/repo-b"],
@@ -464,13 +464,13 @@ async def test_mrepo_run_s1_insert_stage_run_isolates_by_req_id():
     pool = _FakePool()
     pool.set_fetchrow({"id": 42})
 
-    run_id = await sr.insert_stage_run(pool, "REQ-a", "analyze")
+    run_id = await sr.insert_stage_run(pool, "REQ-a", "execute")
     assert run_id == 42
     # SQL must reference req_id
     sql, args = pool.fetchrow_calls[0]
     assert "req_id" in sql.lower()
     assert args[0] == "REQ-a"
-    assert args[1] == "analyze"
+    assert args[1] == "execute"
 
 
 @pytest.mark.asyncio
@@ -500,13 +500,13 @@ async def test_mrepo_run_s3_close_latest_stage_run_targets_stage():
     pool = _FakePool()
     pool.set_fetchrow({"id": 7})
 
-    rid = await sr.close_latest_stage_run(pool, "REQ-x", "analyze", outcome="pass")
+    rid = await sr.close_latest_stage_run(pool, "REQ-x", "execute", outcome="pass")
     assert rid == 7
     sql, args = pool.fetchrow_calls[0]
     assert "req_id = $1" in sql
     assert "stage = $2" in sql
     assert args[0] == "REQ-x"
-    assert args[1] == "analyze"
+    assert args[1] == "execute"
     assert args[2] == "pass"
 
 
@@ -518,7 +518,7 @@ async def test_mrepo_run_s4_stamp_bkd_session_id_only_open_rows():
     pool = _FakePool()
     pool.set_fetchrow({"id": 5})
 
-    rid = await sr.stamp_bkd_session_id(pool, "REQ-x", "analyze", "sess-123")
+    rid = await sr.stamp_bkd_session_id(pool, "REQ-x", "execute", "sess-123")
     assert rid == 5
     sql, _ = pool.fetchrow_calls[0]
     assert "ended_at IS NULL" in sql
@@ -811,9 +811,9 @@ def test_mrepo_state_s2_ctx_supports_involved_repos():
 
     from orchestrator.actions import create_pr_ci_watch as cpc
     from orchestrator.actions import escalate as esc
-    from orchestrator.actions import start_analyze as sa
+    from orchestrator.actions import start_execute as sa
 
-    for mod, name in [(sa, "start_analyze"), (cpc, "create_pr_ci_watch"), (esc, "escalate")]:
+    for mod, name in [(sa, "start_execute"), (cpc, "create_pr_ci_watch"), (esc, "escalate")]:
         src = inspect.getsource(mod)
         assert "involved_repos" in src, f"{name} must reference involved_repos"
 
@@ -833,11 +833,11 @@ def test_mrepo_state_s3_ctx_supports_pr_urls_dict():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def test_mrepo_supersede_s1_start_analyze_supersede_per_repo():
+def test_mrepo_supersede_s1_start_execute_supersede_per_repo():
     """MREPO-SUPERSEDE-S1: _supersede_stale_openspec_changes iterates over each repo."""
     import inspect
 
-    from orchestrator.actions import start_analyze as sa
+    from orchestrator.actions import start_execute as sa
 
     src = inspect.getsource(sa._supersede_stale_openspec_changes)
     assert "for repo in repos:" in src, "must iterate over repos list"
@@ -845,14 +845,14 @@ def test_mrepo_supersede_s1_start_analyze_supersede_per_repo():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# MREPO-INTAKE: start_analyze_with_finalized_intent multi-repo clone
+# MREPO-INTAKE: start_execute_with_finalized_intent multi-repo clone
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
-async def test_mrepo_intake_s1_start_analyze_with_finalized_intent_clones_multi_repo(monkeypatch):
+async def test_mrepo_intake_s1_start_execute_with_finalized_intent_clones_multi_repo(monkeypatch):
     """MREPO-INTAKE-S1: intake path also server-side clones all involved repos."""
-    from orchestrator.actions import start_analyze_with_finalized_intent as safi
+    from orchestrator.actions import start_execute_with_finalized_intent as safi
 
     clone_calls: list[dict] = []
 
@@ -904,7 +904,7 @@ async def test_mrepo_intake_s1_start_analyze_with_finalized_intent_clones_multi_
     monkeypatch.setattr(safi, "render", lambda *a, **kw: "prompt")
 
     body = MagicMock(projectId="P", issueId="I")
-    result = await safi.start_analyze_with_finalized_intent(
+    result = await safi.start_execute_with_finalized_intent(
         body=body,
         req_id="REQ-x",
         tags=[],

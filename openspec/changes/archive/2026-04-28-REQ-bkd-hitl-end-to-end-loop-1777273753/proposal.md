@@ -128,11 +128,11 @@ PR #161 解决 HITL loop 入口侧问题（watchdog 不杀正在跟用户聊的 
 合并后的 BKD-only HITL 完整 loop:
 
 ```
-人 创 BKD intent issue (intent:intake / intent:analyze)
+人 创 BKD intent issue (intent:intake / intent:execute)
   ↓
 INTAKING — watchdog skip (PR #161)，人多轮聊澄清 → 打 result:pass tag
   ↓ INTAKE_PASS
-ANALYZING / SPEC_LINT / DEV_CROSS_CHECK / STAGING_TEST / PR_CI / ACCEPT / ARCHIVING
+EXECUTING / SPEC_LINT / DEV_CROSS_CHECK / STAGING_TEST / PR_CI / ACCEPT / ARCHIVING
   ↓ 主链推进；fail 走 verifier 3 路（pass/fix/escalate）
   ↓
 DONE → BKD intent statusId='done'（本 REQ ★）

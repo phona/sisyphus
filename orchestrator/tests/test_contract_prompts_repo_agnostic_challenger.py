@@ -62,7 +62,7 @@ def test_pra_s1_no_phona_org_in_prompts() -> None:
 # ---------------------------------------------------------------------------
 
 _PRA_S2_FILES = [
-    "analyze.md.j2",
+    "execute.md.j2",
     "_shared/runner_container.md.j2",
     "challenger.md.j2",
     "verifier/dev_cross_check_fail.md.j2",
@@ -116,7 +116,7 @@ def test_pra_s3_no_ttpos_ci_brand_in_prompts() -> None:
 # ---------------------------------------------------------------------------
 
 _PRA_S4_FILES = [
-    "analyze.md.j2",
+    "execute.md.j2",
     "bugfix.md.j2",
     "staging_test.md.j2",
     "_shared/runner_container.md.j2",

@@ -489,17 +489,17 @@ async def test_action_fail_escalates_no_retry(stub_actions):
         calls.append(("escalate", {"req_id": req_id}))
         return {"escalated": True, "reason": "session-failed"}
 
-    reg["start_analyze"] = broken
+    reg["start_execute"] = broken
     reg["escalate"] = escalate_stub
-    ACTION_META["start_analyze"] = {"idempotent": True}
+    ACTION_META["start_execute"] = {"idempotent": True}
     ACTION_META["escalate"] = {"idempotent": True}
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.INIT.value)})
-    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "intent.analyze"})()
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "intent.execute"})()
 
     result = await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p", tags=[],
-        cur_state=ReqState.INIT, ctx={}, event=Event.INTENT_ANALYZE,
+        cur_state=ReqState.INIT, ctx={}, event=Event.INTENT_EXECUTE,
     )
 
     assert attempts["n"] == 1, "M14c: 不再自动重试，一次失败就 escalate (action 内自决)"
@@ -508,8 +508,8 @@ async def test_action_fail_escalates_no_retry(stub_actions):
     assert any(n == "escalate" for n, _ in calls)
     # 新行为：escalate action stub 没真 CAS 推 ESCALATED（stub 太简单），
     # 真生产代码里 escalate 会自己 CAS。这里只验 action 被调用 + 链式 SESSION_FAILED 起。
-    # state 仍 'analyzing'（self-loop 后 stub escalate 没改）—— 这是 stub 的局限
-    assert pool.rows["REQ-1"].state == ReqState.ANALYZING.value
+    # state 仍 'executing'（self-loop 后 stub escalate 没改）—— 这是 stub 的局限
+    assert pool.rows["REQ-1"].state == ReqState.EXECUTING.value
 
 
 @pytest.mark.asyncio

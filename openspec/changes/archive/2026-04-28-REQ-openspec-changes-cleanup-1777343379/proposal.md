@@ -21,7 +21,7 @@ inside the runner pod. Fail-open: cleanup failure never blocks escalate transiti
 queries PG for each `openspec/changes/REQ-*/` dir and classifies: done/escalated/not-found → delete,
 in-flight → keep. Dry-run by default; `--apply` commits deletions (no push).
 
-**D. Dispatch dedup (resume path):** In `start_analyze`, before BKD dispatch, scan each cloned
+**D. Dispatch dedup (resume path):** In `start_execute`, before BKD dispatch, scan each cloned
 repo for `openspec/changes/` dirs with the same base slug (stripping `-vN` suffix) and move them
 to `openspec/changes/_superseded/<old-dir>/` with a commit. Prevents vN redispatch from
 creating a second orphan.

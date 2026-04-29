@@ -391,7 +391,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--description", help="BKD UI 看板上的描述（可选；缺省=title）")
     sp.add_argument("--prompt-file", help="详细 prompt markdown 文件（推荐）")
     sp.add_argument("--prompt", help="详细 prompt 字面字符串（短场景；与 --prompt-file 互斥）")
-    sp.add_argument("--intent", choices=["intake", "analyze"], default="analyze")
+    sp.add_argument("--intent", choices=["intake", "execute"], default="execute")
     sp.add_argument("--tag", action="append", default=[], help="额外 tag（可多次）")
     sp.add_argument("--engine-type", default=DEFAULT_ENGINE_TYPE)
     sp.add_argument("--model", default=DEFAULT_MODEL)
@@ -406,7 +406,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry-run", action="store_true")
     sp.add_argument("--trigger", action="store_true",
                     help="创建后 PATCH intent tag 触发 orchestrator")
-    sp.add_argument("--intent", choices=["intake", "analyze"], default="intake")
+    sp.add_argument("--intent", choices=["intake", "execute"], default="intake")
     sp.set_defaults(func=cmd_yaml)
 
     # list
@@ -418,7 +418,7 @@ def build_parser() -> argparse.ArgumentParser:
     # trigger-existing
     sp = sub.add_parser("trigger-existing", help="给现有 issue 补 intent tag 触发")
     sp.add_argument("issue_ids", help="逗号分隔 issue ids")
-    sp.add_argument("--intent", choices=["intake", "analyze"], default="intake")
+    sp.add_argument("--intent", choices=["intake", "execute"], default="intake")
     sp.set_defaults(func=cmd_trigger_existing)
 
     # close

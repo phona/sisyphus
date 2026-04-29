@@ -4,7 +4,7 @@
 
 - [x] `orchestrator/src/orchestrator/webhook.py`：扩展早期 noise filter，把 `issue.updated`
   也纳入。条件：`body.event == "issue.updated"` 且**没** REQ-N tag 且**没** `intent:intake` /
-  `intent:analyze` tag → log.debug + `dedup.mark_processed` + `return skip`，不调
+  `intent:execute` tag → log.debug + `dedup.mark_processed` + `return skip`，不调
   `obs.record_event` / `derive_event`。
 - [x] 现有 session.completed filter 路径行为不变（同条件、同返回）。
 
@@ -19,7 +19,7 @@
   - `test_RNF_S3_issue_updated_with_intent_intake_passes` —— issue.updated + tags 仅含
     `intent:intake`，无 REQ → 走下游（INTENT_INTAKE 路径仍能 fire）
   - `test_RNF_S4_issue_updated_with_intent_analyze_passes` —— issue.updated + tags 仅含
-    `intent:analyze`，无 REQ → 走下游（INTENT_ANALYZE 路径仍能 fire）
+    `intent:execute`，无 REQ → 走下游（INTENT_EXECUTE 路径仍能 fire）
   - `test_RNF_S5_session_completed_no_req_still_skipped` —— 现有 session filter 路径回归
 
 ## Stage: spec

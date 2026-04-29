@@ -17,8 +17,8 @@ In the M15→M17 world the picture flipped:
   integration-first branch is dead code in practice — every real REQ
   (sisyphus self-host, ttpos-flutter + ttpos-arch-lab, etc.) hits the
   fallback "exactly-one-source-with-target" branch.
-- The `analyze.md.j2` workspace contract documents only
-  `/workspace/source/*` as the layout the analyze-agent must produce.
+- The `execute.md.j2` workspace contract documents only
+  `/workspace/source/*` as the layout the execute-agent must produce.
   Resolver semantics that pretend `/workspace/integration/*` is the
   primary home contradict that contract.
 

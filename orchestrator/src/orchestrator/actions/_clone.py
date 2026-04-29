@@ -1,16 +1,16 @@
-"""server-side clone helper：start_analyze 系列 action 用，把 involved_repos 落到
+"""server-side clone helper：start_execute 系列 action 用，把 involved_repos 落到
 runner pod 的 /workspace/source/<basename>/。
 
 入口：`clone_involved_repos_into_runner(req_id, ctx, *, tags, default_repos)`，
 三种返回：
 - (None, None)：runner controller 没就绪 / 所有 fallback 层都没拿到 repos →
-  caller 跳过 clone 直接 dispatch agent（直接 analyze 路径兼容）
+  caller 跳过 clone 直接 dispatch agent（直接 execute 路径兼容）
 - (repos, None)：clone 成功，repos 是真跑过 helper 的列表
 - (repos, exit_code)：clone 失败，exit_code 是 helper 退码（caller 应
   emit VERIFY_ESCALATE，不打 agent 进空 PVC）
 
-REQ-clone-fallback-direct-analyze-1777119520：multi-layer fallback for direct
-analyze entry。原版只读 ctx，intake 跳过时 ctx 是空的，sisyphus 把 clone
+REQ-clone-fallback-direct-execute-1777119520：multi-layer fallback for direct
+execute entry。原版只读 ctx，intake 跳过时 ctx 是空的，sisyphus 把 clone
 完全推给 agent prompt。新版按下列优先级解析：
 
 1. ctx.intake_finalized_intent.involved_repos —— intake 路径产物

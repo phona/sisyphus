@@ -6,7 +6,7 @@
 
 ## 1. Workspace 约定
 
-sisyphus 在每个 REQ 的 runner Pod 里给你一个 PVC 挂 `/workspace`，分析阶段 `analyze-agent` 负责初始化成下面的结构：
+sisyphus 在每个 REQ 的 runner Pod 里给你一个 PVC 挂 `/workspace`，分析阶段 `execute-agent` 负责初始化成下面的结构：
 
 ```
 /workspace/
@@ -28,7 +28,7 @@ sisyphus 在每个 REQ 的 runner Pod 里给你一个 PVC 挂 `/workspace`，分
 ## 2. `.sisyphus/manifest.yaml` 结构
 
 ```yaml
-# 由 analyze-agent 生成；后续 stage 增量补充字段（不覆盖其他字段）
+# 由 execute-agent 生成；后续 stage 增量补充字段（不覆盖其他字段）
 schema_version: 1
 req_id: REQ-997
 

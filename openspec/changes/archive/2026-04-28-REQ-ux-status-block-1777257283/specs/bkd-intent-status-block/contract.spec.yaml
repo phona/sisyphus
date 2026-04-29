@@ -15,8 +15,8 @@ context_schema:
       example: "REQ-ux-status-block-1777257283"
     stage:
       type: string
-      example: "analyze"
-      allowed_values: ["intake", "analyze"]
+      example: "execute"
+      allowed_values: ["intake", "execute"]
   optional:
     bkd_intent_issue_url:
       type: ["string", "null"]
@@ -88,11 +88,11 @@ consumers:
   - template: orchestrator/src/orchestrator/prompts/intake.md.j2
     inclusion_position: above_tools_whitelist
     callsite: orchestrator/src/orchestrator/actions/start_intake.py
-  - template: orchestrator/src/orchestrator/prompts/analyze.md.j2
+  - template: orchestrator/src/orchestrator/prompts/execute.md.j2
     inclusion_position: above_tools_whitelist
     callsites:
-      - orchestrator/src/orchestrator/actions/start_analyze.py
-      - orchestrator/src/orchestrator/actions/start_analyze_with_finalized_intent.py
+      - orchestrator/src/orchestrator/actions/start_execute.py
+      - orchestrator/src/orchestrator/actions/start_execute_with_finalized_intent.py
 
 backwards_compat:
   unset_kwarg_behaviour: noop_render

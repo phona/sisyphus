@@ -8,7 +8,7 @@ TBD - created by archiving change REQ-test-coverage-escalated-resume-1777281969.
 The engine MUST dispatch the four intake-phase transitions through
 `engine.step` exactly as `state.TRANSITIONS` declares: `(INIT,
 INTENT_INTAKE) → INTAKING` via `start_intake`; `(INTAKING, INTAKE_PASS)
-→ ANALYZING` via `start_analyze_with_finalized_intent`; `(INTAKING,
+→ EXECUTING` via `start_execute_with_finalized_intent`; `(INTAKING,
 INTAKE_FAIL) → ESCALATED` via `escalate`; and `(INTAKING,
 VERIFY_ESCALATE) → ESCALATED` via `escalate`. The two transitions that
 land in `ESCALATED` MUST also fire-and-forget a `cleanup_runner` task
@@ -30,11 +30,11 @@ gets done.
 #### Scenario: ERT-S2 intaking intake_pass enters analyzing
 
 - **GIVEN** a row at state `INTAKING` and a stub
-  `start_analyze_with_finalized_intent` registered in `actions.REGISTRY`
+  `start_execute_with_finalized_intent` registered in `actions.REGISTRY`
 - **WHEN** `engine.step` is called with `event=INTAKE_PASS`
-- **THEN** the row's state MUST advance to `ANALYZING`, the returned
-  dict MUST contain `action="start_analyze_with_finalized_intent"` and
-  `next_state="analyzing"`, and the stub action MUST be awaited exactly
+- **THEN** the row's state MUST advance to `EXECUTING`, the returned
+  dict MUST contain `action="start_execute_with_finalized_intent"` and
+  `next_state="executing"`, and the stub action MUST be awaited exactly
   once
 
 #### Scenario: ERT-S3 intaking intake_fail enters escalated and triggers cleanup
@@ -63,9 +63,9 @@ gets done.
 
 ### Requirement: Engine routes analyze-phase escalation through engine.step
 
-The engine MUST dispatch `(ANALYZING, VERIFY_ESCALATE)` and `(PR_CI_RUNNING,
+The engine MUST dispatch `(EXECUTING, VERIFY_ESCALATE)` and `(PR_CI_RUNNING,
 PR_CI_TIMEOUT)` to `ESCALATED` via the `escalate` action through
-`engine.step`. These two transitions are reached when an analyze action
+`engine.step`. These two transitions are reached when an execute action
 internally emits `VERIFY_ESCALATE` (clone failure, missing finalized
 intent) or when the pr-ci checker times out waiting for GitHub check-runs.
 Both MUST trigger a fire-and-forget `cleanup_runner(retain_pvc=True)`
@@ -73,7 +73,7 @@ because they cross into a terminal state.
 
 #### Scenario: ERT-S5 analyzing verify_escalate enters escalated and triggers cleanup
 
-- **GIVEN** a row at state `ANALYZING`, a stub `escalate` registered in
+- **GIVEN** a row at state `EXECUTING`, a stub `escalate` registered in
   `actions.REGISTRY`, and a fake k8s controller injected via
   `k8s_runner.set_controller`
 - **WHEN** `engine.step` is called with `event=VERIFY_ESCALATE`

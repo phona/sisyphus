@@ -139,7 +139,7 @@ async def test_str_s5_stamp_sql_targets_open_and_null_token_row() -> None:
 
     # Return a row with numeric id (asyncpg pg_bigint → int)
     pool = _FakePool(fetchrow_returns=({"id": 42},))
-    await stamp_bkd_session_id(pool, "REQ-7", "analyze", "new-sess")
+    await stamp_bkd_session_id(pool, "REQ-7", "execute", "new-sess")
 
     assert len(pool.fetchrow_calls) == 1, (
         f"STR-S5: stamp_bkd_session_id MUST emit exactly 1 SQL call (UPDATE…RETURNING via fetchrow); "
@@ -169,7 +169,7 @@ async def test_str_s6_empty_token_is_noop() -> None:
     from orchestrator.store.stage_runs import stamp_bkd_session_id
 
     pool = _FakePool()
-    result = await stamp_bkd_session_id(pool, "REQ-1", "analyze", "")
+    result = await stamp_bkd_session_id(pool, "REQ-1", "execute", "")
 
     assert result is None, (
         f"STR-S6: stamp_bkd_session_id('') MUST return None; got {result!r}"
@@ -186,12 +186,12 @@ async def test_str_s6_empty_token_is_noop() -> None:
 def test_agent_stages_contains_all_spec_required_stages() -> None:
     """
     Boundary for STR-S1/S2: engine.AGENT_STAGES MUST be a frozenset containing
-    all four agent stages: analyze, verifier, fixer, accept.
+    all four agent stages: execute, verifier, fixer, accept.
     (archive was removed as a stage — it runs as a fire-and-forget background task)
     """
     from orchestrator.engine import AGENT_STAGES
 
-    required = {"analyze", "verifier", "fixer", "accept"}
+    required = {"execute", "verifier", "fixer", "accept"}
     assert isinstance(AGENT_STAGES, frozenset), (
         f"AGENT_STAGES MUST be frozenset; got {type(AGENT_STAGES).__name__!r}"
     )
@@ -342,7 +342,7 @@ def _patch_webhook_deps(
 
 async def test_str_s1_stamp_called_before_engine_step(monkeypatch) -> None:
     """
-    STR-S1: When webhook receives session.completed for ANALYZING (analyze stage):
+    STR-S1: When webhook receives session.completed for EXECUTING (execute stage):
       - stamp_bkd_session_id MUST be called exactly once
       - The call MUST precede engine.step
     """
@@ -357,10 +357,10 @@ async def test_str_s1_stamp_called_before_engine_step(monkeypatch) -> None:
 
     _patch_webhook_deps(
         monkeypatch,
-        bkd_tags=["REQ-stage-runs-token-tracking-1777220172", "analyze"],
-        bkd_external_session_id="sess-analyze-uuid",
-        req_state_value=ReqState.ANALYZING,
-        derive_event_return=Event.ANALYZE_DONE,
+        bkd_tags=["REQ-stage-runs-token-tracking-1777220172", "execute"],
+        bkd_external_session_id="sess-execute-uuid",
+        req_state_value=ReqState.EXECUTING,
+        derive_event_return=Event.EXECUTE_DONE,
         call_order=call_order,
         stamp_calls=stamp_calls,
         step_calls=step_calls,
@@ -373,7 +373,7 @@ async def test_str_s1_stamp_called_before_engine_step(monkeypatch) -> None:
             "/bkd-events",
             json={
                 "event": "session.completed",
-                "issueId": "analyze-bkd-issue-id",
+                "issueId": "execute-bkd-issue-id",
                 "projectId": "proj-test",
                 "executionId": "exec-str-s1",
             },
@@ -387,8 +387,8 @@ async def test_str_s1_stamp_called_before_engine_step(monkeypatch) -> None:
         f"STR-S1: stamp_bkd_session_id MUST be called exactly once for agent stage; "
         f"got {len(stamp_calls)} call(s): {stamp_calls}"
     )
-    assert stamp_calls[0][2] == "sess-analyze-uuid", (
-        f"STR-S1: stamp MUST carry externalSessionId='sess-analyze-uuid'; "
+    assert stamp_calls[0][2] == "sess-execute-uuid", (
+        f"STR-S1: stamp MUST carry externalSessionId='sess-execute-uuid'; "
         f"got {stamp_calls[0][2]!r}"
     )
 
@@ -423,10 +423,10 @@ async def test_str_s3_null_external_session_id_skips_stamp(monkeypatch) -> None:
 
     _patch_webhook_deps(
         monkeypatch,
-        bkd_tags=["REQ-stage-runs-token-tracking-1777220172", "analyze"],
+        bkd_tags=["REQ-stage-runs-token-tracking-1777220172", "execute"],
         bkd_external_session_id=None,  # null — BKD hasn't assigned a session UUID yet
-        req_state_value=ReqState.ANALYZING,
-        derive_event_return=Event.ANALYZE_DONE,
+        req_state_value=ReqState.EXECUTING,
+        derive_event_return=Event.EXECUTE_DONE,
         call_order=call_order,
         stamp_calls=stamp_calls,
         step_calls=step_calls,
@@ -439,7 +439,7 @@ async def test_str_s3_null_external_session_id_skips_stamp(monkeypatch) -> None:
             "/bkd-events",
             json={
                 "event": "session.completed",
-                "issueId": "analyze-issue-no-session-id",
+                "issueId": "execute-issue-no-session-id",
                 "projectId": "proj-test",
                 "executionId": "exec-str-s3",
             },

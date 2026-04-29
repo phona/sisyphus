@@ -59,15 +59,15 @@ otherwise the row enters `_check_and_escalate`, which still respects
 ARCHIVING, the `fixer-round-cap` ctx tag for FIXER_RUNNING at cap, and the
 generic `body.event="watchdog.stuck"` for everything else.
 
-#### Scenario: WSP-S4 ANALYZING stuck + session=failed → still escalates
+#### Scenario: WSP-S4 EXECUTING stuck + session=failed → still escalates
 
-- **GIVEN** a REQ in state `ANALYZING` past the threshold with BKD reporting
+- **GIVEN** a REQ in state `EXECUTING` past the threshold with BKD reporting
   `sessionStatus="failed"`
 - **WHEN** `watchdog._tick()` runs
-- **THEN** the row passes the SQL pre-filter (ANALYZING is not in
+- **THEN** the row passes the SQL pre-filter (EXECUTING is not in
   `_NO_WATCHDOG_STATES` nor `_SKIP_STATES`)
 - **AND** `engine.step` is called once with `event=SESSION_FAILED`,
-  `cur_state=ANALYZING`, and `body.event="watchdog.stuck"`
+  `cur_state=EXECUTING`, and `body.event="watchdog.stuck"`
 
 #### Scenario: WSP-S5 SQL pre-filter args include INTAKING
 

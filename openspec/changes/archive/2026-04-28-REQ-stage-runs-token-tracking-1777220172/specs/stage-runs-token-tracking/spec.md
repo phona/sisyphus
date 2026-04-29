@@ -18,10 +18,10 @@ cost on the dominant NULL bucket.
 
 #### Scenario: STR-S1 webhook stamps BKD agent token before engine.step
 
-- **GIVEN** a REQ in state `ANALYZING` with an open `analyze` stage_run
+- **GIVEN** a REQ in state `EXECUTING` with an open `execute` stage_run
 - **WHEN** the webhook receives a `session.completed` event whose BKD issue
   carries `externalSessionId="sess-analyze-uuid"`
-- **THEN** `stage_runs.stamp_bkd_session_id(pool, "REQ-x", "analyze",
+- **THEN** `stage_runs.stamp_bkd_session_id(pool, "REQ-x", "execute",
   "sess-analyze-uuid")` MUST be invoked exactly once, AND the call MUST
   precede the `engine.step` invocation (so the row is still
   `ended_at IS NULL` and the stamp targets the right run)
@@ -37,7 +37,7 @@ cost on the dominant NULL bucket.
 
 #### Scenario: STR-S3 missing externalSessionId is a no-op stamp
 
-- **GIVEN** a REQ in state `ANALYZING`
+- **GIVEN** a REQ in state `EXECUTING`
 - **WHEN** the webhook receives a `session.completed` event whose BKD issue
   payload has `externalSessionId=null` (BKD session not yet assigned a UUID)
 - **THEN** `stage_runs.stamp_bkd_session_id` MUST NOT be invoked, so no
@@ -61,9 +61,9 @@ The `stamp_bkd_session_id` helper in `orchestrator/src/orchestrator/store/stage_
 #### Scenario: STR-S5 stamp targets only ended_at IS NULL AND bkd_session_id IS NULL
 
 - **GIVEN** a `stage_runs` table with multiple rows for `(req_id="REQ-7",
-  stage="analyze")`: an older closed row with `bkd_session_id="old-sess"` and
+  stage="execute")`: an older closed row with `bkd_session_id="old-sess"` and
   a newer open row with `bkd_session_id IS NULL`
-- **WHEN** `stamp_bkd_session_id(pool, "REQ-7", "analyze", "new-sess")` runs
+- **WHEN** `stamp_bkd_session_id(pool, "REQ-7", "execute", "new-sess")` runs
 - **THEN** the SQL MUST contain `ended_at IS NULL` AND `bkd_session_id IS
   NULL` in its WHERE clause, the older closed row MUST NOT be touched, and
   only the newer open row gets `bkd_session_id` set to `"new-sess"`
@@ -71,7 +71,7 @@ The `stamp_bkd_session_id` helper in `orchestrator/src/orchestrator/store/stage_
 #### Scenario: STR-S6 empty token is a no-op
 
 - **GIVEN** any `stage_runs` table state
-- **WHEN** `stamp_bkd_session_id(pool, "REQ-1", "analyze", "")` is called
+- **WHEN** `stamp_bkd_session_id(pool, "REQ-1", "execute", "")` is called
 - **THEN** no SQL is emitted (return value is None) — saves a round-trip and
   prevents writing an empty string
 

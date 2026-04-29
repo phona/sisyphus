@@ -23,7 +23,7 @@ from collections.abc import Iterable
 SISYPHUS_MANAGED_EXACT: frozenset[str] = frozenset({
     "sisyphus",
     "intake",
-    "analyze",
+    "execute",
     "challenger",
     "verifier",
     "fixer",

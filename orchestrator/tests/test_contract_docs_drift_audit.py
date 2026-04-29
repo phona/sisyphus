@@ -243,7 +243,7 @@ def test_docs_s6_tag_spec_contains_router_tags():
     tag_spec = (REPO_ROOT / "docs" / "api-tag-management-spec.md").read_text()
     required = [
         "intent:intake",
-        "intent:analyze",
+        "intent:execute",
         "result:pass",
         "result:fail",
         "decision:",

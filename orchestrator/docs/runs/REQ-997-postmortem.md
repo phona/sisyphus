@@ -40,7 +40,7 @@
 
 | stage | v0.1.0 平均 | REQ-997 实测 | 变化 |
 |---|---|---|---|
-| analyze | ~18 min | 5m 43s | **3x 快** |
+| execute | ~18 min | 5m 43s | **3x 快** |
 | contract-spec | ~17 min | 5m 1s | 3x 快 |
 | acceptance-spec | ~11 min | 4m（并行）| 2.5x 快 |
 | dev | ~17 min | 5m | 3x 快 |
@@ -78,7 +78,7 @@ REQ-997 跑完后磁盘 check：
 ## openspec CLI 修复
 
 ### 暴露过程
-- REQ-997 在 analyze 阶段 agent 报 `openspec: command not found`
+- REQ-997 在 execute 阶段 agent 报 `openspec: command not found`
 - 查发现 Dockerfile 里 `npm install -g @fission-codes/openspec` 仓库不存在 → fallback 到 `npm install -g openspec` → npm 上 `openspec@0.0.0` 是 2019 年占位空包，没 CLI binary
 - 真包名是 `@fission-ai/openspec`（OpenSpec by Fission AI，41k★ TypeScript）
 
@@ -89,7 +89,7 @@ REQ-997 跑完后磁盘 check：
 
 ### 反思
 - `2>/dev/null || ... || echo "..."` 这种"装失败也算成功"的写法掩盖了根本问题，跑了 6 个 REQ 没人发现
-- 之前 REQ 能跑完是因为 analyze prompt 不直接调 openspec CLI（只写文件结构），spec / done_archive prompt 有调用，但 agent 可能忽略了 `command not found`
+- 之前 REQ 能跑完是因为 execute prompt 不直接调 openspec CLI（只写文件结构），spec / done_archive prompt 有调用，但 agent 可能忽略了 `command not found`
 
 ---
 
@@ -97,7 +97,7 @@ REQ-997 跑完后磁盘 check：
 
 ### 现象
 REQ-997 跑完后看 BKD UI，发现 dev / ci-unit / ci-int / done-archive 这 4 个 BKD issue 全卡在 `review` 状态。
-查 actions 代码：只有 `fanout_specs`（推 analyze done）和 `mark_spec_reviewed_and_check`（推 spec done）会主动更新上游 BKD issue 状态，其他 5 个 create_X action 都不推。
+查 actions 代码：只有 `fanout_specs`（推 execute done）和 `mark_spec_reviewed_and_check`（推 spec done）会主动更新上游 BKD issue 状态，其他 5 个 create_X action 都不推。
 
 ### 影响
 - BKD UI 乱：跑一把累 4-5 个 review 残骸，多跑几个 REQ 完全看不清当前状态

@@ -46,8 +46,8 @@ checker, PR-link, stage-run, artifact-check, and accept phases.
 - **WHEN** clone_involved_repos_into_runner executes
 - **THEN** returns (None, None) so agent self-clones
 
-#### Scenario: MREPO-CLONE-S9 start_analyze passes tags+default to helper
-- **GIVEN** start_analyze called with tags and settings.default_involved_repos
+#### Scenario: MREPO-CLONE-S9 start_execute passes tags+default to helper
+- **GIVEN** start_execute called with tags and settings.default_involved_repos
 - **WHEN** clone helper is invoked
 - **THEN** both tags= and default_repos= are forwarded
 
@@ -103,7 +103,7 @@ checker, PR-link, stage-run, artifact-check, and accept phases.
 
 #### Scenario: MREPO-RUN-S1 insert_stage_run binds req_id
 - **GIVEN** pool stub
-- **WHEN** insert_stage_run(pool, "REQ-a", "analyze")
+- **WHEN** insert_stage_run(pool, "REQ-a", "execute")
 - **THEN** SQL references req_id and stage, returns run id
 
 #### Scenario: MREPO-RUN-S2 insert_stage_run supports parallel_id
@@ -113,7 +113,7 @@ checker, PR-link, stage-run, artifact-check, and accept phases.
 
 #### Scenario: MREPO-RUN-S3 close_latest targets stage
 - **GIVEN** pool stub
-- **WHEN** close_latest_stage_run(pool, "REQ-x", "analyze", outcome="pass")
+- **WHEN** close_latest_stage_run(pool, "REQ-x", "execute", outcome="pass")
 - **THEN** SQL WHERE req_id=$1 AND stage=$2
 
 #### Scenario: MREPO-RUN-S4 stamp only open rows
@@ -172,7 +172,7 @@ checker, PR-link, stage-run, artifact-check, and accept phases.
 - **THEN** open_incident called exactly 3 times, once per repo
 
 #### Scenario: MREPO-STATE-S1..S3 ctx supports multi-repo fields
-- **GIVEN** source code of create_accept, start_analyze, create_pr_ci_watch, escalate
+- **GIVEN** source code of create_accept, start_execute, create_pr_ci_watch, escalate
 - **WHEN** inspected
 - **THEN** each references cloned_repos, involved_repos, and/or pr_urls
 
@@ -182,6 +182,6 @@ checker, PR-link, stage-run, artifact-check, and accept phases.
 - **THEN** iterates over repos list with per-repo basename computation
 
 #### Scenario: MREPO-INTAKE-S1 intake path clones multi-repo
-- **GIVEN** start_analyze_with_finalized_intent with 2 involved repos
+- **GIVEN** start_execute_with_finalized_intent with 2 involved repos
 - **WHEN** action runs
 - **THEN** clone helper called with both repos, result contains cloned_repos

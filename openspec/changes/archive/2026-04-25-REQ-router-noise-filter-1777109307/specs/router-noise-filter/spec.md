@@ -10,7 +10,7 @@ hold:
 
 - `body.event == "issue.updated"`
 - `router.extract_req_id(tags)` returns `None` (no `REQ-*` tag in `tags`)
-- `tags` contains **neither** `"intent:intake"` **nor** `"intent:analyze"`
+- `tags` contains **neither** `"intent:intake"` **nor** `"intent:execute"`
 
 When the event is treated as noise, the handler MUST:
 
@@ -38,7 +38,7 @@ branches of the same early-noise section in `webhook.py`.
 
 #### Scenario: RNF-S2 issue.updated 含 REQ tag → 走下游
 
-- **GIVEN** webhook 收到 `body.event="issue.updated"`，`tags=["REQ-foo", "analyze"]`
+- **GIVEN** webhook 收到 `body.event="issue.updated"`，`tags=["REQ-foo", "execute"]`
 - **WHEN** handler 执行
 - **THEN** noise filter 不命中，handler 继续调 `obs.record_event` + `derive_event` +
   `engine.step`（按现有路径推进状态机；engine.step 至少被调用一次）
@@ -50,15 +50,15 @@ branches of the same early-noise section in `webhook.py`.
 - **THEN** noise filter 不命中（intent 入口必须能 fire INTENT_INTAKE），handler 继续走
   下游：`derive_event` 返回 `Event.INTENT_INTAKE` → `engine.step` 被调用
 
-#### Scenario: RNF-S4 issue.updated 仅含 intent:analyze tag → 走下游
+#### Scenario: RNF-S4 issue.updated 仅含 intent:execute tag → 走下游
 
-- **GIVEN** webhook 收到 `body.event="issue.updated"`，`tags=["intent:analyze"]`（无 REQ-*）
+- **GIVEN** webhook 收到 `body.event="issue.updated"`，`tags=["intent:execute"]`（无 REQ-*）
 - **WHEN** handler 执行
-- **THEN** noise filter 不命中，`derive_event` 返回 `Event.INTENT_ANALYZE` → `engine.step`
+- **THEN** noise filter 不命中，`derive_event` 返回 `Event.INTENT_EXECUTE` → `engine.step`
   被调用
 
 #### Scenario: RNF-S5 session.completed 无 REQ tag → 旧 filter 仍生效
 
-- **GIVEN** webhook 收到 `body.event="session.completed"`，`tags=["analyze"]`（无 REQ-*）
+- **GIVEN** webhook 收到 `body.event="session.completed"`，`tags=["execute"]`（无 REQ-*）
 - **WHEN** handler 执行
 - **THEN** 命中既有 session.completed noise filter，返回 `{"action": "skip", "reason": "session event without REQ tag"}`，`dedup.mark_processed` 被调用，`engine.step` 未调用

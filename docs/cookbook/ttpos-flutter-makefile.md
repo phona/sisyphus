@@ -126,7 +126,7 @@ ci-lint:
 	@if [ -n "$$BASE_REV" ]; then \
 	    echo "ci-lint: BASE_REV=$$BASE_REV（Flutter 全量扫，不做增量过滤）"; \
 	fi
-	flutter analyze --no-pub
+	flutter execute --no-pub
 	dart format --set-exit-if-changed .
 ```
 
@@ -165,7 +165,7 @@ ci-lint:
 # melos.yaml
 scripts:
   lint:
-    run: dart analyze . && dart format --set-exit-if-changed .
+    run: dart execute . && dart format --set-exit-if-changed .
     exec:
       concurrency: 6
 ```
@@ -294,7 +294,7 @@ ci-build:
 
 ### 4.2 Flutter 源仓如何为 accept 阶段贡献代码
 
-sisyphus orchestrator 在 dispatch analyze-agent 之前，会把 BKD intent issue 里
+sisyphus orchestrator 在 dispatch execute-agent 之前，会把 BKD intent issue 里
 `involved_repos` 列出的所有仓 clone 到 runner pod：
 
 ```
@@ -400,7 +400,7 @@ BASE_REV="$base_rev" make ci-lint
 # target 一览：
 #   ci-env              输出工具版本 key=value 到 stdout
 #   ci-setup            flutter pub get + melos bootstrap
-#   ci-lint             flutter analyze + dart format 检查（全量；接受 BASE_REV 但忽略）
+#   ci-lint             flutter execute + dart format 检查（全量；接受 BASE_REV 但忽略）
 #   ci-unit-test        melos run test:unit（无 device）
 #   ci-integration-test docker compose 后端集成 or 空（EXIT 0）
 #   ci-build            flutter build apk --release（可选；sisyphus 不直接调）
@@ -426,12 +426,12 @@ ci-setup:
 
 # ── ci-lint ──────────────────────────────────────────────────────────────────
 # BASE_REV 由 sisyphus dev_cross_check 注入；空字符串时全量（Flutter 无增量支持）。
-# 非空时也全量扫（flutter analyze 无 --new-from-rev 等价）。
+# 非空时也全量扫（flutter execute 无 --new-from-rev 等价）。
 ci-lint:
 	@if [ -n "$$BASE_REV" ]; then \
 	    echo "ci-lint: BASE_REV=$$BASE_REV (Flutter does full scan regardless)"; \
 	fi
-	flutter analyze --no-pub
+	flutter execute --no-pub
 	dart format --set-exit-if-changed .
 
 # ── ci-unit-test ─────────────────────────────────────────────────────────────
@@ -480,7 +480,7 @@ packages:
 
 scripts:
   lint:
-    run: dart analyze . && dart format --set-exit-if-changed .
+    run: dart execute . && dart format --set-exit-if-changed .
     exec:
       concurrency: 6
 

@@ -45,7 +45,7 @@ RUN curl -fsSL https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz \
 
 # ─── 3. openspec CLI ─────────────────────────────────────────────────────
 # 真包名是 @fission-ai/openspec（旧版本误装 npm 上的占位 openspec@0.0.0 是空的，导致
-# REQ-997 analyze 报 "openspec: command not found"）
+# REQ-997 execute 报 "openspec: command not found"）
 RUN npm install -g @fission-ai/openspec@latest && openspec --version
 
 # ─── 3b. golangci-lint（业务仓 Makefile ci-lint target 依赖） ──────────

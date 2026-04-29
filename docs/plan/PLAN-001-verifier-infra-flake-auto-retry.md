@@ -74,7 +74,7 @@ automatically; if the cap is hit it falls through to real escalation.
 - **Body reuse**: `apply_verify_infra_retry` passes the verifier webhook body to
   `create_staging_test`; `body.projectId` is the same REQ's project so this is safe.
 - **Stage not in retry dispatch**: Non-checker stages (analyze/accept/challenger/
-  analyze_artifact_check) are not in `_RETRY_ROUTING`; if verifier outputs `retry`
+  execute_artifact_check) are not in `_RETRY_ROUTING`; if verifier outputs `retry`
   for them it falls through to escalate with a warning log.
 
 ## Alternatives

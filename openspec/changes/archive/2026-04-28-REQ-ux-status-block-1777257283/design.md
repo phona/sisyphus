@@ -11,7 +11,7 @@
   so it cannot be used to "post a passive status pane" — it would re-fire the
   agent every transition.
 - The only durable, agent-visible text we control is the prompt body that
-  `start_intake` / `start_analyze` / `start_analyze_with_finalized_intent` follow-up
+  `start_intake` / `start_execute` / `start_execute_with_finalized_intent` follow-up
   once at dispatch.
 
 → The status block must live inside that prompt body. We add it once, at
@@ -35,7 +35,7 @@ it anyway).
 The `{% if status_block %}` guard means callers that don't pass the kwarg
 (verifier prompts, bugfix prompt, challenger prompt — out of scope this REQ) get
 a no-op include and zero diff in their rendered output. Only `intake.md.j2` and
-`analyze.md.j2` get a populated block this REQ. Every other template in
+`execute.md.j2` get a populated block this REQ. Every other template in
 `prompts/` already has a `{% include %}` chain at the top, so this slot is a
 natural extension.
 
@@ -105,17 +105,17 @@ Three callsites change:
 1. `start_intake.py` — adds `bkd_intent_issue_url` (currently not passed) +
    `status_block=build_status_block_ctx(...)`. No `cloned_repos`, no `pr_urls`
    at intake.
-2. `start_analyze.py` — adds `status_block=build_status_block_ctx(...)`,
+2. `start_execute.py` — adds `status_block=build_status_block_ctx(...)`,
    reusing the already-passed `bkd_intent_issue_url`, `cloned_repos`, plus
    `pr_urls=ctx.get("pr_urls")` if present (re-entry from later stages may have
    discovered them).
-3. `start_analyze_with_finalized_intent.py` — same as `start_analyze`. It
+3. `start_execute_with_finalized_intent.py` — same as `start_execute`. It
    currently does NOT pass `bkd_intent_issue_url`; this REQ adds it (it's a
    one-line `links.bkd_issue_url(proj, issue.id)` call, parity with the direct
    path).
 
 Existing `cloned_repos` / `bkd_intent_issue_url` / footer-block kwargs on
-`analyze.md.j2` are left untouched — no behavioural change for code paths that
+`execute.md.j2` are left untouched — no behavioural change for code paths that
 don't consume the new block.
 
 ## Why not a Python pre-rendered string?
@@ -139,7 +139,7 @@ New file `orchestrator/tests/test_prompts_status_block.py`:
   context → table contains 7 rows in the documented column order.
 - BISB-S2: render with only `req_id` + `stage` → table contains exactly the 4
   always-on rows; no empty cells; no row for omitted optional fields.
-- BISB-S3: render `analyze.md.j2` with `status_block=...` and
+- BISB-S3: render `execute.md.j2` with `status_block=...` and
   `cloned_repos=[...]` → first non-blank section is `## REQ Status`, which
   appears *before* `## 工具白名单`.
 - BISB-S4: render `intake.md.j2` with `status_block=...` (no cloned_repos) →
@@ -154,7 +154,7 @@ New file `orchestrator/tests/test_prompts_status_block.py`:
   backwards-compat for any future caller that hasn't been wired yet.
 
 Existing tests stay unchanged. `test_prompts_sisyphus_label.py::_render_analyze`
-calls `render("analyze.md.j2", ...)` without `status_block` — it should keep
+calls `render("execute.md.j2", ...)` without `status_block` — it should keep
 working (no new required kwargs).
 
 ## Out of scope

@@ -8,7 +8,7 @@ TBD - created by archiving change REQ-test-verifier-loop-1777267725. Update Purp
 The state machine and engine MUST route every supported upstream stage-fail
 event from its corresponding running state to `REVIEW_RUNNING` and dispatch
 the matching `invoke_verifier_for_<stage>_fail` action. The supported stages
-are analyze-artifact-check, spec-lint, challenger, dev-cross-check,
+are execute-artifact-check, spec-lint, challenger, dev-cross-check,
 staging-test, pr-ci, and accept-teardown. A regression that drops or renames
 any of these transitions MUST be caught by mock tests; the engine MUST NOT
 silently skip a stage-fail event when it is fired from the matching running
@@ -60,15 +60,15 @@ state.
   dict MUST contain `action="invoke_verifier_for_accept_fail"`, and the
   stub action MUST be awaited exactly once
 
-#### Scenario: VLT-S6 analyze_artifact_check fail enters review-running
+#### Scenario: VLT-S6 execute_artifact_check fail enters review-running
 
-- **GIVEN** a row at state `ANALYZE_ARTIFACT_CHECKING` and a stub
-  `invoke_verifier_for_analyze_artifact_check_fail` registered in
+- **GIVEN** a row at state `EXECUTE_ARTIFACT_CHECKING` and a stub
+  `invoke_verifier_for_execute_artifact_check_fail` registered in
   `actions.REGISTRY`
-- **WHEN** `engine.step` is called with `event=ANALYZE_ARTIFACT_CHECK_FAIL`
+- **WHEN** `engine.step` is called with `event=EXECUTE_ARTIFACT_CHECK_FAIL`
 - **THEN** the row's state MUST advance to `REVIEW_RUNNING`, the returned
   dict MUST contain
-  `action="invoke_verifier_for_analyze_artifact_check_fail"`, and the stub
+  `action="invoke_verifier_for_execute_artifact_check_fail"`, and the stub
   action MUST be awaited exactly once
 
 #### Scenario: VLT-S7 challenger fail enters review-running
@@ -194,7 +194,7 @@ the `SESSION_FAILED` transition set (`INIT`, `GH_INCIDENT_OPEN`, `DONE`,
 #### Scenario: VLT-S15 SESSION_FAILED on every running state self-loops to escalate
 
 - **GIVEN** a row at any of the 13 in-flight states (`INTAKING`,
-  `ANALYZING`, `ANALYZE_ARTIFACT_CHECKING`, `SPEC_LINT_RUNNING`,
+  `EXECUTING`, `EXECUTE_ARTIFACT_CHECKING`, `SPEC_LINT_RUNNING`,
   `CHALLENGER_RUNNING`, `DEV_CROSS_CHECK_RUNNING`,
   `STAGING_TEST_RUNNING`, `PR_CI_RUNNING`, `ACCEPT_RUNNING`,
   `ACCEPT_TEARING_DOWN`, `REVIEW_RUNNING`, `FIXER_RUNNING`, `ARCHIVING`)

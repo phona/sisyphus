@@ -1,6 +1,6 @@
 {% include "verifier/_header.md.j2" %}
 
-## 职责（analyze_artifact_check / success）
+## 职责（execute_artifact_check / success）
 
 sisyphus 的机械 **post-artifact-check** 全绿。机械层确认：
 
@@ -25,7 +25,7 @@ challenger 的活）。所以"绿"只是说 agent 真动手了，不是说产物
 ### NOT 该做
 
 - 不再机械校产物存在（已校）
-- 不开新 analyze 子 agent
+- 不开新 execute 子 agent
 - 跑 `openspec validate` 不是你的活——下一站 spec_lint 会跑
 
 ### 典型决策
@@ -33,7 +33,7 @@ challenger 的活）。所以"绿"只是说 agent 真动手了，不是说产物
 - `pass`：产物结构 + 内容质量都过得去，让 spec_lint 接着校 spec 格式
 - `fix` + `fixer=spec` + `scope=openspec/changes/{{ req_id }}/`：内容稀薄 / 占位
   / 跨仓漏写 → spec fixer 补
-- `escalate`：内容看起来 agent 完全没理解需求，需要重起 analyze（fixer 救不回来）
+- `escalate`：内容看起来 agent 完全没理解需求，需要重起 execute（fixer 救不回来）
 
 ─────────
 

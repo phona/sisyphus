@@ -1,4 +1,4 @@
-"""actions/start_analyze.py + start_analyze_with_finalized_intent.py 单测：
+"""actions/start_execute.py + start_execute_with_finalized_intent.py 单测：
 
 REQ-clone-and-pr-ci-fallback-1777115925：验 server-side clone 派发与失败传播。
 
@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from orchestrator.actions import _clone, start_analyze, start_analyze_with_finalized_intent
+from orchestrator.actions import _clone, start_execute, start_execute_with_finalized_intent
 from orchestrator.admission import AdmissionDecision
 from orchestrator.state import Event
 
@@ -22,22 +22,22 @@ from orchestrator.state import Event
 def _admit_by_default(monkeypatch):
     """Admission gate 默认 admit=True 通过；个别 case 要 deny 自己再 patch。"""
     monkeypatch.setattr(
-        start_analyze, "check_admission",
+        start_execute, "check_admission",
         AsyncMock(return_value=AdmissionDecision(admit=True)),
     )
-    monkeypatch.setattr(start_analyze.db, "get_pool", lambda: object())
+    monkeypatch.setattr(start_execute.db, "get_pool", lambda: object())
     # REQ-issue-link-pr-quality-base-1777218242: success path stashes
-    # analyze_issue_id via update_context. Fixture pool is dummy object();
+    # execute_issue_id via update_context. Fixture pool is dummy object();
     # patch update_context to no-op so existing tests don't crash.
     # Tests that want to inspect the call can re-patch.
     noop = AsyncMock()
-    monkeypatch.setattr(start_analyze.req_state, "update_context", noop)
+    monkeypatch.setattr(start_execute.req_state, "update_context", noop)
     # REQ-427: dispatch_slugs slug check — no hit by default so create_issue proceeds.
     monkeypatch.setattr(
-        start_analyze_with_finalized_intent.dispatch_slugs, "get", AsyncMock(return_value=None)
+        start_execute_with_finalized_intent.dispatch_slugs, "get", AsyncMock(return_value=None)
     )
     monkeypatch.setattr(
-        start_analyze_with_finalized_intent.dispatch_slugs, "put", AsyncMock()
+        start_execute_with_finalized_intent.dispatch_slugs, "put", AsyncMock()
     )
 
 
@@ -54,7 +54,7 @@ def _make_body(*, project_id: str = "nnvxh8wj", issue_id: str = "issue-X"):
 
 
 def _patch_runner(monkeypatch, *, exec_fn: AsyncMock, ensure_ready_fn: AsyncMock | None = None):
-    """同时 patch _clone 跟 start_analyze* 路径上的 k8s_runner.get_controller。"""
+    """同时 patch _clone 跟 start_execute* 路径上的 k8s_runner.get_controller。"""
     if ensure_ready_fn is None:
         ensure_ready_fn = AsyncMock(return_value="runner-pod-x")
 
@@ -66,10 +66,10 @@ def _patch_runner(monkeypatch, *, exec_fn: AsyncMock, ensure_ready_fn: AsyncMock
     fake_rc = FakeRC()
     # _clone helper 调 k8s_runner.get_controller()
     monkeypatch.setattr(_clone.k8s_runner, "get_controller", lambda: fake_rc)
-    # start_analyze.py 同样的 namespace
-    monkeypatch.setattr(start_analyze.k8s_runner, "get_controller", lambda: fake_rc)
+    # start_execute.py 同样的 namespace
+    monkeypatch.setattr(start_execute.k8s_runner, "get_controller", lambda: fake_rc)
     monkeypatch.setattr(
-        start_analyze_with_finalized_intent.k8s_runner, "get_controller",
+        start_execute_with_finalized_intent.k8s_runner, "get_controller",
         lambda: fake_rc,
     )
     return fake_rc
@@ -96,20 +96,20 @@ def _patch_bkd_client(monkeypatch, *, target_module, follow_up: AsyncMock | None
     return follow_up, update_issue, create_issue
 
 
-# ── start_analyze: server-side clone happy path ─────────────────────────────
+# ── start_execute: server-side clone happy path ─────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_server_side_clones_when_involved_repos_present(monkeypatch):
+async def test_start_execute_server_side_clones_when_involved_repos_present(monkeypatch):
     """ctx 含 involved_repos → exec_in_runner 跑 sisyphus-clone-repos.sh，agent 收到 prompt。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
     follow_up, update_issue, _ = _patch_bkd_client(
-        monkeypatch, target_module=start_analyze,
+        monkeypatch, target_module=start_execute,
     )
 
     ctx = {"involved_repos": ["phona/repo-a", "ZonEaseTech/ttpos-server-go"]}
-    rv = await start_analyze.start_analyze(
+    rv = await start_execute.start_execute(
         body=_make_body(), req_id="REQ-X", tags=[], ctx=ctx,
     )
 
@@ -133,13 +133,13 @@ async def test_start_analyze_server_side_clones_when_involved_repos_present(monk
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_skips_clone_when_no_involved_repos(monkeypatch):
+async def test_start_execute_skips_clone_when_no_involved_repos(monkeypatch):
     """直接路径：ctx 没 involved_repos → 不调 exec_in_runner，agent 还是被 dispatch。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_analyze)
+    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_execute)
 
-    rv = await start_analyze.start_analyze(
+    rv = await start_execute.start_execute(
         body=_make_body(), req_id="REQ-X", tags=[],
         ctx={"intent_title": "no involved_repos here"},
     )
@@ -150,14 +150,14 @@ async def test_start_analyze_skips_clone_when_no_involved_repos(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_clone_failure_emits_verify_escalate(monkeypatch):
+async def test_start_execute_clone_failure_emits_verify_escalate(monkeypatch):
     """clone helper exit 非 0 → return emit=VERIFY_ESCALATE，agent 不被 dispatch。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=5, stderr="auth error"))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_analyze)
+    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_execute)
 
     ctx = {"intake_finalized_intent": {"involved_repos": ["phona/typo-repo"]}}
-    rv = await start_analyze.start_analyze(
+    rv = await start_execute.start_execute(
         body=_make_body(), req_id="REQ-X", tags=[], ctx=ctx,
     )
 
@@ -168,16 +168,16 @@ async def test_start_analyze_clone_failure_emits_verify_escalate(monkeypatch):
     assert "5" in rv["reason"]  # exit code 出现在 reason
 
 
-# ── start_analyze_with_finalized_intent: intake 路径 ──────────────────────
+# ── start_execute_with_finalized_intent: intake 路径 ──────────────────────
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_with_finalized_intent_clones_involved_repos(monkeypatch):
+async def test_start_execute_with_finalized_intent_clones_involved_repos(monkeypatch):
     """intake 路径必有 finalized intent；server-side clone 拿 involved_repos。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
     follow_up, _, create_issue = _patch_bkd_client(
-        monkeypatch, target_module=start_analyze_with_finalized_intent,
+        monkeypatch, target_module=start_execute_with_finalized_intent,
     )
 
     ctx = {
@@ -187,7 +187,7 @@ async def test_start_analyze_with_finalized_intent_clones_involved_repos(monkeyp
             "edge_cases": "z", "do_not_touch": "w", "acceptance": "v",
         },
     }
-    rv = await start_analyze_with_finalized_intent.start_analyze_with_finalized_intent(
+    rv = await start_execute_with_finalized_intent.start_execute_with_finalized_intent(
         body=_make_body(), req_id="REQ-X", tags=[], ctx=ctx,
     )
 
@@ -196,23 +196,23 @@ async def test_start_analyze_with_finalized_intent_clones_involved_repos(monkeyp
     for r in ("phona/repo-a", "phona/repo-b", "phona/repo-c"):
         assert r in cmd
 
-    create_issue.assert_awaited_once()  # intake 路径要建新 analyze issue
+    create_issue.assert_awaited_once()  # intake 路径要建新 execute issue
     follow_up.assert_awaited_once()
     assert rv["cloned_repos"] == ["phona/repo-a", "phona/repo-b", "phona/repo-c"]
     assert "emit" not in rv
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_with_finalized_intent_clone_failure_escalates(monkeypatch):
-    """intake 路径 clone 失败 → VERIFY_ESCALATE，且不 create analyze issue。"""
+async def test_start_execute_with_finalized_intent_clone_failure_escalates(monkeypatch):
+    """intake 路径 clone 失败 → VERIFY_ESCALATE，且不 create execute issue。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=2, stderr="repo not found"))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
     follow_up, _, create_issue = _patch_bkd_client(
-        monkeypatch, target_module=start_analyze_with_finalized_intent,
+        monkeypatch, target_module=start_execute_with_finalized_intent,
     )
 
     ctx = {"intake_finalized_intent": {"involved_repos": ["phona/typo"]}}
-    rv = await start_analyze_with_finalized_intent.start_analyze_with_finalized_intent(
+    rv = await start_execute_with_finalized_intent.start_execute_with_finalized_intent(
         body=_make_body(), req_id="REQ-X", tags=[], ctx=ctx,
     )
 
@@ -225,10 +225,10 @@ async def test_start_analyze_with_finalized_intent_clone_failure_escalates(monke
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_with_finalized_intent_missing_finalized_escalates(monkeypatch):
+async def test_start_execute_with_finalized_intent_missing_finalized_escalates(monkeypatch):
     """intake_finalized_intent 缺失 → VERIFY_ESCALATE（保留旧契约）。"""
     # 不 patch runner / bkd —— 该 case 在它们之前就 return
-    rv = await start_analyze_with_finalized_intent.start_analyze_with_finalized_intent(
+    rv = await start_execute_with_finalized_intent.start_execute_with_finalized_intent(
         body=_make_body(), req_id="REQ-X", tags=[], ctx={},
     )
     assert rv["emit"] == Event.VERIFY_ESCALATE.value
@@ -290,7 +290,7 @@ async def test_clone_helper_filters_non_string_repos(monkeypatch):
     assert rc is None
 
 
-# ── REQ-clone-fallback-direct-analyze-1777119520: multi-layer fallback ────
+# ── REQ-clone-fallback-direct-execute-1777119520: multi-layer fallback ────
 
 @pytest.mark.asyncio
 async def test_clone_helper_uses_repo_tags_when_ctx_empty(monkeypatch):
@@ -304,8 +304,8 @@ async def test_clone_helper_uses_repo_tags_when_ctx_empty(monkeypatch):
 
     repos, rc = await _clone.clone_involved_repos_into_runner(
         "REQ-X",
-        ctx={"intent_title": "direct analyze entry"},
-        tags=["analyze", "REQ-X", "repo:phona/foo", "repo:ZonEaseTech/bar"],
+        ctx={"intent_title": "direct execute entry"},
+        tags=["execute", "REQ-X", "repo:phona/foo", "repo:ZonEaseTech/bar"],
     )
     assert repos == ["phona/foo", "ZonEaseTech/bar"]
     assert rc is None
@@ -326,8 +326,8 @@ async def test_clone_helper_uses_default_repos_when_ctx_and_tags_empty(monkeypat
 
     repos, rc = await _clone.clone_involved_repos_into_runner(
         "REQ-X",
-        ctx={"intent_title": "direct analyze, no repo tag"},
-        tags=["analyze", "REQ-X"],
+        ctx={"intent_title": "direct execute, no repo tag"},
+        tags=["execute", "REQ-X"],
         default_repos=["phona/sisyphus"],
     )
     assert repos == ["phona/sisyphus"]
@@ -346,7 +346,7 @@ async def test_clone_helper_returns_none_when_all_layers_empty(monkeypatch):
 
     repos, rc = await _clone.clone_involved_repos_into_runner(
         "REQ-X", ctx={"intent_title": "no repos anywhere"},
-        tags=["analyze"], default_repos=[],
+        tags=["execute"], default_repos=[],
     )
     assert repos is None
     assert rc is None
@@ -377,7 +377,7 @@ def test_resolve_repos_priority_order():
     # L1+L2 missing → L3 (tags) wins
     repos, src = _clone.resolve_repos(
         {"intent_title": "no involved"},
-        tags=["repo:L3/x", "analyze"],
+        tags=["repo:L3/x", "execute"],
         default_repos=["L4/x"],
     )
     assert repos == ["L3/x"]
@@ -385,7 +385,7 @@ def test_resolve_repos_priority_order():
 
     # L1+L2+L3 missing → L4 (settings.default) wins
     repos, src = _clone.resolve_repos(
-        {}, tags=["analyze"], default_repos=["L4/x", "L4/y"],
+        {}, tags=["execute"], default_repos=["L4/x", "L4/y"],
     )
     assert repos == ["L4/x", "L4/y"]
     assert src == "settings.default_involved_repos"
@@ -418,7 +418,7 @@ def test_resolve_repos_skips_empty_layers():
 def test_extract_repo_tags_validates_slug():
     """`repo:<org>/<name>` 形式合法的 tag 才算数；非法 slug + 非 repo: 前缀全过滤。"""
     tags = [
-        "analyze", "REQ-X", "round-2",                # 不是 repo: 前缀
+        "execute", "REQ-X", "round-2",                # 不是 repo: 前缀
         "repo:phona/sisyphus",                        # OK
         "repo:Zone-Ease_Tech/foo",                    # OK（org/repo 字符集）
         "repo:invalid org/name",                      # 非法 slug（含空格）
@@ -444,16 +444,16 @@ def test_extract_repo_tags_handles_none_and_non_string():
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_passes_repo_tags_and_default_to_clone(monkeypatch):
-    """直接 analyze 入口：ctx 没 involved，但 tags 带 `repo:`，sisyphus 替 clone。"""
+async def test_start_execute_passes_repo_tags_and_default_to_clone(monkeypatch):
+    """直接 execute 入口：ctx 没 involved，但 tags 带 `repo:`，sisyphus 替 clone。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_analyze)
+    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_execute)
 
-    rv = await start_analyze.start_analyze(
+    rv = await start_execute.start_execute(
         body=_make_body(), req_id="REQ-X",
-        tags=["intent:analyze", "repo:phona/sisyphus"],
-        ctx={"intent_title": "direct analyze entry"},
+        tags=["intent:execute", "repo:phona/sisyphus"],
+        ctx={"intent_title": "direct execute entry"},
     )
     exec_fn.assert_awaited()
     all_cmds = [call.args[1] for call in exec_fn.await_args_list]
@@ -466,17 +466,17 @@ async def test_start_analyze_passes_repo_tags_and_default_to_clone(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_uses_settings_default_when_no_ctx_no_tags(monkeypatch):
-    """直接 analyze 入口：ctx 空 + tags 没 repo:，settings.default_involved_repos 兜底。"""
+async def test_start_execute_uses_settings_default_when_no_ctx_no_tags(monkeypatch):
+    """直接 execute 入口：ctx 空 + tags 没 repo:，settings.default_involved_repos 兜底。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    _patch_bkd_client(monkeypatch, target_module=start_analyze)
-    monkeypatch.setattr(start_analyze.settings, "default_involved_repos",
+    _patch_bkd_client(monkeypatch, target_module=start_execute)
+    monkeypatch.setattr(start_execute.settings, "default_involved_repos",
                         ["phona/sisyphus"])
 
-    rv = await start_analyze.start_analyze(
+    rv = await start_execute.start_execute(
         body=_make_body(), req_id="REQ-X",
-        tags=["intent:analyze"],
+        tags=["intent:execute"],
         ctx={"intent_title": "single-repo dogfood"},
     )
     exec_fn.assert_awaited()
@@ -488,16 +488,16 @@ async def test_start_analyze_uses_settings_default_when_no_ctx_no_tags(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_skip_remains_when_all_layers_empty(monkeypatch):
+async def test_start_execute_skip_remains_when_all_layers_empty(monkeypatch):
     """ctx + tags + settings.default 全空 → 沿用旧 fallback，不调 helper，agent 自己 clone。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_analyze)
-    monkeypatch.setattr(start_analyze.settings, "default_involved_repos", [])
+    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_execute)
+    monkeypatch.setattr(start_execute.settings, "default_involved_repos", [])
 
-    rv = await start_analyze.start_analyze(
+    rv = await start_execute.start_execute(
         body=_make_body(), req_id="REQ-X",
-        tags=["intent:analyze"],
+        tags=["intent:execute"],
         ctx={"intent_title": "no repos anywhere"},
     )
     exec_fn.assert_not_awaited()
@@ -509,94 +509,94 @@ async def test_start_analyze_skip_remains_when_all_layers_empty(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_forwards_user_hint_tags(monkeypatch):
-    """tags 含 repo: + ux: → PATCH 的 tags kwarg 把它们追加到 ['analyze', req_id]。"""
+async def test_start_execute_forwards_user_hint_tags(monkeypatch):
+    """tags 含 repo: + ux: → PATCH 的 tags kwarg 把它们追加到 ['execute', req_id]。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
     _, update_issue, _ = _patch_bkd_client(
-        monkeypatch, target_module=start_analyze,
+        monkeypatch, target_module=start_execute,
     )
 
-    await start_analyze.start_analyze(
+    await start_execute.start_execute(
         body=_make_body(), req_id="REQ-X",
-        tags=["intent:analyze", "repo:phona/sisyphus", "ux:fast-track"],
+        tags=["intent:execute", "repo:phona/sisyphus", "ux:fast-track"],
         ctx={"intent_title": "with hint tags"},
     )
 
     # 第一次 update_issue = rename + tags（第二次是 status_id=working）
     _, kwargs = update_issue.call_args_list[0]
     tags = kwargs["tags"]
-    assert tags == ["analyze", "REQ-X", "repo:phona/sisyphus", "ux:fast-track"]
+    assert tags == ["execute", "REQ-X", "repo:phona/sisyphus", "ux:fast-track"]
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_strips_sisyphus_managed_tags(monkeypatch):
+async def test_start_execute_strips_sisyphus_managed_tags(monkeypatch):
     """stale intent:* / result:* / pr:* 不被转发到 PATCH tags。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
     _, update_issue, _ = _patch_bkd_client(
-        monkeypatch, target_module=start_analyze,
+        monkeypatch, target_module=start_execute,
     )
 
-    await start_analyze.start_analyze(
+    await start_execute.start_execute(
         body=_make_body(), req_id="REQ-X",
         tags=[
-            "intent:analyze", "REQ-X", "analyze", "result:pass",
+            "intent:execute", "REQ-X", "execute", "result:pass",
             "pr:phona/foo#1", "repo:phona/foo", "ux:fast-track",
         ],
         ctx={},
     )
     _, kwargs = update_issue.call_args_list[0]
     tags = kwargs["tags"]
-    assert tags == ["analyze", "REQ-X", "repo:phona/foo", "ux:fast-track"]
+    assert tags == ["execute", "REQ-X", "repo:phona/foo", "ux:fast-track"]
     # 不重复 / 不混入 managed
-    assert tags.count("analyze") == 1
+    assert tags.count("execute") == 1
     assert tags.count("REQ-X") == 1
-    assert "intent:analyze" not in tags
+    assert "intent:execute" not in tags
     assert "result:pass" not in tags
     assert "pr:phona/foo#1" not in tags
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_no_hint_tags_keeps_base_only(monkeypatch):
-    """tags 全是 sisyphus-managed → PATCH 的 tags 只剩 ['analyze', req_id]，向后兼容。"""
+async def test_start_execute_no_hint_tags_keeps_base_only(monkeypatch):
+    """tags 全是 sisyphus-managed → PATCH 的 tags 只剩 ['execute', req_id]，向后兼容。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
     _, update_issue, _ = _patch_bkd_client(
-        monkeypatch, target_module=start_analyze,
+        monkeypatch, target_module=start_execute,
     )
 
-    await start_analyze.start_analyze(
+    await start_execute.start_execute(
         body=_make_body(), req_id="REQ-X",
-        tags=["intent:analyze"],
+        tags=["intent:execute"],
         ctx={},
     )
     _, kwargs = update_issue.call_args_list[0]
-    assert kwargs["tags"] == ["analyze", "REQ-X"]
+    assert kwargs["tags"] == ["execute", "REQ-X"]
 
 
 # ── REQ-orch-rate-limit-1777202974: admission gate ────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_admission_denied_emits_escalate(monkeypatch):
+async def test_start_execute_admission_denied_emits_escalate(monkeypatch):
     """admission deny → emit VERIFY_ESCALATE，不调 ensure_runner / clone / BKD。"""
     monkeypatch.setattr(
-        start_analyze, "check_admission",
+        start_execute, "check_admission",
         AsyncMock(return_value=AdmissionDecision(
             admit=False, reason="inflight-cap-exceeded:10/10",
         )),
     )
     update_ctx = AsyncMock()
-    monkeypatch.setattr(start_analyze.req_state, "update_context", update_ctx)
+    monkeypatch.setattr(start_execute.req_state, "update_context", update_ctx)
 
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     fake_rc = _patch_runner(monkeypatch, exec_fn=exec_fn)
-    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_analyze)
+    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_execute)
 
-    rv = await start_analyze.start_analyze(
+    rv = await start_execute.start_execute(
         body=_make_body(), req_id="REQ-X",
-        tags=["intent:analyze"], ctx={},
+        tags=["intent:execute"], ctx={},
     )
 
     assert rv["emit"] == Event.VERIFY_ESCALATE.value
@@ -613,21 +613,21 @@ async def test_start_analyze_admission_denied_emits_escalate(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_admission_disk_pressure_escalates(monkeypatch):
+async def test_start_execute_admission_disk_pressure_escalates(monkeypatch):
     """disk-pressure 拒绝同样 escalate；reason 标 disk-pressure。"""
     monkeypatch.setattr(
-        start_analyze, "check_admission",
+        start_execute, "check_admission",
         AsyncMock(return_value=AdmissionDecision(
             admit=False, reason="disk-pressure:0.85/0.75",
         )),
     )
     update_ctx = AsyncMock()
-    monkeypatch.setattr(start_analyze.req_state, "update_context", update_ctx)
+    monkeypatch.setattr(start_execute.req_state, "update_context", update_ctx)
     exec_fn = AsyncMock()
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    _patch_bkd_client(monkeypatch, target_module=start_analyze)
+    _patch_bkd_client(monkeypatch, target_module=start_execute)
 
-    rv = await start_analyze.start_analyze(
+    rv = await start_execute.start_execute(
         body=_make_body(), req_id="REQ-X", tags=[], ctx={},
     )
 

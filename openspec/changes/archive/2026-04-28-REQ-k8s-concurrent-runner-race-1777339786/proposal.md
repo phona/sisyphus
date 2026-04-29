@@ -2,7 +2,7 @@
 
 ## 问题
 
-两条 dogfood REQ 间隔 < 1s 同时进入 `start_analyze`，其中一条在 `_wait_pod_ready`
+两条 dogfood REQ 间隔 < 1s 同时进入 `start_execute`，其中一条在 `_wait_pod_ready`
 阶段立即 escalate。根因：`RunnerController` 共享单一 `CoreV1Api` 实例，两条 REQ 各自
 通过 `asyncio.to_thread` 并发调用 `read_namespaced_pod_status`，kubernetes-python
 ApiClient 内部 state 被并发线程串，随机走入 `ws_client.websocket_call`，把合规 HTTP 200

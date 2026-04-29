@@ -1,7 +1,7 @@
 # watchdog-fast-detection Specification
 
 ## Purpose
-TBD - created by archiving change REQ-bkd-analyze-hang-debug-1777247423. Update Purpose after archive.
+TBD - created by archiving change REQ-bkd-execute-hang-debug-1777247423. Update Purpose after archive.
 ## Requirements
 ### Requirement: Watchdog SQL prefilter MUST use the smaller of the fast and slow stuck thresholds
 

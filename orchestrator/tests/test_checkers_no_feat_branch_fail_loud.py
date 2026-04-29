@@ -7,7 +7,7 @@ Black-box behavioral contracts derived from:
 Background: REQ-checker-empty-source-1777113775 added Guards A/B/C, but Guard
 C only fires when *every* cloned repo is silent-skipped. If 2+ repos are
 cloned and only some lack feat/<REQ>, the missing ones were silently skipped
-and the checker passed on the remainder — masking analyze-agent's failure to
+and the checker passed on the remainder — masking execute-agent's failure to
 push to a declared-involved repo.
 
 This REQ tightens dev_cross_check and staging_test (NOT spec_lint, because
@@ -158,7 +158,7 @@ def test_dev_cross_check_guard_c_fires_when_feat_branch_present_but_no_ci_lint_t
         f"dev_cross_check Guard C MUST emit '0 source repos eligible'.\nstderr: {r.stderr}"
     )
     # And the new fail-loud message MUST NOT appear here — the repo *did* have
-    # a feat branch, so this is a Makefile-target issue, not analyze-agent's.
+    # a feat branch, so this is a Makefile-target issue, not execute-agent's.
     assert "has no feat/" not in r.stderr, (
         f"dev_cross_check: false-positive fail-loud emitted while feat branch was present.\n"
         f"stderr: {r.stderr}"

@@ -12,8 +12,8 @@ Black-box scenarios derived from
   XLINK-S13  gh_incident body contains PR markdown links
   XLINK-S14  absent pr_urls kwargs do not add PR section
   XLINK-S15  escalate threads ctx fields through to open_incident
-  XLINK-S16  analyze prompt renders cross-link block when url provided
-  XLINK-S17  analyze prompt omits link line when url empty
+  XLINK-S16  execute prompt renders cross-link block when url provided
+  XLINK-S17  execute prompt omits link line when url empty
   XLINK-S20  q05 SQL selects the new bkd_intent_url + pr_urls_md columns
   XLINK-S21  q05 SQL tolerates empty context
 
@@ -68,7 +68,7 @@ async def test_xlink_s7_webhook_insert_init_context_includes_bkd_intent_url(monk
                         AsyncMock(return_value={"action": "noop"}))
 
     bkd_inner = MagicMock()
-    bkd_inner.get_issue = AsyncMock(return_value=MagicMock(tags=["intent:analyze", "REQ-xy"]))
+    bkd_inner.get_issue = AsyncMock(return_value=MagicMock(tags=["intent:execute", "REQ-xy"]))
     bkd_ctx = AsyncMock()
     bkd_ctx.__aenter__ = AsyncMock(return_value=bkd_inner)
     bkd_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -85,7 +85,7 @@ async def test_xlink_s7_webhook_insert_init_context_includes_bkd_intent_url(monk
             "issueId": "I",
             "projectId": "P",
             "title": "feat: example",
-            "tags": ["intent:analyze", "REQ-xy"],
+            "tags": ["intent:execute", "REQ-xy"],
         },
         headers={"Authorization": "Bearer tok"},
     )
@@ -129,7 +129,7 @@ async def test_xlink_s8_unparseable_base_omits_bkd_intent_url(monkeypatch):
     monkeypatch.setattr(webhook.engine, "step",
                         AsyncMock(return_value={"action": "noop"}))
     bkd_inner = MagicMock()
-    bkd_inner.get_issue = AsyncMock(return_value=MagicMock(tags=["intent:analyze", "REQ-xy"]))
+    bkd_inner.get_issue = AsyncMock(return_value=MagicMock(tags=["intent:execute", "REQ-xy"]))
     bkd_ctx = AsyncMock()
     bkd_ctx.__aenter__ = AsyncMock(return_value=bkd_inner)
     bkd_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -145,7 +145,7 @@ async def test_xlink_s8_unparseable_base_omits_bkd_intent_url(monkeypatch):
             "issueId": "I",
             "projectId": "P",
             "title": "feat: example",
-            "tags": ["intent:analyze", "REQ-xy"],
+            "tags": ["intent:execute", "REQ-xy"],
         },
         headers={"Authorization": "Bearer tok"},
     )
@@ -453,11 +453,11 @@ async def test_xlink_s15_escalate_threads_ctx_fields_to_open_incident(monkeypatc
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# XLINK-S16 / S17 — analyze prompt PR-body footer block
+# XLINK-S16 / S17 — execute prompt PR-body footer block
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _render_analyze(**overrides) -> str:
+def _render_execute(**overrides) -> str:
     from orchestrator.prompts import render
     base = {
         "req_id": "REQ-x",
@@ -469,18 +469,18 @@ def _render_analyze(**overrides) -> str:
         "bkd_intent_issue_url": "https://bkd.example/projects/P/issues/I",
     }
     base.update(overrides)
-    return render("analyze.md.j2", **base)
+    return render("execute.md.j2", **base)
 
 
-def test_xlink_s16_analyze_prompt_renders_cross_link_block_with_url():
-    out = _render_analyze()
+def test_xlink_s16_execute_prompt_renders_cross_link_block_with_url():
+    out = _render_execute()
     assert "<!-- sisyphus:cross-link -->" in out
     assert "[BKD intent issue](https://bkd.example/projects/P/issues/I)" in out
     assert "REQ-x" in out
 
 
-def test_xlink_s17_analyze_prompt_omits_link_line_when_url_empty():
-    out = _render_analyze(bkd_intent_issue_url="")
+def test_xlink_s17_execute_prompt_omits_link_line_when_url_empty():
+    out = _render_execute(bkd_intent_issue_url="")
     assert "<!-- sisyphus:cross-link -->" in out
     assert "REQ-x" in out
     assert "[BKD intent issue](" not in out

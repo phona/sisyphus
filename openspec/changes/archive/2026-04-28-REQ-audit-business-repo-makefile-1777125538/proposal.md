@@ -88,7 +88,7 @@ REQ-default-involved-repos-1777124541 起 `default_involved_repos=[phona/sisyphu
    单字符之差能让 flutter 那条永远全量 lint
 2. `docs/integration-contracts.md` §1 "两类 repo 角色" 表格用
    `phona/ttpos-server-go` / `phona/ttpos-arch-lab` 做例子，但实际两个 repo
-   都在 `ZonEaseTech/` 下。analyze-agent 看 doc 自己拼仓路径会 404
+   都在 `ZonEaseTech/` 下。execute-agent 看 doc 自己拼仓路径会 404
 3. `docs/integration-contracts.md` §6 默认 dev-agent 的 `feat/REQ-id` 分支以
    `main` 为基（`gh pr list --head feat/REQ-29 --repo ...`）；两个业务 repo 实际
    default branch `release`。pr-ci-watch 的查询不依赖 base，但 BASE_REV
@@ -113,7 +113,7 @@ REQ-default-involved-repos-1777124541 起 `default_involved_repos=[phona/sisyphu
 
 `specs/business-repo-onboarding-audit/spec.md` 把这次审计的 5 条核对项变成
 可复用 requirements。下次再有人提"接 phona/zplan 进 sisyphus"这样的 REQ，
-analyze-agent 看这个 spec 就能直接拿 checklist 跑一遍 + 同样的 audit-report
+execute-agent 看这个 spec 就能直接拿 checklist 跑一遍 + 同样的 audit-report
 形态产出。
 
 ## 后续 REQ 候选（不在本 REQ 范围）

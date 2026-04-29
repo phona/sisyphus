@@ -14,9 +14,9 @@ Scenarios covered:
   UTI-S8   filter is idempotent
   UTI-S9   start_intake forwards repo: + ux: hints into PATCH
   UTI-S10  start_intake without hints stays backward compatible
-  UTI-S11  start_analyze forwards repo: tag through PATCH
-  UTI-S12  start_analyze strips stale sisyphus-managed tags
-  UTI-S13  start_analyze_with_finalized_intent inherits hints
+  UTI-S11  start_execute forwards repo: tag through PATCH
+  UTI-S12  start_execute strips stale sisyphus-managed tags
+  UTI-S13  start_execute_with_finalized_intent inherits hints
   UTI-S14  start_challenger inherits hints with correct tag order
   UTI-S15  start_challenger filters re-emitted role/managed tags
 
@@ -39,7 +39,7 @@ def test_UTI_S1_filter_strips_exact_managed_tags() -> None:
     from orchestrator.intent_tags import filter_propagatable_intent_tags
 
     managed_exact = [
-        "sisyphus", "intake", "analyze", "challenger", "verifier",
+        "sisyphus", "intake", "execute", "challenger", "verifier",
         "fixer", "accept", "staging-test", "pr-ci",
     ]
     result = filter_propagatable_intent_tags(managed_exact)
@@ -56,14 +56,14 @@ def test_UTI_S2_filter_strips_managed_prefix_tags() -> None:
     from orchestrator.intent_tags import filter_propagatable_intent_tags
 
     prefix_tags = [
-        "intent:analyze",
+        "intent:execute",
         "result:pass",
         "pr-ci:pass",
         "verify:dev_cross_check",
         "trigger:fail",
         "decision:eyJ...",
         "fixer:dev",
-        "parent:analyze",
+        "parent:execute",
         "parent-id:abc123",
         "parent-stage:spec_lint",
         "target:phona/foo",
@@ -137,9 +137,9 @@ def test_UTI_S6_filter_mixed_keeps_only_hints() -> None:
     from orchestrator.intent_tags import filter_propagatable_intent_tags
 
     mixed = [
-        "intent:analyze",
+        "intent:execute",
         "REQ-foo-1234",
-        "analyze",
+        "execute",
         "repo:phona/foo",
         "ux:fast-track",
         "result:pass",
@@ -174,7 +174,7 @@ def test_UTI_S8_filter_is_idempotent() -> None:
     from orchestrator.intent_tags import filter_propagatable_intent_tags
 
     test_cases = [
-        ["intent:analyze", "REQ-foo", "repo:phona/foo", "ux:fast-track", "result:pass"],
+        ["intent:execute", "REQ-foo", "repo:phona/foo", "ux:fast-track", "result:pass"],
         ["sisyphus", "challenger", "repo:phona/bar", "priority:high"],
         ["repo:a/b", "repo:a/b", "ux:ok"],
         [],
@@ -219,49 +219,49 @@ def test_UTI_S10_start_intake_tags_array_structure() -> None:
     )
 
 
-# ── UTI-S11 / UTI-S12 — start_analyze callsite ───────────────────────────────
+# ── UTI-S11 / UTI-S12 — start_execute callsite ───────────────────────────────
 
 
-def test_UTI_S11_start_analyze_imports_and_uses_filter() -> None:
-    """start_analyze.py must import filter_propagatable_intent_tags and call it with tags."""
-    src = (_SRC / "actions" / "start_analyze.py").read_text(encoding="utf-8")
+def test_UTI_S11_start_execute_imports_and_uses_filter() -> None:
+    """start_execute.py must import filter_propagatable_intent_tags and call it with tags."""
+    src = (_SRC / "actions" / "start_execute.py").read_text(encoding="utf-8")
     assert "filter_propagatable_intent_tags" in src, (
-        "start_analyze.py must use filter_propagatable_intent_tags "
+        "start_execute.py must use filter_propagatable_intent_tags "
         "(UTI-S11: repo: tag must survive through the PATCH)."
     )
     assert "filter_propagatable_intent_tags(tags)" in src, (
-        "start_analyze.py must call filter_propagatable_intent_tags(tags)."
+        "start_execute.py must call filter_propagatable_intent_tags(tags)."
     )
 
 
-def test_UTI_S12_start_analyze_strips_managed_tags() -> None:
-    """Verify start_analyze.py does NOT manually forward sisyphus-managed tags.
+def test_UTI_S12_start_execute_strips_managed_tags() -> None:
+    """Verify start_execute.py does NOT manually forward sisyphus-managed tags.
 
     The filter handles stripping; the action must rely on the filter rather than
     hand-picking which tags to forward (which would re-emit managed tags).
     """
-    src = (_SRC / "actions" / "start_analyze.py").read_text(encoding="utf-8")
+    src = (_SRC / "actions" / "start_execute.py").read_text(encoding="utf-8")
     # The action must call the filter — not manually select tags to forward
     assert "filter_propagatable_intent_tags" in src, (
-        "start_analyze.py must use filter_propagatable_intent_tags to strip "
+        "start_execute.py must use filter_propagatable_intent_tags to strip "
         "managed tags automatically (UTI-S12)."
     )
 
 
-# ── UTI-S13 — start_analyze_with_finalized_intent callsite ───────────────────
+# ── UTI-S13 — start_execute_with_finalized_intent callsite ───────────────────
 
 
-def test_UTI_S13_start_analyze_finalized_inherits_hints() -> None:
-    """start_analyze_with_finalized_intent.py must forward hint tags when creating the analyze issue."""
-    src = (_SRC / "actions" / "start_analyze_with_finalized_intent.py").read_text(
+def test_UTI_S13_start_execute_finalized_inherits_hints() -> None:
+    """start_execute_with_finalized_intent.py must forward hint tags when creating the execute issue."""
+    src = (_SRC / "actions" / "start_execute_with_finalized_intent.py").read_text(
         encoding="utf-8"
     )
     assert "filter_propagatable_intent_tags" in src, (
-        "start_analyze_with_finalized_intent.py must use filter_propagatable_intent_tags "
-        "(UTI-S13: intake-path analyze must inherit hint tags)."
+        "start_execute_with_finalized_intent.py must use filter_propagatable_intent_tags "
+        "(UTI-S13: intake-path execute must inherit hint tags)."
     )
     assert "filter_propagatable_intent_tags(tags)" in src, (
-        "start_analyze_with_finalized_intent.py must call filter_propagatable_intent_tags(tags)."
+        "start_execute_with_finalized_intent.py must call filter_propagatable_intent_tags(tags)."
     )
 
 
@@ -273,7 +273,7 @@ def test_UTI_S14_start_challenger_imports_and_uses_filter() -> None:
     src = (_SRC / "actions" / "start_challenger.py").read_text(encoding="utf-8")
     assert "filter_propagatable_intent_tags" in src, (
         "start_challenger.py must use filter_propagatable_intent_tags "
-        "(UTI-S14: challenger must inherit user hint tags from analyze issue)."
+        "(UTI-S14: challenger must inherit user hint tags from execute issue)."
     )
     assert "filter_propagatable_intent_tags(tags)" in src, (
         "start_challenger.py must call filter_propagatable_intent_tags(tags)."
@@ -285,7 +285,7 @@ def test_UTI_S15_start_challenger_does_not_duplicate_managed_tags() -> None:
 
     The correct pattern is: [challenger, req_id, parent-id:..., *pr_links, *filter(tags)].
     If the action hand-picks tags from the input without filtering, managed tags like
-    'analyze', 'result:pass', 'challenger' could appear twice in the output.
+    'execute', 'result:pass', 'challenger' could appear twice in the output.
     """
     src = (_SRC / "actions" / "start_challenger.py").read_text(encoding="utf-8")
     assert "filter_propagatable_intent_tags" in src, (
@@ -334,7 +334,7 @@ def test_UTI_is_sisyphus_managed_tag_callable() -> None:
     assert callable(is_sisyphus_managed_tag)
     # Spot-check expected results
     assert is_sisyphus_managed_tag("sisyphus") is True
-    assert is_sisyphus_managed_tag("intent:analyze") is True
+    assert is_sisyphus_managed_tag("intent:execute") is True
     assert is_sisyphus_managed_tag("REQ-foo-1234") is True
     assert is_sisyphus_managed_tag("repo:phona/foo") is False
     assert is_sisyphus_managed_tag("ux:fast-track") is False

@@ -33,10 +33,10 @@ targets:
         required: false
         description: >
           Git merge-base SHA. Flutter repos accept this variable but perform
-          full scan regardless (flutter analyze has no --new-from-rev).
+          full scan regardless (flutter execute has no --new-from-rev).
           Empty string = full scan (same behavior).
     description: >
-      Runs flutter analyze --no-pub and dart format --set-exit-if-changed.
+      Runs flutter execute --no-pub and dart format --set-exit-if-changed.
       Exit 0 = no lint errors. Exit non-zero = lint failure.
 
   - name: ci-unit-test
@@ -71,7 +71,7 @@ accept_env_contract:
 
 scenarios:
   - id: FMC-S1
-    description: ci-lint runs flutter analyze regardless of BASE_REV value
+    description: ci-lint runs flutter execute regardless of BASE_REV value
     spec_ref: specs/flutter-makefile-contract/spec.md
   - id: FMC-S2
     description: ci-unit-test succeeds without device or emulator

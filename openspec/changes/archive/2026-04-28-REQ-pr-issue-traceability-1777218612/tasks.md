@@ -25,9 +25,9 @@
 - [x] `gh_incident.py`: `open_incident` accepts and forwards new kwargs
 - [x] `actions/escalate.py`: pass `bkd_intent_url` + `pr_urls` from ctx
       to every `open_incident` call
-- [x] `actions/start_analyze.py`: pass `bkd_intent_issue_url` template var
-      to `analyze.md.j2` render
-- [x] `prompts/analyze.md.j2`: append PR-body footer section requiring a
+- [x] `actions/start_execute.py`: pass `bkd_intent_issue_url` template var
+      to `execute.md.j2` render
+- [x] `prompts/execute.md.j2`: append PR-body footer section requiring a
       `<!-- sisyphus:cross-link ... -->` block in every PR
 - [x] `actions/done_archive.py`: pull `pr_urls` from ctx, pass to render
 - [x] `prompts/done_archive.md.j2`: render `pr_urls` markdown bullets when
@@ -41,7 +41,7 @@
 - [x] `tests/test_links.py`: scenarios XLINK-S1..S6 (helpers)
 - [x] `tests/test_contract_pr_issue_traceability.py`: webhook persists
       bkd_intent_url; create_pr_ci_watch persists pr_urls;
-      gh_incident body contains clickable links; analyze prompt
+      gh_incident body contains clickable links; execute prompt
       contains PR footer; q05 SQL selects new columns
 
 ## Stage: PR

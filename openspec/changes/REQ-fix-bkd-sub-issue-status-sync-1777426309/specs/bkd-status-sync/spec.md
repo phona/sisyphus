@@ -30,13 +30,13 @@ The watchdog `run_loop` SHALL invoke a compensation task every 5 ticks (approxim
 1. `statusId` is `"review"`
 2. `sessionStatus` is `"completed"`
 3. Contains a tag starting with `"REQ-"` (belongs to a sisyphus workflow)
-4. Contains a sub-agent role tag: `"analyze"`, `"challenger"`, `"fixer"`, `"accept"`, or `"done-archive"`
+4. Contains a sub-agent role tag: `"execute"`, `"challenger"`, `"fixer"`, `"accept"`, or `"done-archive"`
 
 The task MUST exclude issues tagged `"verifier"` because a verifier issue in `"review"` may be an intentional escalate state that requires human follow-up, and the BKD side cannot distinguish between pass/fix/escalate verdicts. The task MUST tolerate failures on individual issues and continue processing the rest.
 
-#### Scenario: BSS-S3 completed analyze issue stuck in review is patched to done
+#### Scenario: BSS-S3 completed execute issue stuck in review is patched to done
 
-- **GIVEN** a BKD issue with `statusId="review"`, `sessionStatus="completed"`, tags `["analyze", "REQ-1"]`
+- **GIVEN** a BKD issue with `statusId="review"`, `sessionStatus="completed"`, tags `["execute", "REQ-1"]`
 - **WHEN** the watchdog compensation task runs
 - **THEN** the issue MUST be PATCHed to `statusId="done"`
 - **AND** the patched count MUST be 1
@@ -50,21 +50,21 @@ The task MUST exclude issues tagged `"verifier"` because a verifier issue in `"r
 
 #### Scenario: BSS-S5 running session is skipped
 
-- **GIVEN** a BKD issue with `statusId="review"`, `sessionStatus="running"`, tags `["analyze", "REQ-1"]`
+- **GIVEN** a BKD issue with `statusId="review"`, `sessionStatus="running"`, tags `["execute", "REQ-1"]`
 - **WHEN** the watchdog compensation task runs
 - **THEN** the issue MUST NOT be PATCHed
 - **AND** the patched count MUST be 0
 
 #### Scenario: BSS-S6 non-review status is skipped
 
-- **GIVEN** a BKD issue with `statusId="done"`, `sessionStatus="completed"`, tags `["analyze", "REQ-1"]`
+- **GIVEN** a BKD issue with `statusId="done"`, `sessionStatus="completed"`, tags `["execute", "REQ-1"]`
 - **WHEN** the watchdog compensation task runs
 - **THEN** the issue MUST NOT be PATCHed
 - **AND** the patched count MUST be 0
 
 #### Scenario: BSS-S7 issue without REQ tag is skipped
 
-- **GIVEN** a BKD issue with `statusId="review"`, `sessionStatus="completed"`, tags `["analyze"]` (no REQ tag)
+- **GIVEN** a BKD issue with `statusId="review"`, `sessionStatus="completed"`, tags `["execute"]` (no REQ tag)
 - **WHEN** the watchdog compensation task runs
 - **THEN** the issue MUST NOT be PATCHed
 - **AND** the patched count MUST be 0

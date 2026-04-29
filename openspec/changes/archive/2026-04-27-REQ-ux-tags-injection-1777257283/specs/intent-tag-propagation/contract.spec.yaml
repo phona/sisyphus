@@ -43,7 +43,7 @@ constants:
     members:
       - sisyphus
       - intake
-      - analyze
+      - execute
       - challenger
       - verifier
       - fixer
@@ -81,16 +81,16 @@ callsites:
       *filter_propagatable_intent_tags(tags)]. The filter input is the
       `tags` kwarg of the action (i.e. body.tags from webhook).
 
-  start_analyze:
-    module: orchestrator.actions.start_analyze
+  start_execute:
+    module: orchestrator.actions.start_execute
     integration: |
-      PATCH intent issue tags = ["analyze", req_id,
+      PATCH intent issue tags = ["execute", req_id,
       *filter_propagatable_intent_tags(tags)].
 
-  start_analyze_with_finalized_intent:
-    module: orchestrator.actions.start_analyze_with_finalized_intent
+  start_execute_with_finalized_intent:
+    module: orchestrator.actions.start_execute_with_finalized_intent
     integration: |
-      create_issue tags = ["analyze", req_id,
+      create_issue tags = ["execute", req_id,
       *filter_propagatable_intent_tags(tags)]. BKDRestClient.create_issue
       auto-prepends `sisyphus` via _ensure_sisyphus_tag.
 

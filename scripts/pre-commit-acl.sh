@@ -11,7 +11,7 @@
 # DEV_TASK_SCOPE 留空则不做 scope 限制（单 dev 模式 / 兼容老流程）。
 #
 # 当前支持的角色及其禁写范围：
-#   analyze-agent       : —                              （全权）
+#   execute-agent       : —                              （全权）
 #   dev-spec-agent      : openspec/specs/**              contract.spec.yaml
 #                         tests/**                       internal/**, cmd/**
 #   contract-test-agent : openspec/specs/**              contract.spec.yaml
@@ -90,23 +90,23 @@ forbid_others() {
   fi
 }
 
-# ---- 权威 specs：仅 analyze / apply 流程可写 ----
-forbid_others "analyze-agent" \
+# ---- 权威 specs：仅 execute / apply 流程可写 ----
+forbid_others "execute-agent" \
   '^openspec/specs/' \
   '长期权威 spec'
 
-# ---- change 目录下的 spec-delta：仅 analyze 可写 ----
-forbid_others "analyze-agent" \
+# ---- change 目录下的 spec-delta：仅 execute 可写 ----
+forbid_others "execute-agent" \
   '^openspec/changes/[^/]+/specs/' \
   'spec-delta'
 
-# ---- contract.spec.yaml：仅 analyze 可写 ----
-forbid_others "analyze-agent" \
+# ---- contract.spec.yaml：仅 execute 可写 ----
+forbid_others "execute-agent" \
   '^openspec/changes/[^/]+/contract\.spec\.yaml$' \
   'API 契约'
 
-# ---- proposal.md / design.md：仅 analyze 可写 ----
-forbid_others "analyze-agent" \
+# ---- proposal.md / design.md：仅 execute 可写 ----
+forbid_others "execute-agent" \
   '^openspec/changes/[^/]+/(proposal|design)\.md$' \
   '需求 / 设计文档'
 
@@ -146,7 +146,7 @@ forbid_others "bugfix-agent test-bugfix-agent" \
   'Bug Fix diagnosis 报告'
 
 # ---- reports/ 兜底：禁止其他 agent 在 reports/ 下随意写 ----
-forbid_others "qa-agent bugfix-agent test-bugfix-agent analyze-agent" \
+forbid_others "qa-agent bugfix-agent test-bugfix-agent execute-agent" \
   '^openspec/changes/[^/]+/reports/' \
   'reports/ 目录受控'
 

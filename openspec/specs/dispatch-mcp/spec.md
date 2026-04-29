@@ -25,12 +25,12 @@ is decoupled from the webhook handler.
 #### Scenario: DISPATCH-MCP-S1 get_req_state returns shape for an existing REQ
 
 - **GIVEN** the `req_state` row for `REQ-x` has
-  `state=ANALYZING`, `project_id=p1`, `context={"a":1,"b":2}`,
-  `history=[{"to":"analyzing","ts":"2026-04-26T10:00:00Z"}]`
+  `state=EXECUTING`, `project_id=p1`, `context={"a":1,"b":2}`,
+  `history=[{"to":"executing","ts":"2026-04-26T10:00:00Z"}]`
 - **WHEN** `fetch_req_state(pool, "REQ-x")` is awaited
 - **THEN** the returned dict contains keys
   `req_id`, `project_id`, `state`, `created_at`, `updated_at`,
-  `last_event`, `context_keys` and `state == "analyzing"` and
+  `last_event`, `context_keys` and `state == "executing"` and
   `sorted(context_keys) == ["a", "b"]`
 
 #### Scenario: DISPATCH-MCP-S2 get_req_state returns None for a missing REQ
@@ -51,8 +51,8 @@ is decoupled from the webhook handler.
 
 #### Scenario: DISPATCH-MCP-S4 list_reqs with explicit state filters by ReqState value
 
-- **GIVEN** the caller passes `state="analyzing"`
-- **WHEN** `fetch_reqs(pool, state="analyzing", limit=50)` is awaited
+- **GIVEN** the caller passes `state="executing"`
+- **WHEN** `fetch_reqs(pool, state="executing", limit=50)` is awaited
 - **THEN** the SQL `WHERE` clause MUST filter on `state = $1` and the
   bound `$1` value MUST be the literal string `analyzing`
 

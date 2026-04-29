@@ -2,7 +2,7 @@
 
 ## Investigation summary
 
-Filed against the symptom "BKD analyze 60min hang" (REQ title). Root
+Filed against the symptom "BKD execute 60min hang" (REQ title). Root
 cause is **not** an analyze-stage agent bug; it is a structural property
 of the watchdog SQL prefilter:
 

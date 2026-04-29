@@ -9,7 +9,7 @@ discover 时机：lazy。第一次 callsite 调 `ensure_pr_links_in_ctx` 时：
 3. 失败（无 controller / GH 5xx / 0 PR）一律 best-effort 返 [],
    **绝不**抛异常出来阻断 issue 创建
 4. 成功 → 持久化 ctx.pr_links + 顺手 backfill ctx 里已知的 sisyphus issue id
-   的 tag（典型场景：analyze issue 在创建时 PR 还没开，第一次 verifier
+   的 tag（典型场景：execute issue 在创建时 PR 还没开，第一次 verifier
    issue 创建时回填）
 
 之所以 cache 在 ctx：
@@ -40,7 +40,7 @@ _REMOTE_RE = re.compile(r"github\.com[:/]([^/]+/[^/.]+?)(?:\.git)?$")
 
 # ctx 里 sisyphus 已创/记的 issue id key 集合 —— first-time discovery 时回填这些
 _KNOWN_ISSUE_ID_KEYS = (
-    "analyze_issue_id",
+    "execute_issue_id",
     "staging_test_issue_id",
     "pr_ci_watch_issue_id",
     "accept_issue_id",

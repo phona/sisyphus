@@ -12,7 +12,7 @@ Scenarios covered:
   VLT-S3   (STAGING_TEST_RUNNING, STAGING_TEST_FAIL) → REVIEW_RUNNING + invoke_verifier_for_staging_test_fail
   VLT-S4   (PR_CI_RUNNING, PR_CI_FAIL) → REVIEW_RUNNING + invoke_verifier_for_pr_ci_fail
   VLT-S5   (ACCEPT_TEARING_DOWN, TEARDOWN_DONE_FAIL) → REVIEW_RUNNING + invoke_verifier_for_accept_fail
-  VLT-S6   (ANALYZE_ARTIFACT_CHECKING, ANALYZE_ARTIFACT_CHECK_FAIL) → REVIEW_RUNNING + invoke_verifier_for_analyze_artifact_check_fail
+  VLT-S6   (EXECUTE_ARTIFACT_CHECKING, EXECUTE_ARTIFACT_CHECK_FAIL) → REVIEW_RUNNING + invoke_verifier_for_execute_artifact_check_fail
   VLT-S7   (CHALLENGER_RUNNING, CHALLENGER_FAIL) → REVIEW_RUNNING + invoke_verifier_for_challenger_fail
   VLT-S8   (REVIEW_RUNNING, VERIFY_FIX_NEEDED) → FIXER_RUNNING, stage_runs: close verifier/fix + insert fixer
   VLT-S9   (REVIEW_RUNNING, VERIFY_ESCALATE) → ESCALATED + cleanup_runner fire-and-forget
@@ -136,9 +136,9 @@ _ENTRY_CASES = [
         id="VLT-S5-accept_teardown_fail",
     ),
     pytest.param(
-        "ANALYZE_ARTIFACT_CHECKING", "ANALYZE_ARTIFACT_CHECK_FAIL",
-        "invoke_verifier_for_analyze_artifact_check_fail",
-        id="VLT-S6-analyze_artifact_check_fail",
+        "EXECUTE_ARTIFACT_CHECKING", "EXECUTE_ARTIFACT_CHECK_FAIL",
+        "invoke_verifier_for_execute_artifact_check_fail",
+        id="VLT-S6-execute_artifact_check_fail",
     ),
     pytest.param(
         "CHALLENGER_RUNNING", "CHALLENGER_FAIL",
@@ -568,8 +568,8 @@ async def test_vlt_s14_escalated_verify_escalate_is_no_op_no_cleanup(monkeypatch
 
 _SESSION_FAILED_STATE_NAMES = [
     "INTAKING",
-    "ANALYZING",
-    "ANALYZE_ARTIFACT_CHECKING",
+    "EXECUTING",
+    "EXECUTE_ARTIFACT_CHECKING",
     "SPEC_LINT_RUNNING",
     "CHALLENGER_RUNNING",
     "DEV_CROSS_CHECK_RUNNING",

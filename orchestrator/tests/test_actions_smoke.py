@@ -64,16 +64,16 @@ def make_body(issue_id="src-1", project_id="p", event="session.completed", title
     })()
 
 
-# ─── start_analyze ────────────────────────────────────────────────────────
+# ─── start_execute ────────────────────────────────────────────────────────
 @pytest.mark.asyncio
-async def test_start_analyze(monkeypatch):
-    from orchestrator.actions import start_analyze as mod
+async def test_start_execute(monkeypatch):
+    from orchestrator.actions import start_execute as mod
     fake = make_fake_bkd()
-    patch_bkd(monkeypatch, "start_analyze", fake)
-    patch_db(monkeypatch, "start_analyze")  # admission gate reads pool
+    patch_bkd(monkeypatch, "start_execute", fake)
+    patch_db(monkeypatch, "start_execute")  # admission gate reads pool
     body = make_body(issue_id="intent-1", title="加个登录")
-    out = await mod.start_analyze(body=body, req_id="REQ-9", tags=["intent:analyze"], ctx={})
-    # cloned_repos=None: 直接 analyze 路径无 involved_repos，跳过 server-side clone
+    out = await mod.start_execute(body=body, req_id="REQ-9", tags=["intent:execute"], ctx={})
+    # cloned_repos=None: 直接 execute 路径无 involved_repos，跳过 server-side clone
     # （REQ-clone-and-pr-ci-fallback-1777115925）
     assert out == {"issue_id": "intent-1", "req_id": "REQ-9", "cloned_repos": None}
     # 改 title + tags + 发 prompt + 推 working
@@ -82,35 +82,35 @@ async def test_start_analyze(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_start_analyze_title_format(monkeypatch):
-    """验证 start_analyze 标题使用 short_title 格式（ — 分隔 + 截断）。"""
-    from orchestrator.actions import start_analyze as mod
+async def test_start_execute_title_format(monkeypatch):
+    """验证 start_execute 标题使用 short_title 格式（ — 分隔 + 截断）。"""
+    from orchestrator.actions import start_execute as mod
     fake = make_fake_bkd()
-    patch_bkd(monkeypatch, "start_analyze", fake)
-    patch_db(monkeypatch, "start_analyze")  # admission gate reads pool
+    patch_bkd(monkeypatch, "start_execute", fake)
+    patch_db(monkeypatch, "start_execute")  # admission gate reads pool
 
     # 场景1：有 intent_title，长度正常
     body = make_body(issue_id="intent-1", title="加个登录端点")
     ctx = {"intent_title": "加个登录端点"}
-    await mod.start_analyze(body=body, req_id="REQ-9", tags=["intent:analyze"], ctx=ctx)
+    await mod.start_execute(body=body, req_id="REQ-9", tags=["intent:execute"], ctx=ctx)
     _, kwargs = fake.update_issue.call_args_list[0]
-    assert kwargs["title"] == "[REQ-9] [ANALYZE] — 加个登录端点"
+    assert kwargs["title"] == "[REQ-9] [EXECUTE] — 加个登录端点"
 
     # 场景2：intent_title 超过 50 字符，需要截断 + 省略号
     long_title = "a" * 60
     ctx = {"intent_title": long_title}
-    await mod.start_analyze(body=body, req_id="REQ-10", tags=["intent:analyze"], ctx=ctx)
+    await mod.start_execute(body=body, req_id="REQ-10", tags=["intent:execute"], ctx=ctx)
     _, kwargs = fake.update_issue.call_args_list[2]
     title = kwargs["title"]
-    assert title.startswith("[REQ-10] [ANALYZE] — ")
+    assert title.startswith("[REQ-10] [EXECUTE] — ")
     assert "…" in title
     assert len(title) < 100  # 合理长度
 
-    # 场景3：ctx 为空，标题应该只有 [REQ-xx] [ANALYZE] 部分
+    # 场景3：ctx 为空，标题应该只有 [REQ-xx] [EXECUTE] 部分
     ctx = {}
-    await mod.start_analyze(body=body, req_id="REQ-11", tags=["intent:analyze"], ctx=ctx)
+    await mod.start_execute(body=body, req_id="REQ-11", tags=["intent:execute"], ctx=ctx)
     _, kwargs = fake.update_issue.call_args_list[4]
-    assert kwargs["title"] == "[REQ-11] [ANALYZE]"
+    assert kwargs["title"] == "[REQ-11] [EXECUTE]"
 
 
 def test_short_title_helper():

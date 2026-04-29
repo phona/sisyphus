@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS event_log (
 
   -- 业务维度（可空，不同 kind 填不同列）
   req_id           TEXT,
-  stage            TEXT,       -- analyze / dev-spec / contract-spec /
+  stage            TEXT,       -- execute / dev-spec / contract-spec /
                                --   accept-spec / ui-spec / migration-spec /
                                --   dev / ci / bugfix / test-fix /
                                --   reviewer / accept / done-archive

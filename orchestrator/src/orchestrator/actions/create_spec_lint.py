@@ -1,4 +1,4 @@
-"""create_spec_lint：analyze done → 跑 spec linting 检查（openspec validate + scenario refs）。
+"""create_spec_lint：execute done → 跑 spec linting 检查（openspec validate + scenario refs）。
 
 M1 checker 框架：sisyphus 在 runner pod 执行客观任务（spec linting），
 根据退出码 emit SPEC_LINT_PASS / SPEC_LINT_FAIL。

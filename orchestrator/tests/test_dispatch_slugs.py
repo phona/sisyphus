@@ -104,8 +104,8 @@ def test_action_handler_slug_format():
     """一般 action handler slug = {action}|{req_id}|{executionId or ''}。"""
     req_id = "REQ-427"
     execution_id = "exec-abc"
-    slug = f"analyze|{req_id}|{execution_id}"
-    assert slug == "analyze|REQ-427|exec-abc"
+    slug = f"execute|{req_id}|{execution_id}"
+    assert slug == "execute|REQ-427|exec-abc"
 
-    slug_no_exec = f"analyze|{req_id}|"
-    assert slug_no_exec == "analyze|REQ-427|"
+    slug_no_exec = f"execute|{req_id}|"
+    assert slug_no_exec == "execute|REQ-427|"

@@ -18,7 +18,7 @@ Sisyphus is a repo-agnostic orchestrator; baking the historical operator's GitHu
 #### Scenario: PRA-S2 placeholder examples in changed files use `<owner>/` form
 
 - **GIVEN** the seven files touched by this change that previously contained
-  `phona/` placeholder examples (`analyze.md.j2`, `done_archive.md.j2`,
+  `phona/` placeholder examples (`execute.md.j2`, `done_archive.md.j2`,
   `_shared/runner_container.md.j2`, `challenger.md.j2`,
   `verifier/dev_cross_check_fail.md.j2`, `verifier/spec_lint_fail.md.j2`,
   `verifier/_decision.md.j2`)
@@ -41,7 +41,7 @@ The contract itself is brand-neutral — any source repo joining sisyphus must i
 
 #### Scenario: PRA-S4 every replaced site links to docs/integration-contracts.md
 
-- **GIVEN** the six sites that previously read "ttpos-ci 标准" (analyze.md.j2 ×2,
+- **GIVEN** the six sites that previously read "ttpos-ci 标准" (execute.md.j2 ×2,
   bugfix.md.j2 ×1, staging_test.md.j2 ×1, _shared/runner_container.md.j2 ×1,
   verifier/dev_cross_check_fail.md.j2 ×1, verifier/dev_cross_check_success.md.j2 ×1)
 - **WHEN** a reader inspects each replacement
@@ -55,7 +55,7 @@ The contract itself is brand-neutral — any source repo joining sisyphus must i
 scenarios as any markdown block whose heading matches `^####\s+Scenario:` (the same
 pattern enforced by `scripts/check-scenario-refs.sh`'s `HEADING_PATTERN`), without
 prescribing a `FEATURE-A` (or any other) prefix on the scenario id. Scenario ids are
-defined by the spec author per repo (e.g. `analyze.md.j2:45` itself uses `UBOX-S1`),
+defined by the spec author per repo (e.g. `execute.md.j2:45` itself uses `UBOX-S1`),
 so the prompt MUST NOT presuppose a specific prefix. The literal string `FEATURE-A`
 MUST NOT appear in any prompt template under `orchestrator/src/orchestrator/prompts/`.
 

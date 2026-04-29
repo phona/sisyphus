@@ -1,6 +1,6 @@
 # Tasks — REQ-448
 
-> owner: analyze-agent
+> owner: execute-agent
 > 所有 checkbox 完成时勾上，反映真实做了的事。
 
 ## Stage: spec

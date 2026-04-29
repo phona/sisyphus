@@ -1,7 +1,7 @@
 # multi-layer-involved-repos-fallback Specification
 
 ## Purpose
-TBD - created by archiving change REQ-clone-fallback-direct-analyze-1777119520. Update Purpose after archive.
+TBD - created by archiving change REQ-clone-fallback-direct-execute-1777119520. Update Purpose after archive.
 ## Requirements
 ### Requirement: _clone.resolve_repos MUST resolve involved_repos through a 4-layer fallback in fixed priority order
 
@@ -21,8 +21,8 @@ observability and structured logging via `clone.exec` / `clone.done`):
 
 When all four layers yield an empty (or non-list / all-non-string)
 result, the helper MUST return `([], "none")` and the caller MUST skip
-the server-side clone (let the analyze-agent run its prompt-driven
-fallback per `analyze.md.j2` Part A.3).
+the server-side clone (let the execute-agent run its prompt-driven
+fallback per `execute.md.j2` Part A.3).
 
 The helper MUST normalize each layer's input by filtering out
 non-string and empty entries while preserving original order and
@@ -44,10 +44,10 @@ deduplicating repeated slugs.
 - **WHEN** the function returns
 - **THEN** the result MUST be `(["L2/x"], "ctx.involved_repos")`
 
-#### Scenario: MLIRF-S3 layer fall-through to BKD `repo:` tags on direct analyze entry
+#### Scenario: MLIRF-S3 layer fall-through to BKD `repo:` tags on direct execute entry
 
 - **GIVEN** `resolve_repos` is called with `ctx={"intent_title": "..."}`
-  (no involved_repos), `tags=["analyze", "REQ-X", "repo:phona/sisyphus"]`,
+  (no involved_repos), `tags=["execute", "REQ-X", "repo:phona/sisyphus"]`,
   `default_repos=["L4/x"]`
 - **WHEN** the function returns
 - **THEN** the result MUST be `(["phona/sisyphus"], "tags.repo")`
@@ -83,7 +83,7 @@ first-occurrence order.
 
 #### Scenario: MLIRF-S6 valid slugs accepted, invalid slugs rejected, dedup preserves order
 
-- **GIVEN** `tags = ["analyze", "REQ-X", "repo:phona/sisyphus", "repo:Zone-Ease_Tech/foo", "repo:invalid org/name", "repo:/missing-org", "repo:no-slash-here", "repo:phona/sisyphus", "repo:phona/repo-with.dots_and-dash"]`
+- **GIVEN** `tags = ["execute", "REQ-X", "repo:phona/sisyphus", "repo:Zone-Ease_Tech/foo", "repo:invalid org/name", "repo:/missing-org", "repo:no-slash-here", "repo:phona/sisyphus", "repo:phona/repo-with.dots_and-dash"]`
 - **WHEN** `_extract_repo_tags(tags)` returns
 - **THEN** the result MUST be exactly
   `["phona/sisyphus", "phona/repo-with.dots_and-dash"]`
@@ -116,9 +116,9 @@ self-dogfood, single-repo lab) opt in via env.
 - **THEN** the field MUST exist
 - **AND** `default_factory()` MUST evaluate to `[]`
 
-### Requirement: start_analyze and start_analyze_with_finalized_intent MUST forward tags + settings.default_involved_repos to the clone helper
+### Requirement: start_execute and start_execute_with_finalized_intent MUST forward tags + settings.default_involved_repos to the clone helper
 
-Both `start_analyze` and `start_analyze_with_finalized_intent` SHALL
+Both `start_execute` and `start_execute_with_finalized_intent` SHALL
 invoke `clone_involved_repos_into_runner` with both keyword arguments
 `tags=tags` (the action's `tags` parameter) and
 `default_repos=settings.default_involved_repos`. This is the only path
@@ -129,7 +129,7 @@ substrings `tags=tags` and `default_repos=settings.default_involved_repos`).
 
 #### Scenario: MLIRF-S9 direct-analyze entry with `repo:` tag clones via L3
 
-- **GIVEN** `start_analyze` is invoked with `tags=["intent:analyze", "repo:phona/sisyphus"]`
+- **GIVEN** `start_execute` is invoked with `tags=["intent:execute", "repo:phona/sisyphus"]`
   and `ctx={"intent_title": "..."}` (no `involved_repos`)
 - **WHEN** the action runs against a fake runner controller
 - **THEN** `exec_in_runner` MUST be called once with a command containing
@@ -140,7 +140,7 @@ substrings `tags=tags` and `default_repos=settings.default_involved_repos`).
 
 #### Scenario: MLIRF-S10 direct-analyze entry with no ctx, no tags, settings.default set → L4 clones
 
-- **GIVEN** `start_analyze` is invoked with `tags=["intent:analyze"]`,
+- **GIVEN** `start_execute` is invoked with `tags=["intent:execute"]`,
   `ctx={"intent_title": "single-repo dogfood"}`, and
   `settings.default_involved_repos == ["phona/sisyphus"]`
 - **WHEN** the action runs against a fake runner controller
@@ -151,13 +151,13 @@ substrings `tags=tags` and `default_repos=settings.default_involved_repos`).
 
 #### Scenario: MLIRF-S11 all four layers empty → no exec call, agent dispatched anyway
 
-- **GIVEN** `start_analyze` is invoked with `tags=["intent:analyze"]`,
+- **GIVEN** `start_execute` is invoked with `tags=["intent:execute"]`,
   `ctx={"intent_title": "no repos anywhere"}`, and
   `settings.default_involved_repos == []`
 - **WHEN** the action runs
 - **THEN** `exec_in_runner` MUST NOT be called
 - **AND** the action MUST still call `BKDClient.follow_up_issue` (preserving
-  the agent-driven prompt fallback path from `analyze.md.j2` Part A.3)
+  the agent-driven prompt fallback path from `execute.md.j2` Part A.3)
 - **AND** the return value MUST contain `cloned_repos is None`
 
 ### Requirement: _clone helper MUST NOT introspect free-text fields to infer repo slugs

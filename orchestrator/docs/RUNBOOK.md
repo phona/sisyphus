@@ -148,8 +148,8 @@ SELECT * FROM bugfix_diagnosis;
 
 ```bash
 # 1. 在 BKD UI 创 issue（或 API）
-# 2. 加 intent:analyze tag
-# 3. sisyphus 收到 issue.updated webhook → 创 req_state → 启 analyze-agent
+# 2. 加 intent:execute tag
+# 3. sisyphus 收到 issue.updated webhook → 创 req_state → 启 execute-agent
 ```
 
 MCP 方式：

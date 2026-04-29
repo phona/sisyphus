@@ -11,7 +11,7 @@
 
 ## Stage: implementation — prompts
 - [x] update `_shared/tools_whitelist.md.j2`: curl POST sub-issue example tags array includes `"sisyphus"`
-- [x] update `analyze.md.j2`: new section B.6 requiring (a) `gh label create sisyphus --force` then `gh pr create --label sisyphus` for every PR, (b) sub-issue fan-out tags includes `"sisyphus"`
+- [x] update `execute.md.j2`: new section B.6 requiring (a) `gh label create sisyphus --force` then `gh pr create --label sisyphus` for every PR, (b) sub-issue fan-out tags includes `"sisyphus"`
 
 ## Stage: unit test
 - [x] update `tests/test_bkd_rest.py::test_create_issue_payload_shape` to expect `"sisyphus"` prepended
@@ -20,7 +20,7 @@
 - [x] add `tests/test_bkd_rest.py::test_ensure_sisyphus_tag_helper_idempotent` (helper unit)
 - [x] add `tests/test_bkd_rest.py::test_mcp_create_issue_auto_injects_sisyphus_tag` (SAL-S3)
 - [x] update `tests/test_intake.py::test_start_intake` to assert `"sisyphus"` in tags (SAL-S4)
-- [x] add `tests/test_prompts_sisyphus_label.py` covering rendered analyze prompt invariants (SAL-S5, SAL-S6)
+- [x] add `tests/test_prompts_sisyphus_label.py` covering rendered execute prompt invariants (SAL-S5, SAL-S6)
 - [x] full `make ci-unit-test` green: 931 passed (no regressions)
 - [x] `make ci-integration-test` clean (no integration tests in scope; exit 5 → pass)
 - [x] `make ci-lint` clean on changed files (ruff)

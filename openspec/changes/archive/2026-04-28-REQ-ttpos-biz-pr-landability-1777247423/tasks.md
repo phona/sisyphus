@@ -28,5 +28,5 @@
 
 ## Stage: BKD
 
-- [x] Update BKD issue tags: keep `analyze` + `REQ-ttpos-biz-pr-landability-1777247423`
+- [x] Update BKD issue tags: keep `execute` + `REQ-ttpos-biz-pr-landability-1777247423`
 - [x] Move BKD issue to `review` status
