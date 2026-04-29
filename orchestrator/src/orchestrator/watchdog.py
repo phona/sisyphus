@@ -87,6 +87,7 @@ _SKIP_STATES = {
     ReqState.INIT.value,
     ReqState.INTAKING.value,
     ReqState.PENDING_USER_REVIEW.value,
+    ReqState.PENDING_USER_PR_REVIEW.value,
 }
 
 @dataclass(frozen=True)
@@ -126,6 +127,7 @@ _STAGE_POLICY: dict[ReqState, _StagePolicy | None] = {
     # human-loop-conversation
     ReqState.INTAKING: None,
     ReqState.PENDING_USER_REVIEW: None,
+    ReqState.PENDING_USER_PR_REVIEW: None,  # 等 GitHub PR review，没 BKD agent 在跑
     # deterministic-checker（紧 5min ended + 5min stuck 双线）
     ReqState.SPEC_LINT_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=300),
     ReqState.DEV_CROSS_CHECK_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=300),

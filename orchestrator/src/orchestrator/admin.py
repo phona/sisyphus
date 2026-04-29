@@ -656,6 +656,7 @@ _PR_MERGED_NOOP_STATES = frozenset({ReqState.DONE, ReqState.ESCALATED})
 # States that accept PR_MERGED → DONE transition (via state.py TRANSITIONS).
 _PR_MERGED_VALID_STATES = frozenset({
     ReqState.PENDING_USER_REVIEW,
+    ReqState.PENDING_USER_PR_REVIEW,
     ReqState.REVIEW_RUNNING,
     ReqState.PR_CI_RUNNING,
 })

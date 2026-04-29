@@ -87,11 +87,11 @@ def _has_status_id_in_call(call_args) -> bool:
 # ── USER-S1..S4: pure state-machine contracts ────────────────────────────────
 
 
-def test_USER_S1_teardown_pass_to_pending_user_review():
-    """Scenario USER-S1: TEARDOWN_DONE_PASS routes to PENDING_USER_REVIEW via post_acceptance_report."""
+def test_USER_S1_teardown_pass_to_pending_user_pr_review():
+    """Scenario USER-S1: TEARDOWN_DONE_PASS routes to PENDING_USER_PR_REVIEW via post_acceptance_report."""
     t = decide(ReqState.ACCEPT_TEARING_DOWN, Event.TEARDOWN_DONE_PASS)
     assert t is not None
-    assert t.next_state == ReqState.PENDING_USER_REVIEW
+    assert t.next_state == ReqState.PENDING_USER_PR_REVIEW
     assert t.action == "post_acceptance_report"
 
 
@@ -128,6 +128,56 @@ def test_USER_S3_pending_fix_to_escalated():
 def test_USER_S4_pending_illegal_events_return_none(illegal_event):
     """Scenario USER-S4: any event other than USER_REVIEW_PASS/FIX returns None from PENDING_USER_REVIEW."""
     assert decide(ReqState.PENDING_USER_REVIEW, illegal_event) is None
+
+
+# ── REQ-user-feedback-loop-1777420881: PENDING_USER_PR_REVIEW contracts ──────
+
+
+def test_PR_S1_pending_pr_review_approved_to_archiving():
+    """PR-S1: GH_PR_REVIEW_APPROVED from PENDING_USER_PR_REVIEW → ARCHIVING + done_archive."""
+    t = decide(ReqState.PENDING_USER_PR_REVIEW, Event.GH_PR_REVIEW_APPROVED)
+    assert t is not None
+    assert t.next_state == ReqState.ARCHIVING
+    assert t.action == "done_archive"
+
+
+def test_PR_S2_pending_pr_review_changes_to_verifier():
+    """PR-S2: GH_PR_REVIEW_CHANGES_REQUESTED → REVIEW_RUNNING + invoke_verifier_for_pr_review_fail."""
+    t = decide(ReqState.PENDING_USER_PR_REVIEW, Event.GH_PR_REVIEW_CHANGES_REQUESTED)
+    assert t is not None
+    assert t.next_state == ReqState.REVIEW_RUNNING
+    assert t.action == "invoke_verifier_for_pr_review_fail"
+
+
+def test_PR_S3_pending_pr_review_comment_to_verifier():
+    """PR-S3: GH_PR_REVIEW_COMMENTED → REVIEW_RUNNING + invoke_verifier_for_pr_review_comment."""
+    t = decide(ReqState.PENDING_USER_PR_REVIEW, Event.GH_PR_REVIEW_COMMENTED)
+    assert t is not None
+    assert t.next_state == ReqState.REVIEW_RUNNING
+    assert t.action == "invoke_verifier_for_pr_review_comment"
+
+
+def test_PR_S4_pending_pr_review_pr_merged_to_archiving():
+    """PR-S4: PR_MERGED from PENDING_USER_PR_REVIEW → ARCHIVING + done_archive."""
+    t = decide(ReqState.PENDING_USER_PR_REVIEW, Event.PR_MERGED)
+    assert t is not None
+    assert t.next_state == ReqState.ARCHIVING
+    assert t.action == "done_archive"
+
+
+@pytest.mark.parametrize(
+    "illegal_event",
+    [
+        Event.ARCHIVE_DONE,
+        Event.SESSION_FAILED,
+        Event.USER_REVIEW_PASS,
+        Event.USER_REVIEW_FIX,
+        Event.INTAKE_PASS,
+    ],
+)
+def test_PR_S5_pending_pr_review_illegal_events(illegal_event):
+    """PR-S5: illegal events from PENDING_USER_PR_REVIEW return None."""
+    assert decide(ReqState.PENDING_USER_PR_REVIEW, illegal_event) is None
 
 
 # ── USER-S5..S8: webhook routing contracts ───────────────────────────────────
@@ -440,6 +490,11 @@ def test_USER_S12_pending_user_review_in_skip_states():
     assert ReqState.PENDING_USER_REVIEW.value in watchdog._SKIP_STATES, (
         "spec requires PENDING_USER_REVIEW.value to be in watchdog._SKIP_STATES "
         "(human-loop-conversation state; no BKD agent to crash-check)"
+    )
+    # REQ-user-feedback-loop-1777420881: PENDING_USER_PR_REVIEW 也必须在 skip 里
+    assert ReqState.PENDING_USER_PR_REVIEW.value in watchdog._SKIP_STATES, (
+        "PENDING_USER_PR_REVIEW.value must be in watchdog._SKIP_STATES "
+        "(human-in-loop state waiting for GitHub PR review)"
     )
     # Legacy entries must still be present (regression guard)
     for legacy in (

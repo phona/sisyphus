@@ -41,9 +41,10 @@ log = structlog.get_logger(__name__)
 
 # 支持的 stage 名（对应 prompts/verifier/{stage}_{trigger}.md.j2）
 # 包括 agent stage（analyze）和 checker stage（spec_lint / dev_cross_check / staging_test / pr_ci）
+# 以及人审 stage（pr_review）
 _STAGES = {
     "analyze", "analyze_artifact_check", "spec_lint", "challenger",
-    "dev_cross_check", "staging_test", "pr_ci", "accept",
+    "dev_cross_check", "staging_test", "pr_ci", "accept", "pr_review",
 }
 
 # Trigger 类型
@@ -58,9 +59,10 @@ _RETRY_ROUTING: dict[str, tuple[ReqState, str]] = {
     "pr_ci":           (ReqState.PR_CI_RUNNING,           "create_pr_ci_watch"),
 }
 
-# stage → decision=pass 时要 emit 的原主链 event + 目标 stage_running state
+# stage → decision=pass 时要 emit 的原主链 event + 目标 state
 # 用于 apply_verify_pass 手工把 state 从 REVIEW_RUNNING 回推到对应 stage_running，
 # 随后链式 emit 该 stage 的 done/pass 事件走原 transition。
+# 特例：pr_review 的 pass 直接到 ARCHIVING（emit ARCHIVE_DONE）。
 _PASS_ROUTING: dict[str, tuple[ReqState, Event]] = {
     "analyze":                 (ReqState.ANALYZING,                Event.ANALYZE_DONE),
     "analyze_artifact_check":  (ReqState.ANALYZE_ARTIFACT_CHECKING,
@@ -71,6 +73,7 @@ _PASS_ROUTING: dict[str, tuple[ReqState, Event]] = {
     "staging_test":            (ReqState.STAGING_TEST_RUNNING,     Event.STAGING_TEST_PASS),
     "pr_ci":                   (ReqState.PR_CI_RUNNING,            Event.PR_CI_PASS),
     "accept":                  (ReqState.ACCEPT_RUNNING,           Event.ACCEPT_PASS),
+    "pr_review":               (ReqState.ARCHIVING,                Event.ARCHIVE_DONE),
 }
 
 # ─── invoke_verifier：起 BKD verifier issue ──────────────────────────────
@@ -502,6 +505,59 @@ async def invoke_verifier_for_challenger_fail(*, body, req_id, tags, ctx):
     """
     return await _invoke_verifier_fail(
         stage="challenger", body=body, req_id=req_id, ctx=ctx,
+    )
+
+
+# ─── REQ-user-feedback-loop-1777420881: PR review verifier handlers ─────────
+
+@register("invoke_verifier_for_pr_review_fail", idempotent=False)
+async def invoke_verifier_for_pr_review_fail(*, body, req_id, tags, ctx):
+    """PR review changes_requested → 起 verifier-agent(stage=pr_review, trigger=fail)。"""
+    ctx = ctx or {}
+    review_body = ctx.get("gh_pr_review_body") or ""
+    return await invoke_verifier(
+        stage="pr_review",
+        trigger="fail",
+        req_id=req_id,
+        project_id=body.projectId,
+        stderr_tail=review_body,
+        ctx=ctx,
+    )
+
+
+@register("invoke_verifier_for_pr_review_success", idempotent=False)
+async def invoke_verifier_for_pr_review_success(*, body, req_id, tags, ctx):
+    """PR review approved → 起 verifier-agent(stage=pr_review, trigger=success)。
+
+    通常 approved 直接 archive（不走 verifier），但本 action 保留供 manual/admin 调用。
+    """
+    ctx = ctx or {}
+    review_body = ctx.get("gh_pr_review_body") or ""
+    return await invoke_verifier(
+        stage="pr_review",
+        trigger="success",
+        req_id=req_id,
+        project_id=body.projectId,
+        stderr_tail=review_body,
+        ctx=ctx,
+    )
+
+
+@register("invoke_verifier_for_pr_review_comment", idempotent=False)
+async def invoke_verifier_for_pr_review_comment(*, body, req_id, tags, ctx):
+    """PR review commented → 起 verifier-agent(stage=pr_review, trigger=comment)。
+
+    verifier 根据 comment 内容判：LGTM=pass / fix:=fix / 其他=escalate。
+    """
+    ctx = ctx or {}
+    review_body = ctx.get("gh_pr_review_body") or ""
+    return await invoke_verifier(
+        stage="pr_review",
+        trigger="fail",  # comment 视为"潜在问题"，verifier prompt 里说明按内容判
+        req_id=req_id,
+        project_id=body.projectId,
+        stderr_tail=review_body,
+        ctx=ctx,
     )
 
 

@@ -1,13 +1,19 @@
 """Webhook handler：BKD → 状态机 → action dispatch。
 
-唯一入口 /bkd-events，收所有 BKD webhook（issue.updated / session.completed / session.failed）。
+入口：
+- /bkd-events：收所有 BKD webhook（issue.updated / session.completed / session.failed）
+- /github-events：收 GitHub webhook（pull_request_review.submitted / pull_request_review_comment.created）
+
 handler 内部按 body.event 字段分流。
 内部 decide+CAS+dispatch 走 engine.step（让 action 也能链式 emit 事件）。
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
+import json
+import re
 from typing import Any
 
 import structlog
@@ -602,5 +608,215 @@ async def webhook(request: Request) -> JSONResponse:
         event=event,
     )
     # handler 跑完，标 processed_at。engine.step 抛异常时不到这里，BKD 重发会走 retry 路径。
+    await dedup.mark_processed(pool, eid)
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# REQ-user-feedback-loop-1777420881: GitHub PR review webhook handler
+# ═══════════════════════════════════════════════════════════════════════
+
+_GH_EVENT_HEADER = "x-github-event"
+_GH_SIGNATURE_HEADER = "x-hub-signature-256"
+
+# 从 branch 名提取 REQ ID：feat/REQ-xxx → REQ-xxx
+_REQ_FROM_BRANCH_RE = re.compile(r"(?:feat/)?(REQ-[\w-]+)$")
+
+
+def _verify_github_signature(payload: bytes, signature: str | None) -> bool:
+    """GitHub webhook HMAC-SHA256 签名验证。"""
+    secret = settings.github_webhook_secret
+    if not secret:
+        log.warning("github_webhook.secret_not_set")
+        return False
+    if not signature or not signature.startswith("sha256="):
+        return False
+    expected = signature[7:]  # 去掉 "sha256=" 前缀
+    mac = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(mac, expected)
+
+
+def _derive_event_from_review_state(review_state: str, body_text: str) -> Event | None:
+    """根据 PR review state + body 内容推导 Event。"""
+    review_state = review_state.lower()
+    body_lower = body_text.lower()
+
+    if review_state == "approved":
+        return Event.GH_PR_REVIEW_APPROVED
+
+    if review_state == "changes_requested":
+        return Event.GH_PR_REVIEW_CHANGES_REQUESTED
+
+    if review_state == "commented":
+        # NLP 轻量规则
+        if "lgtm" in body_lower or "looks good" in body_lower:
+            return Event.GH_PR_REVIEW_APPROVED
+        if body_lower.startswith("fix:") or body_lower.startswith("fix "):
+            return Event.GH_PR_REVIEW_CHANGES_REQUESTED
+        return Event.GH_PR_REVIEW_COMMENTED
+
+    return None
+
+
+async def _resolve_req_id_from_pr(
+    pool: Any, branch: str, pr_url: str,
+) -> tuple[str | None, dict | None]:
+    """从 PR branch / URL 解析 REQ ID，并返回 req_state row（如果找到）。
+
+    优先从 branch 名提取（feat/REQ-xxx）；失败则查 req_state 表 match branch 或 pr_urls。
+    """
+    # 1. branch 名提取
+    m = _REQ_FROM_BRANCH_RE.search(branch)
+    if m:
+        req_id = m.group(1)
+        row = await req_state.get(pool, req_id)
+        if row is not None:
+            return req_id, row
+
+    # 2. fallback：查 req_state 表 context->>'branch' 匹配
+    rows = await pool.fetch(
+        "SELECT req_id, project_id, state, history, context, created_at, updated_at "
+        "FROM req_state WHERE context->>'branch' = $1 LIMIT 5",
+        branch,
+    )
+    if rows:
+        r = rows[0]
+        from .store.req_state import ReqRow
+        return r["req_id"], ReqRow(
+            req_id=r["req_id"],
+            project_id=r["project_id"],
+            state=ReqState(r["state"]),
+            history=json.loads(r["history"]) if isinstance(r["history"], str) else (r["history"] or []),
+            context=json.loads(r["context"]) if isinstance(r["context"], str) else (r["context"] or {}),
+            created_at=r["created_at"],
+            updated_at=r["updated_at"],
+        )
+
+    # 3. fallback：查 req_state 表 pr_urls 匹配
+    rows = await pool.fetch(
+        "SELECT req_id, project_id, state, history, context, created_at, updated_at "
+        "FROM req_state WHERE context->'pr_urls' @> $1::jsonb LIMIT 5",
+        json.dumps({pr_url: pr_url}),
+    )
+    # 这个查询不太准，先不用
+
+    return None, None
+
+
+@api.get("/github-events")
+async def github_webhook_probe() -> dict:
+    """GET 探活，给 GitHub webhook 注册 / 健康巡检用。无需 auth。"""
+    return {"status": "ok", "endpoint": "github-events", "method": "POST", "auth": "X-Hub-Signature-256"}
+
+
+@api.post("/github-events")
+async def github_webhook(request: Request) -> JSONResponse:
+    """GitHub webhook 入口：处理 PR review 事件，驱动 PENDING_USER_PR_REVIEW 状态。
+
+    支持的事件：
+    - pull_request_review.submitted → 根据 review.state 判 approved/changes_requested/commented
+    - pull_request_review_comment.created → 根据 comment.body 内容判
+    """
+    raw = await request.body()
+    signature = request.headers.get(_GH_SIGNATURE_HEADER)
+    if not _verify_github_signature(raw, signature):
+        log.warning("github_webhook.signature_invalid")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid signature",
+        )
+
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body") from None
+
+    gh_event = request.headers.get(_GH_EVENT_HEADER, "")
+    action = payload.get("action", "")
+
+    log.info("github_webhook.received", event=gh_event, action=action)
+
+    # 只处理 pull_request_review.submitted 和 pull_request_review_comment.created
+    if gh_event == "pull_request_review" and action == "submitted":
+        review = payload.get("review", {})
+        review_state = review.get("state", "")
+        review_body = review.get("body", "")
+        event = _derive_event_from_review_state(review_state, review_body)
+        pr = payload.get("pull_request", {})
+        branch = pr.get("head", {}).get("ref", "")
+        pr_url = pr.get("html_url", "")
+        review_id = review.get("id")
+    elif gh_event == "pull_request_review_comment" and action == "created":
+        comment = payload.get("comment", {})
+        comment_body = comment.get("body", "")
+        event = _derive_event_from_review_state("commented", comment_body)
+        pr = payload.get("pull_request", {})
+        branch = pr.get("head", {}).get("ref", "")
+        pr_url = pr.get("html_url", "")
+        review_id = comment.get("id")
+    else:
+        log.debug("github_webhook.event_skipped", event=gh_event, action=action)
+        return {"action": "skip", "reason": f"unhandled event: {gh_event}.{action}"}
+
+    if event is None:
+        log.debug("github_webhook.no_event", review_state=review_state if 'review_state' in locals() else 'n/a')
+        return {"action": "skip", "reason": "no derivable event"}
+
+    pool = db.get_pool()
+    req_id, row = await _resolve_req_id_from_pr(pool, branch, pr_url)
+    if req_id is None or row is None:
+        log.warning("github_webhook.req_not_found", branch=branch, pr_url=pr_url)
+        return {"action": "skip", "reason": "req not found for PR"}
+
+    # 只有 state == PENDING_USER_PR_REVIEW 才处理（其他 state 的 PR review 忽略）
+    if row.state != ReqState.PENDING_USER_PR_REVIEW:
+        log.info(
+            "github_webhook.state_mismatch",
+            req_id=req_id, state=row.state.value, expected=ReqState.PENDING_USER_PR_REVIEW.value,
+        )
+        return {"action": "skip", "reason": f"req state is {row.state.value}, not pending-user-pr-review"}
+
+    # dedup：同一 review/comment 只处理一次（GitHub 可能重发）
+    eid = f"gh|{gh_event}|{review_id}|{req_id}"
+    dedup_status = await dedup.check_and_record(pool, eid)
+    if dedup_status == "skip":
+        log.debug("github_webhook.dedup.skip", event_id=eid)
+        return {"action": "skip", "reason": "duplicate event"}
+
+    # 把 review body 写进 ctx 供 verifier prompt 用
+    body_text = review_body if 'review_body' in locals() else comment_body
+    ctx_patch = {
+        "gh_pr_review_state": review_state if 'review_state' in locals() else "commented",
+        "gh_pr_review_body": body_text,
+        "gh_pr_review_url": pr_url,
+    }
+    await req_state.update_context(pool, req_id, ctx_patch)
+    ctx = {**(row.context or {}), **ctx_patch}
+
+    log.info(
+        "github_webhook.derived",
+        req_id=req_id, event=event.value, branch=branch, pr_url=pr_url,
+    )
+
+    # 推进状态机
+    fake_body = type("_FakeBody", (), {
+        "issueId": f"gh-{review_id}",
+        "projectId": row.project_id,
+        "event": gh_event,
+        "title": "",
+        "tags": [req_id],
+        "issueNumber": None,
+    })()
+
+    result = await engine.step(
+        pool,
+        body=fake_body,
+        req_id=req_id,
+        project_id=row.project_id,
+        tags=[req_id],
+        cur_state=row.state,
+        ctx=ctx,
+        event=event,
+    )
     await dedup.mark_processed(pool, eid)
     return result

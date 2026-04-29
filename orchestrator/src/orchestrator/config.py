@@ -24,6 +24,8 @@ class Settings(BaseSettings):
 
     # 入站 webhook 共享 token（BKD webhook 配置里加 `Authorization: Bearer <token>` header）
     webhook_token: str = Field(..., description="Bearer token expected in Authorization header on /bkd-events")
+    # GitHub webhook secret（用于验证 /github-events 的 X-Hub-Signature-256）
+    github_webhook_secret: str = Field(default="", description="GitHub webhook secret for HMAC-SHA256 signature verification")
 
     # ─── v0.2 K8s runner 配置 ─────────────────────────────────────────────
     # sisyphus 在 sisyphus-runners namespace 拉起 per-REQ Pod（runner-<REQ>），

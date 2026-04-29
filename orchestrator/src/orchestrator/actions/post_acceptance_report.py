@@ -34,7 +34,7 @@ def _render_acceptance_block(*, req_id: str, pr_urls: dict[str, str] | None) -> 
     """构造以 ACCEPTANCE_MARKER 开头的 managed block。"""
     lines = [
         ACCEPTANCE_MARKER,
-        f"## sisyphus 验收已通过（REQ {req_id}）— 等你拍板",
+        f"## sisyphus 验收已通过（REQ {req_id}）— 请 review PR",
         "",
         "**PR**",
     ]
@@ -45,12 +45,15 @@ def _render_acceptance_block(*, req_id: str, pr_urls: dict[str, str] | None) -> 
         lines.append("- (no PR URLs recorded in ctx; check feat/<REQ> on involved repos)")
     lines.extend([
         "",
-        "**拍板方式**：改本 BKD issue 的 **statusId** 即可（不解释自由文本）：",
+        "**拍板方式**：在 GitHub PR 上提交 review：",
         "",
-        "- `done` → approve，sisyphus 立即合 PR 归档",
-        "- `review` 或 `blocked` → 不满意，sisyphus 进 escalated（reason=user-requested-fix）",
-        "  之后你可以在 chat 里 follow-up 描述具体要改啥",
-        "- 其他 statusId（`working` / `todo` 等）→ sisyphus 继续等",
+        "- **Approve** → sisyphus 自动合 PR 归档",
+        "- **Request changes** → sisyphus 自动起 fixer 修复",
+        "- **Comment** 含 `LGTM` → 视为 approve",
+        "- **Comment** 含 `fix: xxx` → 视为 fix，起 fixer",
+        "",
+        "（兼容路径：改本 BKD issue 的 statusId 仍可生效：",
+        "`done` → approve / `review`/`blocked` → escalated）",
     ])
     return "\n".join(lines) + "\n"
 

@@ -1,0 +1,23 @@
+{% include "verifier/_header.md.j2" %}
+
+## 职责（pr_review / success）
+PR review 人已提交 **Approve**。你要做最终确认：这批改动是否真的可以合。
+
+### 关注点
+- PR 改动的文件范围是否跟 REQ 目标一致（有没有夹带私货）
+- review 人的 approve comment 里有没有藏条件（"approve but please fix X in follow-up"）
+- 如果 evidence 目录存在，验收证据是否完整（scenario 覆盖、screenshot、thanatos result）
+
+### NOT 该做
+- 不动 PR 状态（merge 留给 archive 阶段）
+- 不自己再跑测试（之前的 staging-test / pr-ci 已覆盖）
+
+### 典型决策
+- `pass`：review 人明确 approve，无隐藏条件，改动范围正确
+- `escalate`：approve 评论里藏了必须本次修的条件，或改动范围明显越界
+
+─────────
+
+{% if history %}{% include 'verifier/_audit.md.j2' %}{% endif %}
+
+{% include "verifier/_decision.md.j2" %}

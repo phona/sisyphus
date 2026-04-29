@@ -35,6 +35,7 @@ class ReqState(StrEnum):
     ACCEPT_RUNNING = "accept-running"           # env-up 完，accept-agent 跑 FEATURE-A*
     ACCEPT_TEARING_DOWN = "accept-tearing-down" # env-down 清 lab，后续按 accept_result 分流
     PENDING_USER_REVIEW = "pending-user-review" # accept 全过 → 等用户验收（statusId 表态，watchdog skip）
+    PENDING_USER_PR_REVIEW = "pending-user-pr-review"  # accept 全过 → 等 GitHub PR review（webhook 驱动）
     GH_INCIDENT_OPEN = "gh-incident-open"       # GitHub issue 已开，等人
     # verifier-agent 框架
     REVIEW_RUNNING = "review-running"           # verifier-agent 在跑（success / fail 两触发统一入口）
@@ -74,6 +75,10 @@ class Event(StrEnum):
     # 信号通道 = BKD intent issue statusId（webhook 在 PENDING_USER_REVIEW state 收 issue.updated 时派事件）
     USER_REVIEW_PASS = "user-review.pass"           # statusId → done：用户 approve，发车
     USER_REVIEW_FIX = "user-review.fix"             # statusId → review/blocked：用户要返工 → escalate
+    # REQ-user-feedback-loop-1777420881: GitHub PR review webhook 事件
+    GH_PR_REVIEW_APPROVED = "gh-pr-review.approved"              # PR review = approved
+    GH_PR_REVIEW_CHANGES_REQUESTED = "gh-pr-review.changes-requested"  # PR review = changes_requested
+    GH_PR_REVIEW_COMMENTED = "gh-pr-review.commented"            # PR review = commented（内容需 NLP 判）
     # verifier-agent 决策事件（webhook.py 从 verifier issue 的 decision JSON 派发）
     # 3 路决策：pass / fix / escalate（retry_checker 已砍 —— flaky/外部抖动直接 escalate）
     VERIFY_PASS = "verify.pass"                     # decision.action = pass → 推下一 stage
@@ -189,18 +194,40 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
         Transition(ReqState.ACCEPT_TEARING_DOWN, "teardown_accept_env",
                    "accept fail → 清 lab 再走 verifier"),
 
-    # REQ-bkd-acceptance-feedback-loop-1777278984 改：原本直进 ARCHIVING，现在先停一手
-    # 等用户验收。post_acceptance_report 把验收报告 PATCH 进 BKD intent issue body，
-    # 用户改 statusId 表态后 webhook 派 USER_REVIEW_PASS / USER_REVIEW_FIX 推下去。
+    # REQ-user-feedback-loop-1777420881: accept teardown 后等 GitHub PR review
+    # 不再是 BKD statusId 驱动；PR review webhook 来后自动推 verifier / archive / fixer
     (ReqState.ACCEPT_TEARING_DOWN, Event.TEARDOWN_DONE_PASS):
-        Transition(ReqState.PENDING_USER_REVIEW, "post_acceptance_report",
-                   "teardown 完 → 等用户 BKD intent issue statusId 表态"),
+        Transition(ReqState.PENDING_USER_PR_REVIEW, "post_acceptance_report",
+                   "teardown 完 → 等 GitHub PR review"),
 
     (ReqState.ACCEPT_TEARING_DOWN, Event.TEARDOWN_DONE_FAIL):
         Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_accept_fail",
                    "accept fail + teardown 完 → verifier"),
 
-    # ─── PENDING_USER_REVIEW 出口（REQ-bkd-acceptance-feedback-loop-1777278984）───
+    # ─── PENDING_USER_PR_REVIEW 出口（REQ-user-feedback-loop-1777420881）────────
+    # GitHub PR review webhook 驱动：
+    #   - approved → 直接 ARCHIVING（最短路径，不需要 verifier）
+    #   - changes_requested → REVIEW_RUNNING + verifier（trigger=fail）
+    #   - commented → REVIEW_RUNNING + verifier（trigger=comment，由 verifier 判内容）
+    # 没 SESSION_FAILED self-loop —— 该 state 没 BKD agent 在跑
+    (ReqState.PENDING_USER_PR_REVIEW, Event.GH_PR_REVIEW_APPROVED):
+        Transition(ReqState.ARCHIVING, "done_archive",
+                   "PR approved → 直接归档发车"),
+
+    (ReqState.PENDING_USER_PR_REVIEW, Event.GH_PR_REVIEW_CHANGES_REQUESTED):
+        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_pr_review_fail",
+                   "PR changes requested → verifier 判 fix/escalate"),
+
+    (ReqState.PENDING_USER_PR_REVIEW, Event.GH_PR_REVIEW_COMMENTED):
+        Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_for_pr_review_comment",
+                   "PR commented → verifier 判内容（LGTM=pass / fix:=fix / 其他=escalate）"),
+
+    # PR_MERGED 兜底：人在 PENDING_USER_PR_REVIEW 阶段直接合了 PR
+    (ReqState.PENDING_USER_PR_REVIEW, Event.PR_MERGED):
+        Transition(ReqState.ARCHIVING, "done_archive",
+                   "PR merged while waiting review → skip gate → archive"),
+
+    # ─── PENDING_USER_REVIEW 出口（REQ-bkd-acceptance-feedback-loop-1777278984，保留兼容）───
     # 用户改 BKD intent issue statusId：
     #   - "done" → USER_REVIEW_PASS → DONE（archive 作为 fire-and-forget 副作用）
     #   - "review" / "blocked" → USER_REVIEW_FIX → ESCALATED（reason=user-requested-fix）
@@ -216,8 +243,8 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
 
     # ─── PR_MERGED：人手合 PR 后 GHA 钩 → admin endpoint 注入，跳 gate 直达 DONE ───────────
     # REQ-pr-merge-archive-hook-1777344443
-    # 主场景：PENDING_USER_REVIEW（最常见的卡死态：accept 全过但 sisyphus 不知道 PR 被人合了）。
-    # 兜底：REVIEW_RUNNING / PR_CI_RUNNING（极少：verifier 或 CI 还在跑时人已合 PR）。
+    # 主场景：PENDING_USER_PR_REVIEW（accept 全过等 review 时 PR 被人合了）。
+    # 兜底：PENDING_USER_REVIEW / REVIEW_RUNNING / PR_CI_RUNNING。
     # CAS 保证并发安全：如果 verifier/CI 也在尝试 transition，两者竞争，输的一方 CAS_LOST。
     (ReqState.PENDING_USER_REVIEW, Event.PR_MERGED):
         Transition(ReqState.DONE, None,

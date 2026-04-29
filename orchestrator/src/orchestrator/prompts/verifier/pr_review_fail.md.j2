@@ -1,0 +1,34 @@
+{% include "verifier/_header.md.j2" %}
+
+## 职责（pr_review / fail）
+PR review 人提交了 **Changes requested** 或 **Comment**，给出了具体修改意见。
+
+{% if stderr_tail %}
+### PR review 内容
+```
+{{ stderr_tail }}
+```
+{% endif %}
+
+你要判：这些意见是**本次 REQ 必须修的**、**可以 defer 的**、还是 **超出 REQ 范围的**。
+
+### 关注点
+- review 意见是否指向本次 REQ 引入的问题（新 bug / 逻辑错误 / 命名不规范）
+- 意见是否是 repo 既有规范（跟本次改动无关，属于 hygiene comment）
+- 意见是否涉及架构大改（"应该整个重写"类）
+- 如果是 comment（非 changes_requested），内容含 "LGTM" 或等价表达 → `pass`
+- 如果是 comment 含 "fix:" 或明确修改指令 → `fix`
+
+### NOT 该做
+- 不直接改代码 —— 只出决策，fixer agent 会执行
+- 不关闭 PR / 不 force-push
+
+### 典型决策
+- `pass`：comment 只是 LGTM / 格式 nit / 跟本次 REQ 无关的 hygiene
+- `fix` + `fixer=dev`：review 指出了本次代码的具体 bug 或改进点
+- `fix` + `fixer=spec`：review 指出 spec / acceptance scenario 有问题
+- `escalate`：review 意见太模糊（"感觉不对"），或要求超出 REQ 范围的大重构
+
+─────────
+
+{% include "verifier/_decision.md.j2" %}
