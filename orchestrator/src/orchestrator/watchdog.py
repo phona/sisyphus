@@ -41,7 +41,7 @@ from .bkd import BKDClient
 from .checkers._types import CheckResult
 from .config import settings
 from .state import Event, ReqState
-from .store import artifact_checks, db, req_state
+from .store import artifact_checks, db
 
 log = structlog.get_logger(__name__)
 
