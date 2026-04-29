@@ -110,11 +110,11 @@ FIX_DEV_RUNNING
   ↓ fixer.done
 REVIEW_RUNNING (verifier 看 fixer 改对没)
   ↓ verifier pass → 重跑 accept stage（thanatos 跑新 scenarios）→ 新 acceptance report → 回 PENDING_USER_PR_REVIEW
-  ↓ verifier fix → 再 fixer 一轮（cap 5）
+  ↓ verifier fix → 再 fixer 一轮（cap 2）
   ↓ verifier escalate → ESCALATED
 ```
 
-**fixer cap 5 轮**沿用现有限制。第 6 轮 user request_changes 时强制 escalate（reason=fixer-cap-exceeded）让人介入。
+**fixer cap 2 轮**沿用现有限制。第 3 轮 user request_changes 时强制 escalate（reason=fixer-cap-exceeded）让人介入。
 
 ## 3. interrupt / resume 设计
 

@@ -605,6 +605,8 @@ async def test_start_fixer_persists_round_counter(monkeypatch):
         patches.append(patch)
     monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
     monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+    # 显式放宽 cap，避免默认值变化干扰计数器递增测试
+    monkeypatch.setattr("orchestrator.actions._verifier.settings.fixer_round_cap", 5)
 
     out = await v.start_fixer(
         body=make_body(), req_id="REQ-9", tags=[],
@@ -623,8 +625,8 @@ async def test_start_fixer_persists_round_counter(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_start_fixer_caps_at_default_5(monkeypatch):
-    """ctx.fixer_round=5（已起 5 轮）+ 第 6 次调 start_fixer → escalate（不开 fixer）。"""
+async def test_start_fixer_caps_at_default_2(monkeypatch):
+    """ctx.fixer_round=2（已起 2 轮）+ 第 3 次调 start_fixer → escalate（不开 fixer）。"""
     from orchestrator.actions import _verifier as v
     fake = make_fake_bkd()
     patch_bkd(monkeypatch, fake)
@@ -638,7 +640,7 @@ async def test_start_fixer_caps_at_default_5(monkeypatch):
 
     out = await v.start_fixer(
         body=make_body(), req_id="REQ-9", tags=["verify:dev_cross_check"],
-        ctx={"verifier_stage": "dev_cross_check", "fixer_round": 5},
+        ctx={"verifier_stage": "dev_cross_check", "fixer_round": 2},
     )
     # 不创 fixer issue
     fake.create_issue.assert_not_called()
@@ -650,7 +652,7 @@ async def test_start_fixer_caps_at_default_5(monkeypatch):
     reasons = [p for p in patches if "escalated_reason" in p]
     assert reasons
     assert reasons[-1]["escalated_reason"] == "fixer-round-cap"
-    assert reasons[-1]["fixer_round_cap_hit"] == 5
+    assert reasons[-1]["fixer_round_cap_hit"] == 2
 
 
 @pytest.mark.asyncio

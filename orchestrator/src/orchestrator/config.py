@@ -206,8 +206,8 @@ class Settings(BaseSettings):
     # 每次 verifier decision=fix 都会 start_fixer 起新一轮 fixer agent，跑完回 verifier
     # 复查；verifier 再判 fix 又起一轮。某些场景（spec 自相矛盾 / fixer 改不动根因）
     # 会无限循环。第 N+1 次 start_fixer 到达 cap → escalate（reason=fixer-round-cap）
-    # 让人介入。N 默认 5；调高 = 给 fixer 更多机会，调低 = 更早叫人。
-    fixer_round_cap: int = 5
+    # 让人介入。N 默认 2；调高 = 给 fixer 更多机会，调低 = 更早叫人。
+    fixer_round_cap: int = 2
 
     # ─── verifier 判 infra-flake 时的自动重跑次数上限 ────────────────────
     # verifier decision=retry（基础设施 flaky 判定）时，apply_verify_infra_retry

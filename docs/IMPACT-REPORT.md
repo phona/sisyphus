@@ -162,7 +162,7 @@
 | `fix(checkers): exit non-zero on empty /workspace/source` | AI 在空目录上静默通过 | 拒绝 silent-pass，强制失败 |
 | `fix(pr_ci_watch): treat all-green-but-no-GHA check-runs as fail` | GitHub API 返回全绿但无实际 GHA 配置 | 增加 GHA 存在性检查 |
 | `fix(engine): close orphan verifier stage_run on VERIFY_PASS` | verifier stage_run 在 self-loop 后未关闭 | engine 层显式补 close |
-| `feat(engine+watchdog): hard cap fixer rounds at N` | verifier↔fixer 死循环 | 硬上限 5 轮后强制 escalate |
+| `feat(engine+watchdog): hard cap fixer rounds at N` | verifier↔fixer 死循环 | 硬上限 2 轮后强制 escalate |
 | `fix(webhook): drop issue.updated without REQ tag` | BKD 推送无关 issue 事件导致 noise | 早期过滤 |
 
 ---

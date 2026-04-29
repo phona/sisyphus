@@ -1,6 +1,6 @@
 """
 Contract tests for REQ-fixer-round-cap-1777078900:
-feat(engine+watchdog): hard cap fixer rounds at N (default 5)
+feat(engine+watchdog): hard cap fixer rounds at N (default 2)
 
 Black-box behavioral contracts derived from:
   openspec/changes/REQ-fixer-round-cap-1777078900/specs/fixer-round-cap/spec.md

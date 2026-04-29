@@ -419,7 +419,7 @@ async def test_fixer_round_cap_marks_reason(monkeypatch):
         update_calls.append((req_id, patch))
 
     monkeypatch.setattr("orchestrator.watchdog.req_state.update_context", fake_update)
-    # 显式锁 cap 默认为 5（防 helm values 覆盖污染测试）
+    # 显式锁 cap 为 5（防 helm values 覆盖污染测试）
     monkeypatch.setattr("orchestrator.watchdog.settings.fixer_round_cap", 5)
 
     result = await watchdog._tick()
