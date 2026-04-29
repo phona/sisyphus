@@ -24,7 +24,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers (mirroring existing contract test conventions)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -191,7 +190,7 @@ class TestCapConfigurableFRCS3:
 
         patches = _start_fixer_patches(settings, mock_req_state, mock_bkd_cls)
         with patches[0], patches[1], patches[2], patches[3]:
-            result = await start_fixer(
+            await start_fixer(
                 body=_make_body(),
                 req_id="REQ-test",
                 tags=[],
