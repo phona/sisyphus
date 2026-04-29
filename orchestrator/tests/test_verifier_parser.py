@@ -12,19 +12,13 @@ from __future__ import annotations
 import base64
 import json
 
-import pytest
-
 from orchestrator.verifier_parser import (
-    ParseResult,
     _extract_balanced_braces,
-    _extract_from_tags,
-    _extract_from_text,
     _fix_common_json_syntax,
     _preprocess_json,
     _strip_markdown,
     extract_decision_robust,
 )
-
 
 # ─── 1. tag base64 解码 ──────────────────────────────────────────────────
 
