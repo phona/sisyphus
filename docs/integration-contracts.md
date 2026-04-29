@@ -166,6 +166,40 @@ shell 不展开 flag，等价全量。
 
 **幂等性硬要求**：accept-env-up / accept-env-down 必须可重复调（重试或 watchdog 路径会再 cleanup 一次）。
 
+### 2.4 analyze-agent 推 PR 前 guard
+
+analyze-agent 在 `gh pr create` **之前**必须跑通：
+
+```bash
+make ci-lint        # BASE_REV 自行计算或留空全量
+make ci-unit-test
+make ci-integration-test
+```
+
+**任一轮失败都禁止开 PR**。analyze-agent 自己修、重跑、直到全绿。
+
+常见失败场景：改了状态机或接口名 → 现有 contract / integration test assert 旧名 →
+同步修测试 → 重跑 → 全绿后再 `gh pr create`。
+
+这是 analyze-agent "全责交付"契约的一部分——推上去的代码必须让 `make ci-*` 全绿。
+
+### 2.5 challenger 复用业务仓 integration test 基础设施
+
+业务仓的 `ci-integration-test` target 已经定义了契约测试的完整基础设施
+（docker-compose 栈、fixture、服务发现、HTTP client）。challenger **不发明新框架**，
+直接复用。
+
+| 项目 | 约定 |
+|---|---|
+| build tag | `//go:build contract`（和 dev 的 `integration` 区分开，staging-test 不跑）|
+| 文件位置 | 优先读 `.claude/skills/integration-test/SKILL.md`；无 skill 时探测仓内现有 test 目录结构 |
+| fixture | 复用业务仓现有 fixture 包（如 ttp 的 `main/tests/fixture`）|
+| 服务发现 | 复用业务仓环境变量（如 `SERVICE_URL`）|
+| RED 验证 | `go test -tags=contract <contract-test-path>`（编译通过即可，服务不必须）|
+
+staging-test checker 只跑 `make ci-unit-test && make ci-integration-test`，
+**不跑 contract tag**。contract test 的 RED 阶段由 challenger 自行验证。
+
 > **历史命名**：早期契约依次叫过 `accept-up` / `accept-down`（M14 之前）和
 > `ci-accept-env-up` / `ci-accept-env-down`（REQ-accept-contract-docs-1777121224）。
 > 当前唯一支持名为 `accept-env-up` / `accept-env-down`（REQ-rename-accept-targets-1777124774，
