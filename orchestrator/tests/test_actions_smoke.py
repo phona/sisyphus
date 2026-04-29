@@ -57,6 +57,19 @@ def patch_db(monkeypatch, target_module: str):
     return pool_writes
 
 
+def patch_dispatch_slugs(monkeypatch, target_module: str):
+    """patch dispatch_slugs.get/put 为 no-op，避免 start_analyze 等 action 因 slug
+    命中而跳过 create_issue。"""
+    monkeypatch.setattr(
+        f"orchestrator.actions.{target_module}.dispatch_slugs.get",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        f"orchestrator.actions.{target_module}.dispatch_slugs.put",
+        AsyncMock(),
+    )
+
+
 def make_body(issue_id="src-1", project_id="p", event="session.completed", title="T"):
     return type("B", (), {
         "issueId": issue_id, "projectId": project_id,
@@ -71,36 +84,42 @@ async def test_start_analyze(monkeypatch):
     fake = make_fake_bkd()
     patch_bkd(monkeypatch, "start_analyze", fake)
     patch_db(monkeypatch, "start_analyze")  # admission gate reads pool
+    patch_dispatch_slugs(monkeypatch, "start_analyze")
     body = make_body(issue_id="intent-1", title="加个登录")
     out = await mod.start_analyze(body=body, req_id="REQ-9", tags=["intent:analyze"], ctx={})
     # cloned_repos=None: 直接 analyze 路径无 involved_repos，跳过 server-side clone
     # （REQ-clone-and-pr-ci-fallback-1777115925）
-    assert out == {"issue_id": "intent-1", "req_id": "REQ-9", "cloned_repos": None}
-    # 改 title + tags + 发 prompt + 推 working
-    assert fake.update_issue.await_count == 2  # title/tags + working
+    # REQ-fix-intent-issue-hijacking-1777427339: issue_id 现在指向新建的 analyze sub-issue
+    assert out == {"issue_id": "new-1", "req_id": "REQ-9", "cloned_repos": None}
+    # merge_tags_and_update(intent issue) + create_issue(analyze sub-issue) +
+    # follow_up(analyze sub-issue) + update_issue(analyze sub-issue status=working)
+    assert fake.merge_tags_and_update.await_count == 1
+    assert fake.create_issue.await_count == 1
     assert fake.follow_up_issue.await_count == 1
+    assert fake.update_issue.await_count == 1
 
 
 @pytest.mark.asyncio
 async def test_start_analyze_title_format(monkeypatch):
-    """验证 start_analyze 标题使用 short_title 格式（ — 分隔 + 截断）。"""
+    """验证 start_analyze 新建 analyze sub-issue 的标题使用 short_title 格式（ — 分隔 + 截断）。"""
     from orchestrator.actions import start_analyze as mod
     fake = make_fake_bkd()
     patch_bkd(monkeypatch, "start_analyze", fake)
     patch_db(monkeypatch, "start_analyze")  # admission gate reads pool
+    patch_dispatch_slugs(monkeypatch, "start_analyze")
 
     # 场景1：有 intent_title，长度正常
     body = make_body(issue_id="intent-1", title="加个登录端点")
     ctx = {"intent_title": "加个登录端点"}
     await mod.start_analyze(body=body, req_id="REQ-9", tags=["intent:analyze"], ctx=ctx)
-    _, kwargs = fake.update_issue.call_args_list[0]
+    _, kwargs = fake.create_issue.call_args_list[0]
     assert kwargs["title"] == "[REQ-9] [ANALYZE] — 加个登录端点"
 
     # 场景2：intent_title 超过 50 字符，需要截断 + 省略号
     long_title = "a" * 60
     ctx = {"intent_title": long_title}
     await mod.start_analyze(body=body, req_id="REQ-10", tags=["intent:analyze"], ctx=ctx)
-    _, kwargs = fake.update_issue.call_args_list[2]
+    _, kwargs = fake.create_issue.call_args_list[1]
     title = kwargs["title"]
     assert title.startswith("[REQ-10] [ANALYZE] — ")
     assert "…" in title
@@ -109,7 +128,7 @@ async def test_start_analyze_title_format(monkeypatch):
     # 场景3：ctx 为空，标题应该只有 [REQ-xx] [ANALYZE] 部分
     ctx = {}
     await mod.start_analyze(body=body, req_id="REQ-11", tags=["intent:analyze"], ctx=ctx)
-    _, kwargs = fake.update_issue.call_args_list[4]
+    _, kwargs = fake.create_issue.call_args_list[2]
     assert kwargs["title"] == "[REQ-11] [ANALYZE]"
 
 
