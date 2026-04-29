@@ -92,7 +92,7 @@ def test_challenger_workspace_paths_use_basename_placeholder() -> None:
     assert "/workspace/source/<spec_home_repo>" not in text, (
         "challenger.md.j2 still uses `/workspace/source/<spec_home_repo>` as a "
         "path segment, but `<spec_home_repo>` placeholder holds `<owner>/<repo>` "
-        "form (see done_archive.md.j2 example) — runner pod's clone helper lays "
+        "form — runner pod's clone helper lays"
         "repos out at /workspace/source/<basename>/. Use "
         "`<spec_home_repo_basename>` in path segments instead (PRA-S8)."
     )

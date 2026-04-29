@@ -292,7 +292,7 @@ def test_s6_session_end_signals_excludes_intake_no_result_tag():
         "watchdog no longer emits this event. "
         f"Current set: {_SESSION_END_SIGNALS!r}"
     )
-    for required in ("session.failed", "watchdog.stuck", "archive.failed"):
+    for required in ("session.failed", "watchdog.stuck"):
         assert required in _SESSION_END_SIGNALS, (
             f"_SESSION_END_SIGNALS MUST still contain '{required}'. "
             f"Current set: {_SESSION_END_SIGNALS!r}"

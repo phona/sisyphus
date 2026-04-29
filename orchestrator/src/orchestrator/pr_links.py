@@ -44,7 +44,6 @@ _KNOWN_ISSUE_ID_KEYS = (
     "staging_test_issue_id",
     "pr_ci_watch_issue_id",
     "accept_issue_id",
-    "archive_issue_id",
 )
 
 

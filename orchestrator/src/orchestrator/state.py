@@ -36,7 +36,6 @@ class ReqState(StrEnum):
     ACCEPT_TEARING_DOWN = "accept-tearing-down" # env-down 清 lab，后续按 accept_result 分流
     PENDING_USER_REVIEW = "pending-user-review" # accept 全过 → 等用户验收（statusId 表态，watchdog skip）
     GH_INCIDENT_OPEN = "gh-incident-open"       # GitHub issue 已开，等人
-    ARCHIVING = "archiving"                     # done-archive agent（合 PR 等）
     # verifier-agent 框架
     REVIEW_RUNNING = "review-running"           # verifier-agent 在跑（success / fail 两触发统一入口）
     FIXER_RUNNING = "fixer-running"             # verifier decision=fix → 起对应 fixer agent（dev/spec）
@@ -68,7 +67,6 @@ class Event(StrEnum):
     ACCEPT_FAIL = "accept.fail"                     # accept-agent 发现 bug → verifier
     TEARDOWN_DONE_PASS = "teardown-done.pass"       # env-down 完（上一个是 accept.pass）
     TEARDOWN_DONE_FAIL = "teardown-done.fail"       # env-down 完（上一个是 accept.fail）→ verifier
-    ARCHIVE_DONE = "archive.done"
     # REQ-pr-merge-archive-hook-1777344443：人手合 PR 后 GHA 触发，跳过剩余 gate 直接归档
     PR_MERGED = "pr.merged"
     SESSION_FAILED = "session.failed"
@@ -204,34 +202,34 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
 
     # ─── PENDING_USER_REVIEW 出口（REQ-bkd-acceptance-feedback-loop-1777278984）───
     # 用户改 BKD intent issue statusId：
-    #   - "done" → USER_REVIEW_PASS → ARCHIVING（发车）
+    #   - "done" → USER_REVIEW_PASS → DONE（archive 作为 fire-and-forget 副作用）
     #   - "review" / "blocked" → USER_REVIEW_FIX → ESCALATED（reason=user-requested-fix）
     # 没 SESSION_FAILED self-loop —— 该 state 没 BKD agent 在跑，不会收到 session 事件
     # （watchdog 也 skip 此 state，见 watchdog._SKIP_STATES）
     (ReqState.PENDING_USER_REVIEW, Event.USER_REVIEW_PASS):
-        Transition(ReqState.ARCHIVING, "done_archive",
-                   "用户把 BKD intent statusId 改 done → 归档发车"),
+        Transition(ReqState.DONE, None,
+                   "用户把 BKD intent statusId 改 done → 直接终态，archive 后台异步跑"),
 
     (ReqState.PENDING_USER_REVIEW, Event.USER_REVIEW_FIX):
         Transition(ReqState.ESCALATED, "escalate",
                    "用户把 BKD intent statusId 改 review/blocked → 标 user-requested-fix 入 escalated"),
 
-    # ─── PR_MERGED：人手合 PR 后 GHA 钩 → admin endpoint 注入，跳 gate 直归档 ───────────
+    # ─── PR_MERGED：人手合 PR 后 GHA 钩 → admin endpoint 注入，跳 gate 直达 DONE ───────────
     # REQ-pr-merge-archive-hook-1777344443
     # 主场景：PENDING_USER_REVIEW（最常见的卡死态：accept 全过但 sisyphus 不知道 PR 被人合了）。
     # 兜底：REVIEW_RUNNING / PR_CI_RUNNING（极少：verifier 或 CI 还在跑时人已合 PR）。
     # CAS 保证并发安全：如果 verifier/CI 也在尝试 transition，两者竞争，输的一方 CAS_LOST。
     (ReqState.PENDING_USER_REVIEW, Event.PR_MERGED):
-        Transition(ReqState.ARCHIVING, "done_archive",
-                   "PR merged by reviewer → skip user-review gate → archive"),
+        Transition(ReqState.DONE, None,
+                   "PR merged by reviewer → skip user-review gate → done"),
 
     (ReqState.REVIEW_RUNNING, Event.PR_MERGED):
-        Transition(ReqState.ARCHIVING, "done_archive",
-                   "PR merged while verifier running → archive (CAS races verifier; one wins)"),
+        Transition(ReqState.DONE, None,
+                   "PR merged while verifier running → done (CAS races verifier; one wins)"),
 
     (ReqState.PR_CI_RUNNING, Event.PR_MERGED):
-        Transition(ReqState.ARCHIVING, "done_archive",
-                   "PR merged while CI running → archive (CAS races ci-watch; one wins)"),
+        Transition(ReqState.DONE, None,
+                   "PR merged while CI running → done (CAS races ci-watch; one wins)"),
 
     # ─── verifier 子链 ─────────────────────────────────────────────────
     # verifier-agent 完成 → webhook 解 decision JSON → emit 对应事件。
@@ -262,10 +260,6 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     (ReqState.FIXER_RUNNING, Event.VERIFY_ESCALATE):
         Transition(ReqState.ESCALATED, "escalate",
                    "fixer round 触顶 / start_fixer 自判 escalate"),
-
-    # ─── 终态 ───────────────────────────────────────────────────────────
-    (ReqState.ARCHIVING, Event.ARCHIVE_DONE):
-        Transition(ReqState.DONE, None, "REQ complete"),
 
     # ─── 人工恢复（escalate ≠ 死终态）─────────────────────────────────────
     # 用户在 BKD UI follow-up 那个 escalate 的 verifier issue → BKD wake agent →
@@ -299,7 +293,6 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
             ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
             ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
             ReqState.REVIEW_RUNNING, ReqState.FIXER_RUNNING,
-            ReqState.ARCHIVING,
         ]
     },
 }

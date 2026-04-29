@@ -1,9 +1,9 @@
 """Engine step tests for PR_MERGED + USER_REVIEW_FIX transitions.
 
 Closes the remaining 4 transitions that had sweep-only coverage in ERT-S9:
-- PENDING_USER_REVIEW + PR_MERGED  → ARCHIVING
-- REVIEW_RUNNING    + PR_MERGED  → ARCHIVING
-- PR_CI_RUNNING     + PR_MERGED  → ARCHIVING
+- PENDING_USER_REVIEW + PR_MERGED  → DONE
+- REVIEW_RUNNING    + PR_MERGED  → DONE
+- PR_CI_RUNNING     + PR_MERGED  → DONE
 - PENDING_USER_REVIEW + USER_REVIEW_FIX → ESCALATED
 """
 from __future__ import annotations
@@ -72,13 +72,10 @@ _PR_MERGED_CASES = [
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cur_state,issue_id", _PR_MERGED_CASES)
-async def test_pr_merged_advances_to_archiving(
+async def test_pr_merged_advances_to_done(
     stub_actions, mock_runner_controller, cur_state, issue_id,
 ):
-    """PR merged by reviewer → skip remaining gates → archive."""
-    calls: list = []
-    stub_actions["done_archive"] = _make_recorder("done_archive", calls)
-
+    """PR merged by reviewer → skip remaining gates → done."""
     pool = FakePool({"REQ-1": FakeReq(state=cur_state.value)})
     body = _body(issueId=issue_id, projectId="p", event="pr.merged")
 
@@ -89,12 +86,13 @@ async def test_pr_merged_advances_to_archiving(
     )
     await _drain_tasks()
 
-    assert result["action"] == "done_archive"
-    assert result["next_state"] == ReqState.ARCHIVING.value
-    assert pool.rows["REQ-1"].state == ReqState.ARCHIVING.value
-    assert len(calls) == 1
-    # ARCHIVING is non-terminal → no cleanup yet
-    mock_runner_controller.cleanup_runner.assert_not_awaited()
+    assert result["action"] == "no-op"
+    assert result["next_state"] == ReqState.DONE.value
+    assert pool.rows["REQ-1"].state == ReqState.DONE.value
+    # DONE is terminal → cleanup should run
+    mock_runner_controller.cleanup_runner.assert_awaited_once_with(
+        "REQ-1", retain_pvc=False,
+    )
 
 
 # ─── USER_REVIEW_FIX ──────────────────────────────────────────────────────

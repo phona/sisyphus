@@ -164,7 +164,6 @@ async def test_USER_S8_sub_issue_id_does_not_emit_user_review(monkeypatch):
     [
         ReqState.ANALYZING,
         ReqState.STAGING_TEST_RUNNING,
-        ReqState.ARCHIVING,
         ReqState.DONE,
         ReqState.ESCALATED,
     ],

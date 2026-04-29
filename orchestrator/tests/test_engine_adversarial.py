@@ -146,8 +146,8 @@ async def test_eat_s4_row_vanishes_mid_chain(stub_actions):
 async def test_eat_s5_chained_illegal_transition(stub_actions):
     """Spec EAT-S5: handler emit 一个该 state 没注册的 event → chain 子 step 返 skip。"""
     async def start_challenger(*, body, req_id, tags, ctx):
-        # CHALLENGER_RUNNING + ARCHIVE_DONE 没有 transition
-        return {"emit": Event.ARCHIVE_DONE.value}
+        # CHALLENGER_RUNNING + ACCEPT_PASS 没有 transition
+        return {"emit": Event.ACCEPT_PASS.value}
 
     stub_actions["start_challenger"] = start_challenger
 
@@ -160,7 +160,7 @@ async def test_eat_s5_chained_illegal_transition(stub_actions):
     assert result["action"] == "start_challenger"
     assert "chained" in result
     assert result["chained"]["action"] == "skip"
-    assert "no transition challenger-running+archive.done" in result["chained"]["reason"]
+    assert "no transition challenger-running+accept.pass" in result["chained"]["reason"]
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -372,7 +372,7 @@ async def test_eat_s12_done_skips_every_event(stub_actions):
         "start_intake", "start_analyze", "start_analyze_with_finalized_intent",
         "create_analyze_artifact_check", "create_spec_lint", "start_challenger",
         "create_dev_cross_check", "create_staging_test", "create_pr_ci_watch",
-        "create_accept", "teardown_accept_env", "done_archive", "escalate",
+        "create_accept", "teardown_accept_env", "escalate",
         "apply_verify_pass", "start_fixer", "invoke_verifier_after_fix",
         "invoke_verifier_for_analyze_artifact_check_fail",
         "invoke_verifier_for_spec_lint_fail",

@@ -240,47 +240,8 @@ async def test_escalate_canonical_signal_overrides_stale_ctx(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_escalate_archive_failed_from_watchdog(monkeypatch):
-    """REQ-archive-failure-watchdog: watchdog 贴 body.event='archive.failed' →
-    reason='archive-failed'（不是 generic 'watchdog-stuck'），auto-resume 一次。"""
-    from orchestrator.actions import escalate as mod
-    fake = make_fake_bkd()
-    patch_bkd(monkeypatch, "escalate", fake)
-    patch_db(monkeypatch, "escalate")
-    body = make_body(issue_id="arch-1", event="archive.failed")
-    out = await mod.escalate(
-        body=body, req_id="REQ-9", tags=["done-archive"],
-        ctx={"intent_issue_id": "intent-1", "archive_issue_id": "arch-1"},
-    )
-    # archive.failed 是 canonical → reason 直接 slug 化得 archive-failed
-    assert out["auto_resumed"] is True
-    assert out["reason"] == "archive-failed"
-    fake.follow_up_issue.assert_awaited_once()
-    fake.merge_tags_and_update.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_escalate_archive_failed_from_bkd_session_failed_webhook(monkeypatch):
-    """REQ-archive-failure-watchdog: BKD 真发的 session.failed webhook + body.issueId
-    匹配 ctx.archive_issue_id → reason 也覆盖为 'archive-failed'（不是默认 'session-failed'），
-    让 dashboard M7 能统一统计 archive 阶段失败。"""
-    from orchestrator.actions import escalate as mod
-    fake = make_fake_bkd()
-    patch_bkd(monkeypatch, "escalate", fake)
-    patch_db(monkeypatch, "escalate")
-    body = make_body(issue_id="arch-2", event="session.failed")
-    out = await mod.escalate(
-        body=body, req_id="REQ-9", tags=["done-archive"],
-        ctx={"intent_issue_id": "intent-1", "archive_issue_id": "arch-2"},
-    )
-    assert out["auto_resumed"] is True
-    assert out["reason"] == "archive-failed"
-
-
-@pytest.mark.asyncio
 async def test_escalate_session_failed_unrelated_issue_unchanged(monkeypatch):
-    """body.issueId 不是 archive_issue_id（比如 dev / accept 阶段崩溃）→ reason 不变 'session-failed'。
-    确保 archive override 只在 issue 真匹配 archive_issue_id 时生效。"""
+    """body.issueId 不匹配任何已知 stage issue → reason 不变 'session-failed'。"""
     from orchestrator.actions import escalate as mod
     fake = make_fake_bkd()
     patch_bkd(monkeypatch, "escalate", fake)
@@ -288,47 +249,9 @@ async def test_escalate_session_failed_unrelated_issue_unchanged(monkeypatch):
     body = make_body(issue_id="dev-1", event="session.failed")
     out = await mod.escalate(
         body=body, req_id="REQ-9", tags=["dev"],
-        ctx={"intent_issue_id": "intent-1", "archive_issue_id": "arch-other"},
+        ctx={"intent_issue_id": "intent-1"},
     )
     assert out["reason"] == "session-failed"
-
-
-@pytest.mark.asyncio
-async def test_escalate_archive_failed_real_after_retries_exhausted(monkeypatch):
-    """archive.failed + retry_count=2 → 真 escalate，final_reason='archive-failed-after-2-retries'
-    （区别于通用 'session-failed-after-2-retries'）。"""
-    from orchestrator.actions import escalate as mod
-    fake = make_fake_bkd()
-    patch_bkd(monkeypatch, "escalate", fake)
-    patch_db(monkeypatch, "escalate")
-    from unittest.mock import AsyncMock
-
-    from orchestrator import k8s_runner as krunner
-    from orchestrator.store import req_state as rs
-
-    class FakeRow:
-        state = type("S", (), {"value": "archiving"})()
-    monkeypatch.setattr(rs, "get", AsyncMock(return_value=FakeRow()))
-    monkeypatch.setattr(rs, "cas_transition", AsyncMock(return_value=True))
-    monkeypatch.setattr(krunner, "get_controller", lambda: type("C", (), {"cleanup_runner": AsyncMock()})())
-
-    body = make_body(issue_id="arch-1", event="archive.failed")
-    out = await mod.escalate(
-        body=body, req_id="REQ-9", tags=["done-archive"],
-        ctx={
-            "intent_issue_id": "intent-1",
-            "archive_issue_id": "arch-1",
-            "auto_retry_count": 2,
-        },
-    )
-    assert out["escalated"] is True
-    assert out["reason"] == "archive-failed-after-2-retries"
-    fake.merge_tags_and_update.assert_awaited_once()
-    fake.follow_up_issue.assert_not_awaited()
-    # 验证 tag merge 用的是 intent_issue_id（不是 archive issue），且 reason tag 正确
-    _, kwargs = fake.merge_tags_and_update.call_args
-    assert "escalated" in kwargs["add"]
-    assert "reason:archive-failed-after-2-retries" in kwargs["add"]
 
 
 @pytest.mark.asyncio
@@ -433,21 +356,7 @@ def test_is_transient_treats_fixer_round_cap_as_hard():
     assert _is_transient("session.failed", "session-failed") is True
 
 
-# ─── done_archive ─────────────────────────────────────────────────────────
-@pytest.mark.asyncio
-async def test_done_archive(monkeypatch):
-    from orchestrator.actions import done_archive as mod
-    fake = make_fake_bkd()
-    fake.create_issue.return_value = FakeIssue(id="done-1")
-    patch_bkd(monkeypatch, "done_archive", fake)
-    patch_db(monkeypatch, "done_archive")
-    out = await mod.done_archive(
-        body=make_body(issue_id="acc-1"), req_id="REQ-9", tags=["accept", "result:pass"],
-        ctx={"accept_issue_id": "acc-1"},
-    )
-    assert out == {"archive_issue_id": "done-1"}
-
-
+# ─── create_accept ────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_create_accept(monkeypatch):
     """v0.3-lite fallback: per-repo shell script exits 0 → emit accept.pass (no BKD agent)."""

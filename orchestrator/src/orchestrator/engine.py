@@ -54,12 +54,11 @@ STATE_TO_STAGE: dict[ReqState, str] = {
     ReqState.ACCEPT_TEARING_DOWN:    "accept_teardown",
     ReqState.REVIEW_RUNNING:         "verifier",
     ReqState.FIXER_RUNNING:          "fixer",
-    ReqState.ARCHIVING:              "archive",
 }
 # 仅以下 state 对应的 stage 由 BKD agent 跑；其他 state 是机械 checker / teardown，
 # 没 BKD session 可绑。webhook 用此集合决定 stamp_bkd_session_id 是否值得调用。
 AGENT_STAGES: frozenset[str] = frozenset({
-    "analyze", "verifier", "fixer", "accept", "archive",
+    "analyze", "verifier", "fixer", "accept",
 })
 
 # event → stage_runs.outcome 标签。escalate / session.failed 全归 fail。
@@ -81,7 +80,6 @@ _EVENT_TO_OUTCOME: dict[Event, str] = {
     Event.ACCEPT_ENV_UP_FAIL:   "fail",
     Event.TEARDOWN_DONE_PASS:   "pass",
     Event.TEARDOWN_DONE_FAIL:   "fail",
-    Event.ARCHIVE_DONE:         "pass",
     Event.SESSION_FAILED:       "fail",
     Event.VERIFY_PASS:          "pass",
     Event.VERIFY_FIX_NEEDED:    "fix",
@@ -221,6 +219,44 @@ async def _tag_intent_pr_ready(
         )
 
 
+async def _auto_archive(req_id: str, ctx: dict) -> None:
+    """REQ-archive-automation：transition 到 DONE 时后台 fire-and-forget 跑 openspec archive。
+
+    在 runner pod 内执行 `openspec archive REQ --yes && git add openspec/ && git commit`。
+    失败只 log warning，不阻塞状态机（REQ 已经是 DONE）。
+    archive commit 留在 feat 分支，随 PR 合入 main，不直接 push main。
+    """
+    try:
+        rc = k8s_runner.get_controller()
+    except RuntimeError as e:
+        log.debug("archive.no_controller", req_id=req_id, error=str(e))
+        return
+
+    script = (
+        f"for repo_path in /workspace/source/*/; do "
+        f"  cd \"$repo_path\" 2>/dev/null || continue; "
+        f"  if [ -d \"openspec/changes/{req_id}\" ]; then "
+        f"    openspec archive {req_id} --yes && "
+        f"    git add openspec/ && "
+        f"    git commit -m 'chore(openspec): archive {req_id}' || true; "
+        f"  fi; "
+        f"done"
+    )
+    try:
+        result = await rc.exec_in_runner(req_id, script, timeout_sec=120)
+        if result.exit_code == 0:
+            log.info("archive.done", req_id=req_id)
+        else:
+            log.warning(
+                "archive.failed",
+                req_id=req_id,
+                exit_code=result.exit_code,
+                stderr=(result.stderr or "")[-256:],
+            )
+    except Exception as e:
+        log.warning("archive.error", req_id=req_id, error=str(e))
+
+
 async def _cleanup_runner_on_terminal(req_id: str, terminal_state: ReqState) -> None:
     try:
         rc = k8s_runner.get_controller()
@@ -335,6 +371,12 @@ async def step(
         )
         _cleanup_tasks.add(sync_task)
         sync_task.add_done_callback(_cleanup_tasks.discard)
+
+        # REQ-archive-automation：转 DONE 时后台跑 openspec archive（fire-and-forget；失败不阻塞）
+        if transition.next_state == ReqState.DONE:
+            archive_task = asyncio.create_task(_auto_archive(req_id, ctx))
+            _cleanup_tasks.add(archive_task)
+            archive_task.add_done_callback(_cleanup_tasks.discard)
 
     # REQ-pr-ready-for-review-notify: REVIEW_RUNNING 进入时给 BKD intent issue 打 pr-ready tag
     if transition.next_state == ReqState.REVIEW_RUNNING:

@@ -48,9 +48,7 @@ _TRANSIENT_REASONS = {
     "session-failed",
     "watchdog-stuck",
     "runner-pod-not-ready",
-    "archive-failed",  # done-archive 阶段失败（state==ARCHIVING）
     "session-failed-after-2-retries",  # 兜底防自循环
-    "archive-failed-after-2-retries",  # 兜底防自循环（archive 路径）
 }
 
 # Hard reasons：明确叫人停 + 不允许 auto-resume 绕过。
@@ -71,8 +69,6 @@ def _is_transient(body_event: str | None, reason: str) -> bool:
         return True
     if body_event == "watchdog.stuck":
         return True  # watchdog 兜底永远值得续一次（BKD 漏发 webhook / process 卡住等）
-    if body_event == "archive.failed":
-        return True  # watchdog 在 ARCHIVING 阶段贴的 archive 专属信号
     if reason in _TRANSIENT_REASONS:
         return True
     if reason.startswith("action-error:"):
@@ -87,16 +83,13 @@ def _is_transient(body_event: str | None, reason: str) -> bool:
 # （避免被前轮 ctx.escalated_reason 毒化）。
 # - session.failed: BKD 真发的 webhook
 # - watchdog.stuck: watchdog 兜底
-# - archive.failed: watchdog 在 ARCHIVING state 贴的细分信号（让 reason="archive-failed"
-#   能在 dashboard 上跟通用 watchdog-stuck 区分）
-_CANONICAL_SIGNALS = {"session.failed", "watchdog.stuck", "archive.failed"}
+_CANONICAL_SIGNALS = {"session.failed", "watchdog.stuck"}
 
 # 走 SESSION_FAILED transition 的 body.event 都需要在 escalate 末尾手动 CAS 推到
 # ESCALATED + 清 runner（transition 是 self-loop，engine 不自动清）。
 _SESSION_END_SIGNALS = {
     "session.failed",
     "watchdog.stuck",
-    "archive.failed",
 }
 
 
@@ -179,7 +172,7 @@ async def _apply_pr_merged_done_override(
     cur = row.state
     advanced = await req_state.cas_transition(
         pool, req_id, cur, ReqState.DONE,
-        Event.ARCHIVE_DONE, "escalate_pr_merged_override",
+        Event.PR_MERGED, "escalate_pr_merged_override",
         context_patch={
             "completed_via": "pr-merge",
             "completed_from_state": cur.value,
@@ -344,17 +337,6 @@ async def escalate(*, body, req_id, tags, ctx):
         reason = ctx_reason or (
             (body.event or "unknown").replace(".", "-")[:40]
         )
-    # 二次 override：BKD 真发的 session.failed webhook 也能识别 archive 阶段
-    # （body.issueId == ctx.archive_issue_id 说明是 done-archive agent 崩溃）。
-    # watchdog 路径已经直接贴 body.event="archive.failed"，命中上面的 canonical 分支
-    # 自然得到 "archive-failed"；这里专门补 BKD webhook 路径。
-    archive_issue_id = (ctx or {}).get("archive_issue_id")
-    if (
-        body.event == "session.failed"
-        and archive_issue_id
-        and failed_issue_id == archive_issue_id
-    ):
-        reason = "archive-failed"
     retry_count = (ctx or {}).get("auto_retry_count", 0)
 
     # ─── 1. transient + retry < 2 → auto-resume ────────────────────────────
@@ -388,10 +370,7 @@ async def escalate(*, body, req_id, tags, ctx):
     # ─── 2. 真 escalate：retry 用完 / non-transient (verifier escalate / intake-fail / pr-ci-timeout 等) ─
     final_reason = reason
     if retry_count >= _MAX_AUTO_RETRY and _is_transient(body.event, reason):
-        if reason == "archive-failed":
-            final_reason = "archive-failed-after-2-retries"
-        else:
-            final_reason = "session-failed-after-2-retries"
+        final_reason = "session-failed-after-2-retries"
 
     pool = db.get_pool()
 
@@ -466,7 +445,7 @@ async def escalate(*, body, req_id, tags, ctx):
     # SESSION_FAILED 类路径下 transition 是 self-loop（state 没动），需手动 CAS 推到
     # ESCALATED 并清 runner。
     # 触发源：BKD 真发的 session.failed webhook，或 watchdog 内部 emit Event.SESSION_FAILED
-    # （body.event="watchdog.stuck" 通用 / "archive.failed" 在 ARCHIVING state 上）。
+    # （body.event="watchdog.stuck"）。
     # 其他事件路径（如 INTAKE_FAIL / PR_CI_TIMEOUT / VERIFY_ESCALATE）的 transition
     # 已在 state.py 写死 next_state=ESCALATED，engine 已经做过 CAS + cleanup，这里跳过。
     is_session_failed_path = body.event in _SESSION_END_SIGNALS

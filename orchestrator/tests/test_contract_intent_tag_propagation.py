@@ -40,7 +40,7 @@ def test_UTI_S1_filter_strips_exact_managed_tags() -> None:
 
     managed_exact = [
         "sisyphus", "intake", "analyze", "challenger", "verifier",
-        "fixer", "accept", "staging-test", "pr-ci", "done-archive",
+        "fixer", "accept", "staging-test", "pr-ci",
     ]
     result = filter_propagatable_intent_tags(managed_exact)
     assert result == [], (
@@ -318,7 +318,7 @@ def test_UTI_module_exports_constants() -> None:
     # Spot-check known members from spec
     assert "sisyphus" in SISYPHUS_MANAGED_EXACT
     assert "challenger" in SISYPHUS_MANAGED_EXACT
-    assert "done-archive" in SISYPHUS_MANAGED_EXACT
+    assert "pr-ready" in SISYPHUS_MANAGED_EXACT
     assert any(p.startswith("parent") for p in SISYPHUS_MANAGED_PREFIXES), (
         "SISYPHUS_MANAGED_PREFIXES must contain a 'parent'-family prefix."
     )

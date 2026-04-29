@@ -21,8 +21,6 @@ Scenarios covered:
   XLINK-S15 escalate: threads bkd_intent_url and pr_urls from ctx to open_incident
   XLINK-S16 analyze prompt: renders cross-link block when bkd_intent_issue_url provided
   XLINK-S17 analyze prompt: omits BKD link line when bkd_intent_issue_url empty
-  XLINK-S18 done_archive prompt: renders Known PRs section when pr_urls present
-  XLINK-S19 done_archive prompt: omits Known PRs heading when pr_urls absent
   XLINK-S20 SQL query: returns bkd_intent_url and pr_urls_md columns (integration)
   XLINK-S21 SQL query: tolerates missing context fields returning NULL (integration)
 
@@ -826,59 +824,6 @@ class TestAnalyzePromptCrossLink:
         assert "[BKD intent issue](" not in result, (
             "XLINK-S17: '[BKD intent issue](' MUST NOT appear when bkd_intent_issue_url is empty"
         )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Part 8: done_archive prompt pr_urls rendering — XLINK-S18..S19
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestDoneArchivePromptPrUrls:
-    """Spec: done_archive.md.j2 renders Known PRs section conditionally."""
-
-    _BASE_VARS: ClassVar[dict] = dict(
-        req_id="REQ-x",
-        accept_issue_id="accept-1",
-        project_id="P",
-        project_alias="P",
-        issue_id="I",
-        intent_issue_id="intent-1",
-    )
-
-    def test_xlink_s18_renders_known_prs_when_pr_urls_present(self) -> None:
-        """
-        XLINK-S18: pr_urls={'foo/bar': 'https://github.com/foo/bar/pull/9'} →
-        output contains '## Known PRs' AND
-        '- [foo/bar#9](https://github.com/foo/bar/pull/9)'.
-        """
-        result = _render_jinja2(
-            "done_archive.md.j2",
-            **self._BASE_VARS,
-            pr_urls={"foo/bar": "https://github.com/foo/bar/pull/9"},
-        )
-
-        assert "## Known PRs" in result, (
-            "XLINK-S18: output MUST contain '## Known PRs' when pr_urls is non-empty"
-        )
-        assert "- [foo/bar#9](https://github.com/foo/bar/pull/9)" in result, (
-            "XLINK-S18: output MUST contain markdown bullet for foo/bar#9"
-        )
-
-    def test_xlink_s19_omits_known_prs_when_pr_urls_absent(self) -> None:
-        """
-        XLINK-S19: pr_urls absent / empty →
-        output MUST NOT contain '## Known PRs' (no orphan heading).
-        """
-        for pr_urls_val in ({}, None, "absent"):
-            kwargs = dict(**self._BASE_VARS)
-            if pr_urls_val != "absent":
-                kwargs["pr_urls"] = pr_urls_val  # type: ignore[assignment]
-            result = _render_jinja2("done_archive.md.j2", **kwargs)
-
-            assert "## Known PRs" not in result, (
-                f"XLINK-S19: '## Known PRs' MUST NOT appear when pr_urls={pr_urls_val!r}; "
-                f"found in output"
-            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -11,7 +11,7 @@ State 操作：
                                        （派 VERIFY_PASS / VERIFY_FIX_NEEDED 走合法 transition）
   POST /admin/req/{req_id}/pr-merged  body: {"merged_pr_url": "...", "merged_sha": "...", "merged_at": "..."}
                                        → GHA 钩：人手合 PR 后通知 orch，state 在 pending-user-review /
-                                          review-running / pr-ci-running 时发 PR_MERGED → done_archive
+                                          review-running / pr-ci-running 时发 PR_MERGED → DONE
   GET  /admin/metrics
   GET  /admin/req/{req_id}
 
@@ -653,7 +653,7 @@ class PrMergedBody(BaseModel):
 # Terminal states where PR_MERGED is a noop (already done or escalated).
 _PR_MERGED_NOOP_STATES = frozenset({ReqState.DONE, ReqState.ESCALATED})
 
-# States that accept PR_MERGED → done_archive transition (via state.py TRANSITIONS).
+# States that accept PR_MERGED → DONE transition (via state.py TRANSITIONS).
 _PR_MERGED_VALID_STATES = frozenset({
     ReqState.PENDING_USER_REVIEW,
     ReqState.REVIEW_RUNNING,
@@ -694,7 +694,7 @@ async def pr_merged(
             ),
         )
 
-    # 写 merge 元数据入 ctx，让 done_archive action 可读到
+    # 写 merge 元数据入 ctx，供后续观测用
     ctx_patch = {
         "merged_pr_url": body.merged_pr_url,
         "merged_sha": body.merged_sha,

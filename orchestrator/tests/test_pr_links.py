@@ -280,7 +280,6 @@ async def test_LP_S5b_backfill_iterates_all_known_issue_ids(monkeypatch, httpx_m
         "analyze_issue_id": "a-1",
         "staging_test_issue_id": "s-1",
         "accept_issue_id": "ac-1",
-        # archive_issue_id 缺：不该 panic
         "unknown_key": "x-1",  # 不在白名单：不该被 backfill
     }
     await pr_links.ensure_pr_links_in_ctx(

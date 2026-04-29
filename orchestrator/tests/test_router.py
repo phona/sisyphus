@@ -46,7 +46,6 @@ CASES: list[tuple[str, list[str], Event | None]] = [
     # M14c：bugfix / diagnose tag 已删除映射（router 不再认这两个 agent role）
     ("session.completed", ["bugfix", "REQ-1", "round-1"],                    None),
     ("session.completed", ["diagnose", "REQ-1", "diagnosis:code-bug"],       None),
-    ("session.completed", ["done-archive", "REQ-1"],                         Event.ARCHIVE_DONE),
 
     # M14b verifier-agent：由 router 主动返 None，交 webhook.derive_verifier_event 解 JSON
     ("session.completed", ["verifier", "REQ-1", "verify:dev", "trigger:success"], None),

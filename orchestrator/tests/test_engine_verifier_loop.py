@@ -390,7 +390,6 @@ _SESSION_FAILED_STATES = [
         ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
         ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
         ReqState.REVIEW_RUNNING, ReqState.FIXER_RUNNING,
-        ReqState.ARCHIVING,
     ]
 ]
 
@@ -431,7 +430,7 @@ async def test_vlt_s15_session_failed_self_loops_to_escalate(
 @pytest.mark.asyncio
 async def test_vlt_s16_session_failed_on_init_is_dropped(stub_actions):
     """Spec VLT-S16: INIT 不在 SESSION_FAILED transition 集合（只有 *_RUNNING + INTAKING
-    + ARCHIVING 在）→ engine 应返 skip 而不是误进 escalate。"""
+    + ACCEPT_TEARING_DOWN 在）→ engine 应返 skip 而不是误进 escalate。"""
     calls: list = []
     stub_actions["escalate"] = _make_recorder("escalate", calls)
 

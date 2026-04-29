@@ -60,24 +60,21 @@ _STATE_ISSUE_KEY: dict[ReqState, str | None] = {
     ReqState.ACCEPT_TEARING_DOWN: "accept_issue_id",
     ReqState.REVIEW_RUNNING: "verifier_issue_id",
     ReqState.FIXER_RUNNING: "fixer_issue_id",
-    ReqState.ARCHIVING: "archive_issue_id",
 }
 
 # state → 兜底失败时贴在 _SyntheticBody.event 上的字符串。
 # escalate.py 把这串当 canonical signal，slug 化成 reason tag
 # （如 "archive.failed" → "archive-failed"），让 dashboards 能区分
-# done-archive 阶段崩溃 vs 通用 watchdog 卡死。
+# 通用 watchdog 卡死。
 # 未列出的 state 默认用 "watchdog.stuck"（→ reason "watchdog-stuck"）。
-_STATE_FAILURE_EVENT: dict[ReqState, str] = {
-    ReqState.ARCHIVING: "archive.failed",
-}
+_STATE_FAILURE_EVENT: dict[ReqState, str] = {}
 
 # sub-agent role tag（intake 不在此列：intake 跑在 user 创的 intent issue 上，
 # 那条 issue 的 statusId 反映用户意图，不该被补偿清理动）。
 # verifier 也排除：verifier 判 escalate 时 issue 应保持 review，BKD 侧无法区分 pass/fix/escalate。
 # REQ-fix-bkd-sub-issue-status-sync-1777426309
 _SUB_AGENT_ROLE_TAGS: frozenset[str] = frozenset({
-    "analyze", "challenger", "fixer", "accept", "done-archive",
+    "analyze", "challenger", "fixer", "accept",
 })
 
 # 排除：终态 + 等人态（human-in-loop）+ 未入链
@@ -140,7 +137,6 @@ _STAGE_POLICY: dict[ReqState, _StagePolicy | None] = {
     ReqState.CHALLENGER_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
     ReqState.ACCEPT_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
     ReqState.ACCEPT_TEARING_DOWN: _StagePolicy(ended_sec=300, stuck_sec=None),
-    ReqState.ARCHIVING: _StagePolicy(ended_sec=300, stuck_sec=None),
     ReqState.FIXER_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
     ReqState.REVIEW_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
     # external-poll
@@ -320,7 +316,7 @@ async def _check_and_escalate(row) -> bool:
             )
             return False
 
-    # 4. 选 body.event：ARCHIVING 用专属 archive.failed，其他通用 watchdog.stuck
+    # 4. 选 body.event：未列出的 state 通用 watchdog.stuck
     body_event = _STATE_FAILURE_EVENT.get(state, "watchdog.stuck")
     reason = "watchdog_stuck"
     stage_label = f"watchdog:{state_str}"
@@ -373,7 +369,7 @@ async def _check_and_escalate(row) -> bool:
 async def _sync_stuck_sub_agent_statuses_tick() -> dict:
     """补偿清理：把 BKD 中 sessionStatus=completed 但 statusId=review 的 sub-agent issue 推 done。
 
-    只动非 verifier 的 sub-agent issue（analyze / challenger / fixer / accept / done-archive）。
+    只动非 verifier 的 sub-agent issue（analyze / challenger / fixer / accept）。
     verifier issue 在 escalate 时应保持 review，BKD 侧无法区分 verdict，保守排除。
     REQ-fix-bkd-sub-issue-status-sync-1777426309
     """
