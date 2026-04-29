@@ -507,3 +507,54 @@ def test_USER_S12_pending_user_review_in_skip_states():
         assert legacy in watchdog._SKIP_STATES, (
             f"watchdog._SKIP_STATES must still contain legacy entry {legacy!r}"
         )
+
+
+# ── PR-PA-S12: post_acceptance_report includes PR review instructions ─────────
+
+
+@pytest.mark.asyncio
+async def test_PR_PA_S12_report_includes_pr_review_instructions(monkeypatch):
+    """Scenario PR-PA-S12: post_acceptance_report description contains PR review instructions.
+
+    Spec contract:
+      - The description MUST explain that GitHub PR review is the primary approval mechanism
+      - The description MUST mention Approve → auto-archive
+      - The description MUST mention Request changes → auto-fixer
+      - The description MUST mention Comment with LGTM → approve
+      - The description MUST mention Comment with fix: → fix
+      - The backward-compatible BKD statusId path MUST still be mentioned
+    """
+    from orchestrator.actions import post_acceptance_report as mod
+
+    bkd = _make_action_bkd(description="existing body without block")
+    _patch_action_bkd(monkeypatch, bkd)
+    _patch_action_db(monkeypatch)
+
+    ctx = {
+        "intent_issue_id": "intent-1",
+        "pr_urls": {"phona/sisyphus": "https://github.com/phona/sisyphus/pull/200"},
+    }
+
+    await mod.post_acceptance_report(
+        body=_make_action_body(),
+        req_id="REQ-test",
+        tags=["REQ-test"],
+        ctx=ctx,
+    )
+
+    bkd.update_issue.assert_awaited()
+    desc = _extract_description(bkd.update_issue.call_args)
+    assert desc is not None, "update_issue must receive a description argument"
+
+    # Spec: must explain GitHub PR review as primary approval mechanism
+    assert "Approve" in desc, "description must mention Approve as approval mechanism"
+    assert "Request changes" in desc, "description must mention Request changes"
+
+    # Spec: must mention LGTM and fix: keywords
+    assert "LGTM" in desc, "description must mention LGTM keyword"
+    assert "fix:" in desc, "description must mention fix: keyword"
+
+    # Spec: backward-compatible BKD statusId path must still be mentioned
+    assert "statusId" in desc or "done" in desc, (
+        "description must still mention backward-compatible BKD statusId path"
+    )
