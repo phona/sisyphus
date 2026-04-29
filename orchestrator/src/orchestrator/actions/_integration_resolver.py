@@ -43,6 +43,19 @@ log = structlog.get_logger(__name__)
 # resolver 误判"无 integration repo"），跟 dev_cross_check / staging_test 同根因。
 _SCAN_SCRIPT = r"""
 set +e
+# 诊断输出到 stderr（供 verifier / 日志审阅时定位空目录根因）
+if [ ! -d /workspace ]; then
+  echo "[resolver-diag] /workspace does not exist" >&2
+else
+  for root in /workspace/source /workspace/integration; do
+    if [ ! -d "$root" ]; then
+      echo "[resolver-diag] $root missing" >&2
+    else
+      count=$(find "$root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+      echo "[resolver-diag] $root has $count subdirs" >&2
+    fi
+  done
+fi
 for d in /workspace/integration/*/; do
   [ -d "$d" ] || continue
   [ -f "${d}Makefile" ] || continue
@@ -175,10 +188,20 @@ async def resolve_integration_dir(rc, req_id: str) -> ResolveResult:
         )
     integ, src = _parse_scan(result.stdout)
     decision = _decide(integ, src)
-    log.info(
-        "integration_resolver.decided",
-        req_id=req_id,
-        integration_candidates=integ, source_candidates=src,
-        chosen=decision.dir, reason=decision.reason or None,
-    )
+    if decision.dir is None:
+        log.warning(
+            "integration_resolver.unresolvable",
+            req_id=req_id,
+            integration_candidates=integ,
+            source_candidates=src,
+            reason=decision.reason,
+            stderr_diag=result.stderr[-300:],
+        )
+    else:
+        log.info(
+            "integration_resolver.decided",
+            req_id=req_id,
+            integration_candidates=integ, source_candidates=src,
+            chosen=decision.dir, reason=decision.reason or None,
+        )
     return decision

@@ -113,6 +113,7 @@ async def invoke_verifier(
             "verifier_issue_id": hit,
             "verifier_stage": stage,
             "verifier_trigger": trigger,
+            "verifier_parse_retry_count": 0,
         })
         return {"verifier_issue_id": hit, "stage": stage, "trigger": trigger}
 
@@ -162,6 +163,7 @@ async def invoke_verifier(
         "verifier_issue_id": issue.id,
         "verifier_stage": stage,
         "verifier_trigger": trigger,
+        "verifier_parse_retry_count": 0,
     })
 
     log.info(
