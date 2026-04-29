@@ -389,7 +389,7 @@ def test_session_end_signals_no_longer_lists_intake_no_result_tag():
     assert "watchdog.intake_no_result_tag" not in _SESSION_END_SIGNALS
     assert "session.failed" in _SESSION_END_SIGNALS
     assert "watchdog.stuck" in _SESSION_END_SIGNALS
-    assert "archive.failed" in _SESSION_END_SIGNALS
+    # archive.failed removed: archive now runs as fire-and-forget background task on DONE
 
 
 # ─── Case 9b：FIXER_RUNNING + fixer_round 已到 cap → 标 escalated_reason=fixer-round-cap ─

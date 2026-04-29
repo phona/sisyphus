@@ -219,8 +219,8 @@ async def test_pmo_s1_single_repo_merged_overrides_escalate_to_done(monkeypatch)
     cas = caps["cas_calls"][0]
     assert cas["target"] == ReqState.DONE, \
         f"PMO-S1: next_state MUST be DONE, got {cas['target']!r}"
-    assert cas["event"] == Event.ARCHIVE_DONE, \
-        f"PMO-S1: event MUST be ARCHIVE_DONE, got {cas['event']!r}"
+    assert cas["event"] == Event.PR_MERGED, \
+        f"PMO-S1: event MUST be PR_MERGED, got {cas['event']!r}"
     assert cas["action"] == "escalate_pr_merged_override", \
         f"PMO-S1: action MUST be 'escalate_pr_merged_override', got {cas['action']!r}"
 
@@ -309,7 +309,7 @@ async def test_pmo_s3_multi_repo_all_merged_overrides_to_done(monkeypatch):
         body=_FakeWebhookBody(event="session.failed"),
         bkd_factory=_tag_collector_factory(tag_log),
         open_incident_mock=AsyncMock(return_value="should-not-reach"),
-        initial_state="archiving",
+        initial_state="accept-running",
     )
 
     # Contract: CAS to DONE
@@ -492,7 +492,7 @@ async def test_pmo_s7_override_schedules_cleanup_with_retain_pvc_false(monkeypat
         body=_FakeWebhookBody(event="session.completed"),
         bkd_factory=_tag_collector_factory(tag_log),
         open_incident_mock=AsyncMock(return_value=None),
-        initial_state="archiving",
+        initial_state="accept-running",
     )
 
     # Yield to allow fire-and-forget asyncio.Task to execute
@@ -525,7 +525,7 @@ async def test_pmo_s8_override_bkd_tags_done_and_via_pr_merge_not_escalated(monk
         body=_FakeWebhookBody(event="session.completed"),
         bkd_factory=_tag_collector_factory(tag_log, status_log),
         open_incident_mock=AsyncMock(return_value=None),
-        initial_state="archiving",
+        initial_state="accept-running",
     )
 
     assert tag_log, "PMO-S8: bkd.merge_tags_and_update MUST be called at least once"

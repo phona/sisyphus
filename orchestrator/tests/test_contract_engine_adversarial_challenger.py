@@ -257,7 +257,8 @@ async def test_eat_s5_chained_emit_illegal_transition(monkeypatch) -> None:
     _patch_io(monkeypatch, get_side_effects=[_FakeRow(ReqState.CHALLENGER_RUNNING)])
 
     async def _handler(**_kw):
-        return {"emit": Event.ARCHIVE_DONE.value}
+        # CHALLENGER_RUNNING + ACCEPT_PASS has no transition
+        return {"emit": Event.ACCEPT_PASS.value}
 
     REGISTRY["start_challenger"] = _handler
 
@@ -274,8 +275,8 @@ async def test_eat_s5_chained_emit_illegal_transition(monkeypatch) -> None:
         f"EAT-S5: chained.action MUST be 'skip'; got chained={chained!r}"
     )
     reason = chained.get("reason") or ""
-    assert "no transition challenger-running+archive.done" in reason, (
-        f"EAT-S5: reason MUST contain 'no transition challenger-running+archive.done'; "
+    assert "no transition challenger-running+accept.pass" in reason, (
+        f"EAT-S5: reason MUST contain 'no transition challenger-running+accept.pass'; "
         f"got {reason!r}"
     )
 

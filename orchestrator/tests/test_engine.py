@@ -369,13 +369,20 @@ async def test_terminal_done_triggers_git_cleanup(stub_actions, mock_runner_cont
     mock_runner_controller.cleanup_runner.assert_awaited_once_with(
         "REQ-1", retain_pvc=False,
     )
-    mock_runner_controller.exec_in_runner.assert_awaited_once()
-    call_args = mock_runner_controller.exec_in_runner.await_args
-    assert call_args[0][0] == "REQ-1"  # req_id
-    command = call_args[0][1]
-    assert "git worktree remove" in command
-    assert "git branch -D" in command
-    assert call_args[1].get("timeout_sec") == 60
+    # REQ-archive-automation: DONE triggers both git cleanup AND archive → 2 exec_in_runner calls
+    assert mock_runner_controller.exec_in_runner.await_count == 2, (
+        f"Expected 2 exec_in_runner calls (git cleanup + archive), got {mock_runner_controller.exec_in_runner.await_count}"
+    )
+    calls = mock_runner_controller.exec_in_runner.await_args_list
+    # First call: git cleanup
+    assert calls[0][0][0] == "REQ-1"
+    assert "git worktree remove" in calls[0][0][1]
+    assert "git branch -D" in calls[0][0][1]
+    assert calls[0][1].get("timeout_sec") == 60
+    # Second call: archive
+    assert calls[1][0][0] == "REQ-1"
+    assert "openspec archive" in calls[1][0][1]
+    assert calls[1][1].get("timeout_sec") == 120
 
 
 @pytest.mark.asyncio
@@ -419,7 +426,8 @@ async def test_cleanup_runner_failure_still_attempts_git_cleanup(
     )
     await _drain_tasks()
 
-    mock_runner_controller.exec_in_runner.assert_awaited_once()
+    # REQ-archive-automation: 2 exec_in_runner calls (git cleanup + archive)
+    assert mock_runner_controller.exec_in_runner.await_count == 2
 
 
 @pytest.mark.asyncio

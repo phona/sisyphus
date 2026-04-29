@@ -146,8 +146,8 @@ async def test_eat_s4_row_vanishes_mid_chain(stub_actions):
 async def test_eat_s5_chained_illegal_transition(stub_actions):
     """Spec EAT-S5: handler emit 一个该 state 没注册的 event → chain 子 step 返 skip。"""
     async def start_challenger(*, body, req_id, tags, ctx):
-        # CHALLENGER_RUNNING + ARCHIVE_DONE 没有 transition
-        return {"emit": Event.ARCHIVE_DONE.value}
+        # CHALLENGER_RUNNING + ACCEPT_PASS 没有 transition
+        return {"emit": Event.ACCEPT_PASS.value}
 
     stub_actions["start_challenger"] = start_challenger
 
@@ -160,7 +160,7 @@ async def test_eat_s5_chained_illegal_transition(stub_actions):
     assert result["action"] == "start_challenger"
     assert "chained" in result
     assert result["chained"]["action"] == "skip"
-    assert "no transition challenger-running+archive.done" in result["chained"]["reason"]
+    assert "no transition challenger-running+accept.pass" in result["chained"]["reason"]
 
 
 # ───────────────────────────────────────────────────────────────────────

@@ -38,38 +38,6 @@ def _find_table_row(content: str, first_col: str) -> str:
 
 # ─── SMD-S1: archiving row reflects no-auto-merge contract ──────────────────
 
-def test_smd_s1_archiving_contains_no_auto_merge() -> None:
-    """SMD-S1: archiving row MUST contain '不 auto-merge'."""
-    row = _find_table_row(_load_state_machine_doc(), "archiving")
-    assert "不 auto-merge" in row, (
-        f"archiving row missing '不 auto-merge'. Row content:\n{row}"
-    )
-
-
-def test_smd_s1_archiving_contains_no_push_main() -> None:
-    """SMD-S1: archiving row MUST contain '不 push main'."""
-    row = _find_table_row(_load_state_machine_doc(), "archiving")
-    assert "不 push main" in row, (
-        f"archiving row missing '不 push main'. Row content:\n{row}"
-    )
-
-
-def test_smd_s1_archiving_references_pr124() -> None:
-    """SMD-S1: archiving row MUST reference PR #124."""
-    row = _find_table_row(_load_state_machine_doc(), "archiving")
-    assert "#124" in row, (
-        f"archiving row missing reference to PR #124. Row content:\n{row}"
-    )
-
-
-def test_smd_s1_archiving_not_contain_merge_pr() -> None:
-    """SMD-S1: archiving row MUST NOT contain '合 PR' (implies auto-merge)."""
-    row = _find_table_row(_load_state_machine_doc(), "archiving")
-    assert "合 PR" not in row, (
-        f"archiving row still contains '合 PR' which implies auto-merge — must be removed. Row content:\n{row}"
-    )
-
-
 # ─── SMD-S2: gh-incident-open row: correct PRs and function name ─────────────
 
 def test_smd_s2_gh_incident_references_pr118() -> None:
