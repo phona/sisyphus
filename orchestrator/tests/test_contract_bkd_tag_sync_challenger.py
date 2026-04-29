@@ -21,7 +21,6 @@ import pytest
 from orchestrator.bkd import Issue
 from orchestrator.bkd_rest import BKDRestClient
 
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -87,7 +86,7 @@ async def test_bkd_s1_single_caller_updates_tags_successfully():
     # Exactly one get → one patch cycle (no retry needed).
     assert len([c for c in calls if c["method"] == "get"]) == 1
     assert len([c for c in calls if c["method"] == "patch"]) == 1
-    patch_call = [c for c in calls if c["method"] == "patch"][0]
+    patch_call = next(c for c in calls if c["method"] == "patch")
     assert set(patch_call["json"]["tags"]) == {"REQ-9", "ci-passed"}
 
 
