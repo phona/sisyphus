@@ -65,14 +65,71 @@ HEADING_PATTERN='^##+ Scenario:[[:space:]]+([A-Z][A-Z0-9-]+-S[0-9]+)([[:space:]]
 # NB: 必须显式初始化为空 ()，否则 set -u + 空 ${#DEFINED[@]} 会报 unbound variable（bash 5.2）
 declare -A DEFINED=()
 
+# 全局 FAIL 标志，必须在 scan_spec_file 调用前设为 0（覆盖引用扫描段的旧值）
+FAILED=0
+
+# Scenario heading 匹配（用于空壳检测，精确匹配 #### Scenario:）
+SCENARIO_HEADING_PATTERN='^#{4}[[:space:]]+Scenario:[[:space:]]+([A-Z][A-Z0-9-]+-S[0-9]+)([[:space:]]|$|[^A-Z0-9-])'
+# Step 检测正则（匹配 gherkin 和 bullet 两种格式，大小写不敏感）
+_STEP_PATTERN='^[[:space:]]*(-[[:space:]]*\*\*)?[[:space:]]*([Gg][Ii][Vv][Ee][Nn]|[Ww][Hh][Ee][Nn]|[Tt][Hh][Ee][Nn]|[Aa][Nn][Dd]|[Bb][Uu][Tt])([^[:alnum:]_]|$)'
+
 scan_spec_file() {
   local file="$1"
   local line
+  local in_scenario=0
+  local scen_id=""
+  local scen_has_step=0
+
   while IFS= read -r line; do
-    if [[ "$line" =~ $HEADING_PATTERN ]]; then
-      DEFINED["${BASH_REMATCH[1]}"]="$file"
+    # 检测新的 scenario heading
+    if [[ "$line" =~ $SCENARIO_HEADING_PATTERN ]]; then
+      # 检查上一个 scenario 是否有 step
+      if [[ $in_scenario -eq 1 && $scen_has_step -eq 0 ]]; then
+        echo "FAIL: $file scenario [$scen_id] has no GIVEN/WHEN/THEN steps"
+        FAILED=1
+      fi
+      # 开始新 scenario
+      in_scenario=1
+      scen_id="${BASH_REMATCH[1]}"
+      scen_has_step=0
+      # 同时记录到 DEFINED（原有行为）
+      DEFINED["$scen_id"]="$file"
+      continue
+    fi
+
+    # 在 scenario 范围内检测 step 和结束条件
+    if [[ $in_scenario -eq 1 ]]; then
+      # 检测 step 行
+      if [[ "$line" =~ $_STEP_PATTERN ]]; then
+        scen_has_step=1
+      fi
+
+      # 检测是否遇到结束 scenario 的 heading
+      # 结束条件：1-3个#号（更高级/同级Requirement）或4个#号但不是Scenario（同级非Scenario）
+      local end_scenario=0
+      if [[ "$line" =~ ^#{1,3}[[:space:]] ]]; then
+        end_scenario=1
+      elif [[ "$line" =~ ^#{4}[[:space:]] && ! "$line" =~ $SCENARIO_HEADING_PATTERN ]]; then
+        end_scenario=1
+      fi
+
+      if [[ $end_scenario -eq 1 ]]; then
+        if [[ $scen_has_step -eq 0 ]]; then
+          echo "FAIL: $file scenario [$scen_id] has no GIVEN/WHEN/THEN steps"
+          FAILED=1
+        fi
+        in_scenario=0
+        scen_id=""
+        scen_has_step=0
+      fi
     fi
   done < "$file"
+
+  # 文件结尾检查最后一个 scenario
+  if [[ $in_scenario -eq 1 && $scen_has_step -eq 0 ]]; then
+    echo "FAIL: $file scenario [$scen_id] has no GIVEN/WHEN/THEN steps"
+    FAILED=1
+  fi
 }
 
 while IFS= read -r file; do
@@ -91,7 +148,6 @@ if [[ ${#DEFINED[@]} -eq 0 ]]; then
 fi
 
 # 扫所有引用位置，查找每一个 [XXX-S<N>]
-FAILED=0
 while IFS= read -r file; do
   # grep 出本文件所有 scenario 引用
   while IFS=: read -r lineno content; do
