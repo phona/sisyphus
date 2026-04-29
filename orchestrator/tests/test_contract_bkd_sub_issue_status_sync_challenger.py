@@ -30,7 +30,6 @@ import structlog.testing
 
 from orchestrator.bkd import Issue
 
-
 # ─── Fake BKD for webhook retry tests ────────────────────────────────────────
 
 
@@ -112,7 +111,6 @@ async def test_bss_s1_transient_bkd_error_succeeds_on_retry(monkeypatch, caplog)
     monkeypatch.setattr(webhook, "BKDClient", _FakeBKDFlaky)
 
     sleep_calls: list[float] = []
-    orig_sleep = asyncio.sleep
 
     async def _tracked_sleep(delay):
         sleep_calls.append(delay)
@@ -235,7 +233,6 @@ def _patch_pool(monkeypatch, pool):
 async def test_bss_s3_completed_analyze_patched_to_done(monkeypatch):
     """BSS-S3: review + completed + analyze + REQ tag → PATCHed to done."""
     from orchestrator import watchdog
-    from orchestrator.store import db
 
     pool = _FakePool(rows=[{"project_id": "proj-1"}])
     _patch_pool(monkeypatch, pool)
@@ -264,7 +261,6 @@ async def test_bss_s3_completed_analyze_patched_to_done(monkeypatch):
 async def test_bss_s4_verifier_issue_skipped(monkeypatch):
     """BSS-S4: review + completed + verifier tag → NOT PATCHed (preserve escalate path)."""
     from orchestrator import watchdog
-    from orchestrator.store import db
 
     pool = _FakePool(rows=[{"project_id": "proj-1"}])
     _patch_pool(monkeypatch, pool)
@@ -293,7 +289,6 @@ async def test_bss_s4_verifier_issue_skipped(monkeypatch):
 async def test_bss_s5_running_session_skipped(monkeypatch):
     """BSS-S5: review + running + analyze + REQ tag → NOT PATCHed."""
     from orchestrator import watchdog
-    from orchestrator.store import db
 
     pool = _FakePool(rows=[{"project_id": "proj-1"}])
     _patch_pool(monkeypatch, pool)
@@ -322,7 +317,6 @@ async def test_bss_s5_running_session_skipped(monkeypatch):
 async def test_bss_s6_non_review_status_skipped(monkeypatch):
     """BSS-S6: done + completed + analyze + REQ tag → NOT PATCHed."""
     from orchestrator import watchdog
-    from orchestrator.store import db
 
     pool = _FakePool(rows=[{"project_id": "proj-1"}])
     _patch_pool(monkeypatch, pool)
@@ -351,7 +345,6 @@ async def test_bss_s6_non_review_status_skipped(monkeypatch):
 async def test_bss_s7_no_req_tag_skipped(monkeypatch):
     """BSS-S7: review + completed + analyze (no REQ tag) → NOT PATCHed."""
     from orchestrator import watchdog
-    from orchestrator.store import db
 
     pool = _FakePool(rows=[{"project_id": "proj-1"}])
     _patch_pool(monkeypatch, pool)
@@ -380,7 +373,6 @@ async def test_bss_s7_no_req_tag_skipped(monkeypatch):
 async def test_bss_s8_individual_patch_failure_continues(monkeypatch):
     """BSS-S8: first PATCH fails with 500, second still PATCHed; report patched=1, failed=1."""
     from orchestrator import watchdog
-    from orchestrator.store import db
 
     pool = _FakePool(rows=[{"project_id": "proj-1"}])
     _patch_pool(monkeypatch, pool)
@@ -413,7 +405,6 @@ async def test_bss_s8_individual_patch_failure_continues(monkeypatch):
 async def test_bss_s9_multiple_projects_scanned(monkeypatch):
     """BSS-S9: active projects proj-a and proj-b each have one matching issue → both PATCHed."""
     from orchestrator import watchdog
-    from orchestrator.store import db
 
     pool = _FakePool(rows=[
         {"project_id": "proj-a"},

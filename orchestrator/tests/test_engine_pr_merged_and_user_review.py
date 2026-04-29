@@ -11,7 +11,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from test_engine import FakePool, FakeReq, _drain_tasks  # type: ignore[import-not-found]
 
 from orchestrator import engine, k8s_runner

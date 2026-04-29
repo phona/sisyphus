@@ -184,7 +184,7 @@ def test_derive_with_retry_info_schema_invalid_is_retry_worthy():
 
 
 def test_derive_with_retry_info_no_decision_not_retry_worthy():
-    ev, decision, why, retry = derive_verifier_event_with_retry_info("no json here", [])
+    ev, decision, _why, retry = derive_verifier_event_with_retry_info("no json here", [])
     assert ev == Event.VERIFY_ESCALATE
     assert decision is None
     assert retry is False
@@ -193,7 +193,7 @@ def test_derive_with_retry_info_no_decision_not_retry_worthy():
 def test_derive_with_retry_info_unparseable_but_retry_worthy():
     """找到了 decision-like 文本但解析失败 → retry_worthy=True。"""
     desc = "My decision is {action: pass, fixer: None} because..."
-    ev, decision, why, retry = derive_verifier_event_with_retry_info(desc, [])
+    ev, decision, _why, retry = derive_verifier_event_with_retry_info(desc, [])
     assert ev == Event.VERIFY_ESCALATE
     assert decision is None
     assert retry is True

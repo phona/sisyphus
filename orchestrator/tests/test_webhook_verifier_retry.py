@@ -5,7 +5,6 @@ REQ-fix-verifier-json-parse-1777420690：schema invalid 时自动 retry（最多
 from __future__ import annotations
 
 from typing import ClassVar
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -198,7 +197,7 @@ async def test_retry_on_schema_invalid_first_time(fake_bkd, fake_req_state, fake
 @pytest.mark.asyncio
 async def test_retry_on_schema_invalid_second_time(fake_bkd, fake_req_state, fake_obs, fake_dedup, monkeypatch):
     """第二次 schema invalid（retry_count=1）→ follow-up retry，返回 skip。"""
-    rows, ctx_updates = fake_req_state
+    rows, _ctx_updates = fake_req_state
     rows["REQ-1"] = _FakeReqStateRow(context={"verifier_parse_retry_count": 1})
     fake_bkd.set_last_msg("```json\n{\"action\": \"nope\"}\n```")
 
@@ -215,7 +214,7 @@ async def test_retry_on_schema_invalid_second_time(fake_bkd, fake_req_state, fak
 @pytest.mark.asyncio
 async def test_escalate_when_retry_exhausted(fake_bkd, fake_req_state, fake_obs, fake_dedup, monkeypatch):
     """第三次 schema invalid（retry_count=2）→ escalate，不再 retry。"""
-    rows, ctx_updates = fake_req_state
+    rows, _ctx_updates = fake_req_state
     rows["REQ-1"] = _FakeReqStateRow(context={"verifier_parse_retry_count": 2})
     fake_bkd.set_last_msg("```json\n{\"action\": \"nope\"}\n```")
 
@@ -234,7 +233,7 @@ async def test_escalate_when_retry_exhausted(fake_bkd, fake_req_state, fake_obs,
 @pytest.mark.asyncio
 async def test_no_retry_when_no_decision_found(fake_bkd, fake_req_state, fake_obs, fake_dedup, monkeypatch):
     """完全找不到 decision → 直接 escalate，不 retry。"""
-    rows, ctx_updates = fake_req_state
+    rows, _ctx_updates = fake_req_state
     rows["REQ-1"] = _FakeReqStateRow(context={})
     fake_bkd.set_last_msg("no json here at all")
 
@@ -252,7 +251,7 @@ async def test_no_retry_when_no_decision_found(fake_bkd, fake_req_state, fake_ob
 @pytest.mark.asyncio
 async def test_no_retry_when_valid_decision(fake_bkd, fake_req_state, fake_obs, fake_dedup, monkeypatch):
     """decision 合规 → 正常通过，不 retry。"""
-    rows, ctx_updates = fake_req_state
+    rows, _ctx_updates = fake_req_state
     rows["REQ-1"] = _FakeReqStateRow(context={})
     fake_bkd.set_last_msg('```json\n{"action": "pass", "fixer": null, "reason": "ok", "confidence": "high"}\n```')
 
