@@ -17,8 +17,7 @@ Scenarios covered:
 """
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -108,7 +107,7 @@ async def test_DFP_S1_dev_fixer_uses_dedicated_dev_prompt(_patch_start_fixer_dep
 
     render_calls = _patch_start_fixer_deps
 
-    result = await start_fixer(
+    await start_fixer(
         body=_FakeBody(),
         req_id=_REQ_ID,
         tags=["verify:dev_cross_check"],
@@ -137,7 +136,7 @@ async def test_DFP_S2_spec_fixer_uses_dedicated_spec_prompt(_patch_start_fixer_d
 
     render_calls = _patch_start_fixer_deps
 
-    result = await start_fixer(
+    await start_fixer(
         body=_FakeBody(),
         req_id=_REQ_ID,
         tags=["verify:spec_lint"],
@@ -165,7 +164,7 @@ async def test_DFP_S3_missing_fixer_fallback_to_bugfix(_patch_start_fixer_deps, 
 
     render_calls = _patch_start_fixer_deps
 
-    result = await start_fixer(
+    await start_fixer(
         body=_FakeBody(),
         req_id=_REQ_ID,
         tags=["verify:dev_cross_check"],
@@ -241,7 +240,7 @@ def test_DFP_S6_target_repo_extracted_from_decision_json():
         '"target_repo": "owner/repo-a"}\n'
         '```'
     )
-    event, decision, reason = derive_verifier_event(decision_json, tags=[])
+    event, decision, _reason = derive_verifier_event(decision_json, tags=[])
     assert event == Event.VERIFY_FIX_NEEDED
     assert decision is not None
     assert decision.get("target_repo") == "owner/repo-a"
@@ -260,7 +259,7 @@ async def test_DFP_S7_target_repo_appears_in_rendered_dev_prompt(_patch_start_fi
 
     render_calls = _patch_start_fixer_deps
 
-    result = await start_fixer(
+    await start_fixer(
         body=_FakeBody(),
         req_id=_REQ_ID,
         tags=["verify:dev_cross_check"],
