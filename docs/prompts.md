@@ -15,7 +15,9 @@
 | [challenger.md.j2](../orchestrator/src/orchestrator/prompts/challenger.md.j2) | challenger（M18：黑盒读 spec 写 contract test，**不看 dev 代码**；spec 自相矛盾 / 写不出 test → fail → verifier） | `actions/start_challenger.py` |
 | [accept.md.j2](../orchestrator/src/orchestrator/prompts/accept.md.j2) | accept | `actions/create_accept.py` |
 | [done_archive.md.j2](../orchestrator/src/orchestrator/prompts/done_archive.md.j2) | archive（每仓 `openspec apply` + 关 issue；**不自动合 PR / 不 push main**） | `actions/done_archive.py` |
-| [bugfix.md.j2](../orchestrator/src/orchestrator/prompts/bugfix.md.j2) | （fixer 过渡） | `actions/_verifier.py:start_fixer`（后续替换为专用 dev/spec fixer 模板） |
+| [verifier-fix-dev.md.j2](../orchestrator/src/orchestrator/prompts/verifier-fix-dev.md.j2) | fixer dev（只改业务代码） | `actions/_verifier.py:start_fixer`（fixer=dev 时路由） |
+| [verifier-fix-spec.md.j2](../orchestrator/src/orchestrator/prompts/verifier-fix-spec.md.j2) | fixer spec（只改 spec） | `actions/_verifier.py:start_fixer`（fixer=spec 时路由） |
+| [bugfix.md.j2](../orchestrator/src/orchestrator/prompts/bugfix.md.j2) | fixer fallback（无 fixer 字段时兜底） | `actions/_verifier.py:start_fixer` |
 
 历史遗留模板（v0.1 时代，保留作回退）：
 

@@ -249,6 +249,7 @@ async def start_fixer(*, body, req_id, tags, ctx):
     fixer = ctx.get("verifier_fixer") or "dev"
     scope = ctx.get("verifier_scope") or ""
     reason = ctx.get("verifier_reason") or ""
+    target_repo = ctx.get("verifier_target_repo") or ""
     branch = ctx.get("branch") or f"feat/{req_id}"
 
     pool = db.get_pool()
@@ -309,11 +310,17 @@ async def start_fixer(*, body, req_id, tags, ctx):
             use_worktree=True,
             model=settings.agent_model,
         )
-        # 通用 bugfix prompt 作为过渡；PR4 再做每类 fixer 专用模板。
+        # 专用 fixer prompt：dev / spec 各走各的模板；无 fixer 字段兜底旧 bugfix。
         # REQ-base-branch-override-1777480690: forward base branch info so fixer
         # lint uses the correct merge-base.
+        if fixer == "dev":
+            template_name = "verifier-fix-dev.md.j2"
+        elif fixer == "spec":
+            template_name = "verifier-fix-spec.md.j2"
+        else:
+            template_name = "bugfix.md.j2"
         prompt = render(
-            "bugfix.md.j2",
+            template_name,
             req_id=req_id, round_n=next_round,
             kind=f"verifier-{fixer}",
             source_issue_id=ctx.get("verifier_issue_id", ""),
@@ -323,10 +330,13 @@ async def start_fixer(*, body, req_id, tags, ctx):
             project_alias=proj,
             base_branch=ctx.get("base_branch"),
             base_branches=ctx.get("base_branches") or {},
+            target_repo=target_repo,
         )
         # 把 verifier 的 scope / reason 叠进 prompt 作为上下文
         if scope or reason:
             prompt += f"\n\n## Verifier 决策\n- fixer: {fixer}\n- scope: {scope}\n- reason: {reason}\n"
+        if target_repo:
+            prompt += f"- target_repo: {target_repo}\n"
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")
 

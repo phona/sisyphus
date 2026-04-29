@@ -552,6 +552,80 @@ async def test_start_fixer_creates_issue_with_fixer_tags(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_start_fixer_dev_uses_dedicated_prompt(monkeypatch):
+    """fixer=dev 时用 verifier-fix-dev.md.j2，不是通用 bugfix。"""
+    from orchestrator.actions import _verifier as v
+    fake = make_fake_bkd()
+    fake.create_issue.return_value = FakeIssue(id="fix-dev")
+    patch_bkd(monkeypatch, fake)
+
+    async def fake_update(pool, req_id, patch):
+        pass
+    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+
+    out = await v.start_fixer(
+        body=make_body(), req_id="REQ-9", tags=[],
+        ctx={"verifier_stage": "dev_cross_check", "verifier_fixer": "dev"},
+    )
+    assert out["fixer"] == "dev"
+    _, fu = fake.follow_up_issue.await_args
+    assert "DEV FIXER" in fu["prompt"]
+    assert "LOCKED：只改业务代码" in fu["prompt"]
+    assert "LOCKED：不改 spec" in fu["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_start_fixer_spec_uses_dedicated_prompt(monkeypatch):
+    """fixer=spec 时用 verifier-fix-spec.md.j2，不是通用 bugfix。"""
+    from orchestrator.actions import _verifier as v
+    fake = make_fake_bkd()
+    fake.create_issue.return_value = FakeIssue(id="fix-spec")
+    patch_bkd(monkeypatch, fake)
+
+    async def fake_update(pool, req_id, patch):
+        pass
+    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+
+    out = await v.start_fixer(
+        body=make_body(), req_id="REQ-9", tags=[],
+        ctx={"verifier_stage": "spec_lint", "verifier_fixer": "spec"},
+    )
+    assert out["fixer"] == "spec"
+    _, fu = fake.follow_up_issue.await_args
+    assert "SPEC FIXER" in fu["prompt"]
+    assert "LOCKED：只改 spec 相关文件" in fu["prompt"]
+    assert "LOCKED：不改业务代码" in fu["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_start_fixer_target_repo_passed_to_prompt(monkeypatch):
+    """ctx.verifier_target_repo 透传给 prompt 模板。"""
+    from orchestrator.actions import _verifier as v
+    fake = make_fake_bkd()
+    fake.create_issue.return_value = FakeIssue(id="fix-tr")
+    patch_bkd(monkeypatch, fake)
+
+    async def fake_update(pool, req_id, patch):
+        pass
+    monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+
+    await v.start_fixer(
+        body=make_body(), req_id="REQ-9", tags=[],
+        ctx={
+            "verifier_stage": "staging_test",
+            "verifier_fixer": "dev",
+            "verifier_target_repo": "owner/repo-a",
+        },
+    )
+    _, fu = fake.follow_up_issue.await_args
+    assert "TARGET_REPO=owner/repo-a" in fu["prompt"]
+    assert "只改 `owner/repo-a` 这一个仓的业务代码" in fu["prompt"]
+
+
+@pytest.mark.asyncio
 async def test_start_fixer_defaults_to_dev(monkeypatch):
     """ctx 里没 verifier_fixer 时兜底 dev。"""
     from orchestrator.actions import _verifier as v

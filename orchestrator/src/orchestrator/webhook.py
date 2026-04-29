@@ -705,6 +705,7 @@ async def webhook(request: Request) -> JSONResponse:
             "verifier_scope": decision_payload.get("scope"),
             "verifier_reason": decision_payload.get("reason"),
             "verifier_confidence": decision_payload.get("confidence"),
+            "verifier_target_repo": decision_payload.get("target_repo"),
         }
         await req_state.update_context(pool, req_id, patch)
         ctx = {**ctx, **patch}
