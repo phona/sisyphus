@@ -135,32 +135,43 @@ def test_than_s4_mixed_format_raises():
     )
 
 
-# ─── THAN-S5: AdbDriver remains M0 stub; Http/Playwright drivers are M1 ──────
+# ─── THAN-S5: AdbDriver M2 — no longer stub; returns typed results ───────────
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
     "method_name", ["preflight", "observe", "act", "assert_", "capture_evidence"]
 )
-async def test_than_s5_adb_driver_raises_not_implemented(method_name):
-    """THAN-S5: AdbDriver is still M0 scaffold — every method raises NotImplementedError."""
+async def test_than_s5_adb_driver_no_longer_stub(method_name):
+    """THAN-S5: AdbDriver M2 implements the full protocol — no NotImplementedError."""
     from thanatos.drivers import AdbDriver
+    from thanatos.drivers.base import (
+        ActResult,
+        AssertResult,
+        Evidence,
+        PreflightResult,
+        SemanticTree,
+    )
 
     instance = AdbDriver()
     method = getattr(instance, method_name)
 
     if method_name == "preflight":
-        coro = method("http://localhost")
-    elif method_name in ("act", "assert_"):
-        coro = method("some step")
+        result = await method("http://localhost")
+        assert isinstance(result, PreflightResult)
+    elif method_name == "observe":
+        result = await method()
+        assert isinstance(result, SemanticTree)
+        assert result.kind == "uiautomator"
+    elif method_name == "act":
+        result = await method("tap Submit")
+        assert isinstance(result, ActResult)
+    elif method_name == "assert_":
+        result = await method('element "Submit" is visible')
+        assert isinstance(result, AssertResult)
     else:
-        coro = method()
-
-    with pytest.raises(NotImplementedError) as exc_info:
-        await coro
-    assert str(exc_info.value) == "M0: scaffold only", (
-        f"AdbDriver.{method_name}: got '{exc_info.value}'"
-    )
+        result = await method()
+        assert isinstance(result, Evidence)
 
 
 @pytest.mark.integration

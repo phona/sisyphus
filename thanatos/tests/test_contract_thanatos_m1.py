@@ -162,6 +162,7 @@ async def test_than_m1_s2_http_act_post_json():
     mock_client = httpx.AsyncClient(transport=mock_transport)
     driver._client = mock_client
     try:
+        await driver.preflight("http://localhost:8080")
         result = await driver.act('POST /api/order with body {"id":1}')
         assert result.ok is True
         assert captured.get("method") == "POST"
@@ -184,6 +185,7 @@ async def test_than_m1_s3_http_assert_status_code():
     mock_client = httpx.AsyncClient(transport=mock_transport)
     driver._client = mock_client
     try:
+        await driver.preflight("http://localhost:8080")
         await driver.act("GET /something")
         result = await driver.assert_("response code is 201")
         assert result.ok is True
@@ -206,6 +208,7 @@ async def test_than_m1_s4_http_assert_json_path():
     mock_client = httpx.AsyncClient(transport=mock_transport)
     driver._client = mock_client
     try:
+        await driver.preflight("http://localhost:8080")
         await driver.act("GET /something")
         result = await driver.assert_("response body.order.id is 42")
         assert result.ok is True
