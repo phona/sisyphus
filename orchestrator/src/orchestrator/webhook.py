@@ -6,6 +6,7 @@ handler 内部按 body.event 字段分流。
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
 from typing import Any
 
@@ -138,13 +139,32 @@ async def _push_upstream_status(project_id: str, issue_id: str, status_id: str) 
     - "review" —— verifier 判 escalate 时用，issue 进"待审查"列让用户能定位 follow-up
       （resume 路径：用户在该 issue chat 续聊 → BKD wake agent → 新 decision → 主链继续）
 
-    幂等。失败只记 warning，不阻塞状态机。
+    幂等。失败指数退避重试 3 次，最终仍失败只记 warning，不阻塞状态机。
+    REQ-fix-bkd-sub-issue-status-sync-1777426309
     """
+    max_attempts = 3
+    base_delay = 1.0
+
     try:
         async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
-            await bkd.update_issue(
-                project_id=project_id, issue_id=issue_id, status_id=status_id,
-            )
+            for attempt in range(max_attempts):
+                try:
+                    await bkd.update_issue(
+                        project_id=project_id, issue_id=issue_id, status_id=status_id,
+                    )
+                    return
+                except Exception as e:
+                    if attempt < max_attempts - 1:
+                        delay = base_delay * (2 ** attempt)
+                        log.warning(
+                            "webhook.upstream_status_retry",
+                            issue_id=issue_id, status_id=status_id,
+                            attempt=attempt + 1, max_attempts=max_attempts,
+                            delay=delay, error=str(e),
+                        )
+                        await asyncio.sleep(delay)
+                    else:
+                        raise
     except Exception as e:
         log.warning("webhook.upstream_status_failed",
                     issue_id=issue_id, status_id=status_id, error=str(e))
