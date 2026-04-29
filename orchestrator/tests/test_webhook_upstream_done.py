@@ -1,6 +1,6 @@
 """webhook 收到 session.completed 时把上游 BKD issue 推目标 statusId。
 
-默认 done（防 dev / ci-unit / ci-int / accept / done-archive issue 永远卡 review）。
+默认 done（防 dev / ci-unit / ci-int / accept issue 永远卡 review）。
 verifier 判 escalate 例外 → review（resume 路径：用户可在 BKD 看板"待审查"列定位 follow-up）。
 """
 from __future__ import annotations

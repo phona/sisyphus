@@ -372,7 +372,7 @@ async def test_eat_s12_done_skips_every_event(stub_actions):
         "start_intake", "start_analyze", "start_analyze_with_finalized_intent",
         "create_analyze_artifact_check", "create_spec_lint", "start_challenger",
         "create_dev_cross_check", "create_staging_test", "create_pr_ci_watch",
-        "create_accept", "teardown_accept_env", "done_archive", "escalate",
+        "create_accept", "teardown_accept_env", "escalate",
         "apply_verify_pass", "start_fixer", "invoke_verifier_after_fix",
         "invoke_verifier_for_analyze_artifact_check_fail",
         "invoke_verifier_for_spec_lint_fail",

@@ -222,12 +222,12 @@ async def _drain_tasks() -> None:
 
 @pytest.mark.asyncio
 async def test_terminal_done_triggers_cleanup_no_retain(stub_actions, mock_runner_controller):
-    """ARCHIVING + ARCHIVE_DONE → DONE 应触发 cleanup_runner(retain_pvc=False)。"""
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ARCHIVING.value)})
-    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    """PENDING_USER_REVIEW + USER_REVIEW_PASS → DONE 应触发 cleanup_runner(retain_pvc=False)。"""
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.PENDING_USER_REVIEW.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "issue.updated"})()
     await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p", tags=[],
-        cur_state=ReqState.ARCHIVING, ctx={}, event=Event.ARCHIVE_DONE,
+        cur_state=ReqState.PENDING_USER_REVIEW, ctx={}, event=Event.USER_REVIEW_PASS,
     )
     await _drain_tasks()
 
@@ -322,12 +322,12 @@ async def test_cleanup_no_controller_safe(stub_actions, monkeypatch):
     """没 K8s controller（dev / 测试）→ 静默跳过，不报错。"""
     k8s_runner.set_controller(None)
 
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ARCHIVING.value)})
-    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.PENDING_USER_REVIEW.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "issue.updated"})()
     # 不抛 = ok
     await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p", tags=[],
-        cur_state=ReqState.ARCHIVING, ctx={}, event=Event.ARCHIVE_DONE,
+        cur_state=ReqState.PENDING_USER_REVIEW, ctx={}, event=Event.USER_REVIEW_PASS,
     )
     await _drain_tasks()
     assert pool.rows["REQ-1"].state == ReqState.DONE.value
@@ -338,11 +338,11 @@ async def test_cleanup_failure_does_not_block_engine(stub_actions, mock_runner_c
     """cleanup_runner 抛错 → engine 不受影响（fire-and-forget）。"""
     mock_runner_controller.cleanup_runner = AsyncMock(side_effect=RuntimeError("kapow"))
 
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ARCHIVING.value)})
-    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.PENDING_USER_REVIEW.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "issue.updated"})()
     result = await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p", tags=[],
-        cur_state=ReqState.ARCHIVING, ctx={}, event=Event.ARCHIVE_DONE,
+        cur_state=ReqState.PENDING_USER_REVIEW, ctx={}, event=Event.USER_REVIEW_PASS,
     )
     await _drain_tasks()
 
@@ -358,11 +358,11 @@ async def test_cleanup_failure_does_not_block_engine(stub_actions, mock_runner_c
 @pytest.mark.asyncio
 async def test_terminal_done_triggers_git_cleanup(stub_actions, mock_runner_controller):
     """DONE 时 cleanup_runner 之后还要 exec_in_runner 清理 git worktree + 分支。"""
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ARCHIVING.value)})
-    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.PENDING_USER_REVIEW.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "issue.updated"})()
     await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p", tags=[],
-        cur_state=ReqState.ARCHIVING, ctx={}, event=Event.ARCHIVE_DONE,
+        cur_state=ReqState.PENDING_USER_REVIEW, ctx={}, event=Event.USER_REVIEW_PASS,
     )
     await _drain_tasks()
 
@@ -411,11 +411,11 @@ async def test_cleanup_runner_failure_still_attempts_git_cleanup(
     """cleanup_runner 抛错，但 exec_in_runner 仍应被尝试。"""
     mock_runner_controller.cleanup_runner = AsyncMock(side_effect=RuntimeError("kapow"))
 
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ARCHIVING.value)})
-    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.PENDING_USER_REVIEW.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "issue.updated"})()
     await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p", tags=[],
-        cur_state=ReqState.ARCHIVING, ctx={}, event=Event.ARCHIVE_DONE,
+        cur_state=ReqState.PENDING_USER_REVIEW, ctx={}, event=Event.USER_REVIEW_PASS,
     )
     await _drain_tasks()
 
@@ -427,11 +427,11 @@ async def test_git_cleanup_failure_does_not_block_engine(stub_actions, mock_runn
     """exec_in_runner 抛错 → 不阻塞 engine（fire-and-forget）。"""
     mock_runner_controller.exec_in_runner = AsyncMock(side_effect=RuntimeError("exec boom"))
 
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ARCHIVING.value)})
-    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.PENDING_USER_REVIEW.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "issue.updated"})()
     result = await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p", tags=[],
-        cur_state=ReqState.ARCHIVING, ctx={}, event=Event.ARCHIVE_DONE,
+        cur_state=ReqState.PENDING_USER_REVIEW, ctx={}, event=Event.USER_REVIEW_PASS,
     )
     await _drain_tasks()
 
@@ -448,11 +448,11 @@ async def test_git_cleanup_nonzero_exit_logged(stub_actions, mock_runner_control
         )
     )
 
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ARCHIVING.value)})
-    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "session.completed"})()
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.PENDING_USER_REVIEW.value)})
+    body = type("B", (), {"issueId": "x", "projectId": "p", "event": "issue.updated"})()
     result = await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p", tags=[],
-        cur_state=ReqState.ARCHIVING, ctx={}, event=Event.ARCHIVE_DONE,
+        cur_state=ReqState.PENDING_USER_REVIEW, ctx={}, event=Event.USER_REVIEW_PASS,
     )
     await _drain_tasks()
 

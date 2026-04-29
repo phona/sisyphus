@@ -86,7 +86,7 @@ def _setup(monkeypatch, *, state: ReqState, rows: list[_Row] | None = None):
 
     async def _step(*a, **kw):
         step_calls.append(kw)
-        return {"action": "done_archive", "next_state": "archiving"}
+        return {"action": "no-op", "next_state": "done"}
 
     monkeypatch.setattr("orchestrator.admin.engine.step", _step)
 
@@ -275,9 +275,9 @@ def test_pr_merged_event_in_state_machine():
             f"TRANSITIONS must contain {key}; PR_MERGED event not wired"
         )
         t = TRANSITIONS[key]
-        assert t.next_state == ReqState.ARCHIVING, (
-            f"{key}: next_state MUST be ARCHIVING, got {t.next_state}"
+        assert t.next_state == ReqState.DONE, (
+            f"{key}: next_state MUST be DONE, got {t.next_state}"
         )
-        assert t.action == "done_archive", (
-            f"{key}: action MUST be 'done_archive', got {t.action}"
+        assert t.action is None, (
+            f"{key}: action MUST be None (archive is fire-and-forget side effect), got {t.action}"
         )

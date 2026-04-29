@@ -20,7 +20,7 @@
   `staging-test-running` 三个 checker stage 内部从单仓变成 for-each-repo 遍历
   （任一仓红 → stage fail）。状态机层面无影响。
 
-## 2. ReqState 枚举（18 个）
+## 2. ReqState 枚举（17 个）
 
 | state | 含义 | 类型 |
 |---|---|---|
@@ -38,12 +38,11 @@
 | `pending-user-review` | **REQ-bkd-acceptance-feedback-loop-1777278984** accept teardown 通过后停一手等用户 BKD intent issue statusId 表态（`done` = approve, `review`/`blocked` = 要返工）—— human-loop-conversation 类，watchdog 不杀 | in-flight |
 | `review-running` | **M14b** verifier-agent 在跑（success / fail 两触发统一入口） | in-flight |
 | `fixer-running` | **M14b** decision=fix → 起对应 fixer agent | in-flight |
-| `archiving` | done-archive agent 跑：每仓 `openspec apply` + 写 archive 结果。**不 auto-merge / 不 push main**——final merge 由人在每仓审过再合（#124） | in-flight |
 | `gh-incident-open` | ~~（已规划，未启用）GitHub issue 已开等人 \| wait-human~~ — 设计被 PR #118 / #122 重新走"escalate side-effect"路：进 ESCALATED 时 `escalate` action 调 `gh_incident.open_incident()`，对**每个 involved source repo**（intake_finalized_intent / ctx.involved_repos / `repo:` tag / `default_involved_repos` / `settings.gh_incident_repo` 5 层 fallback）独立 POST 一条 GH issue，URL 写入 `ctx.gh_incident_urls: dict[str, str]`，**不引入新 state**。enum 仍保留，但 TRANSITIONS 表无任何条目用到它，相当于 dead code，下次大改 state 表时删 |
 | **`done`** | REQ 完成 | **terminal** |
 | **`escalated`** | 熔断 / session-failed / 人工止损 | **terminal** |
 
-## 3. Event 枚举（33 个）
+## 3. Event 枚举（32 个）
 
 | event | 来源 | 触发什么 |
 |---|---|---|
@@ -70,9 +69,8 @@
 | `accept.fail` | accept-agent 写 result:fail tag | teardown_accept_env |
 | `teardown-done.pass` | 上一个是 accept.pass 的 teardown 完 | post_acceptance_report（→ PENDING_USER_REVIEW） |
 | `teardown-done.fail` | 上一个是 accept.fail 的 teardown 完 | invoke_verifier_for_accept_fail |
-| **`user-review.pass`** | **REQ-bkd-acceptance-feedback-loop-1777278984** 用户改 BKD intent issue statusId → `done` | done_archive |
+| **`user-review.pass`** | **REQ-bkd-acceptance-feedback-loop-1777278984** 用户改 BKD intent issue statusId → `done` | （进入 done；archive 为后台 fire-and-forget 副作用） |
 | **`user-review.fix`** | **REQ-bkd-acceptance-feedback-loop-1777278984** 用户改 statusId → `review` / `blocked` | escalate（reason=user-requested-fix） |
-| `archive.done` | done_archive agent session.completed | （进入 done） |
 | `session.failed` | 任意 stage agent session 崩 / watchdog 超时 | escalate |
 | **`verify.pass`** | M14b verifier decision=pass | apply_verify_pass（手工 CAS 推进下一 stage） |
 | **`verify.fix-needed`** | M14b verifier decision=fix | start_fixer |
@@ -117,10 +115,8 @@ stateDiagram-v2
     accept_tearing_down --> pending_user_review: teardown-done.pass\n(post_acceptance_report)
     accept_tearing_down --> review_running: teardown-done.fail
 
-    pending_user_review --> archiving: user-review.pass\n(BKD intent statusId=done)
+    pending_user_review --> done: user-review.pass\n(BKD intent statusId=done)
     pending_user_review --> escalated: user-review.fix\n(BKD intent statusId=review/blocked, reason=user-requested-fix)
-
-    archiving --> done: archive.done
 
     review_running --> review_running: verify.pass\n(action 手工 CAS 推进)
     review_running --> fixer_running: verify.fix-needed
@@ -217,7 +213,7 @@ watchdog (M8) 把"BKD session 卡 N 秒不动"翻译成 SESSION_FAILED 喂回状
 做一次 GH REST 探测：当本 REQ 的 layers 1-4 involved_repos 里**所有开过 PR 的仓**的
 `feat/{REQ}` PR 都已 merged，escalate 直接 short-circuit 到 DONE：
 
-- CAS state → `done`，event=`archive.done`，action=`escalate_pr_merged_override`
+- CAS state → `done`，event=`pr-merged`，action=`escalate_pr_merged_override`
 - ctx 写 `completed_via=pr-merge` / `completed_from_state=<prev>` / `completed_repos=[...]`
 - BKD intent issue tags add `done` + `via:pr-merge`，statusId=`done`
 - fire-and-forget cleanup_runner(retain_pvc=False)（mirror admin/complete）

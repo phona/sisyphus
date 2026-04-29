@@ -30,7 +30,6 @@ SISYPHUS_MANAGED_EXACT: frozenset[str] = frozenset({
     "accept",
     "staging-test",
     "pr-ci",
-    "done-archive",
     "pr-ready",
 })
 

@@ -251,7 +251,7 @@ git push origin master
 
 跨仓 REQ 经常有"高层文档"（proposal / design / 跨仓集成总览）只想写一份。
 **指定其中一个仓为 spec home**，把这种文档放它的 `openspec/changes/{{ req_id }}/`。
-done_archive 阶段会到这里跑 `openspec apply` 归档全 REQ 共享部分。
+transition 到 DONE 时 orchestrator 后台自动跑 `openspec archive` 归档全 REQ 共享部分。
 
 声明方式：BKD intent issue chat 直接说一句（不是 ctx 字段）：
 
@@ -301,7 +301,7 @@ curl -sS -X POST http://localhost:3000/api/projects/$PROJECT/issues \
 ```
 
 orchestrator 程序自身开的 BKD issue（analyze / staging-test / pr-ci-watch / accept /
-done-archive / verifier / fixer / challenger）由 BKDRestClient.create_issue 自动注入
+verifier / fixer / challenger）由 BKDRestClient.create_issue 自动注入
 `sisyphus` tag，**你只用管自己 fan out 的那批**。
 
 ### B.7 PR body 必带的 sisyphus 跨链 footer
@@ -370,7 +370,7 @@ sisyphus 之后做（**纯机械，不再起 agent**）：
 3. **staging_test** —— 遍历所有仓**并行**跑 `make ci-unit-test && make ci-integration-test`（**单仓内串行**，避免内存峰值叠加）
 4. **pr_ci_watch** —— 轮 GitHub REST 等所有 PR check-runs 全绿
 5. **accept-agent** —— 起 lab（`make accept-env-up`） + 跑 acceptance scenarios
-6. **done_archive agent** —— 合所有 PR + 各仓 `openspec apply` 归档 specs
+6. **archive** —— transition 到 DONE 时后台自动 `openspec archive` 归档 specs（非 agent 阶段）
 
 任一 stage 红 → verifier-agent 主观判 pass / fix / retry / escalate。fix 起 fixer-agent
 回头修，**不会**起新 spec / dev 子 agent。

@@ -14,8 +14,6 @@ Black-box scenarios derived from
   XLINK-S15  escalate threads ctx fields through to open_incident
   XLINK-S16  analyze prompt renders cross-link block when url provided
   XLINK-S17  analyze prompt omits link line when url empty
-  XLINK-S18  done_archive prompt renders Known PRs bullets
-  XLINK-S19  done_archive prompt omits heading when pr_urls absent
   XLINK-S20  q05 SQL selects the new bkd_intent_url + pr_urls_md columns
   XLINK-S21  q05 SQL tolerates empty context
 
@@ -486,39 +484,6 @@ def test_xlink_s17_analyze_prompt_omits_link_line_when_url_empty():
     assert "<!-- sisyphus:cross-link -->" in out
     assert "REQ-x" in out
     assert "[BKD intent issue](" not in out
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# XLINK-S18 / S19 — done_archive prompt Known PRs section
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _render_done_archive(**overrides) -> str:
-    from orchestrator.prompts import render
-    base = {
-        "req_id": "REQ-x",
-        "branch": "feat/REQ-x",
-        "workdir": "/var/sisyphus-ci/feat-REQ-x",
-        "accept_issue_id": "AC",
-        "project_id": "P",
-        "project_alias": "P",
-        "pr_urls": {},
-    }
-    base.update(overrides)
-    return render("done_archive.md.j2", **base)
-
-
-def test_xlink_s18_done_archive_prompt_renders_known_prs_bullets():
-    out = _render_done_archive(
-        pr_urls={"foo/bar": "https://github.com/foo/bar/pull/9"},
-    )
-    assert "## Known PRs" in out
-    assert "- [foo/bar#9](https://github.com/foo/bar/pull/9)" in out
-
-
-def test_xlink_s19_done_archive_prompt_omits_section_when_pr_urls_absent():
-    out = _render_done_archive(pr_urls={})
-    assert "## Known PRs" not in out
 
 
 # ─────────────────────────────────────────────────────────────────────────────

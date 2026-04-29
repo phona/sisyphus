@@ -1,7 +1,7 @@
 """Mock tests for the 7 accept-phase transitions (REQ-test-accept-phase-1777267654).
 
 Goal: cover every transition whose source state is ACCEPT_RUNNING or
-ACCEPT_TEARING_DOWN — accept 阶段是 happy-path 链路从 PR-CI 绿到 ARCHIVING 的最后
+ACCEPT_TEARING_DOWN — accept 阶段是 happy-path 链路从 PR-CI 绿到 DONE 的最后
 一公里，之前一条单测都没有。所有 case 用 in-process FakePool + stub action，
 **不打 BKD / Postgres / K8s**。
 
@@ -53,7 +53,7 @@ def _body(**attrs):
 
 
 # ───────────────────────────────────────────────────────────────────────
-# APT-S1：(ACCEPT_RUNNING, ACCEPT_PASS) + emit teardown-done.pass → ARCHIVING
+# APT-S1：(ACCEPT_RUNNING, ACCEPT_PASS) + emit teardown-done.pass → DONE
 # ───────────────────────────────────────────────────────────────────────
 
 
@@ -65,7 +65,7 @@ async def test_apt_s1_accept_pass_advances_through_teardown_to_archiving(
     → 链式 teardown-done.pass → post_acceptance_report → 停在 PENDING_USER_REVIEW
     等用户改 BKD intent statusId 表态。
 
-    旧行为是 teardown → done_archive 直进 ARCHIVING；新链多了一段 PENDING_USER_REVIEW
+    旧行为是 teardown 后直进 ARCHIVING（已砍）；现在 teardown → PENDING_USER_REVIEW
     gate（用户验收回路），下一步 USER_REVIEW_PASS / USER_REVIEW_FIX 由用户驱动，
     不在本 engine.step 链路里。
     """
@@ -206,7 +206,7 @@ async def test_apt_s4_teardown_done_pass_advances_to_archiving(
     stub_actions, mock_runner_controller,
 ):
     """Spec APT-S4 (post-REQ-bkd-acceptance-feedback-loop): teardown-done.pass 直接入口
-    → PENDING_USER_REVIEW（用户验收 gate），不再直进 ARCHIVING。"""
+    → PENDING_USER_REVIEW（用户验收 gate）。"""
     post_report_calls = {"n": 0}
 
     async def post_acceptance_report(*, body, req_id, tags, ctx):

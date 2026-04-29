@@ -18,9 +18,9 @@ from orchestrator.state import TRANSITIONS, Event, ReqState, Transition, decide
 
 PR_MERGED_CASES = [
     # state, event, next_state, action
-    (ReqState.PENDING_USER_REVIEW, Event.PR_MERGED, ReqState.ARCHIVING, "done_archive"),
-    (ReqState.REVIEW_RUNNING, Event.PR_MERGED, ReqState.ARCHIVING, "done_archive"),
-    (ReqState.PR_CI_RUNNING, Event.PR_MERGED, ReqState.ARCHIVING, "done_archive"),
+    (ReqState.PENDING_USER_REVIEW, Event.PR_MERGED, ReqState.DONE, None),
+    (ReqState.REVIEW_RUNNING, Event.PR_MERGED, ReqState.DONE, None),
+    (ReqState.PR_CI_RUNNING, Event.PR_MERGED, ReqState.DONE, None),
 ]
 
 
@@ -274,17 +274,6 @@ def test_fixer_running_illegal_events():
         )
 
 
-def test_archiving_illegal_events():
-    """ARCHIVING 接受 archive.done / SESSION_FAILED。"""
-    legal = {Event.ARCHIVE_DONE, Event.SESSION_FAILED}
-    for ev in Event:
-        if ev in legal:
-            continue
-        assert decide(ReqState.ARCHIVING, ev) is None, (
-            f"ARCHIVING should not accept {ev.value}"
-        )
-
-
 def test_gh_incident_open_has_no_transitions():
     """GH_INCIDENT_OPEN 是等人 state，没有任何 outgoing transition。"""
     for ev in Event:
@@ -317,11 +306,11 @@ def test_all_transitions_reason_is_str_or_none():
 def test_transition_count_sanity():
     """transition 总数 sanity check：防止未来重构误删/误增。
 
-    当前总数 = 40 显式 + 13 SESSION_FAILED self-loop = 53。
+    当前总数 = 39 显式 + 12 SESSION_FAILED self-loop = 51。
     如果数字变了，说明有人增删 transition，本测试会 fail 提醒同步测试。
     """
-    assert len(TRANSITIONS) == 53, (
-        f"Expected 53 transitions, got {len(TRANSITIONS)}. "
+    assert len(TRANSITIONS) == 51, (
+        f"Expected 51 transitions, got {len(TRANSITIONS)}. "
         "If this is intentional, update this assertion and add corresponding tests."
     )
 
@@ -329,16 +318,16 @@ def test_transition_count_sanity():
 def test_explicit_transition_count():
     """非 SESSION_FAILED 的显式 transition 数量 sanity check。"""
     explicit = [k for k in TRANSITIONS if k[1] != Event.SESSION_FAILED]
-    assert len(explicit) == 40, (
-        f"Expected 40 explicit transitions, got {len(explicit)}"
+    assert len(explicit) == 39, (
+        f"Expected 39 explicit transitions, got {len(explicit)}"
     )
 
 
 def test_session_failed_transition_count():
     """SESSION_FAILED self-loop 数量 sanity check。"""
     session_failed = [k for k in TRANSITIONS if k[1] == Event.SESSION_FAILED]
-    assert len(session_failed) == 13, (
-        f"Expected 13 SESSION_FAILED transitions, got {len(session_failed)}"
+    assert len(session_failed) == 12, (
+        f"Expected 12 SESSION_FAILED transitions, got {len(session_failed)}"
     )
 
 

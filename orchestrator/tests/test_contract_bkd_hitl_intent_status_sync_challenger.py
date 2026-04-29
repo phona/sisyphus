@@ -144,13 +144,13 @@ def runner_ctrl():
 
 @pytest.mark.asyncio
 async def test_hitl_s1_done_transition_patches_statusid_done(clean_registry, runner_ctrl):
-    """GIVEN REQ in ARCHIVING with intent_issue_id="abc123" and project_id="proj-x"
-    WHEN engine.step processes ARCHIVE_DONE → CAS to DONE succeeds
+    """GIVEN REQ in PENDING_USER_REVIEW with intent_issue_id="abc123" and project_id="proj-x"
+    WHEN engine.step processes USER_REVIEW_PASS → CAS to DONE succeeds
     THEN BKDClient.update_issue(project_id="proj-x", issue_id="abc123", status_id="done")
     AND the call is fire-and-forget (engine.step returns without blocking on PATCH).
     """
     pool = _FakePool({"REQ-1": _FakeRow(
-        state=ReqState.ARCHIVING.value,
+        state=ReqState.PENDING_USER_REVIEW.value,
         context={"intent_issue_id": "abc123"},
     )})
     inst, ui = _bkd_mock()
@@ -158,13 +158,13 @@ async def test_hitl_s1_done_transition_patches_statusid_done(clean_registry, run
     with patch("orchestrator.engine.BKDClient", return_value=inst):
         result = await engine.step(
             pool,
-            body=_Body(event="session.completed", issue_id="archive-1"),
+            body=_Body(event="issue.updated", issue_id="intent-1"),
             req_id="REQ-1",
             project_id="proj-x",
             tags=[],
-            cur_state=ReqState.ARCHIVING,
+            cur_state=ReqState.PENDING_USER_REVIEW,
             ctx={"intent_issue_id": "abc123"},
-            event=Event.ARCHIVE_DONE,
+            event=Event.USER_REVIEW_PASS,
         )
         # drain fire-and-forget tasks
         await _drain()
@@ -311,7 +311,7 @@ async def test_hitl_s4_bkd_patch_failure_warns_and_does_not_rollback(
     AND cleanup_runner MUST still be invoked.
     """
     pool = _FakePool({"REQ-1": _FakeRow(
-        state=ReqState.ARCHIVING.value,
+        state=ReqState.PENDING_USER_REVIEW.value,
         context={"intent_issue_id": "abc123"},
     )})
     inst, ui = _bkd_mock()
@@ -320,13 +320,13 @@ async def test_hitl_s4_bkd_patch_failure_warns_and_does_not_rollback(
     with patch("orchestrator.engine.BKDClient", return_value=inst):
         result = await engine.step(
             pool,
-            body=_Body(event="session.completed", issue_id="archive-1"),
+            body=_Body(event="issue.updated", issue_id="intent-1"),
             req_id="REQ-1",
             project_id="proj-x",
             tags=[],
-            cur_state=ReqState.ARCHIVING,
+            cur_state=ReqState.PENDING_USER_REVIEW,
             ctx={"intent_issue_id": "abc123"},
-            event=Event.ARCHIVE_DONE,
+            event=Event.USER_REVIEW_PASS,
         )
         await _drain()
 

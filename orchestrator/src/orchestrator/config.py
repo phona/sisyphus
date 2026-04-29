@@ -115,7 +115,7 @@ class Settings(BaseSettings):
 
     # ─── Mock / 调试开关 ──────────────────────────────────────────────────
     # 临时跳过某 stage：对应 create_* action 不调 BKD agent，直接 emit *.done/.pass
-    # 用于：ttpos-arch-lab 没接 → skip_accept；调试状态机 / done_archive → skip 全部
+    # 用于：ttpos-arch-lab 没接 → skip_accept；调试状态机 → skip 全部
     # 生产环境全设 false
     skip_analyze: bool = False        # analyze.done
     skip_spec: bool = False           # spec.all-passed (跳整 spec stage)
@@ -160,7 +160,7 @@ class Settings(BaseSettings):
 
     # ─── agent model 控制 ─────────────────────────────────────────────────
     # sisyphus 起的 agent 用哪个模型（verifier / fixer / accept / pr_ci_watch /
-    # done_archive / staging_test）。None = 用 BKD per-engine 默认（opus）。
+    # staging_test）。None = 用 BKD per-engine 默认（opus）。
     # 默认 claude-sonnet-4-6（成本低于 opus；测试 helm values 可覆盖成 'claude-haiku-4-5'）。
     # 注意：analyze agent 的 model 是 user 创 intent issue 时定的，sisyphus 不控；
     # analyze fan out 的 sub-issue model 由 analyze prompt 自己控（见 analyze.md.j2）。

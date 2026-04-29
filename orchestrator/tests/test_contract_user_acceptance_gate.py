@@ -5,7 +5,7 @@ Black-box behavioural contracts derived from:
 
 Scenarios:
   USER-S1  TEARDOWN_DONE_PASS routes ACCEPT_TEARING_DOWN → PENDING_USER_REVIEW + post_acceptance_report
-  USER-S2  PENDING_USER_REVIEW + USER_REVIEW_PASS → ARCHIVING + done_archive
+  USER-S2  PENDING_USER_REVIEW + USER_REVIEW_PASS → DONE (archive fire-and-forget side effect)
   USER-S3  PENDING_USER_REVIEW + USER_REVIEW_FIX → ESCALATED + escalate
   USER-S4  Illegal events from PENDING_USER_REVIEW return None
   USER-S5  webhook: statusId=done emits USER_REVIEW_PASS (only when state is pending-user-review)
@@ -95,12 +95,16 @@ def test_USER_S1_teardown_pass_to_pending_user_review():
     assert t.action == "post_acceptance_report"
 
 
-def test_USER_S2_pending_pass_to_archiving():
-    """Scenario USER-S2: USER_REVIEW_PASS from PENDING_USER_REVIEW goes to ARCHIVING via done_archive."""
+def test_USER_S2_pending_pass_to_done():
+    """Scenario USER-S2: USER_REVIEW_PASS from PENDING_USER_REVIEW goes directly to DONE.
+
+    archive runs as a fire-and-forget side effect in engine._auto_archive;
+    it is not a state machine action.
+    """
     t = decide(ReqState.PENDING_USER_REVIEW, Event.USER_REVIEW_PASS)
     assert t is not None
-    assert t.next_state == ReqState.ARCHIVING
-    assert t.action == "done_archive"
+    assert t.next_state == ReqState.DONE
+    assert t.action is None
 
 
 def test_USER_S3_pending_fix_to_escalated():
@@ -114,7 +118,6 @@ def test_USER_S3_pending_fix_to_escalated():
 @pytest.mark.parametrize(
     "illegal_event",
     [
-        Event.ARCHIVE_DONE,
         Event.SESSION_FAILED,
         Event.VERIFY_PASS,
         Event.STAGING_TEST_PASS,

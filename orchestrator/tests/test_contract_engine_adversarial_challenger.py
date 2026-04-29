@@ -523,7 +523,7 @@ async def test_eat_s12_done_skips_every_event() -> None:
     for name in [
         "start_intake", "start_analyze", "start_challenger", "escalate",
         "create_spec_lint", "create_staging_test", "create_pr_ci_watch",
-        "create_accept", "done_archive",
+        "create_accept",
         "invoke_verifier_for_analyze_artifact_check_fail",
     ]:
         REGISTRY[name] = _any_handler

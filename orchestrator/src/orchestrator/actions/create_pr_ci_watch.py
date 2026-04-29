@@ -48,7 +48,7 @@ async def create_pr_ci_watch(*, body, req_id, tags, ctx):
 
     # REQ-pr-issue-traceability-1777218612: capture per-repo PR html_url to
     # ctx.pr_urls before either dispatch path runs, so downstream gh_incident
-    # bodies + done_archive prompts can render clickable links. Best-effort:
+    # bodies can render clickable links. Best-effort:
     # discovery failure / empty result leaves ctx.pr_urls untouched.
     await _capture_pr_urls(req_id=req_id, ctx=ctx or {})
 

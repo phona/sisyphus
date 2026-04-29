@@ -303,7 +303,7 @@ class TestInsertDecisionAuditContract:
 
 
 class TestPromptCleanupContract:
-    """Spec: bugfix.md.j2 and done_archive.md.j2 cleaned of M15 remnants."""
+    """Spec: bugfix.md.j2 cleaned of M15 remnants."""
 
     def test_bugfix_no_deprecated_mcp_bkd_get_issue(self):
         """Spec: mcp__bkd__get-issue removed, replaced by curl BKD REST."""
@@ -326,16 +326,3 @@ class TestPromptCleanupContract:
             "bugfix.md.j2 must contain audit notification section for dev"
         )
 
-    def test_done_archive_no_mcp_bkd_tools(self):
-        """Spec: mcp__bkd__* → curl BKD REST in done_archive."""
-        content = (_PROMPTS_DIR / "done_archive.md.j2").read_text()
-        assert "mcp__bkd__" not in content, (
-            "done_archive.md.j2 must not reference deprecated mcp__bkd__* tools"
-        )
-
-    def test_done_archive_uses_gh_pr_list_for_pr_discovery(self):
-        """Spec: done_archive uses gh pr list --head feat/{req_id} for each source repo."""
-        content = (_PROMPTS_DIR / "done_archive.md.j2").read_text()
-        assert "gh pr list" in content, (
-            "done_archive.md.j2 must use 'gh pr list' for PR discovery"
-        )

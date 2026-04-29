@@ -7,10 +7,10 @@ Dev MUST NOT modify these tests to make them pass — fix the implementation ins
 If a test is truly wrong, escalate to spec_fixer to correct the spec, not the test.
 
 Scenarios covered:
-  APT-S1  (ACCEPT_RUNNING, ACCEPT_PASS) → teardown → ARCHIVING; done_archive called; no cleanup
+  APT-S1  (ACCEPT_RUNNING, ACCEPT_PASS) → teardown → PENDING_USER_REVIEW; post_acceptance_report called; no cleanup
   APT-S2  (ACCEPT_RUNNING, ACCEPT_FAIL) → teardown → REVIEW_RUNNING; verifier called; no cleanup
   APT-S3  (ACCEPT_RUNNING, ACCEPT_ENV_UP_FAIL) → ESCALATED; escalate called; cleanup_runner retain_pvc=True once
-  APT-S4  (ACCEPT_TEARING_DOWN, TEARDOWN_DONE_PASS) → ARCHIVING; done_archive called; no cleanup
+  APT-S4  (ACCEPT_TEARING_DOWN, TEARDOWN_DONE_PASS) → PENDING_USER_REVIEW; post_acceptance_report called; no cleanup
   APT-S5  (ACCEPT_TEARING_DOWN, TEARDOWN_DONE_FAIL) → REVIEW_RUNNING; verifier called; no cleanup
   APT-S6  (ACCEPT_RUNNING, SESSION_FAILED) → self-loop ACCEPT_RUNNING; escalate called; no cleanup
   APT-S7  (ACCEPT_TEARING_DOWN, SESSION_FAILED) → self-loop ACCEPT_TEARING_DOWN; escalate called; no cleanup
@@ -296,7 +296,7 @@ async def test_apt_s3_accept_env_up_fail_escalates_and_cleans_up(
     )
 
 
-# ─── APT-S4: teardown-done.pass → ARCHIVING ──────────────────────────────────
+# ─── APT-S4: teardown-done.pass → PENDING_USER_REVIEW ────────────────────────
 
 
 async def test_apt_s4_teardown_done_pass_advances_to_archiving(

@@ -37,12 +37,11 @@ EXPECTED = [
     (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_PASS,         ReqState.ACCEPT_TEARING_DOWN, "teardown_accept_env"),
     (ReqState.ACCEPT_RUNNING,       Event.ACCEPT_FAIL,         ReqState.ACCEPT_TEARING_DOWN, "teardown_accept_env"),
     # REQ-bkd-acceptance-feedback-loop-1777278984：teardown 通过后改去 PENDING_USER_REVIEW
-    # 等用户验收，不再直进 ARCHIVING。新增 PENDING_USER_REVIEW 出口 2 条。
+    # 等用户验收。新增 PENDING_USER_REVIEW 出口 2 条。
     (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_PASS,  ReqState.PENDING_USER_REVIEW, "post_acceptance_report"),
-    (ReqState.PENDING_USER_REVIEW,  Event.USER_REVIEW_PASS,    ReqState.ARCHIVING,           "done_archive"),
+    (ReqState.PENDING_USER_REVIEW,  Event.USER_REVIEW_PASS,    ReqState.DONE,                None),
     (ReqState.PENDING_USER_REVIEW,  Event.USER_REVIEW_FIX,     ReqState.ESCALATED,           "escalate"),
     (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_FAIL,  ReqState.REVIEW_RUNNING,      "invoke_verifier_for_accept_fail"),
-    (ReqState.ARCHIVING,            Event.ARCHIVE_DONE,        ReqState.DONE,                None),
     # M14b verifier 子链（3 路：pass / fix / escalate）
     (ReqState.REVIEW_RUNNING,       Event.VERIFY_PASS,         ReqState.REVIEW_RUNNING,      "apply_verify_pass"),
     (ReqState.REVIEW_RUNNING,       Event.VERIFY_FIX_NEEDED,   ReqState.FIXER_RUNNING,       "start_fixer"),
@@ -50,10 +49,10 @@ EXPECTED = [
     (ReqState.FIXER_RUNNING,        Event.FIXER_DONE,          ReqState.REVIEW_RUNNING,      "invoke_verifier_after_fix"),
     # fixer round cap：start_fixer 自检超 cap → 链 emit verify.escalate 走 escalate
     (ReqState.FIXER_RUNNING,        Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
-    # PR merged hook：人手合 PR 后 GHA 触发，跳 gate 直归档
-    (ReqState.PENDING_USER_REVIEW,  Event.PR_MERGED,           ReqState.ARCHIVING,           "done_archive"),
-    (ReqState.REVIEW_RUNNING,       Event.PR_MERGED,           ReqState.ARCHIVING,           "done_archive"),
-    (ReqState.PR_CI_RUNNING,        Event.PR_MERGED,           ReqState.ARCHIVING,           "done_archive"),
+    # PR merged hook：人手合 PR 后 GHA 触发，跳 gate 直达 DONE
+    (ReqState.PENDING_USER_REVIEW,  Event.PR_MERGED,           ReqState.DONE,                None),
+    (ReqState.REVIEW_RUNNING,       Event.PR_MERGED,           ReqState.DONE,                None),
+    (ReqState.PR_CI_RUNNING,        Event.PR_MERGED,           ReqState.DONE,                None),
     # verifier infra-flake 有界重试
     (ReqState.REVIEW_RUNNING,       Event.VERIFY_INFRA_RETRY,  ReqState.REVIEW_RUNNING,      "apply_verify_infra_retry"),
 ]
@@ -82,7 +81,6 @@ def test_session_failed_routes_to_escalate_action_all_running_states():
         ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
         # M14b：verifier / fixer running state 也必须 escalate
         ReqState.REVIEW_RUNNING, ReqState.FIXER_RUNNING,
-        ReqState.ARCHIVING,
     ]
     for st in running:
         t = decide(st, Event.SESSION_FAILED)
@@ -193,7 +191,7 @@ def test_user_review_pending_illegal_events_return_none():
 
 def test_acceptance_teardown_pass_routes_through_pending_not_archiving():
     """USR-T1: TEARDOWN_DONE_PASS 现在指向 PENDING_USER_REVIEW + post_acceptance_report
-    （而非旧的 ARCHIVING + done_archive 直通）。"""
+    （archive 改为 transition 到 DONE 时后台自动触发）。"""
     t = decide(ReqState.ACCEPT_TEARING_DOWN, Event.TEARDOWN_DONE_PASS)
     assert t is not None
     assert t.next_state == ReqState.PENDING_USER_REVIEW

@@ -235,8 +235,6 @@ def derive_event(event_type: str, tags: Iterable[str]) -> Event | None:
                 return Event.ACCEPT_PASS
             if "result:fail" in tagset:
                 return Event.ACCEPT_FAIL
-        if "done-archive" in tagset and "result:pass" in tagset:
-            return Event.ARCHIVE_DONE
         if "fixer" in tagset and (
             "result:pass" in tagset or "result:fail" in tagset
         ):
@@ -302,9 +300,6 @@ def derive_event(event_type: str, tags: Iterable[str]) -> Event | None:
         if "result:fail" in tagset:
             return Event.ACCEPT_FAIL
         return None
-
-    if "done-archive" in tagset:
-        return Event.ARCHIVE_DONE
 
     if "analyze" in tagset:
         return Event.ANALYZE_DONE

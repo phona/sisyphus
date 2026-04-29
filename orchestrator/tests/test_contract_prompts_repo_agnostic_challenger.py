@@ -63,7 +63,6 @@ def test_pra_s1_no_phona_org_in_prompts() -> None:
 
 _PRA_S2_FILES = [
     "analyze.md.j2",
-    "done_archive.md.j2",
     "_shared/runner_container.md.j2",
     "challenger.md.j2",
     "verifier/dev_cross_check_fail.md.j2",

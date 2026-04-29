@@ -136,21 +136,21 @@ async def test_hitl_s1_done_transition_patches_intent_statusid_done(
     inst, update_issue = _make_bkd_mock()
     pool = _FakePool({
         "REQ-1": _FakeReq(
-            state=ReqState.ARCHIVING.value,
+            state=ReqState.PENDING_USER_REVIEW.value,
             context={"intent_issue_id": "abc123"},
         ),
     })
     body = type("B", (), {
-        "issueId": "archive-1", "projectId": "proj-x",
-        "event": "session.completed",
+        "issueId": "intent-1", "projectId": "proj-x",
+        "event": "issue.updated",
     })()
 
     with patch("orchestrator.engine.BKDClient", return_value=inst):
         await engine.step(
             pool, body=body, req_id="REQ-1", project_id="proj-x", tags=[],
-            cur_state=ReqState.ARCHIVING,
+            cur_state=ReqState.PENDING_USER_REVIEW,
             ctx={"intent_issue_id": "abc123"},
-            event=Event.ARCHIVE_DONE,
+            event=Event.USER_REVIEW_PASS,
         )
         await _drain_tasks()
 
@@ -320,21 +320,21 @@ async def test_hitl_s4_bkd_patch_failure_logs_warning_no_rollback(
 
     pool = _FakePool({
         "REQ-1": _FakeReq(
-            state=ReqState.ARCHIVING.value,
+            state=ReqState.PENDING_USER_REVIEW.value,
             context={"intent_issue_id": "abc123"},
         ),
     })
     body = type("B", (), {
-        "issueId": "archive-1", "projectId": "proj-x",
-        "event": "session.completed",
+        "issueId": "intent-1", "projectId": "proj-x",
+        "event": "issue.updated",
     })()
 
     with patch("orchestrator.engine.BKDClient", return_value=inst):
         result = await engine.step(
             pool, body=body, req_id="REQ-1", project_id="proj-x", tags=[],
-            cur_state=ReqState.ARCHIVING,
+            cur_state=ReqState.PENDING_USER_REVIEW,
             ctx={"intent_issue_id": "abc123"},
-            event=Event.ARCHIVE_DONE,
+            event=Event.USER_REVIEW_PASS,
         )
         await _drain_tasks()
 
