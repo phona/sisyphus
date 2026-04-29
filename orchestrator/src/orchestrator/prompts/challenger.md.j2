@@ -60,9 +60,12 @@ kubectl exec runner-{{ req_id | lower }} -- ls /workspace/source/<spec_home_repo
 
 ## Part B: 写 contract test
 
-### B.0 必读：业务仓的 integration-test skill（**先读再写**）
+### B.0 必读：探测业务仓的 integration test 约定（**先探测再写**）
 
-业务仓如果有 `.claude/skills/integration-test/SKILL.md`，**必须先读它**：
+业务仓的 `make ci-integration-test` 已经定义了契约测试基础设施（docker-compose、fixture、
+服务发现）。challenger **不发明新框架**，直接复用。
+
+**第一步**：读 skill（如果有）：
 ```bash
 ls /workspace/source/<repo>/.claude/skills/integration-test/ 2>/dev/null
 # 有的话:
@@ -71,22 +74,41 @@ cat /workspace/source/<repo>/.claude/skills/integration-test/rules.md
 ls /workspace/source/<repo>/.claude/skills/integration-test/templates/   # 用模板
 ```
 
-skill 写明这个仓的：
-- 测试组织方式（per-scenario file / per-capability file / 等）
-- docker-compose 入口 + service 拓扑
-- env 注入约定（`BASE_URL` / `BUILD_ID` 等）
-- build tag 约定（`//go:build integration`）
-- 命名 + assertion 风格
+**第二步**：无 skill 时探测仓内现有测试模式（必做）：
+```bash
+# 1. 看 build tag 用什么
+grep -r "go:build" /workspace/source/<repo>/tests/ /workspace/source/<repo>/main/tests/ 2>/dev/null | head -5
 
-**不读 skill 自己发明 = 偏离仓约定 = staging_test 必跑不通**。如果模板存在直接用模板，
-skill 已规定好一切，你只填 scenario 逻辑。
+# 2. 看测试文件放哪、怎么组织
+find /workspace/source/<repo> -path "*/tests/*_test.go" 2>/dev/null | head -10
 
-如果**没有** skill（业务仓还没接入），按下面 B.1 默认约定写。
+# 3. 看 fixture / helper 包在哪
+find /workspace/source/<repo> -path "*/tests/fixture/*" -o -path "*/testutil/*" 2>/dev/null | head -10
+
+# 4. 看 docker-compose 文件
+find /workspace/source/<repo> -name "docker-compose*.yml" 2>/dev/null
+
+# 5. 看 Makefile 里 ci-integration-test 怎么跑
+grep -A5 "ci-integration-test:" /workspace/source/<repo>/Makefile 2>/dev/null
+```
+
+**第三步**：基于探测结果写 contract test：
+- 用 `//go:build contract` 标签（和 dev 的 `integration` 区分开，staging-test 不跑）
+- 文件位置和包名跟随仓约定（不是强制 `tests/integration/`）
+- fixture / HTTP client 复用仓里已有的
+- env 注入跟随仓约定（如 `SERVICE_URL`）
+
+**不探测就按默认约定写 = 偏离仓约定 = 测试跑不通或无法复用基础设施**。
 
 ### B.1 测试位置 + 命名
 
-写在 spec home repo 的 `tests/integration/<capability>_test.go`（一个 capability 一个文件）。
-**优先按仓 skill 的命名规则**；skill 没说时按上面默认。
+**优先按仓 skill 的命名规则**；无 skill 时按仓内现有 test 目录结构跟随：
+
+- 如果仓内已有 `main/tests/*.go`（如 ttp），contract test 放 `main/tests/contract/<capability>_test.go`
+- 如果仓内已有 `tests/*.go`，contract test 放 `tests/contract/<capability>_test.go`
+- 包名跟随仓约定（看现有 test 文件用的 package name）
+
+一个 capability 一个文件，覆盖 spec 里的所有 scenarios。
 
 ### B.2 内容原则
 
@@ -97,40 +119,42 @@ skill 已规定好一切，你只填 scenario 逻辑。
 - **要 RED 不要 GREEN** —— 你写完 test 后跑一次，**预期失败**（dev 还没实现），
   这是 TDD 的 RED 阶段。如果你写完意外 GREEN，说明已有实现满足或测试太弱。
 
-### B.3 示例（Go HTTP service）
+### B.3 示例（Go HTTP service，复用仓内 fixture）
 
-`tests/integration/buildinfo_contract_test.go`：
+假设业务仓已有 `main/tests/fixture` 包提供 HTTP client 和 token 生成：
+
+`main/tests/contract/order_contract_test.go`：
 ```go
 //go:build contract
-// +build contract
 
-package contract
+package contract_test
 
 import (
-    "encoding/json"
-    "net/http"
     "testing"
+    "ttpos-server-go/tests/fixture"
 )
 
-// Scenario: UBOX-S1 Returns 200 OK
-func TestBuildinfo_S1_Returns200(t *testing.T) {
-    r, err := http.Get(serviceURL() + "/buildinfo")
-    if err != nil { t.Fatal(err) }
-    if r.StatusCode != 200 { t.Errorf("want 200, got %d", r.StatusCode) }
+// Scenario: [ORDER-S1] Create instant order returns 200 + sale_bill_uuid
+func TestOrder_S1_CreateInstantOrder(t *testing.T) {
+    companyUUID := fixture.GenerateCompanyUUID(t)
+    db := fixture.NewTestTenantFull(t, companyUUID)
+    fixture.SeedCompany(t, db, fixture.WithCompanyUUID(mustParseInt64(companyUUID)))
+    fixture.SeedCompanySetting(t, db, fixture.WithCompanySettingCompanyUUID(mustParseInt64(companyUUID)))
+
+    staff := fixture.SeedStaff(t, db, fixture.WithStaffCompanyUUID(mustParseInt64(companyUUID)))
+    token := fixture.GenerateStaffToken(t, companyUUID, mustParseString(staff.UUID), staff.Username, 1)
+
+    httpClient := fixture.NewHTTPClient().WithToken(token)
+    resp := httpClient.Post(t, "/api/v1/cashier/instant/order/create", nil)
+
+    resp.AssertOK(t).AssertSuccess(t)
 }
 
-// Scenario: UBOX-S2 Response is valid JSON + has 3 fields
-func TestBuildinfo_S2_JSONShape(t *testing.T) {
-    r, _ := http.Get(serviceURL() + "/buildinfo")
-    var d map[string]any
-    if err := json.NewDecoder(r.Body).Decode(&d); err != nil { t.Fatal(err) }
-    for _, k := range []string{"git_sha","build_id","go_version"} {
-        if _, ok := d[k]; !ok { t.Errorf("missing field %s", k) }
-    }
-}
-
-// ... S3 ~ Sn
+// ... S2 ~ Sn
 ```
+
+**要点**：复用仓内 `fixture` 包（不自己写 `serviceURL()` 或 HTTP client），和 dev 的
+integration test 共享基础设施，只有 build tag 用 `contract` 区分开。
 
 ### B.4 push commit
 
@@ -139,24 +163,36 @@ func TestBuildinfo_S2_JSONShape(t *testing.T) {
 gh repo clone <spec_home_repo> ./repo
 cd ./repo
 git checkout feat/{{ req_id }}     # checkout 到 dev 已用的 feat 分支
-# 写 tests/integration/*.go
-git add tests/integration/
+# 写 contract test（路径跟随仓约定，如 tests/contract/ 或 main/tests/contract/）
+git add <contract-test-path>/
 git commit -m "test(contract): add contract tests for {{ req_id }} per spec"
 git push
 ```
 
 ### B.5 验证 RED 状态（可选但建议）
 
-在 runner pod 跑你的 test 一次，确认它能编译 + 现在确实失败（dev 没实现）：
+在 runner pod 跑你的 test 一次，确认它能编译 + 现在确实失败（dev 没实现）。
+命令根据仓结构调整：
+
 ```bash
+# 方案 A：仓根直接跑（如果 contract test 在 tests/contract/）
 kubectl exec runner-{{ req_id | lower }} -- bash -c "
   cd /workspace/source/<spec_home_repo_basename> && \
   git fetch origin feat/{{ req_id }} && git checkout feat/{{ req_id }} && \
-  go test -tags=contract ./tests/integration/... 2>&1 | tail -20
+  go test -tags=contract ./tests/contract/... 2>&1 | tail -20
+"
+
+# 方案 B：cd 到 main/ 再跑（如 ttp，contract test 在 main/tests/contract/）
+kubectl exec runner-{{ req_id | lower }} -- bash -c "
+  cd /workspace/source/<spec_home_repo_basename>/main && \
+  git fetch origin feat/{{ req_id }} && git checkout feat/{{ req_id }} && \
+  go test -tags=contract ./tests/contract/... 2>&1 | tail -20
 "
 ```
 
 预期：编译通过 + 所有 test fail（because no impl）。
+如果 runner pod 里没有完整服务栈（MySQL/Redis 等），至少验证**编译通过**；
+服务起来后自然能跑完整测试。`go test -tags=contract -c ./...` 只做编译不跑。
 
 ---
 
