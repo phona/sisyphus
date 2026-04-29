@@ -623,7 +623,13 @@ async def test_aegc_s13_startup_starts_loop_when_controller_ok_and_interval_posi
     monkeypatch.setattr("orchestrator.main.settings.watchdog_enabled", False)
     monkeypatch.setattr("orchestrator.main.settings.ttl_cleanup_enabled", False)
 
-    # Ensure any previous controller is cleared
+    # Mock RunnerController so init succeeds in test env (no real kubeconfig)
+    fake_controller = MagicMock()
+    monkeypatch.setattr(
+        "orchestrator.main.k8s_runner.RunnerController",
+        lambda **kw: fake_controller,
+    )
+    # Ensure any previous controller is cleared; startup will set it
     k8s_runner.set_controller(None)
 
     await main_mod.startup()

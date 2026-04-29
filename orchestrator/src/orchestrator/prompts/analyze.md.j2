@@ -16,10 +16,41 @@
 
 ─────────
 
+## RESUME GUARD（防重复执行）
+
+你被 wake 后，**第一件事**是先通过客观事实自检 analyze 阶段是否已经完成。在 runner pod 或本地 workspace 执行：
+
+```bash
+# 检查 1：feat 分支是否已 push 到 origin
+kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
+  "git ls-remote --heads origin feat/{{ req_id }}"
+# ↑ 有输出 = 分支已存在
+
+# 检查 2：PR 是否已开（在 BKD Coder workspace 执行）
+gh pr list --head feat/{{ req_id }} --state open --json number
+# ↑ 非空数组 = PR 已存在
+
+# 检查 3：openspec 产物是否已随 feat 分支 push
+kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
+  "git show origin/feat/{{ req_id }}:openspec/changes/{{ req_id }}/proposal.md >/dev/null 2>&1 && echo EXIST || echo MISSING"
+# ↑ 输出 EXIST = 产物已存在
+```
+
+如果以上**任意一条**检测到已存在（分支 / PR / openspec 产物）：
+
+**立即停止工作**，在 BKD chat 中输出以下提示后不再执行任何操作：
+
+> RESUME GUARD triggered: analyze for {{ req_id }} appears already completed (branch/PR/openspec artifact found). Skipping duplicate execution.
+
+不要重复 clone、不要重复写代码、不要重复 push、不要重复开 PR。等待 sisyphus 状态机自然推进或人工介入即可。
+
+---
+
 ## 全责交付 (M17)
 AGENT_ROLE=analyze-agent
 REQ={{ req_id }}
 
+{% if intake_summary is defined %}
 ### Intake 摘要（验收标准）
 
 以下是从 intake 阶段确定的验收要求，**你写 spec 时必须把每一条 acceptance criteria 翻译成一个或多个 `#### Scenario`**，不能漏、不能写空壳 scenario（只有 heading 没有 GIVEN/WHEN/THEN）：
@@ -32,6 +63,12 @@ REQ={{ req_id }}
 
 > **关键**：spec.md 里的 scenario 不是装饰，是之后 `accept-env-up` 阶段 thanatos MCP 会直接读取并执行的验收用例。每个 scenario 必须有清晰的 GIVEN/WHEN/THEN step，否则 check-scenario-refs.sh 会报空壳 scenario 直接 fail。
 
+{% else %}
+### 需求分析
+
+本 REQ 未经过 intake 阶段，请直接基于 intent description 和上下文进行需求分析，确定验收标准，并在 spec 中写出完整的 `#### Scenario`。
+
+{% endif -%}
 你**全权负责**这个 REQ 从 0 到可合并 PR 的端到端交付。
 
 > 重要：M15 砍掉了 sisyphus 主动起的 spec / dev BKD 子 agent —— 状态机里已经没人接手 spec/dev

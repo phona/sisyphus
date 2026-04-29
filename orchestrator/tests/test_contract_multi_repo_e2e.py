@@ -622,7 +622,7 @@ def test_mrepo_acc_s1_create_accept_script_traverses_all_repos():
     """MREPO-ACC-S1: _build_accept_script iterates over /workspace/source/*/ for env-up + smoke."""
     from orchestrator.actions import create_accept as ca
 
-    script = ca._build_accept_script("REQ-x", delay_sec=5)
+    script = ca._build_lite_script("REQ-x", delay_sec=5)
     # Must have three phases: env-up, sleep, accept-smoke, env-down
     assert "for repo in /workspace/source/*/; do" in script
     assert "accept-env-up" in script
@@ -635,7 +635,7 @@ def test_mrepo_acc_s2_create_accept_script_isolates_per_repo_failures():
     """MREPO-ACC-S2: per-repo failure sets fail=1 but script continues to next repo."""
     from orchestrator.actions import create_accept as ca
 
-    script = ca._build_accept_script("REQ-x", delay_sec=5)
+    script = ca._build_lite_script("REQ-x", delay_sec=5)
     # fail flag accumulates across repos
     assert "fail=1" in script
     # env-down is in a separate loop with || true (best-effort)
@@ -647,7 +647,7 @@ def test_mrepo_acc_s3_create_accept_missing_target_skips_repo():
     """MREPO-ACC-S3: make -n target missing -> skip that repo (fail-open)."""
     from orchestrator.actions import create_accept as ca
 
-    script = ca._build_accept_script("REQ-x", delay_sec=5)
+    script = ca._build_lite_script("REQ-x", delay_sec=5)
     # Check for make -n before running
     assert "make -C" in script
     assert "-n accept-env-up" in script
@@ -657,16 +657,14 @@ def test_mrepo_acc_s3_create_accept_missing_target_skips_repo():
 
 
 def test_mrepo_acc_s4_create_accept_no_repos_vacuous_pass():
-    """MREPO-ACC-S4: cloned_repos empty -> create_accept returns vacuous pass."""
-    # This is a behavioral contract of the action function (not the shell script)
-    # Verified by checking the action's early return path
-    # The action checks ctx.cloned_repos and returns ACCEPT_PASS if empty
+    """MREPO-ACC-S4: no integration dir -> create_accept returns vacuous pass."""
+    # create_accept now uses resolve_integration_dir instead of ctx.cloned_repos
     import inspect
 
     from orchestrator.actions import create_accept as ca
 
     src = inspect.getsource(ca.create_accept)
-    assert "cloned_repos" in src
+    assert "resolve_integration_dir" in src or "integration_dir" in src
     assert "ACCEPT_PASS" in src or "accept.pass" in src.lower()
 
 
@@ -798,13 +796,13 @@ async def test_mrepo_esc_s1_escalate_iterates_all_involved_repos(monkeypatch):
 
 
 def test_mrepo_state_s1_ctx_supports_cloned_repos():
-    """MREPO-STATE-S1: ctx.cloned_repos field exists and is read by accept phase."""
+    """MREPO-STATE-S1: integration resolution is used by accept phase."""
     import inspect
 
     from orchestrator.actions import create_accept as ca
 
     src = inspect.getsource(ca.create_accept)
-    assert "cloned_repos" in src, "create_accept must read ctx.cloned_repos"
+    assert "resolve_integration_dir" in src or "integration_dir" in src, "create_accept must resolve integration dir"
 
 
 def test_mrepo_state_s2_ctx_supports_involved_repos():

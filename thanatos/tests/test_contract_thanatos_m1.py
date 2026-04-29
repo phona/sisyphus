@@ -9,13 +9,12 @@ Derived from:
 from __future__ import annotations
 
 import json
-import textwrap
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import ClassVar
 
 import httpx
 import pytest
-
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -75,7 +74,7 @@ class _CaptureRequestHandler(_MockHandler):
 class _JSONResponseHandler(_MockHandler):
     """Returns configurable JSON responses."""
 
-    responses: dict[str, tuple[int, dict]] = {}
+    responses: ClassVar[dict[str, tuple[int, dict]]] = {}
 
     def do_GET(self):
         status, data = self.responses.get(self.path, (200, {}))
