@@ -12,5 +12,5 @@
 - [x] Update test_contract_multi_repo_e2e.py with missing mocks
 
 ## Stage: PR
-- [ ] git push feat/REQ-fix-intent-issue-hijacking-1777427339
-- [ ] gh pr create with sisyphus label
+- [x] git push feat/REQ-fix-intent-issue-hijacking-1777427339
+- [x] gh pr create with sisyphus label
