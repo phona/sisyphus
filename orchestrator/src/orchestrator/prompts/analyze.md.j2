@@ -50,6 +50,7 @@ kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
 AGENT_ROLE=analyze-agent
 REQ={{ req_id }}
 
+{% if intake_summary is defined %}
 ### Intake 摘要（验收标准）
 
 以下是从 intake 阶段确定的验收要求，**你写 spec 时必须把每一条 acceptance criteria 翻译成一个或多个 `#### Scenario`**，不能漏、不能写空壳 scenario（只有 heading 没有 GIVEN/WHEN/THEN）：
@@ -62,6 +63,12 @@ REQ={{ req_id }}
 
 > **关键**：spec.md 里的 scenario 不是装饰，是之后 `accept-env-up` 阶段 thanatos MCP 会直接读取并执行的验收用例。每个 scenario 必须有清晰的 GIVEN/WHEN/THEN step，否则 check-scenario-refs.sh 会报空壳 scenario 直接 fail。
 
+{% else %}
+### 需求分析
+
+本 REQ 未经过 intake 阶段，请直接基于 intent description 和上下文进行需求分析，确定验收标准，并在 spec 中写出完整的 `#### Scenario`。
+
+{% endif -%}
 你**全权负责**这个 REQ 从 0 到可合并 PR 的端到端交付。
 
 > 重要：M15 砍掉了 sisyphus 主动起的 spec / dev BKD 子 agent —— 状态机里已经没人接手 spec/dev
