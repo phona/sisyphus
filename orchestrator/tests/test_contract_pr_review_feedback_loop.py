@@ -17,15 +17,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
+from unittest.mock import AsyncMock
 
 import pytest
-from unittest.mock import AsyncMock
 
 from orchestrator import webhook
 from orchestrator.actions._verifier import _PASS_ROUTING
 from orchestrator.state import Event, ReqState, decide
-
 
 # ── _derive_event_from_review_state ───────────────────────────────────────────
 
