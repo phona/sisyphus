@@ -112,6 +112,21 @@ async def start_analyze(*, body, req_id, tags, ctx):
         await req_state.update_context(db.get_pool(), req_id, {
             "escalated_reason": f"rate-limit:{decision.reason}",
         })
+        # 给用户可见反馈：tag + follow-up 消息说明拒绝原因
+        try:
+            async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+                await bkd.merge_tags_and_update(
+                    project_id=proj,
+                    issue_id=issue_id,
+                    add=["reason:rate-limit"],
+                )
+                await bkd.follow_up_issue(
+                    project_id=proj,
+                    issue_id=issue_id,
+                    prompt=f"当前并发 REQ 已满（{decision.reason}），请稍后重试或联系管理员扩容。",
+                )
+        except Exception as e:
+            log.warning("start_analyze.admission_bkd_sync_failed", req_id=req_id, error=str(e))
         return {
             "emit": Event.VERIFY_ESCALATE.value,
             "reason": f"admission denied: {decision.reason}",

@@ -180,18 +180,43 @@ class BKDRestClient:
         remove: list[str] | None = None,
         status_id: str | None = None,
     ) -> Issue:
-        """get_issue → 合 tags → update_issue。BKD update tags 是替换语义，必须先取再合。"""
-        cur = await self.get_issue(project_id, issue_id)
-        new_tags = list(cur.tags)
-        for t in remove or []:
-            while t in new_tags:
-                new_tags.remove(t)
-        for t in add or []:
-            if t not in new_tags:
-                new_tags.append(t)
-        return await self.update_issue(
-            project_id, issue_id, tags=new_tags, status_id=status_id,
+        """get_issue → 合 tags → update_issue → 验证。
+
+        BKD update tags 是替换语义，必须先取再合。为消除并发读-改-写的 race，
+        update 后再 get 一次验证；若 tags 和预期不一致（说明并发修改），最多重试 3 次。
+        """
+        for attempt in range(3):
+            cur = await self.get_issue(project_id, issue_id)
+            new_tags = list(cur.tags)
+            for t in remove or []:
+                while t in new_tags:
+                    new_tags.remove(t)
+            for t in add or []:
+                if t not in new_tags:
+                    new_tags.append(t)
+            result = await self.update_issue(
+                project_id, issue_id, tags=new_tags, status_id=status_id,
+            )
+            # 乐观锁验证：update 返回的 tags 已和预期一致 → 成功
+            if set(result.tags) == set(new_tags):
+                return result
+            # 返回不一致（可能服务端有其他并发写），再 get 一次确认
+            verify = await self.get_issue(project_id, issue_id)
+            if set(verify.tags) == set(new_tags):
+                return result
+            log.info(
+                "bkd.tag_race_detected",
+                issue_id=issue_id,
+                attempt=attempt,
+                expected=sorted(new_tags),
+                actual=sorted(verify.tags),
+            )
+        log.warning(
+            "bkd.tag_race_exhausted",
+            issue_id=issue_id,
+            max_attempts=3,
         )
+        return result
 
     # ─── 内部 ──────────────────────────────────────────────────────────────
     def _headers(self) -> dict[str, str]:
