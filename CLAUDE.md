@@ -8,6 +8,8 @@
 
 ## 核心哲学
 
+> **定位与边界权威**：[docs/architecture.md §1b](docs/architecture.md)（隐形 infra / 控制面复杂度结构 / 不换通用框架的理由 / 新增机制的判断尺子）
+
 - **薄编排，agent 决定** —— 路由 / 状态机 / checker 是 sisyphus；判 PR 内容、bug 该不该修是 agent。**永远不抢 AI 决定权**。
 - **机械层 ≠ agent 层** —— 跑测试 / 轮 GHA / 校 schema 不绕 agent，sisyphus 是唯一裁判（4 个 checker：spec_lint / dev_cross_check / staging_test / pr_ci_watch）。
 - **失败先验，再试错** —— stage fail 不直接 bugfix，verifier-agent 主观判 pass / fix / escalate（M14b/c，3 路）。
@@ -49,9 +51,11 @@ intent:analyze → analyze(全责交付：写 spec + 业务码 + push feat/REQ-x
 任何 stage（含 staging-test / pr-ci / accept）失败入 `REVIEW_RUNNING`，verifier-agent 3 路决策：
 - `pass` → 推下一 stage
 - `fix` + `fixer` → 起 dev / spec fixer，回 `REVIEW_RUNNING` 再判
-- `escalate` → 终态 ESCALATED（**包括所有 flaky / 基础设施抖动**：sisyphus 不再机制性兜 retry，由人重起）
+- `escalate` → 进 ESCALATED（**包括所有 flaky / 基础设施抖动**：sisyphus 不再机制性兜 retry）
 
-state 转移完整定义在 [orchestrator/src/orchestrator/state.py](orchestrator/src/orchestrator/state.py)（17 ReqState × 27 Event × 30+ transition）。
+**ESCALATED 是暂停态，不是死终态**——用户在任意 stage agent issue（含 verifier issue）BKD UI 续 follow-up，agent 重跑产出 result tag → router 派出对应主链事件 → ESCALATED 复用主链 transition 继续推。零新概念 / 零新 tag / 零新 endpoint。详见 [docs/state-machine.md §5](docs/state-machine.md)。
+
+state 转移完整定义在 [orchestrator/src/orchestrator/state.py](orchestrator/src/orchestrator/state.py)（17 ReqState × 27 Event × 70 transition）。
 
 ## 技术栈
 
