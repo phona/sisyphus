@@ -8,6 +8,8 @@
 
 ## 核心哲学
 
+> **定位与边界权威**：[docs/architecture.md §1b](docs/architecture.md)（隐形 infra / 控制面复杂度结构 / 不换通用框架的理由 / 新增机制的判断尺子）
+
 - **薄编排，agent 决定** —— 路由 / 状态机 / checker 是 sisyphus；判 PR 内容、bug 该不该修是 agent。**永远不抢 AI 决定权**。
 - **机械层 ≠ agent 层** —— 跑测试 / 轮 GHA / 校 schema 不绕 agent，sisyphus 是唯一裁判（4 个 checker：spec_lint / dev_cross_check / staging_test / pr_ci_watch）。
 - **失败先验，再试错** —— stage fail 不直接 bugfix，verifier-agent 主观判 pass / fix / escalate（M14b/c，3 路）。

@@ -107,6 +107,74 @@
 └────────────────────────────────────────────────────────┘
 ```
 
+## 1b. 定位与控制面边界
+
+> 这一节回答："sisyphus 这套控制面这么重，是不是必要的？为什么不换通用 workflow 框架？"
+> 影响所有未来新增 / 删减 / 重构机制的判断尺子。
+
+### 1b.1 sisyphus 的产品定位：隐形 infra，不是用户产品
+
+| | 角色 |
+|---|---|
+| **BKD** | **唯一用户入口**。agent chat workspace、worktree、issue / tag / 续聊都在这里。 |
+| **sisyphus** | **隐形控制面**。状态机 / 路由 / checker / 度量。**不给用户做 UI / CLI / dashboard**。 |
+
+设计推论（**所有未来 sisyphus 功能必须遵守**）：
+
+- 任何用户可见操作（含 ESCALATED 恢复 / 触发 / 排障）**必须能在 BKD agent issue 里自然完成**——续 prompt → BKD agent 跑 → session.\* webhook → sisyphus 接住信号
+- sisyphus admin REST endpoint 仅供脚本 / cron / dev 调试，**不是日常路径**
+- 不写"用户怎么 resume / 怎么触发"这种用户文档；用户不需要知道 sisyphus 内部概念（ESCALATED / RESUMING / ctx 等）
+- **但**用户感知不到 sisyphus 内部 = sisyphus 必须**替用户守边界**：cap / hard-reason / 异常告警 / 数据自愈 比"有 UI 时"重要得多
+
+### 1b.2 控制面复杂度结构
+
+| 层 | 占比 | 是否可避免 |
+|---|---|---|
+| 控制面本质 | ~30% | **不可避免**：状态机 / CAS / event_log / ctx——只要想"无人值守 + 可观测 + 自愈" |
+| BKD 同步 | ~30% | 架构选择带来的：BKD 跟 sisyphus 解耦换来 BKD 自身演进 + 用户介入界面 + chat workspace 等价值 |
+| 多 actor 协作 | ~20% | 业务本质：user / verifier / fixer / sisyphus 都能戳 BKD agent → 必须有 race protection / tag dedup / 状态收敛 |
+| 实现抽象债 | ~20% | **可还**：每加 stage 都要碰 N 处的代码 → 修对抽象（如 active\_stage / declarative DSL）能降一个量级 |
+
+前 3 层是**系统化工程的必要税**，跟 k8s controller 跟 kubelet 同步、CI orchestrator 跟 runner 同步、GitOps 跟集群 reconcile 同构。第 4 层是真正可优化的余地。
+
+### 1b.3 为什么不换 Temporal / Cadence / 通用 workflow framework
+
+**框架解决什么** vs **不解决什么**：
+
+| 问题 | Temporal/Cadence | sisyphus 现状 |
+|---|---|---|
+| 状态持久化 | ✅ workflow history 自动 | `req_state` + `history` 列 |
+| CAS / 并发 | ✅ workflow 单线程串行 | 手写 CAS SQL |
+| retry / timeout | ✅ activity 标准 API | watchdog + retry_count |
+| event sourcing | ✅ history 自动 replay | event_log 表 |
+| **业务状态语义**（ESCALATED 是终态还是暂停态？） | ❌ 你自己定义 | state.py |
+| **跨系统状态同步**（BKD ↔ sisyphus） | ❌ activity 自己写 | bkd.py + router.py 全部 |
+| **多 actor 协作协议** | ❌ signal 协议自己设计 | tag 命名规范 + derive_event |
+| **业务指标语义**（哪条 prompt 该改？） | ❌ history 是技术日志，不是业务诊断 | Q1-Q18 那 18 条 Metabase SQL |
+| **领域抽象**（stage / checker / fixer / verifier） | ❌ 你自己建模 | actions/ + checkers/ + prompts/ |
+| **dead-letter / 恢复 UX** | ❌ 你自己设计 | docs/state-machine.md §5 |
+
+横线**以下**才是真正占 sisyphus 复杂度大头的部分，框架一行不省。Temporal 重写估算净收益 **-10% ~ +20%**，加迁移半年 + 双跑期间双倍运维 = **不划算**。
+
+**AI workflow 这个领域没有事实标准框架**：
+
+- LangGraph / CrewAI / AutoGen：砍掉控制面 → 没有可观测 / 没有恢复语义 / 没有并发安全
+- Airflow + LLM operators：DAG 模型对 verifier 这种动态决策很笨拙
+- Prefect 3 / Temporal：通用 workflow 引擎，但 deterministic 约束跟 LLM 本质冲突
+- 这个领域 frameworks-of-the-month 现象严重，**最稳的反而是自研轻量控制面 + 业务认知积累**
+
+### 1b.4 新增 / 删减机制的判断尺子
+
+加任何机制（新 state、新 event、新 action、新 checker、新 ctx 字段）前先问：
+
+1. **数据进了哪张表？**——`stage_runs` / `verifier_decisions` / `artifact_checks` / `event_log` 没人看就别加。"指标驱动改进" 的反向应用。
+2. **用户能在 BKD 里完成对应操作吗？**——如果答案是"用户要去 sisyphus 那边点个按钮 / 加个 tag"，停下来重想。
+3. **抽象修对了未来新 stage 是不是免维护？**——typedef / 通用 ctx 字段 / declarative DSL 比硬编码 stage_map 优。
+4. **sisyphus 在抢 agent 决定权吗？**——如果答案模棱两可，默认不抢。
+5. **复杂度收益递减信号**：如果一个机制的覆盖率永远小于 5%（比如某个特定 stage 的特定边界 case），考虑用日志 + 人工兜底替代代码。
+
+每次"折磨"是抽象修补机会，不是换框架机会。
+
 ## 2. 主流水线
 
 happy path（含 INTAKING）十一段，入口可选 `intent:intake`（推荐）或 `intent:analyze`（跳过澄清）一路自动到 `done`。
