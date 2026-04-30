@@ -28,6 +28,11 @@ service:
 # redroid sidecar settings (only used when driver=adb).
 redroid:
   image: redroid/redroid:11.0.0-latest
+  # pullPolicy 跟 image.pullPolicy 解耦：自包装的 redroid-fixed 镜像（含 /etc/passwd
+  # 修复 + flatten 顶层符号链接、解 containerd 2.x mount safety check）通常
+  # `k3s ctr images import` 进集群本地 cache，需要走 IfNotPresent / Never；而
+  # thanatos 镜像仍可走 dev tag 滚动 Always。空值则 fallback 到 image.pullPolicy。
+  pullPolicy: ""
   port: 5555
   resources:
     requests:
