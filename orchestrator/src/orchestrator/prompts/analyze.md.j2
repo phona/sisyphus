@@ -373,6 +373,21 @@ kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
 kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
   "cd /workspace/source/$REPO && gh pr list --head feat/{{ req_id }} --state open --json number"
 # ↑ 必须返回非空 JSON 数组（如 [{"number":208}]）。空数组 [] = PR 没开，立即 gh pr create
+
+# 4. 验证 openspec 产物能通过 spec_lint（自检，避免 verifier escalate）
+kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
+  "cd /workspace/source/\$REPO && \
+   git fetch origin feat/{{ req_id }} 2>/dev/null && \
+   git checkout -B feat/{{ req_id }} origin/feat/{{ req_id }} 2>/dev/null && \
+   openspec validate '{{ req_id }}' && \
+   check-scenario-refs.sh --specs-search-path /workspace/source ."
+# ↑ 任一失败 = 立即修复后重跑，不要报完成。openspec validate 红的原因通常是：
+#   - 缺少 ## ADDED Requirements 顶层 heading
+#   - Requirement body 缺少 SHALL/MUST
+#   - scenario heading 格式不对（必须是 #### Scenario: <ID>）
+# check-scenario-refs.sh 红的原因通常是：
+#   - 空壳 scenario（只有 heading 没有 GIVEN/WHEN/THEN step）
+#   - [XXX-S<N>] 引用找不到定义
 ```
 
 **全部验证通过后才能报完成**。如果验证失败，先修复再报，不要先报"完成"再回头补。
