@@ -1,10 +1,16 @@
 name: thanatos-image
 
 # build & push thanatos MCP server image to GHCR.
-# 触发：thanatos/ 或本 workflow 改动 push 到 main / 打 thanatos-v* tag。
-# 输出 tag：sha-<short>（每次 commit）+ dev（main 滚动） + thanatos-v* tag 时打版本号。
+# 触发：
+#   - pull_request: build but don't push（验证 Dockerfile 改动能 build）
+#   - push main / 打 thanatos-v* tag: build + push
+# 输出 tag：sha-<short> + dev（main 滚动）+ tag 版本号（push tag 时）
 
 on:
+  pull_request:
+    paths:
+      - 'thanatos/**'
+      - '.github/workflows/thanatos-image.yml'
   push:
     branches: [main]
     tags: ['thanatos-v*']
@@ -17,7 +23,7 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/thanatos
 
 jobs:
-  build-and-push:
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -29,6 +35,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -39,12 +46,12 @@ jobs:
         id: vars
         run: echo "sha_short=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
 
-      - name: Build and push
+      - name: Build (push only on push events; PR 阶段只验 Dockerfile 能 build)
         uses: docker/build-push-action@v5
         with:
           context: ./thanatos
           file: ./thanatos/Dockerfile
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.vars.outputs.sha_short }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev
