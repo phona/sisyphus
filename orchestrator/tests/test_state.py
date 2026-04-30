@@ -143,17 +143,64 @@ def test_done_terminal_has_no_outgoing():
 
 
 def test_escalated_resumable_via_verifier_followup():
-    """ESCALATED 不是死终态：用户续 verifier issue → BKD 新 decision → 走原 verifier 同链。
+    """ESCALATED 不是死终态：用户续 verifier issue → BKD 新 decision → 走原 verifier 同链。"""
+    for ev in (Event.VERIFY_PASS, Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE):
+        assert decide(ReqState.ESCALATED, ev) is not None, ev
 
-    其他 event（非 verifier 类）仍然没出口 —— escalated 只通过"人续 verifier issue"复活。
+
+def test_escalated_resumable_via_stage_issue_followup():
+    """REQ-escalated-stage-resume：用户续 stage agent issue（非 verifier issue）也能恢复。
+
+    BKD agent 重跑并贴 result tag → router 派出主链事件 → ESCALATED 复用主链 transition
+    （next_state / action 跟主链同一份），不需要新 action。
     """
-    resumable = {Event.VERIFY_PASS, Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE}
-    for ev in Event:
+    expected = [
+        # event,                                next_state,                          action
+        (Event.INTAKE_PASS,                     ReqState.ANALYZING,                  "start_analyze_with_finalized_intent"),
+        (Event.ANALYZE_DONE,                    ReqState.ANALYZE_ARTIFACT_CHECKING,  "create_analyze_artifact_check"),
+        (Event.ANALYZE_ARTIFACT_CHECK_PASS,     ReqState.SPEC_LINT_RUNNING,          "create_spec_lint"),
+        (Event.ANALYZE_ARTIFACT_CHECK_FAIL,     ReqState.REVIEW_RUNNING,             "invoke_verifier_for_analyze_artifact_check_fail"),
+        (Event.SPEC_LINT_PASS,                  ReqState.CHALLENGER_RUNNING,         "start_challenger"),
+        (Event.SPEC_LINT_FAIL,                  ReqState.REVIEW_RUNNING,             "invoke_verifier_for_spec_lint_fail"),
+        (Event.CHALLENGER_PASS,                 ReqState.DEV_CROSS_CHECK_RUNNING,    "create_dev_cross_check"),
+        (Event.CHALLENGER_FAIL,                 ReqState.REVIEW_RUNNING,             "invoke_verifier_for_challenger_fail"),
+        (Event.DEV_CROSS_CHECK_PASS,            ReqState.STAGING_TEST_RUNNING,       "create_staging_test"),
+        (Event.DEV_CROSS_CHECK_FAIL,            ReqState.REVIEW_RUNNING,             "invoke_verifier_for_dev_cross_check_fail"),
+        (Event.STAGING_TEST_PASS,               ReqState.PR_CI_RUNNING,              "create_pr_ci_watch"),
+        (Event.STAGING_TEST_FAIL,               ReqState.REVIEW_RUNNING,             "invoke_verifier_for_staging_test_fail"),
+        (Event.PR_CI_PASS,                      ReqState.ACCEPT_RUNNING,             "create_accept"),
+        (Event.PR_CI_FAIL,                      ReqState.REVIEW_RUNNING,             "invoke_verifier_for_pr_ci_fail"),
+        (Event.ACCEPT_PASS,                     ReqState.ACCEPT_TEARING_DOWN,        "teardown_accept_env"),
+        (Event.ACCEPT_FAIL,                     ReqState.ACCEPT_TEARING_DOWN,        "teardown_accept_env"),
+        (Event.TEARDOWN_DONE_PASS,              ReqState.PENDING_USER_REVIEW,        "post_acceptance_report"),
+        (Event.TEARDOWN_DONE_FAIL,              ReqState.REVIEW_RUNNING,             "invoke_verifier_for_accept_fail"),
+        (Event.FIXER_DONE,                      ReqState.REVIEW_RUNNING,             "invoke_verifier_after_fix"),
+    ]
+    for ev, next_st, action in expected:
         t = decide(ReqState.ESCALATED, ev)
-        if ev in resumable:
-            assert t is not None, f"{ev.value} should be resumable from ESCALATED"
-        else:
-            assert t is None, f"{ev.value} should NOT move ESCALATED (non-resume path)"
+        assert t is not None, f"{ev.value} should be resumable from ESCALATED"
+        assert t.next_state == next_st, f"{ev.value}: expected {next_st}, got {t.next_state}"
+        assert t.action == action, f"{ev.value}: expected action {action}, got {t.action}"
+
+
+def test_escalated_non_resume_events_still_blocked():
+    """不该被复活的事件：直接进 ESCALATED 类、SESSION_FAILED、PENDING_USER_REVIEW 出口、PR_MERGED。
+
+    PR_MERGED 由 escalate.py 入口的 PR-merged shortcut 处理，不在 transition 表里出现。
+    """
+    blocked = {
+        Event.SESSION_FAILED,        # 已在 ESCALATED 再挂还是 escalate，无意义
+        Event.INTAKE_FAIL,           # 直接进 ESCALATED 的事件，不是恢复信号
+        Event.PR_CI_TIMEOUT,
+        Event.ACCEPT_ENV_UP_FAIL,
+        Event.USER_REVIEW_FIX,       # PENDING_USER_REVIEW 出口
+        Event.USER_REVIEW_PASS,
+        Event.PR_MERGED,             # escalate.py 入口的 PR-merged shortcut 处理
+        Event.INTENT_INTAKE,         # 入口事件，REQ 已经存在不该重新入口
+        Event.INTENT_ANALYZE,
+    }
+    for ev in blocked:
+        assert decide(ReqState.ESCALATED, ev) is None, f"{ev.value} should NOT move ESCALATED"
 
 
 def test_m5_dropped_test_fix_reviewer_states():

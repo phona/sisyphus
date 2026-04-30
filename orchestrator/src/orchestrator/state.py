@@ -298,6 +298,49 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
 }
 
 
+# ─── ESCALATED 主链反激活：stage-issue 续写 follow-up ─────────────────────
+# 已有：(ESCALATED, VERIFY_*) 让用户续 escalate 的 verifier issue 走原 verifier 链。
+# 这里补：用户在 stage agent issue（intake / analyze / challenger / accept / fixer）
+# 续 follow-up → BKD wake agent → agent 重跑并贴 result tag → router 派出对应主链
+# 事件 → ESCALATED 复用主链 transition（next_state / action 跟主链同一份）。
+#
+# 设计：复用 TRANSITIONS[(src_state, ev)]，主链改了 ESCALATED 复活路径自动跟，
+# 没有 next_state / action 的二次定义，不会漂移。dump_transitions 看起来就像
+# (ESCALATED, X) 跟 (src_state, X) 走同一套；这是有意的。
+#
+# 排除清单（不加）：
+#   - SESSION_FAILED：已在 ESCALATED 再挂还是 escalate，无意义
+#   - 直接进 ESCALATED 的事件：INTAKE_FAIL / PR_CI_TIMEOUT / ACCEPT_ENV_UP_FAIL
+#     / VERIFY_ESCALATE / USER_REVIEW_FIX —— 这些不是"恢复信号"
+#   - PR_MERGED：escalate.py 入口的 PR-merged shortcut 已处理
+#   - VERIFY_PASS / VERIFY_FIX_NEEDED / VERIFY_INFRA_RETRY：已在上面 verifier 反激活段
+_ESCALATED_RESUME_EVENT_SOURCES: list[tuple[Event, ReqState]] = [
+    (Event.INTAKE_PASS,                  ReqState.INTAKING),
+    (Event.ANALYZE_DONE,                 ReqState.ANALYZING),
+    (Event.ANALYZE_ARTIFACT_CHECK_PASS,  ReqState.ANALYZE_ARTIFACT_CHECKING),
+    (Event.ANALYZE_ARTIFACT_CHECK_FAIL,  ReqState.ANALYZE_ARTIFACT_CHECKING),
+    (Event.SPEC_LINT_PASS,               ReqState.SPEC_LINT_RUNNING),
+    (Event.SPEC_LINT_FAIL,               ReqState.SPEC_LINT_RUNNING),
+    (Event.CHALLENGER_PASS,              ReqState.CHALLENGER_RUNNING),
+    (Event.CHALLENGER_FAIL,              ReqState.CHALLENGER_RUNNING),
+    (Event.DEV_CROSS_CHECK_PASS,         ReqState.DEV_CROSS_CHECK_RUNNING),
+    (Event.DEV_CROSS_CHECK_FAIL,         ReqState.DEV_CROSS_CHECK_RUNNING),
+    (Event.STAGING_TEST_PASS,            ReqState.STAGING_TEST_RUNNING),
+    (Event.STAGING_TEST_FAIL,            ReqState.STAGING_TEST_RUNNING),
+    (Event.PR_CI_PASS,                   ReqState.PR_CI_RUNNING),
+    (Event.PR_CI_FAIL,                   ReqState.PR_CI_RUNNING),
+    (Event.ACCEPT_PASS,                  ReqState.ACCEPT_RUNNING),
+    (Event.ACCEPT_FAIL,                  ReqState.ACCEPT_RUNNING),
+    (Event.TEARDOWN_DONE_PASS,           ReqState.ACCEPT_TEARING_DOWN),
+    (Event.TEARDOWN_DONE_FAIL,           ReqState.ACCEPT_TEARING_DOWN),
+    (Event.FIXER_DONE,                   ReqState.FIXER_RUNNING),
+]
+TRANSITIONS.update({
+    (ReqState.ESCALATED, ev): TRANSITIONS[(src, ev)]
+    for ev, src in _ESCALATED_RESUME_EVENT_SOURCES
+})
+
+
 def decide(cur_state: ReqState, event: Event) -> Transition | None:
     """主 API：给 (state, event) 查 transition。None 表示非法/忽略。"""
     return TRANSITIONS.get((cur_state, event))

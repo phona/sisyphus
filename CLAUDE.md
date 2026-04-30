@@ -49,9 +49,11 @@ intent:analyze → analyze(全责交付：写 spec + 业务码 + push feat/REQ-x
 任何 stage（含 staging-test / pr-ci / accept）失败入 `REVIEW_RUNNING`，verifier-agent 3 路决策：
 - `pass` → 推下一 stage
 - `fix` + `fixer` → 起 dev / spec fixer，回 `REVIEW_RUNNING` 再判
-- `escalate` → 终态 ESCALATED（**包括所有 flaky / 基础设施抖动**：sisyphus 不再机制性兜 retry，由人重起）
+- `escalate` → 进 ESCALATED（**包括所有 flaky / 基础设施抖动**：sisyphus 不再机制性兜 retry）
 
-state 转移完整定义在 [orchestrator/src/orchestrator/state.py](orchestrator/src/orchestrator/state.py)（17 ReqState × 27 Event × 30+ transition）。
+**ESCALATED 是暂停态，不是死终态**——用户在任意 stage agent issue（含 verifier issue）BKD UI 续 follow-up，agent 重跑产出 result tag → router 派出对应主链事件 → ESCALATED 复用主链 transition 继续推。零新概念 / 零新 tag / 零新 endpoint。详见 [docs/state-machine.md §5](docs/state-machine.md)。
+
+state 转移完整定义在 [orchestrator/src/orchestrator/state.py](orchestrator/src/orchestrator/state.py)（17 ReqState × 27 Event × 70 transition）。
 
 ## 技术栈
 

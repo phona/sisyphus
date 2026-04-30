@@ -123,10 +123,20 @@ stateDiagram-v2
     review_running --> escalated: verify.escalate\n(不确定 flaky / 基础设施严重问题)
     review_running --> review_running: verify.infra-retry\n(REQ-428: 确认 infra-flake → 重跑 checker;\n超 cap → escalate)
 
-    %% escalated 不是死终态：用户 follow-up 那个 escalate 的 verifier issue → 走原 verifier 同链
+    %% escalated 不是死终态：续 verifier issue / 续 stage agent issue 都能复活
     escalated --> escalated: verify.pass\n(apply_verify_pass 内部 CAS 推下一 stage)
     escalated --> fixer_running: verify.fix-needed
     escalated --> escalated: verify.escalate\n(verifier 又判 escalate, 留原地)
+
+    %% REQ-escalated-stage-resume: 续 stage agent issue 走主链事件，复用主链 transition
+    escalated --> analyze_artifact_checking: analyze.done\n(stage-issue 续: 用户在 analyze issue follow-up,\nagent 重跑出 result:pass)
+    escalated --> dev_cross_check_running: challenger.pass
+    escalated --> staging_test_running: dev-cross-check.pass
+    escalated --> pr_ci_running: staging-test.pass
+    escalated --> accept_running: pr-ci.pass
+    escalated --> accept_tearing_down: accept.pass / accept.fail
+    escalated --> review_running: any *.fail / fixer.done\n(走 verifier 复查)
+    escalated --> pending_user_review: teardown-done.pass
 
     fixer_running --> review_running: fixer.done\n(invoke_verifier_after_fix)
 
@@ -150,11 +160,23 @@ stateDiagram-v2
   输出 retry 会退回 escalate（这些非机械 checker，无法简单重跑）。
 - `escalate`：不确定是否 flaky / infra 问题持续 / retry cap 到顶 / 所有非 retry 场景。
 
-**ESCALATED 可恢复**：用户在 BKD UI follow-up 那条 escalate 的 verifier issue（webhook
-统一推 statusId="review" 让"待审查"列只剩它）→ BKD wake agent → 写新 decision → 走原
-verifier session.completed 同一套 webhook 链路，直接命中 `(ESCALATED, VERIFY_*)` transition。
-零新概念 / 零新 tag / 零新 endpoint。**注意**只可 follow-up verifier issue 续；analyze
-issue 续会重起整个 analyze 等于新 REQ，文档不推荐。
+**ESCALATED 可恢复（两条入口）**：
+
+1. **续 verifier issue**：用户 follow-up 那条 escalate 的 verifier issue（webhook 统一
+   推 statusId="review" 让"待审查"列只剩它）→ BKD wake agent → 写新 decision → 走原
+   verifier session.completed 同一套链路，命中 `(ESCALATED, VERIFY_*)` transition。
+
+2. **续 stage agent issue**（REQ-escalated-stage-resume）：用户 follow-up 任意 stage
+   agent issue（intake / analyze / challenger / accept / fixer 等）→ BKD wake agent
+   → 重跑并贴 result tag → router 派出对应主链事件（ANALYZE_DONE / CHALLENGER_PASS
+   等）→ ESCALATED 复用主链 transition（next_state / action 跟主链同一份）。19 条
+   `(ESCALATED, <main-chain-event>)` 在 state.py `_ESCALATED_RESUME_EVENT_SOURCES`
+   声明，复用 `TRANSITIONS[(src, ev)]`，主链改了 ESCALATED 复活路径自动跟，零漂移。
+
+零新概念 / 零新 tag / 零新 endpoint / 零新 action。失败信号（`SESSION_FAILED` / 直接进
+ESCALATED 类事件 `PR_CI_TIMEOUT` / `ACCEPT_ENV_UP_FAIL` / `VERIFY_ESCALATE` /
+`INTAKE_FAIL` / `USER_REVIEW_FIX`）和 `PR_MERGED`（escalate.py 入口的 PR-merged
+shortcut 处理）不在恢复列表里，避免恢复语义被误用。
 
 `VERIFY_PASS` 在 transition 表里看起来是 self-loop（next_state 还是 `review-running`），
 但 **action 内部手工 CAS 推到目标 stage_running 再链式 emit 该 stage 的 done/pass 事件**。

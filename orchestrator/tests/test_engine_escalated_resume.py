@@ -442,15 +442,117 @@ async def test_ert_s9_full_transition_sweep(
     )
 
 
-def test_ert_s9_sweep_covers_exactly_51():
-    """Sanity: TRANSITIONS 必须正好 50 条 —— 加 / 减 transition 时这条 fail 提醒
+def test_ert_s9_sweep_covers_exactly_70():
+    """Sanity: TRANSITIONS 必须正好 70 条 —— 加 / 减 transition 时这条 fail 提醒
     review 是否同步加 spec scenario / 文档（state-machine.md / dump_transitions）。
 
-    REQ-bkd-acceptance-feedback-loop-1777278984 起新增 PENDING_USER_REVIEW 入/出
-    transitions（pr.opened 入站 + acceptance approve/request_changes 出站），从 47
-    增至 49；后续 REQ 再增 1 条至 50。"""
-    assert len(state_mod.TRANSITIONS) == 51, (
-        f"expected 51 transitions, got {len(state_mod.TRANSITIONS)}; "
+    历史：47 → 49（PENDING_USER_REVIEW 入/出）→ 51（再 +1）→ 70（REQ-escalated-stage-resume：
+    + 19 条 ESCALATED 主链反激活，让 stage-issue 续 follow-up 也能恢复）。"""
+    assert len(state_mod.TRANSITIONS) == 70, (
+        f"expected 70 transitions, got {len(state_mod.TRANSITIONS)}; "
         "if you intentionally added/removed a transition, update this assertion "
         "AND add granular ERT/MCT/APT/VLT scenario coverage for it."
     )
+
+
+# ───────────────────────────────────────────────────────────────────────
+# ERT-S10: ESCALATED + ANALYZE_DONE — stage-issue follow-up 端到端复活
+# ───────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_ert_s10_escalated_analyze_done_resumes_to_artifact_check(
+    stub_actions, mock_runner_controller,
+):
+    """REQ-escalated-stage-resume：用户在 analyze BKD issue 续 follow-up，
+    agent 重跑出 result:pass → router 派 ANALYZE_DONE → ESCALATED 复用主链
+    transition (next=ANALYZE_ARTIFACT_CHECKING, action=create_analyze_artifact_check)。
+
+    端到端：pool row 真被推到 ANALYZE_ARTIFACT_CHECKING；不需要新 action / RESUMING
+    中间态 / active_stage_* ctx 字段。"""
+    calls: list = []
+    stub_actions["create_analyze_artifact_check"] = _make_recorder(
+        "create_analyze_artifact_check", calls,
+    )
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ESCALATED.value)})
+    body = _body(issueId="analyze-1", projectId="p", event="session.completed")
+
+    result = await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p",
+        tags=["analyze", "REQ-1", "result:pass"],
+        cur_state=ReqState.ESCALATED, ctx={"intent_issue_id": "analyze-1"},
+        event=Event.ANALYZE_DONE,
+    )
+    await _drain_tasks()
+
+    assert result["action"] == "create_analyze_artifact_check"
+    assert result["next_state"] == ReqState.ANALYZE_ARTIFACT_CHECKING.value
+    assert pool.rows["REQ-1"].state == ReqState.ANALYZE_ARTIFACT_CHECKING.value
+    assert len(calls) == 1
+    # cur 是 terminal (ESCALATED) → engine 跳过 cleanup（防误删 resume 路径已拉的 pod）
+    mock_runner_controller.cleanup_runner.assert_not_awaited()
+
+
+# ───────────────────────────────────────────────────────────────────────
+# ERT-S11: ESCALATED + CHALLENGER_FAIL — stage failure during resume routes to verifier
+# ───────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_ert_s11_escalated_challenger_fail_resumes_to_verifier(
+    stub_actions, mock_runner_controller,
+):
+    """用户在 challenger BKD issue 续，agent 这次跑出 result:fail → router 派
+    CHALLENGER_FAIL → ESCALATED 复用主链 transition (next=REVIEW_RUNNING,
+    action=invoke_verifier_for_challenger_fail)。
+
+    覆盖恢复路径上 fail 分支也通：失败信号同样能从 ESCALATED 走主链推进。"""
+    calls: list = []
+    stub_actions["invoke_verifier_for_challenger_fail"] = _make_recorder(
+        "invoke_verifier_for_challenger_fail", calls,
+    )
+
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ESCALATED.value)})
+    body = _body(issueId="ch-1", projectId="p", event="session.completed")
+
+    result = await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p",
+        tags=["challenger", "REQ-1", "result:fail"],
+        cur_state=ReqState.ESCALATED, ctx={"challenger_issue_id": "ch-1"},
+        event=Event.CHALLENGER_FAIL,
+    )
+    await _drain_tasks()
+
+    assert result["action"] == "invoke_verifier_for_challenger_fail"
+    assert result["next_state"] == ReqState.REVIEW_RUNNING.value
+    assert pool.rows["REQ-1"].state == ReqState.REVIEW_RUNNING.value
+    assert len(calls) == 1
+
+
+# ───────────────────────────────────────────────────────────────────────
+# ERT-S12: ESCALATED + SESSION_FAILED — agent 在用户续写后又挂了，仍丢弃不接
+# ───────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_ert_s12_escalated_session_failed_remains_no_op(
+    stub_actions, mock_runner_controller,
+):
+    """ESCALATED + SESSION_FAILED 没 transition：用户续 follow-up 后 agent 又挂，
+    sisyphus 不再额外 escalate（已经在 ESCALATED 了），保持原状等下次续。
+
+    防回归：避免后续 PR 误加 (ESCALATED, SESSION_FAILED) → escalate 形成自循环。"""
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ESCALATED.value)})
+    body = _body(issueId="x-1", projectId="p", event="session.failed")
+
+    result = await engine.step(
+        pool, body=body, req_id="REQ-1", project_id="p",
+        tags=["analyze", "REQ-1"],
+        cur_state=ReqState.ESCALATED, ctx={}, event=Event.SESSION_FAILED,
+    )
+    await _drain_tasks()
+
+    # 现状：state.decide returns None → engine 走 illegal_transition skip path
+    assert result == {"action": "skip", "reason": "no transition escalated+session.failed"}
+    assert pool.rows["REQ-1"].state == ReqState.ESCALATED.value

@@ -306,20 +306,25 @@ def test_all_transitions_reason_is_str_or_none():
 def test_transition_count_sanity():
     """transition 总数 sanity check：防止未来重构误删/误增。
 
-    当前总数 = 39 显式 + 12 SESSION_FAILED self-loop = 51。
+    当前总数 = 39 显式 + 12 SESSION_FAILED self-loop + 19 ESCALATED stage-resume 反激活
+    （REQ-escalated-stage-resume）= 70。
     如果数字变了，说明有人增删 transition，本测试会 fail 提醒同步测试。
     """
-    assert len(TRANSITIONS) == 51, (
-        f"Expected 51 transitions, got {len(TRANSITIONS)}. "
+    assert len(TRANSITIONS) == 70, (
+        f"Expected 70 transitions, got {len(TRANSITIONS)}. "
         "If this is intentional, update this assertion and add corresponding tests."
     )
 
 
 def test_explicit_transition_count():
-    """非 SESSION_FAILED 的显式 transition 数量 sanity check。"""
+    """非 SESSION_FAILED 的显式 + ESCALATED 反激活 transition 数量 sanity check。
+
+    包含 39 主链显式 + 19 ESCALATED 主链反激活（复用主链 transition 对象，但 key 是
+    (ESCALATED, ev) 独立计数）= 58 条非 SESSION_FAILED transition。
+    """
     explicit = [k for k in TRANSITIONS if k[1] != Event.SESSION_FAILED]
-    assert len(explicit) == 39, (
-        f"Expected 39 explicit transitions, got {len(explicit)}"
+    assert len(explicit) == 58, (
+        f"Expected 58 explicit transitions, got {len(explicit)}"
     )
 
 
@@ -363,8 +368,30 @@ def test_done_no_transitions_at_all():
 
 
 def test_escalated_non_resume_events_all_none():
-    """ESCALATED 只有 3 个 verifier 决策事件有出口，其余全部非法。"""
-    resume_events = {Event.VERIFY_PASS, Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE}
+    """ESCALATED 接受 3 类恢复事件，其余非法：
+
+    1. verifier 决策续 follow-up：VERIFY_PASS / VERIFY_FIX_NEEDED / VERIFY_ESCALATE
+    2. stage-issue 续 follow-up（REQ-escalated-stage-resume）：19 条主链事件
+       —— intake/analyze/spec_lint/challenger/dev_cross_check/staging_test/pr_ci/
+       accept/teardown/fixer 各 pass+fail（无 timeout/env-up-fail/intake-fail/
+       user-review-fix/PR_MERGED 这类直接进 ESCALATED 或不属于"恢复"语义的事件）
+    """
+    resume_events = {
+        # verifier 决策反激活
+        Event.VERIFY_PASS, Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE,
+        # stage-issue 反激活
+        Event.INTAKE_PASS,
+        Event.ANALYZE_DONE,
+        Event.ANALYZE_ARTIFACT_CHECK_PASS, Event.ANALYZE_ARTIFACT_CHECK_FAIL,
+        Event.SPEC_LINT_PASS, Event.SPEC_LINT_FAIL,
+        Event.CHALLENGER_PASS, Event.CHALLENGER_FAIL,
+        Event.DEV_CROSS_CHECK_PASS, Event.DEV_CROSS_CHECK_FAIL,
+        Event.STAGING_TEST_PASS, Event.STAGING_TEST_FAIL,
+        Event.PR_CI_PASS, Event.PR_CI_FAIL,
+        Event.ACCEPT_PASS, Event.ACCEPT_FAIL,
+        Event.TEARDOWN_DONE_PASS, Event.TEARDOWN_DONE_FAIL,
+        Event.FIXER_DONE,
+    }
     for ev in Event:
         if ev in resume_events:
             continue
