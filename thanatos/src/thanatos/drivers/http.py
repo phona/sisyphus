@@ -48,6 +48,7 @@ class HttpDriver:
         self._client: httpx.AsyncClient | None = None
         self._last_response: httpx.Response | None = None
         self._last_request_info: dict[str, Any] | None = None
+        self._endpoint: str | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -55,9 +56,10 @@ class HttpDriver:
         return self._client
 
     async def preflight(self, endpoint: str) -> PreflightResult:
+        self._endpoint = endpoint.rstrip("/")
         client = await self._get_client()
         try:
-            resp = await client.get(f"{endpoint}/healthz")
+            resp = await client.get(f"{self._endpoint}/healthz")
             if resp.status_code == 200:
                 return PreflightResult(ok=True)
             return PreflightResult(
@@ -99,8 +101,12 @@ class HttpDriver:
 
         client = await self._get_client()
 
+        url = path
+        if url.startswith("/") and self._endpoint is not None:
+            url = f"{self._endpoint}{url}"
+
         try:
-            resp = await client.request(method, path, json=body if isinstance(body, (dict, list)) else None, content=body if isinstance(body, str) else None)
+            resp = await client.request(method, url, json=body if isinstance(body, (dict, list)) else None, content=body if isinstance(body, str) else None)
         except Exception as exc:
             self._last_response = None
             self._last_request_info = {"method": method, "path": path, "error": str(exc)}

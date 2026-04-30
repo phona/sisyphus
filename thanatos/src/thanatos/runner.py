@@ -128,6 +128,66 @@ async def run_all(skill_path: str, spec_path: str, endpoint: str) -> list[Scenar
 
 
 def recall(skill_path: str, intent: str) -> list[dict]:
-    """Look up product knowledge by intent. M1: always returns empty list."""
-    _ = (skill_path, intent)
-    return []
+    """Look up product knowledge fragments matching an intent.
+
+    Searches all ``.md`` files in the same directory as ``skill.yaml`` and
+    returns snippets ranked by keyword overlap with *intent*.
+    """
+    from pathlib import Path
+
+    skill_dir = Path(skill_path).parent
+    if not skill_dir.is_dir():
+        return []
+
+    intent_words = {w.lower() for w in intent.split() if len(w) > 2}
+    if not intent_words:
+        return []
+
+    hits: list[tuple[float, dict]] = []
+
+    for md_path in skill_dir.glob("*.md"):
+        text = md_path.read_text(encoding="utf-8")
+        # Split into chunks by double-newline or headings
+        chunks = _split_into_chunks(text)
+        for chunk in chunks:
+            if not chunk.strip():
+                continue
+            score = _score_chunk(chunk, intent_words)
+            if score > 0:
+                mtime = md_path.stat().st_mtime
+                hits.append(
+                    (
+                        score,
+                        {
+                            "kind": md_path.name,
+                            "snippet": chunk.strip()[:800],
+                            "freshness": mtime,
+                        },
+                    )
+                )
+
+    hits.sort(key=lambda x: x[0], reverse=True)
+    return [h[1] for h in hits[:10]]
+
+
+def _split_into_chunks(text: str) -> list[str]:
+    """Split markdown text into chunks by headings or double newlines."""
+    import re
+
+    # Split on markdown headings first
+    heading_split = re.split(r"\n(?=#+\s+)", text)
+    chunks: list[str] = []
+    for part in heading_split:
+        # Further split on double newlines for long sections
+        sub = [s.strip() for s in part.split("\n\n") if s.strip()]
+        chunks.extend(sub)
+    return chunks
+
+
+def _score_chunk(chunk: str, intent_words: set[str]) -> float:
+    """Simple TF overlap score between chunk and intent words."""
+    chunk_words = {w.lower() for w in chunk.split() if len(w) > 2}
+    if not chunk_words:
+        return 0.0
+    overlap = intent_words & chunk_words
+    return len(overlap) / len(intent_words)
