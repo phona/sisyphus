@@ -39,7 +39,7 @@ _TAIL = 2048
 _STAGE = "dev_cross_check"
 
 
-def _build_cmd(req_id: str) -> str:
+def _build_cmd(req_id: str, repo_base_map: dict[str, str] | None = None) -> str:
     """遍历 /workspace/source/*/，先切到 feat/<REQ>，对含 ci-lint target 的仓跑 make ci-lint。
 
     Empty-source guard（防 silent-pass）：
@@ -50,18 +50,29 @@ def _build_cmd(req_id: str) -> str:
     - 遍历后 ran=0（所有仓都缺 ci-lint target）→ exit 1
       checker 不能在零信号情况下报 pass。
 
-    BASE_REV 计算（REQ-fix-base-rev-default-branch-1777214183）：先 resolve 仓**实际**
-    默认分支，再退到静态链。
-    1. `git symbolic-ref --short refs/remotes/origin/HEAD` → 例如 `origin/release`，
-       `git clone` 时自动设置；剥掉 `origin/` 前缀拿到 `<default_branch>` 名
-    2. 顺序尝试：`origin/<default_branch>` → `origin/main` → `origin/master`
-       → `origin/develop` → `origin/dev` → 空字符串（ci-lint 退化为全量扫描）
-
-    修这条前默认分支非 main/develop/dev 的仓（ttpos-server-go / ttpos-flutter 默认
-    `release`）BASE_REV 必空 → 增量 lint 形同虚设。
+    BASE_REV 计算（REQ-fix-base-rev-default-branch-1777214183 + REQ-base-branch-override-1777480690）：
+    1. 优先用显式指定的 base_branch（per-repo 或全局默认）
+    2. fallback 到 `git symbolic-ref refs/remotes/origin/HEAD` 拿仓实际 default_branch
+    3. 再退静态链 main → master → develop → dev → 空字符串
     """
+    # 序列化 per-repo base branch 映射为 shell 变量
+    # _base_default = 全局默认；_base_<repo> = per-repo override
+    # bash 变量名不能含连字符，repo 名中的 '-' 替换为 '_'
+    base_vars = ""
+    default_base = ""
+    if repo_base_map:
+        for repo_name, branch in repo_base_map.items():
+            safe_name = repo_name.replace("-", "_")
+            if safe_name == "_default":
+                default_base = branch
+            else:
+                base_vars += f'  _base_{safe_name}="{branch}"; '
+    if default_base:
+        base_vars += f'  _base_default="{default_base}"; '
+
     return (
         "set -o pipefail; "
+        f"{base_vars}"
         "if [ ! -d /workspace/source ]; then "
         '  echo "=== FAIL dev_cross_check: /workspace/source missing — refusing to silent-pass ===" >&2; '
         "  exit 1; "
@@ -97,12 +108,20 @@ def _build_cmd(req_id: str) -> str:
         # 实证 ttpos v8 (REQ-ttpos-validate-end-to-end) 卡这个：ttpos-server-go Makefile 里
         # ci-lint target 真存在 (via include) 但 make 评估时某处 exit 非零，pipefail 把 grep 吞光。
         '  if [ -f "$repo/Makefile" ] && (cd "$repo" && (make -p -n 2>/dev/null || true) | grep -q \'^ci-lint:\'); then '
-        # BASE_REV 计算：先读 origin/HEAD 符号引用拿仓实际 default_branch（git clone
-        # 自动设置），再退静态链 main → master → develop → dev → ""。
-        # 修这条前默认分支非 main/develop/dev 的仓（ttpos-server-go / ttpos-flutter 默
-        # 认 release）整条链全 miss → BASE_REV 必空 → ci-lint 退化为全量扫，增量 lint
-        # 形同虚设（实证 REQ-audit-business-repo-makefile-1777125538 audit-report.md §2.3）。
-        '    default_branch=$(cd "$repo" && git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed \'s@^origin/@@\' || true); '
+        # BASE_REV 计算（REQ-base-branch-override-1777480690）：
+        # 1. 优先 per-repo 显式 base_branch（_base_<repo> 变量）
+        # 2. fallback 到 origin/HEAD 符号引用
+        # 3. 再退静态链 main → master → develop → dev → ""
+        '    _safe_name=$(echo "$name" | tr \'-\' \'_\'); '
+        '    eval "base_branch=\\$_base_$_safe_name" 2>/dev/null || base_branch=""; '
+        '    if [ -z "$base_branch" ] && [ -n "${_base_default:-}" ]; then '
+        '      base_branch="$_base_default"; '
+        '    fi; '
+        '    if [ -n "$base_branch" ]; then '
+        '      default_branch="$base_branch"; '
+        '    else '
+        '      default_branch=$(cd "$repo" && git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed \'s@^origin/@@\' || true); '
+        '    fi; '
         '    base_rev=$(cd "$repo" && ( '
         '              ([ -n "$default_branch" ] && git merge-base HEAD "origin/$default_branch" 2>/dev/null) '
         '              || git merge-base HEAD origin/main 2>/dev/null '
@@ -137,6 +156,7 @@ async def run_dev_cross_check(
     req_id: str,
     *,
     timeout_sec: int = 900,
+    repo_base_map: dict[str, str] | None = None,
 ) -> CheckResult:
     """kubectl exec runner -- <for-each-repo make ci-lint>。
 
@@ -144,10 +164,11 @@ async def run_dev_cross_check(
     DNS / kubectl-channel / go-mod 等 infra 抖动自动重跑，bounded by settings。
     """
     rc = k8s_runner.get_controller()
-    cmd = _build_cmd(req_id)
+    cmd = _build_cmd(req_id, repo_base_map=repo_base_map)
     log.info(
         "checker.dev_cross_check.start",
         req_id=req_id, timeout=timeout_sec,
+        repo_base_map=repo_base_map,
     )
     started = time.monotonic()
 

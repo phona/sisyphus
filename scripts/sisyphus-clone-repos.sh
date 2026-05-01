@@ -5,28 +5,40 @@
 #   - 统一 target 路径 /workspace/source/<repo-basename>/
 #   - 统一 auth（$GH_TOKEN）
 #   - shallow clone + 自动 unshallow（dev-agent 后续切分支需要 full history）
-#   - 已存在 repo 不重 clone，只 fetch + reset --hard origin/main
+#   - 已存在 repo 不重 clone，只 fetch + reset --hard origin/<base_branch>
 #
 # 用法：
-#   sisyphus-clone-repos.sh <owner1>/<repo1> [<owner2>/<repo2> ...]
+#   sisyphus-clone-repos.sh [--base <branch>] [--base-for <repo> <branch>] \
+#     <owner1>/<repo1> [<owner2>/<repo2> ...]
+#
+# 参数：
+#   --base <branch>           所有仓的默认 base branch（覆盖 origin/HEAD）
+#   --base-for <repo> <branch> 指定 repo 的 base branch（覆盖 --base）
 #
 # 环境变量：
 #   GH_TOKEN  GitHub token，用于 https x-access-token auth（必需）
 #
-# 退出码：0=全成功，非 0=任一仓 clone/update 失败
+# 退出码：0=全成功，非 0=任一仓 clone/update/校验 失败
 
 set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: sisyphus-clone-repos.sh <owner1>/<repo1> [<owner2>/<repo2> ...]
+Usage: sisyphus-clone-repos.sh [--base <branch>] [--base-for <repo> <branch>] \
+  <owner1>/<repo1> [<owner2>/<repo2> ...]
 
 Clones (or updates) source repos to /workspace/source/<repo-basename>/.
 Requires $GH_TOKEN.
 
+Options:
+  --base <branch>            Default base branch for all repos
+  --base-for <repo> <branch> Per-repo base branch override
+
 Examples:
   sisyphus-clone-repos.sh phona/sisyphus
-  sisyphus-clone-repos.sh phona/sisyphus phona/ubox-crosser
+  sisyphus-clone-repos.sh --base develop phona/sisyphus
+  sisyphus-clone-repos.sh --base develop --base-for ttpos-flutter feat/develop-hwt \
+    phona/sisyphus phona/ttpos-flutter
 EOF
   exit 1
 }
@@ -39,6 +51,54 @@ if [[ -z "${GH_TOKEN:-}" ]]; then
   echo "=== FAIL clone: \$GH_TOKEN not set ===" >&2
   exit 2
 fi
+
+# 解析 --base / --base-for 参数
+DEFAULT_BASE=""
+declare -A REPO_BASE_MAP
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --base)
+      shift
+      if [[ $# -eq 0 ]]; then usage; fi
+      DEFAULT_BASE="$1"
+      shift
+      ;;
+    --base-for)
+      shift
+      if [[ $# -lt 2 ]]; then usage; fi
+      REPO_BASE_MAP["$1"]="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "=== FAIL clone: unknown option $1 ===" >&2
+      usage
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [[ $# -eq 0 ]]; then
+  usage
+fi
+
+# 辅助：给定 repo basename，返回应使用的 base branch
+_resolve_base() {
+  local basename="$1"
+  if [[ -n "${REPO_BASE_MAP[$basename]:-}" ]]; then
+    echo "${REPO_BASE_MAP[$basename]}"
+  elif [[ -n "$DEFAULT_BASE" ]]; then
+    echo "$DEFAULT_BASE"
+  else
+    echo ""
+  fi
+}
 
 WORKSPACE_ROOT="${SISYPHUS_SOURCE_ROOT:-/workspace/source}"
 mkdir -p "$WORKSPACE_ROOT"
@@ -57,6 +117,17 @@ for repo_spec in "$@"; do
   basename="${basename%.git}"
   target="$WORKSPACE_ROOT/$basename"
   url="https://x-access-token:${GH_TOKEN}@github.com/${repo_spec}.git"
+  base_branch=$(_resolve_base "$basename")
+
+  # ── base branch 存在性校验（早 fail）──────────────────────────────────────
+  if [[ -n "$base_branch" ]]; then
+    echo "[sisyphus-clone-repos] validating base branch '$base_branch' for $repo_spec ..." >&2
+    if ! git ls-remote --heads "$url" "$base_branch" | grep -q "refs/heads/$base_branch"; then
+      echo "=== FAIL clone: base branch '$base_branch' not found on origin for $repo_spec ===" >&2
+      FAILED+=("$repo_spec")
+      continue
+    fi
+  fi
 
   needs_clone=0
 
@@ -81,18 +152,25 @@ for repo_spec in "$@"; do
 
   if [[ "$needs_clone" -eq 0 && -d "$target/.git" ]]; then
     echo "[sisyphus-clone-repos] updating existing $repo_spec at $target" >&2
+    # update 时：fetch all + checkout base_branch（有显式 base 用 base，否则 origin/HEAD）
+    reset_ref="origin/${base_branch:-HEAD}"
     if ! ( cd "$target" \
            && git remote set-url origin "$url" \
            && git fetch --all --prune \
-           && git checkout main \
-           && git reset --hard origin/main ); then
+           && git checkout -B "${base_branch:-HEAD}" "$reset_ref" \
+           && git reset --hard "$reset_ref" ); then
       echo "=== FAIL clone: $repo_spec (update failed) ===" >&2
       FAILED+=("$repo_spec")
       continue
     fi
   else
     echo "[sisyphus-clone-repos] cloning $repo_spec to $target" >&2
-    if ! git clone --depth=1 "$url" "$target"; then
+    clone_args="--depth=1"
+    if [[ -n "$base_branch" ]]; then
+      clone_args="$clone_args --branch $base_branch"
+    fi
+    # shellcheck disable=SC2086
+    if ! git clone $clone_args "$url" "$target"; then
       echo "=== FAIL clone: $repo_spec (clone failed) ===" >&2
       FAILED+=("$repo_spec")
       continue

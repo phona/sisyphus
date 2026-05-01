@@ -26,6 +26,7 @@ from ..config import settings
 from ..intent_tags import filter_propagatable_intent_tags
 from ..prompts import render
 from ..prompts.status_block import build_status_block_ctx
+from ..router import extract_base_branches
 from ..state import Event
 from ..store import db, dispatch_slugs, req_state
 from . import register, short_title
@@ -56,11 +57,22 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
         pod_name = await rc.ensure_runner(req_id, wait_ready=True)
         log.info("start_analyze_with_finalized_intent.runner_ready", req_id=req_id, pod=pod_name)
 
+    # 1.5 解析 base:* tag 并注入 ctx（REQ-base-branch-override-1777480690）
+    default_base, base_overrides = extract_base_branches(tags)
+    if default_base or base_overrides:
+        pool = db.get_pool()
+        await req_state.update_context(pool, req_id, {
+            "base_branch": default_base,
+            "base_branches": base_overrides,
+        })
+        ctx = {**(ctx or {}), "base_branch": default_base, "base_branches": base_overrides}
+
     # 2. server-side clone（intake 路径必有 involved_repos；失败 → escalate）。
     # tags + settings.default_involved_repos 是 REQ-clone-fallback-direct-analyze
     # 的 multi-layer 兜底，intake 路径正常用不上但传进去保持调用形状一致。
     cloned_repos, clone_rc = await clone_involved_repos_into_runner(
         req_id, ctx, tags=tags, default_repos=settings.default_involved_repos,
+        default_base=default_base, base_overrides=base_overrides,
     )
     if clone_rc is not None:
         return {
@@ -103,6 +115,9 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
             intake_summary=finalized,
             cloned_repos=cloned_repos,
             bkd_intent_issue_url=bkd_intent_issue_url,
+            # REQ-base-branch-override-1777480690: forward base branch info.
+            base_branch=default_base,
+            base_branches=base_overrides,
             status_block=build_status_block_ctx(
                 req_id=req_id,
                 stage="analyze",
