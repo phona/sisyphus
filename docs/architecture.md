@@ -175,6 +175,29 @@
 
 每次"折磨"是抽象修补机会，不是换框架机会。
 
+### 1b.5 反向控制通道（user-driven resume from any stable state）
+
+sisyphus 默认是单向流（user 起 REQ → 自动跑到 done / escalated）。但用户经常需要在
+**stable state 中途**下发调整指令——尤其是 UI 这种"看到才知道对不对"的领域，accept
+完了看 PR / lab 才发现"按钮挪 5px"，需要追加调整而不是另起完整 REQ。
+
+**通用机制**（不是某个 state 的局部解）：
+
+> **任何 stable state 都用 stage-issue follow-up 触发主链 resume，复用 `TRANSITIONS[(src, ev)]` dict，零新概念 / 零新 tag / 零新 endpoint / 零新 action。**
+
+落地形态：每个 stable state 独立声明一份 resume sources 列表（`_<STATE>_RESUME_EVENT_SOURCES`），通过 `TRANSITIONS.update` 把 `(stable_state, ev) → TRANSITIONS[(src, ev)]` 复制进主表。语义跟主链同一份，主链改了恢复路径自动跟，零漂移。每个 stable state 可独立设计允许哪些主链事件复活——这是**有意的安全边界**，不是缺陷（不同稳定态可能允许不同范围的 resume）。
+
+当前覆盖：
+- ESCALATED resume：所有 PASS + FAIL（人接管态，需要完整通道）
+- PENDING_USER_REVIEW resume（#247 Phase 1）：PASS-only（happy-path 微调；fail 走 ESCALATED 那条）
+
+判断尺子（加新 stable state 时套用）：
+
+1. 用户能在 BKD 里完成对应操作吗？必须能在 BKD agent issue 里自然续 follow-up，不要求用户去 sisyphus 那边点按钮。
+2. 复用 `TRANSITIONS[(src, ev)]` 还是另写一份？默认复用——另写一份等于把同一语义维护两次。
+3. PASS / FAIL 都允许还是只允许 PASS？看 stable state 的语义（"happy-path 等待态"只 PASS；"人接管态"PASS + FAIL）。
+4. UX 层（PR comment / acceptance block 入口清单）该不该列出某个 issue？机械 checker issue 不列（用户在那里续聊没 BKD agent 响应），stage agent issue 列（intake / analyze / challenger / accept / fixer）。
+
 ## 2. 主流水线
 
 happy path（含 INTAKING）十一段，入口可选 `intent:intake`（推荐）或 `intent:analyze`（跳过澄清）一路自动到 `done`。

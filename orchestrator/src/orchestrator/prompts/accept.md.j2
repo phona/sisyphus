@@ -99,7 +99,13 @@ thanatos 会返回每个 scenario 的 pass/fail + evidence。你只需：
 - <scenario-id>: FAIL — <failure_hint>
 ```
 
-### Step 5: 贴 tag + move review
+### Step 5: 贴 PR 管理 comment（含 BKD 反向控制通道入口）
+
+⚠️ 这一步**必须用 BKD Coder workspace 的 `gh` CLI 执行**（你跑在 Coder 里有现成的
+`gh auth`）—— sisyphus orchestrator / runner pod **不写 GH**（架构契约）。
+{% include "_shared/pr_acceptance_comment.md.j2" %}
+
+### Step 6: 贴 tag + move review
 
 - 全过：tags = `[accept, {{ req_id }}, result:pass]`, statusId=review
 - 任一失败：tags = `[accept, {{ req_id }}, result:fail]`, statusId=review
@@ -160,7 +166,13 @@ kubectl -n $NS exec $POD -- bash -c \
 - <scenario-id>:2: FAIL — curl 500, error: xxx
 ```
 
-### Step 5: 贴 tag + move review
+### Step 5: 贴 PR 管理 comment（含 BKD 反向控制通道入口）
+
+⚠️ 这一步**必须用 BKD Coder workspace 的 `gh` CLI 执行**（你跑在 Coder 里有现成的
+`gh auth`）—— sisyphus orchestrator / runner pod **不写 GH**（架构契约）。
+{% include "_shared/pr_acceptance_comment.md.j2" %}
+
+### Step 6: 贴 tag + move review
 
 - 全过：tags = `[accept, {{ req_id }}, result:pass]`, statusId=review
 - 任一失败：tags = `[accept, {{ req_id }}, result:fail]`, statusId=review

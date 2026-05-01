@@ -442,14 +442,16 @@ async def test_ert_s9_full_transition_sweep(
     )
 
 
-def test_ert_s9_sweep_covers_exactly_70():
-    """Sanity: TRANSITIONS 必须正好 70 条 —— 加 / 减 transition 时这条 fail 提醒
+def test_ert_s9_sweep_covers_exactly_77():
+    """Sanity: TRANSITIONS 必须正好 77 条 —— 加 / 减 transition 时这条 fail 提醒
     review 是否同步加 spec scenario / 文档（state-machine.md / dump_transitions）。
 
     历史：47 → 49（PENDING_USER_REVIEW 入/出）→ 51（再 +1）→ 70（REQ-escalated-stage-resume：
-    + 19 条 ESCALATED 主链反激活，让 stage-issue 续 follow-up 也能恢复）。"""
-    assert len(state_mod.TRANSITIONS) == 70, (
-        f"expected 70 transitions, got {len(state_mod.TRANSITIONS)}; "
+    + 19 条 ESCALATED 主链反激活，让 stage-issue 续 follow-up 也能恢复）→ 77
+    (#247 Phase 1: + 7 条 PENDING_USER_REVIEW 主链反激活，PASS-only 让用户在
+    accept 后调整 happy-path)。"""
+    assert len(state_mod.TRANSITIONS) == 77, (
+        f"expected 77 transitions, got {len(state_mod.TRANSITIONS)}; "
         "if you intentionally added/removed a transition, update this assertion "
         "AND add granular ERT/MCT/APT/VLT scenario coverage for it."
     )

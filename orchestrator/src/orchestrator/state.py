@@ -341,6 +341,43 @@ TRANSITIONS.update({
 })
 
 
+# ─── PENDING_USER_REVIEW 主链反激活：stage-issue 续写 follow-up ─────────────
+# 兄弟于上面 ESCALATED resume：用户在 accept 后看到 PR / lab 效果不满意，
+# 在任意 stage agent issue（analyze / challenger / accept / fixer 等）续 follow-up
+# → BKD wake agent → agent 重跑出 result:pass → router 派对应主链 *_PASS 事件
+# → PENDING_USER_REVIEW 复用主链 transition 自然推到下一 stage 重跑。
+#
+# 设计：故意只列 *_PASS。失败信号（*_FAIL / SESSION_FAILED / VERIFY_ESCALATE 等）
+# 走另一条路 —— 用户看到 BKD agent 自己输出 fail 后改 statusId="review" / "blocked"
+# → USER_REVIEW_FIX → ESCALATED → 复用已有 ESCALATED resume（含 *_FAIL 完整集）。
+# 这条边界让 PENDING_USER_REVIEW 仍然是"happy-path 等待 / 微调"的纯净语义；
+# ESCALATED 是"人接管态"。两个稳定态各司其职，不互相污染。
+#
+# 排除清单（不加）：
+#   - 任意 *_FAIL：见上面边界说明
+#   - SESSION_FAILED / PR_CI_TIMEOUT / ACCEPT_ENV_UP_FAIL / VERIFY_ESCALATE
+#     / INTAKE_FAIL / USER_REVIEW_FIX / TEARDOWN_DONE_*：失败 / 中间 / 出口信号，
+#     从 PENDING_USER_REVIEW 收到没意义
+#   - VERIFY_PASS / VERIFY_FIX_NEEDED / VERIFY_INFRA_RETRY：用户不应在 PENDING
+#     状态续 verifier issue（verifier 早走完了），走 ESCALATED resume 那条
+#   - PR_MERGED / USER_REVIEW_PASS：已有 PENDING → DONE 直达，不在恢复列表
+#   - ANALYZE_ARTIFACT_CHECK_PASS / ACCEPT_ENV_UP_FAIL：机械 checker 中间事件，
+#     用户不在对应 issue 续聊（那个 issue 是机械 checker 的，没 BKD agent 响应）
+_PENDING_USER_REVIEW_RESUME_EVENT_SOURCES: list[tuple[Event, ReqState]] = [
+    (Event.ANALYZE_DONE,                 ReqState.ANALYZING),
+    (Event.SPEC_LINT_PASS,               ReqState.SPEC_LINT_RUNNING),
+    (Event.CHALLENGER_PASS,              ReqState.CHALLENGER_RUNNING),
+    (Event.DEV_CROSS_CHECK_PASS,         ReqState.DEV_CROSS_CHECK_RUNNING),
+    (Event.STAGING_TEST_PASS,            ReqState.STAGING_TEST_RUNNING),
+    (Event.PR_CI_PASS,                   ReqState.PR_CI_RUNNING),
+    (Event.ACCEPT_PASS,                  ReqState.ACCEPT_RUNNING),
+]
+TRANSITIONS.update({
+    (ReqState.PENDING_USER_REVIEW, ev): TRANSITIONS[(src, ev)]
+    for ev, src in _PENDING_USER_REVIEW_RESUME_EVENT_SOURCES
+})
+
+
 def decide(cur_state: ReqState, event: Event) -> Transition | None:
     """主 API：给 (state, event) 查 transition。None 表示非法/忽略。"""
     return TRANSITIONS.get((cur_state, event))
