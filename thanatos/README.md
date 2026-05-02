@@ -12,7 +12,7 @@
 - ✅ Driver Protocol（`thanatos.drivers.base`）—— `preflight / observe / act / assert_ / capture_evidence` 五方法 async 契约
 - ❌ Driver 实现（playwright / adb / http）—— 全部 `raise NotImplementedError("M0: scaffold only")`
 - ❌ KB 更新真实生成（`run_scenario` 永远返回 `kb_updates: []`）
-- ❌ recall 索引（永远返回 `[]`）
+- ✅ recall 索引（递归搜索 `.md` 文件，支持关键词匹配与 YAML frontmatter tags 过滤）
 
 ## Build / test / run
 
