@@ -128,7 +128,15 @@ runner:
   createRbac: true            # 自动建 Role/RoleBinding 给 orchestrator SA 管 ns
   serviceAccountName: sisyphus-runner-sa   # runner Pod 跑的 SA
 
-  image: ghcr.io/phona/sisyphus-runner-go:main
+  # 默认 full flavor（Flutter SDK + Android SDK + Java + Go + Node + Docker DinD）。
+  # 之前默认 sisyphus-runner-go 是 Go-only 轻量（~1GB），但 Flutter REQ
+  # （如 ttpos-flutter）跑 ci-setup `dart pub global activate melos` 会撞
+  # `dart: No such file or directory`。
+  # full image ~5GB，cold pull 慢一点（~30s vs ~5s），但镜像 cache 命中后所有
+  # REQ 复用，跟 Go-only 实际差不多。换 image 工作量 = 改这一行。
+  # `sisyphus-runner-go` 仍保留 build（runner-image.yml matrix 不动），有需要
+  # 可手动 --set runner.image=ghcr.io/phona/sisyphus-runner-go:main 切回。
+  image: ghcr.io/phona/sisyphus-runner:main
   storageClass: local-path    # K3s 默认；多节点场景换 longhorn / NFS
   workspaceSize: 10Gi         # PVC 大小（runner 峰值 ~5GB + 余量）
   readyTimeoutSec: 120        # ensure_runner 等 Pod Ready 的超时
