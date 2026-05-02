@@ -175,7 +175,7 @@ def cmd_inline(args: argparse.Namespace) -> int:
     intent_tag = f"intent:{args.intent}"
     title = f"[REQ-{slug}] {args.title}"
     base_tags = [f"REQ-{slug}", *args.tag]
-    final_tags = [intent_tag, *base_tags]
+    final_tags = base_tags if args.no_intent else [intent_tag, *base_tags]
 
     if args.prompt_file:
         with open(args.prompt_file, "r", encoding="utf-8") as f:
@@ -398,6 +398,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-worktree", action="store_true", help="useWorktree=False")
     sp.add_argument("--no-activate", dest="activate", action="store_false",
                     help="不 PATCH statusId=working（让 orchestrator 自取）")
+    sp.add_argument("--no-intent", action="store_true",
+                    help="不 PATCH intent tag（纯 BKD 派单，不走 orchestrator）")
     sp.set_defaults(activate=True, func=cmd_inline)
 
     # yaml
