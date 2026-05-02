@@ -3,8 +3,9 @@
 
 ─────────
 
-{% include "_shared/mcp_preflight.md.j2" %}
-{% include "_shared/self_issue_constraint.md.j2" %}
+{% for _hook in enabled_prompt_hooks %}
+{% include "_shared/hooks/" + _hook + ".md.j2" %}
+{% endfor %}
 
 ─────────
 

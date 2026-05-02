@@ -201,6 +201,26 @@ class Settings(BaseSettings):
         },
         description="capability → 默认 MCP provider 名称",
     )
+    # mcp_capability_probe_tools：capability → MCP probe 工具名（即 preflight 段
+    # 用来探活的 `mcp__<provider>__<tool>` 里的 <tool>）。换 MCP 后若工具表面跟着变
+    # （aissh-tao 的 servers_list → 别家 list_servers），改这里就能让 prompt 同步。
+    mcp_capability_probe_tools: dict[str, str] = Field(
+        default_factory=lambda: {"ssh_exec": "servers_list"},
+        description="capability → MCP probe 工具名（hook 渲染期注入到 mcp__<provider>__<tool>）",
+    )
+
+    # ─── REQ-feat-mcp-preflight-1777727213：可插拔 prompt hook ──────────────
+    # _shared/hooks/<name>.md.j2 是「policy 类」prompt 片段（约束 / 外部依赖声明），
+    # 跟具体 stage 业务无关、跨 stage 复用、operator 想改要做到不动模板源码。每个
+    # stage prompt 在 hook slot 处 for-loop 渲所有 enabled 的 hook 文件；hook body
+    # 自行靠 `stage` 变量决定要不要落地。
+    # 默认两条：mcp-preflight（issue #270 的 fail-fast）+ self-issue-constraint
+    # （只 PATCH 自己 issue 的硬规矩）。operator 通过 SISYPHUS_ENABLED_PROMPT_HOOKS
+    # 全量覆盖（JSON 数组），增删改某个 hook 一行 helm values 搞定，不用 fork prompt。
+    enabled_prompt_hooks: list[str] = Field(
+        default_factory=lambda: ["mcp_preflight", "self_issue_constraint"],
+        description="按文件名约定加载的 prompt hook 列表（_shared/hooks/<name>.md.j2）",
+    )
 
     # ─── REQ-clone-fallback-direct-analyze-1777119520：multi-layer involved_repos
     # 的 last-resort fallback 层（L4）。直接 analyze 路径（无 intake）+ ctx 没

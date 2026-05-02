@@ -1,15 +1,17 @@
-{# REQ-feat-mcp-preflight-1777727213 — MCP 依赖预检 partial。
+{# REQ-feat-mcp-preflight-1777727213 — MCP 依赖预检 hook。
 
    解决"agent 在缺 MCP 工具的 BKD workspace 里硬撞工具名 7min 不报错卡死"问题。
-   每个 stage prompt 顶部 include 它，partial 自己从 `stage_mcp_requirements`
+   stage prompt 在 hook for-loop 处统一 include 它（hook 名 `mcp_preflight`，由
+   `enabled_prompt_hooks` 默认值挂上）；hook body 自己从 `stage_mcp_requirements`
    全局表查本 stage 的 capability 列表，列表非空才渲染下方 hard-fail-fast 段落。
 
    render 期望：
    - `stage`        — 字符串，本 prompt 对应的 stage 名（'analyze' / 'accept' …）。
                       include 方触发前 `{% set stage = "analyze" %}`。
-   - 无 stage 或 stage 不在 stage_mcp_requirements 表里 → 默认空依赖，partial 静默。
-   - `stage_mcp_requirements` / `mcp_capability_providers` 由
-     prompts/__init__.py 注入为 Jinja2 globals，不用每个 render() 显式传。
+   - 无 stage 或 stage 不在 stage_mcp_requirements 表里 → 默认空依赖，hook 静默。
+   - `stage_mcp_requirements` / `mcp_capability_providers` /
+     `mcp_capability_probe_tools` 由 prompts/__init__.py 注入为 Jinja2 globals，
+     不用每个 render() 显式传。
 #}
 {%- set _required_caps = stage_mcp_requirements.get(stage, []) if stage is defined else [] -%}
 {%- if _required_caps -%}
@@ -27,7 +29,7 @@
 session 启动后**第一件事**：
 
 {% if 'ssh_exec' in _required_caps %}
-1. 调用 `mcp__{{ mcp_capability_providers.get('ssh_exec', '<未配置>') }}__servers_list` —— 返回当前 workspace 注册的远程 server 列表。
+1. 调用 `mcp__{{ mcp_capability_providers.get('ssh_exec', '<未配置>') }}__{{ mcp_capability_probe_tools.get('ssh_exec', 'servers_list') }}` —— 返回当前 workspace 注册的远程 server 列表。
    - 调用本身报错（tool not found / no such MCP）= MCP 没装。
    - 返回空列表 = 远程 server 没注册。
    - 任一情况按下方"缺依赖"处理。

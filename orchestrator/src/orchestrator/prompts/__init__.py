@@ -19,11 +19,13 @@ _env = Environment(
 )
 
 # REQ-feat-mcp-preflight-1777727213：MCP 依赖预检框架。
-# 把 capability → provider 映射 + 每 stage 的 capability 需求暴露成 Jinja2 globals，
-# 这样 _shared/mcp_preflight.md.j2 + tools_whitelist.md.j2 等模板可以直接引用，
-# 不必每个 render() call site 都显式 forward 这两个常量。
+# 把 capability → provider 映射 + 每 stage 的 capability 需求 + probe 工具名 +
+# enabled hook 列表暴露成 Jinja2 globals，让 _shared/hooks/<name>.md.j2 这些
+# pluggable partial 可以直接引用，不必每个 render() call site 都显式 forward。
 _env.globals["mcp_capability_providers"] = settings.mcp_capability_providers
+_env.globals["mcp_capability_probe_tools"] = settings.mcp_capability_probe_tools
 _env.globals["stage_mcp_requirements"] = settings.stage_mcp_requirements
+_env.globals["enabled_prompt_hooks"] = settings.enabled_prompt_hooks
 
 
 def render(template_name: str, **context) -> str:

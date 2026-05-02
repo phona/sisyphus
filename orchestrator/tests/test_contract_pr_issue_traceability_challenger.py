@@ -93,7 +93,9 @@ def _render_jinja2(template_name: str, **kwargs: Any) -> str:
     # 时 UndefinedError。本 helper 是 ad-hoc render harness，挂同款 globals 让它和
     # 生产 render 行为一致。
     env.globals["mcp_capability_providers"] = _runtime_settings.mcp_capability_providers
+    env.globals["mcp_capability_probe_tools"] = _runtime_settings.mcp_capability_probe_tools
     env.globals["stage_mcp_requirements"] = _runtime_settings.stage_mcp_requirements
+    env.globals["enabled_prompt_hooks"] = _runtime_settings.enabled_prompt_hooks
     return env.get_template(template_name).render(**kwargs)
 
 
