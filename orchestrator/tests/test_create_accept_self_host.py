@@ -204,7 +204,8 @@ class _RC:
 
     async def exec_in_runner(self, req_id, command, env=None, timeout_sec=None):
         self.calls.append({"command": command, "env": env})
-        if env and env.get("SISYPHUS_STAGE") == "accept-resolve":
+        # Resolver call carries the I:/S: scan loop (no env injection — see _SCAN_SCRIPT comment)
+        if "printf 'I:%s\\n'" in command or "printf 'S:%s\\n'" in command:
             return ExecResult(exit_code=0, stdout=self.scan_stdout, stderr="", duration_sec=0.1)
         return ExecResult(exit_code=self.env_up_exit, stdout=self.env_up_stdout, stderr="", duration_sec=1.0)
 
