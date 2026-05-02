@@ -65,6 +65,14 @@ resources:
 # 跑 yoyo apply 用的初始化 init-container（同样的镜像）
 migrations:
   enabled: true
+  timeout: 300
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
 
 # ─── 业务配置（注入 SISYPHUS_* env）──────────────────────────────────────
 env:

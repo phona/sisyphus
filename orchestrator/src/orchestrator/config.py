@@ -90,6 +90,13 @@ class Settings(BaseSettings):
     # Postgres
     pg_dsn: str = Field(..., description="postgresql://user:pass@host:5432/sisyphus")
 
+    # ─── DB migration 控制 ─────────────────────────────────────────────────
+    # True = startup 跳过 yoyo migration（helm init-container 已跑完）
+    skip_migration_on_startup: bool = False
+    # yoyo 分布式锁等待超时（秒）。默认 300s，防止 K8s 多副本同时启动时
+    # 排队 Pod 因 yoyo 默认 10s 超时 crashloop。
+    migration_lock_timeout: int = 300
+
     # 可观测性 DB（schema 见 observability/schema.sql，独立 db sisyphus_obs）
     # 留空 = 关闭观测写入和快照同步（dev 模式可不开）
     obs_pg_dsn: str = ""
