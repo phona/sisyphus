@@ -55,7 +55,7 @@ intent:analyze → analyze(全责交付：写 spec + 业务码 + push feat/REQ-x
 
 **ESCALATED 是暂停态，不是死终态**——用户在任意 stage agent issue（含 verifier issue）BKD UI 续 follow-up，agent 重跑产出 result tag → router 派出对应主链事件 → ESCALATED 复用主链 transition 继续推。零新概念 / 零新 tag / 零新 endpoint。详见 [docs/state-machine.md §5](docs/state-machine.md)。
 
-state 转移完整定义在 [orchestrator/src/orchestrator/state.py](orchestrator/src/orchestrator/state.py)（17 ReqState × 27 Event × 70 transition）。
+state 转移完整定义在 [orchestrator/src/orchestrator/state.py](orchestrator/src/orchestrator/state.py)（16 ReqState × 27 Event × 70 transition）。
 
 ## 技术栈
 

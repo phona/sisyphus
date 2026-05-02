@@ -100,7 +100,6 @@ def _has_result_tag(tags: list[str]) -> bool:
 _SKIP_STATES = {
     ReqState.DONE.value,
     ReqState.ESCALATED.value,
-    ReqState.GH_INCIDENT_OPEN.value,
     ReqState.INIT.value,
     ReqState.INTAKING.value,
     ReqState.PENDING_USER_REVIEW.value,

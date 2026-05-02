@@ -274,14 +274,6 @@ def test_fixer_running_illegal_events():
         )
 
 
-def test_gh_incident_open_has_no_transitions():
-    """GH_INCIDENT_OPEN 是等人 state，没有任何 outgoing transition。"""
-    for ev in Event:
-        assert decide(ReqState.GH_INCIDENT_OPEN, ev) is None, (
-            f"GH_INCIDENT_OPEN should have no transitions, got {ev.value}"
-        )
-
-
 # ── 缺口 6：全 transition 枚举验 completeness（防止未来新增 transition 漏测）───────
 
 

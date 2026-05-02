@@ -35,7 +35,6 @@ class ReqState(StrEnum):
     ACCEPT_RUNNING = "accept-running"           # env-up 完，accept-agent 跑 FEATURE-A*
     ACCEPT_TEARING_DOWN = "accept-tearing-down" # env-down 清 lab，后续按 accept_result 分流
     PENDING_USER_REVIEW = "pending-user-review" # accept 全过 → 等用户验收（statusId 表态，watchdog skip）
-    GH_INCIDENT_OPEN = "gh-incident-open"       # GitHub issue 已开，等人
     # verifier-agent 框架
     REVIEW_RUNNING = "review-running"           # verifier-agent 在跑（success / fail 两触发统一入口）
     FIXER_RUNNING = "fixer-running"             # verifier decision=fix → 起对应 fixer agent（dev/spec）
