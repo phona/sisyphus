@@ -1,0 +1,83 @@
+name: redroid-fixed-image
+
+# build & push redroid-fixed image to GHCR.
+#
+# 触发：
+#   - pull_request：跑 shellcheck + build.sh（验证脚本能跑）但不 push
+#   - push main 时 redroid-fixed/ 变了（patch 调整 / README 改）：build + push
+#   - 打 redroid-fixed-v* tag（手动版本提升）
+#   - workflow_dispatch（要重 build / 上游 redroid 升级）
+#
+# 输出 tag：13.0.0（=upstream 13.0.0_64only-latest patch 后） + latest + sha-<7>
+#
+# 不能用 buildkit / docker build：buildkit COPY 会踩同一个 containerd 2.x
+# 路径校验。必须 docker create + docker export | tar -x + docker import。
+
+on:
+  pull_request:
+    paths:
+      - 'redroid-fixed/**'
+      - '.github/workflows/redroid-fixed-image.yml'
+  push:
+    branches: [main]
+    tags: ['redroid-fixed-v*']
+    paths:
+      - 'redroid-fixed/**'
+      - '.github/workflows/redroid-fixed-image.yml'
+  workflow_dispatch:
+    inputs:
+      upstream_image:
+        description: 'Upstream redroid image to patch'
+        required: false
+        default: 'redroid/redroid:13.0.0_64only-latest'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/redroid-fixed
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shellcheck build.sh
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck redroid-fixed/build.sh
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: vars
+        run: |
+          echo "sha_short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "version_tag=13.0.0" >> "$GITHUB_OUTPUT"
+
+      - name: Build redroid-fixed (patch /etc/passwd in upstream rootfs)
+        env:
+          UPSTREAM_IMAGE: ${{ inputs.upstream_image || 'redroid/redroid:13.0.0_64only-latest' }}
+          OUT_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.version_tag }}
+        run: bash redroid-fixed/build.sh
+
+      - name: Push (skipped on PR — PR 阶段只验 build.sh 能跑通)
+        if: github.event_name != 'pull_request'
+        run: |
+          VERSION_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.version_tag }}"
+          LATEST_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          SHA_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.vars.outputs.sha_short }}"
+          docker tag "$VERSION_TAG" "$LATEST_TAG"
+          docker tag "$VERSION_TAG" "$SHA_TAG"
+          docker push "$VERSION_TAG"
+          docker push "$LATEST_TAG"
+          docker push "$SHA_TAG"
