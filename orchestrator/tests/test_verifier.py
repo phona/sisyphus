@@ -60,7 +60,11 @@ def test_validate_decision(decision, ok):
 
 
 def test_decision_to_event_mapping():
+    # 无 stage → 回退 VERIFY_PASS（调用方应 escalate）
     assert decision_to_event({"action": "pass"}) == Event.VERIFY_PASS
+    # 有 stage → 主链 pass 事件
+    assert decision_to_event({"action": "pass"}, stage="staging_test") == Event.STAGING_TEST_PASS
+    assert decision_to_event({"action": "pass"}, stage="pr_ci") == Event.PR_CI_PASS
     assert decision_to_event({"action": "fix"}) == Event.VERIFY_FIX_NEEDED
     assert decision_to_event({"action": "escalate"}) == Event.VERIFY_ESCALATE
     # REQ-428 VFR-S6: retry maps to VERIFY_INFRA_RETRY
@@ -123,8 +127,9 @@ def test_extract_none_when_empty():
 def test_derive_verifier_event_pass():
     d = {"action": "pass", "fixer": None, "scope": None, "reason": "ok", "confidence": "high"}
     b64 = base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
-    ev, decision, why = derive_verifier_event(None, [f"decision:{b64}"])
-    assert ev == Event.VERIFY_PASS
+    # verify:staging_test tag 驱动 router 译成 STAGING_TEST_PASS
+    ev, decision, why = derive_verifier_event(None, [f"decision:{b64}", "verify:staging_test"])
+    assert ev == Event.STAGING_TEST_PASS
     assert decision == d
     assert why == ""
 
@@ -166,10 +171,24 @@ def test_derive_verifier_event_no_decision_escalates():
 
 def test_derive_with_retry_info_valid_decision():
     d = {"action": "pass", "fixer": None, "scope": None, "reason": "ok", "confidence": "high"}
-    ev, decision, why, retry = derive_verifier_event_with_retry_info(None, [f"decision:{_b64(d)}"])
-    assert ev == Event.VERIFY_PASS
+    ev, decision, why, retry = derive_verifier_event_with_retry_info(
+        None, [f"decision:{_b64(d)}", "verify:staging_test"],
+    )
+    assert ev == Event.STAGING_TEST_PASS
     assert decision == d
     assert why == ""
+    assert retry is False
+
+
+def test_derive_pass_without_verify_tag_escalates():
+    """无 verify:<stage> tag → router 译不出 stage → escalate（不 retry，不是解析问题）。"""
+    d = {"action": "pass", "fixer": None, "scope": None, "reason": "ok", "confidence": "high"}
+    ev, decision, why, retry = derive_verifier_event_with_retry_info(
+        None, [f"decision:{_b64(d)}"],
+    )
+    assert ev == Event.VERIFY_ESCALATE
+    assert decision == d
+    assert "unknown verifier stage" in why
     assert retry is False
 
 
@@ -491,166 +510,6 @@ def make_body(issue_id="src-1", project_id="p", event="session.completed"):
         "issueId": issue_id, "projectId": project_id,
         "event": event, "title": "", "tags": [], "issueNumber": None,
     })()
-
-
-@pytest.mark.asyncio
-async def test_apply_verify_pass_chains_staging_test_pass(monkeypatch):
-    """verifier_stage=staging_test + VERIFY_PASS → CAS REVIEW_RUNNING→STAGING_TEST_RUNNING
-    + emit STAGING_TEST_PASS（走原主链）。"""
-    from orchestrator.actions import _verifier as v
-
-    cas_calls: list = []
-
-    async def fake_cas(pool, req_id, expected, nxt, event, action, context_patch=None):
-        cas_calls.append((req_id, expected, nxt, event, action))
-        return True
-
-    monkeypatch.setattr("orchestrator.actions._verifier.req_state.cas_transition", fake_cas)
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
-
-    out = await v.apply_verify_pass(
-        body=make_body(), req_id="REQ-9", tags=[],
-        ctx={"verifier_stage": "staging_test"},
-    )
-    assert out["emit"] == Event.STAGING_TEST_PASS.value
-    assert out["stage"] == "staging_test"
-    assert len(cas_calls) == 1
-    (_, expected, nxt, event, _) = cas_calls[0]
-    assert expected.value == "review-running"
-    assert nxt.value == "staging-test-running"
-    assert event == Event.VERIFY_PASS
-
-
-@pytest.mark.asyncio
-async def test_apply_verify_pass_unknown_stage_escalates(monkeypatch):
-    from orchestrator.actions import _verifier as v
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
-    out = await v.apply_verify_pass(
-        body=make_body(), req_id="REQ-9", tags=[],
-        ctx={"verifier_stage": None},
-    )
-    assert out["emit"] == Event.VERIFY_ESCALATE.value
-
-
-@pytest.mark.asyncio
-async def test_apply_verify_pass_cas_fail_returns_skip(monkeypatch):
-    """并发导致 REVIEW_RUNNING 已被别的事件改走 → action 不抛，返 cas_failed。"""
-    from orchestrator.actions import _verifier as v
-
-    async def fake_cas(*a, **kw):
-        return False
-    monkeypatch.setattr("orchestrator.actions._verifier.req_state.cas_transition", fake_cas)
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
-
-    out = await v.apply_verify_pass(
-        body=make_body(), req_id="REQ-9", tags=[],
-        ctx={"verifier_stage": "dev_cross_check"},
-    )
-    assert out == {"cas_failed": True}
-
-
-@pytest.mark.asyncio
-async def test_apply_verify_pass_closes_orphan_verifier_stage_run(monkeypatch):
-    """REGRESSION: (REVIEW_RUNNING, VERIFY_PASS) 是 self-loop transition →
-    engine._record_stage_transitions 跳过 close → verifier 行 outcome 永远为 None。
-
-    DB 实证：18 条 verifier outcome=NULL（占 verifier 总数 29%）污染 stage_stats /
-    agent_quality / failure_mode 三张 Metabase 看板。修：apply_verify_pass 在
-    REVIEW_RUNNING → target_state CAS 成功后，手动 close_latest_stage_run("verifier",
-    outcome="pass")。
-    """
-    from orchestrator.actions import _verifier as v
-
-    close_calls: list = []
-
-    async def fake_cas(*a, **kw):
-        return True
-
-    async def fake_close(pool, req_id, stage, *, outcome, fail_reason=None):
-        close_calls.append({"req_id": req_id, "stage": stage, "outcome": outcome})
-        return 42  # any non-None id
-
-    monkeypatch.setattr(
-        "orchestrator.actions._verifier.req_state.cas_transition", fake_cas,
-    )
-    monkeypatch.setattr(
-        "orchestrator.actions._verifier.stage_runs.close_latest_stage_run",
-        fake_close,
-    )
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
-
-    out = await v.apply_verify_pass(
-        body=make_body(), req_id="REQ-9", tags=[],
-        ctx={"verifier_stage": "pr_ci"},
-    )
-
-    assert out["emit"] == Event.PR_CI_PASS.value
-    assert close_calls == [
-        {"req_id": "REQ-9", "stage": "verifier", "outcome": "pass"},
-    ], "verifier orphan stage_run must be closed with outcome=pass when CAS from REVIEW_RUNNING"
-
-
-@pytest.mark.asyncio
-async def test_apply_verify_pass_skips_close_on_escalated_resume(monkeypatch):
-    """resume from ESCALATED：上一轮 verifier 行已被前次 escalate 路径关掉
-    （outcome=escalate）；此时不应再 close 一次，避免改写 outcome 或关错行。"""
-    from orchestrator.actions import _verifier as v
-
-    close_calls: list = []
-
-    async def fake_cas(pool, req_id, expected, nxt, event, action, context_patch=None):
-        # 模拟 REQ 在 ESCALATED：CAS REVIEW_RUNNING 失败，CAS ESCALATED 成功
-        return expected.value == "escalated"
-
-    async def fake_close(pool, req_id, stage, *, outcome, fail_reason=None):
-        close_calls.append({"req_id": req_id, "stage": stage, "outcome": outcome})
-        return 42
-
-    monkeypatch.setattr(
-        "orchestrator.actions._verifier.req_state.cas_transition", fake_cas,
-    )
-    monkeypatch.setattr(
-        "orchestrator.actions._verifier.stage_runs.close_latest_stage_run",
-        fake_close,
-    )
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
-
-    out = await v.apply_verify_pass(
-        body=make_body(), req_id="REQ-9", tags=[],
-        ctx={"verifier_stage": "pr_ci"},
-    )
-
-    assert out["emit"] == Event.PR_CI_PASS.value
-    assert close_calls == [], (
-        "ESCALATED-resume 路径不应 close verifier stage_run "
-        "（前次 escalate 已 close，重复 close 会改写 outcome）"
-    )
-
-
-@pytest.mark.asyncio
-async def test_apply_verify_pass_resumes_from_escalated(monkeypatch):
-    """resume 路径：用户 follow-up escalate 的 verifier issue → 新 decision=pass →
-    apply_verify_pass 第一次 CAS REVIEW_RUNNING 失败（state 是 ESCALATED），
-    第二次 CAS ESCALATED → STAGE_RUNNING 成功 + chain emit 上游 pass event。"""
-    from orchestrator.actions import _verifier as v
-
-    cas_calls: list = []
-
-    async def fake_cas(pool, req_id, expected, nxt, event, action, context_patch=None):
-        cas_calls.append(expected.value)
-        # 模拟"REQ 当前在 ESCALATED"——CAS REVIEW_RUNNING 失败，CAS ESCALATED 成功
-        return expected.value == "escalated"
-
-    monkeypatch.setattr("orchestrator.actions._verifier.req_state.cas_transition", fake_cas)
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
-
-    out = await v.apply_verify_pass(
-        body=make_body(), req_id="REQ-9", tags=[],
-        ctx={"verifier_stage": "pr_ci"},
-    )
-    assert cas_calls == ["review-running", "escalated"]
-    assert out["emit"] == Event.PR_CI_PASS.value
-    assert out["stage"] == "pr_ci"
 
 
 @pytest.mark.asyncio

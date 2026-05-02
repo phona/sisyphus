@@ -261,6 +261,6 @@ async def test_no_retry_when_valid_decision(fake_bkd, fake_req_state, fake_obs, 
     )
     result = await _call_webhook(body, monkeypatch)
 
-    assert result["event"] == Event.VERIFY_PASS
+    assert result["event"] == Event.STAGING_TEST_PASS
     assert result["retry_worthy"] is False
     assert len(fake_bkd.captured_follow_up) == 0
