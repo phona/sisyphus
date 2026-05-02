@@ -13,6 +13,8 @@ Makefile ci 契约：仅 lint 变更文件；BASE_REV 缺失则全量；详见 d
 ```
 {% endif %}
 
+{% include "verifier/_checker_output.md.j2" %}
+
 ### 多仓识别（重要）
 
 stderr 里 sisyphus 用 `=== FAIL: <repo-basename> ===` 标记**哪个仓**挂了。

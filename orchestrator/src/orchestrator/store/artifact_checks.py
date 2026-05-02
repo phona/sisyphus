@@ -6,6 +6,23 @@ import asyncpg
 from ..checkers._types import CheckResult
 
 
+async def get_latest(pool: asyncpg.Pool, req_id: str, stage: str) -> dict | None:
+    """取 req_id + stage 最新一条 checker 结果。"""
+    row = await pool.fetchrow(
+        """
+        SELECT exit_code, stdout_tail, stderr_tail, cmd, duration_sec,
+               attempts, flake_reason, checked_at
+        FROM artifact_checks
+        WHERE req_id = $1 AND stage = $2
+        ORDER BY checked_at DESC
+        LIMIT 1
+        """,
+        req_id,
+        stage,
+    )
+    return dict(row) if row else None
+
+
 async def insert_check(pool: asyncpg.Pool, req_id: str, stage: str, result: CheckResult) -> None:
     """写一条 checker 跑的结果。
 

@@ -22,6 +22,8 @@ sisyphus 的机械 **post-artifact-check** 红了。它在 ANALYZING → SPEC_LI
 ```
 {% endif %}
 
+{% include "verifier/_checker_output.md.j2" %}
+
 ### 关注点
 
 - `0 source repos eligible` / `0 cloned repos` → analyze agent 根本没 push `feat/{{ req_id }}` 分支
