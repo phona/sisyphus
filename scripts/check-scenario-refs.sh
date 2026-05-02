@@ -20,6 +20,10 @@ set -euo pipefail
 
 SEARCH_PATHS=()
 ROOT="."
+# --current-change <REQ>：把空壳 scenario 检测**只限**到 openspec/changes/<REQ>/specs/。
+# 不传时保持原行为（全仓所有 changes/*/specs/* 都做空壳检测）。
+# 引用解析（DEFINED 集合）始终全量收集，保跨 REQ scenario 引用能解析。
+CURRENT_CHANGE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -33,6 +37,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --specs-search-path=*)
       SEARCH_PATHS+=("${1#--specs-search-path=}")
+      shift
+      ;;
+    --current-change)
+      if [[ $# -lt 2 ]]; then
+        echo "FAIL: --current-change requires an argument" >&2
+        exit 2
+      fi
+      CURRENT_CHANGE="$2"
+      shift 2
+      ;;
+    --current-change=*)
+      CURRENT_CHANGE="${1#--current-change=}"
       shift
       ;;
     -h|--help)
@@ -75,6 +91,7 @@ _STEP_PATTERN='^[[:space:]]*(-[[:space:]]*\*\*)?[[:space:]]*([Gg][Ii][Vv][Ee][Nn
 
 scan_spec_file() {
   local file="$1"
+  local check_empty="${2:-1}"   # 0 = 只 collect DEFINED；1 = 同时检测空壳（默认，向后兼容）
   local line
   local in_scenario=0
   local scen_id=""
@@ -84,7 +101,7 @@ scan_spec_file() {
     # 检测新的 scenario heading
     if [[ "$line" =~ $SCENARIO_HEADING_PATTERN ]]; then
       # 检查上一个 scenario 是否有 step
-      if [[ $in_scenario -eq 1 && $scen_has_step -eq 0 ]]; then
+      if [[ $check_empty -eq 1 && $in_scenario -eq 1 && $scen_has_step -eq 0 ]]; then
         echo "FAIL: $file scenario [$scen_id] has no GIVEN/WHEN/THEN steps"
         FAILED=1
       fi
@@ -114,7 +131,7 @@ scan_spec_file() {
       fi
 
       if [[ $end_scenario -eq 1 ]]; then
-        if [[ $scen_has_step -eq 0 ]]; then
+        if [[ $check_empty -eq 1 && $scen_has_step -eq 0 ]]; then
           echo "FAIL: $file scenario [$scen_id] has no GIVEN/WHEN/THEN steps"
           FAILED=1
         fi
@@ -126,20 +143,45 @@ scan_spec_file() {
   done < "$file"
 
   # 文件结尾检查最后一个 scenario
-  if [[ $in_scenario -eq 1 && $scen_has_step -eq 0 ]]; then
+  if [[ $check_empty -eq 1 && $in_scenario -eq 1 && $scen_has_step -eq 0 ]]; then
     echo "FAIL: $file scenario [$scen_id] has no GIVEN/WHEN/THEN steps"
     FAILED=1
   fi
 }
 
+# helper: 文件是否属于「当前 REQ」的 specs（用于决定是否做空壳检测）
+file_in_current_change() {
+  local file="$1"
+  if [[ -z "$CURRENT_CHANGE" ]]; then
+    # 没传 --current-change → 所有 changes 都算「当前」（向后兼容：全量空壳检测）
+    return 0
+  fi
+  # 路径含 openspec/changes/<CURRENT_CHANGE>/  或  openspec/specs/（baseline 永远扫）
+  case "$file" in
+    *"openspec/specs/"*) return 0 ;;
+    *"openspec/changes/$CURRENT_CHANGE/"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 while IFS= read -r file; do
-  scan_spec_file "$file"
+  # 当前仓 specs：只对「当前 REQ 的 specs」+ baseline 做空壳检测；
+  # 别的 REQ（含已合 / 历史遗留）的空壳 scenario 不应卡当前 REQ 的 spec_lint。
+  if file_in_current_change "$file"; then
+    scan_spec_file "$file" 1
+  else
+    scan_spec_file "$file" 0
+  fi
 done < <(find openspec/specs openspec/changes/*/specs 2>/dev/null -name '*.md' 2>/dev/null || true)
 
 for sp in "${SEARCH_PATHS[@]}"; do
   # P/*/openspec/specs/*.md  — 同时匹配每个 sibling repo 的 in-progress changes
   while IFS= read -r file; do
-    scan_spec_file "$file"
+    if file_in_current_change "$file"; then
+      scan_spec_file "$file" 1
+    else
+      scan_spec_file "$file" 0
+    fi
   done < <(find "$sp"/*/openspec/specs "$sp"/*/openspec/changes/*/specs 2>/dev/null -name '*.md' 2>/dev/null || true)
 done
 
