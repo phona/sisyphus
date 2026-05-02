@@ -702,3 +702,193 @@ def test_challenger_running_in_state_issue_key():
     """CHALLENGER_RUNNING 必须在 _STATE_ISSUE_KEY 中以便 watchdog 能 reconcile BKD session。"""
     assert ReqState.CHALLENGER_RUNNING in watchdog._STATE_ISSUE_KEY
     assert watchdog._STATE_ISSUE_KEY[ReqState.CHALLENGER_RUNNING] == "challenger_issue_id"
+
+
+# ─── REQ-feat-watchdog-self-heal-1777723955: empty-text 双 retry 后自愈 ──────────
+
+def _patch_bkd_with_follow_up(monkeypatch, issue: FakeIssue | None,
+                              follow_up_side_effect: Exception | None = None):
+    """Mock BKDClient 带 follow_up_issue，返回 (get_issue_mock, follow_up_mock)。"""
+    fake = AsyncMock()
+    fake.get_issue = AsyncMock(return_value=issue)
+    fake_follow_up = AsyncMock(
+        side_effect=follow_up_side_effect,
+    )
+    fake.follow_up_issue = fake_follow_up
+
+    @asynccontextmanager
+    async def _ctx(*a, **kw):
+        yield fake
+
+    monkeypatch.setattr("orchestrator.watchdog.BKDClient", _ctx)
+    return fake, fake_follow_up
+
+
+@pytest.mark.asyncio
+async def test_self_heal_session_ended_without_result_tag(monkeypatch):
+    """SH-S1: CHALLENGER_RUNNING + session=completed + no result tag → follow-up, 不 escalate。"""
+    pool = FakePool(rows=[
+        _row("REQ-SH1", ReqState.CHALLENGER_RUNNING.value,
+             ctx={"challenger_issue_id": "ch-sh1", "intent_issue_id": "intent-sh1"},
+             stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _fake, follow_up_mock = _patch_bkd_with_follow_up(
+        monkeypatch, FakeIssue(session_status="completed", id="ch-sh1", tags=["challenger"]),
+    )
+    step_calls = _patch_engine(monkeypatch)
+    art_calls = _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 0}
+    assert step_calls == []
+    assert art_calls == []
+    follow_up_mock.assert_awaited_once()
+    assert "ch-sh1" in follow_up_mock.await_args[0]
+
+
+@pytest.mark.asyncio
+async def test_self_heal_skips_when_result_tag_present(monkeypatch):
+    """SH-S2: CHALLENGER_RUNNING + session=completed + has result:pass → 正常 escalate。"""
+    pool = FakePool(rows=[
+        _row("REQ-SH2", ReqState.CHALLENGER_RUNNING.value,
+             ctx={"challenger_issue_id": "ch-sh2", "intent_issue_id": "intent-sh2"},
+             stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _fake, follow_up_mock = _patch_bkd_with_follow_up(
+        monkeypatch,
+        FakeIssue(session_status="completed", id="ch-sh2",
+                  tags=["challenger", "result:pass"]),
+    )
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 1}
+    assert len(step_calls) == 1
+    follow_up_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_self_heal_skips_for_analyze_stage(monkeypatch):
+    """SH-S3: ANALYZING 不需要 result tag，session=completed → 正常 escalate。"""
+    pool = FakePool(rows=[
+        _row("REQ-SH3", ReqState.ANALYZING.value,
+             ctx={"intent_issue_id": "intent-sh3"},
+             stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _fake, follow_up_mock = _patch_bkd_with_follow_up(
+        monkeypatch,
+        FakeIssue(session_status="completed", id="intent-sh3", tags=["analyze"]),
+    )
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 1}
+    assert len(step_calls) == 1
+    follow_up_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_self_heal_falls_back_to_escalate_on_follow_up_failure(monkeypatch):
+    """SH-S4: follow_up_issue 抛异常 → fall through 到正常 escalate。"""
+    pool = FakePool(rows=[
+        _row("REQ-SH4", ReqState.STAGING_TEST_RUNNING.value,
+             ctx={"staging_test_issue_id": "st-sh4", "intent_issue_id": "intent-sh4"},
+             stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _fake, follow_up_mock = _patch_bkd_with_follow_up(
+        monkeypatch,
+        FakeIssue(session_status="completed", id="st-sh4", tags=["staging-test"]),
+        follow_up_side_effect=RuntimeError("BKD 502"),
+    )
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 1}
+    assert len(step_calls) == 1
+    follow_up_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_self_heal_pr_ci_with_pr_ci_timeout_tag_escalates(monkeypatch):
+    """SH-S5: PR_CI_RUNNING + pr-ci:timeout tag → 有 result tag，正常 escalate。"""
+    pool = FakePool(rows=[
+        _row("REQ-SH5", ReqState.PR_CI_RUNNING.value,
+             ctx={"pr_ci_watch_issue_id": "ci-sh5", "intent_issue_id": "intent-sh5"},
+             stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _fake, follow_up_mock = _patch_bkd_with_follow_up(
+        monkeypatch,
+        FakeIssue(session_status="completed", id="ci-sh5",
+                  tags=["pr-ci", "pr-ci:timeout"]),
+    )
+    _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 1}
+    follow_up_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_self_heal_running_session_not_affected(monkeypatch):
+    """SH-S6: session still running → 原逻辑不变，skip。"""
+    pool = FakePool(rows=[
+        _row("REQ-SH6", ReqState.CHALLENGER_RUNNING.value,
+             ctx={"challenger_issue_id": "ch-sh6", "intent_issue_id": "intent-sh6"},
+             stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    _fake, follow_up_mock = _patch_bkd_with_follow_up(
+        monkeypatch,
+        FakeIssue(session_status="running", id="ch-sh6", tags=["challenger"]),
+    )
+    step_calls = _patch_engine(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 0}
+    assert step_calls == []
+    follow_up_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_self_heal_bkd_lookup_falls_back_to_escalate(monkeypatch):
+    """SH-S7: BKD get_issue 抛异常（issue=None）+ stage 需要 result tag → fall through escalate。"""
+    pool = FakePool(rows=[
+        _row("REQ-SH7", ReqState.ACCEPT_RUNNING.value,
+             ctx={"accept_issue_id": "ac-sh7", "intent_issue_id": "intent-sh7"},
+             stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    fake = AsyncMock()
+    fake.get_issue = AsyncMock(side_effect=RuntimeError("BKD 404"))
+    follow_up_mock = AsyncMock()
+    fake.follow_up_issue = follow_up_mock
+
+    @asynccontextmanager
+    async def _ctx(*a, **kw):
+        yield fake
+
+    monkeypatch.setattr("orchestrator.watchdog.BKDClient", _ctx)
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 1}
+    assert len(step_calls) == 1
+    # issue 查不到时 follow_up 也会失败，所以不会调用
+    follow_up_mock.assert_not_called()
