@@ -49,8 +49,11 @@ RUN curl -fsSL https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz \
 ARG GO_VERSION=1.23.4
 RUN curl -fsSL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz \
       | tar -xz -C /usr/local
-ENV PATH="/usr/local/go/bin:/root/go/bin:$PATH" \
+ENV PATH="/usr/local/go/bin:/root/go/bin:/root/.pub-cache/bin:$PATH" \
     GOPATH=/root/go
+# /root/.pub-cache/bin (#276) — `dart pub global activate <pkg>` 装的可执行文件落
+# 在这里（如 melos / flutterfire_cli），下一个 shell 不在 PATH 就 `command not
+# found`。Flutter 业务仓 melos bs 这种步骤都靠这条路径。
 
 # ─── 4. openspec CLI ─────────────────────────────────────────────────────
 # 真包名是 @fission-ai/openspec（旧 Dockerfile 装的 @fission-codes/openspec 不存在，

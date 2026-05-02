@@ -35,10 +35,37 @@ def _build_server() -> Server:
                     "type": "object",
                     "required": ["skill_path", "spec_path", "scenario_id", "endpoint"],
                     "properties": {
-                        "skill_path": {"type": "string"},
-                        "spec_path": {"type": "string"},
-                        "scenario_id": {"type": "string"},
-                        "endpoint": {"type": "string"},
+                        "skill_path": {
+                            "type": "string",
+                            "description": (
+                                "Absolute path to skill.yaml (FILE, not the .thanatos/ "
+                                "directory). Example: "
+                                "/workspace/source/<repo>/.thanatos/skill.yaml"
+                            ),
+                        },
+                        "spec_path": {
+                            "type": "string",
+                            "description": (
+                                "Absolute path to a spec.md file containing the "
+                                "Scenario block. May live anywhere; common paths: "
+                                "<repo>/.thanatos/spec-fixtures/*.spec.md or "
+                                "<repo>/openspec/changes/<REQ>/specs/.../spec.md"
+                            ),
+                        },
+                        "scenario_id": {
+                            "type": "string",
+                            "description": (
+                                "Identifier in the `#### Scenario: <id> — ...` heading "
+                                "(e.g. ttpos-shop-smoke-001 / REQ-1004-S1). Must match exactly."
+                            ),
+                        },
+                        "endpoint": {
+                            "type": "string",
+                            "description": (
+                                "Driver-specific endpoint. adb: host:port (e.g. "
+                                "localhost:5555). playwright: URL. http: base URL."
+                            ),
+                        },
                     },
                 },
             ),
@@ -52,9 +79,23 @@ def _build_server() -> Server:
                     "type": "object",
                     "required": ["skill_path", "spec_path", "endpoint"],
                     "properties": {
-                        "skill_path": {"type": "string"},
-                        "spec_path": {"type": "string"},
-                        "endpoint": {"type": "string"},
+                        "skill_path": {
+                            "type": "string",
+                            "description": (
+                                "Absolute path to skill.yaml (FILE, not directory). "
+                                "Example: /workspace/source/<repo>/.thanatos/skill.yaml"
+                            ),
+                        },
+                        "spec_path": {
+                            "type": "string",
+                            "description": "Absolute path to spec.md file.",
+                        },
+                        "endpoint": {
+                            "type": "string",
+                            "description": (
+                                "Driver-specific endpoint (adb host:port / playwright URL / http base URL)."
+                            ),
+                        },
                     },
                 },
             ),
@@ -69,12 +110,28 @@ def _build_server() -> Server:
                     "type": "object",
                     "required": ["skill_path", "intent"],
                     "properties": {
-                        "skill_path": {"type": "string"},
-                        "intent": {"type": "string"},
+                        "skill_path": {
+                            "type": "string",
+                            "description": (
+                                "Absolute path to skill.yaml (FILE). recall reads its "
+                                "parent directory to find anchors.md / flows.md / pitfalls.md / etc."
+                            ),
+                        },
+                        "intent": {
+                            "type": "string",
+                            "description": (
+                                "Free-form natural language describing what knowledge to recall, "
+                                "e.g. 'login screen widgets' or 'payment flow pitfalls'."
+                            ),
+                        },
                         "limit": {"type": "integer", "default": 10},
                         "tags": {
                             "type": "array",
                             "items": {"type": "string"},
+                            "description": (
+                                "Optional YAML frontmatter tags to filter by. "
+                                "Files without matching tags are excluded."
+                            ),
                         },
                     },
                 },
