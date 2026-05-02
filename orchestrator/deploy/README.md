@@ -100,6 +100,35 @@ BKD 那边加 webhook：
 - 临时 kubeconfig（`/tmp/sisyphus-kubeconfig.tmp`，脚本结尾 `rm -f` 清掉）
 - PAT 本体（只进 K8s secret）
 
+## 自动化部署（GitHub Actions）
+
+`.github/workflows/deploy.yml` 在 `main` 分支的 `orchestrator-ci` 通过且 `image-publish` 完成后自动触发：
+
+1. 计算镜像 tag：`sha-<short>`（与 `orchestrator-ci` 推送到 GHCR 的 tag 对齐）
+2. `helm upgrade` 到 K8s 集群（`--reuse-values` 保留已有配置，仅更新镜像 tag）
+3. 部署后通过 `kubectl exec` 在 Pod 内 curl `/healthz` 做健康检查
+4. 健康检查失败自动 `helm rollback`
+
+### 需要配置的 Secrets
+
+在仓库 **Settings → Secrets and variables → Actions** 里添加：
+
+| Secret | 内容 |
+|---|---|
+| `KUBECONFIG` | **base64 编码**的 kubeconfig（`cat ~/.kube/config \| base64 -w0`）。用于 GH Actions runner 连 K3s 集群。 |
+
+### 手动触发
+
+`workflow_dispatch` 支持：
+- `image_tag`：指定镜像 tag（如 `sha-abc1234`、`main`）
+- `release_name`：Helm release 名（默认 `orch`，与现有部署一致）
+- `namespace`：K8s namespace（默认 `sisyphus`）
+
+### 镜像构建链路
+
+- `orchestrator-ci.yml` 在 `push` 到 `main` / tag 时构建并推送镜像到 GHCR（`:sha-<short>` / `:main` / semver tag）
+- `deploy.yml` 复用已推送的镜像，不重复 build
+
 ## 回滚
 
 1. Helm 回退：`helm -n sisyphus rollback orch`

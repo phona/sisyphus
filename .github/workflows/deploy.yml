@@ -1,0 +1,87 @@
+name: deploy
+
+on:
+  # main 分支 orchestrator-ci 通过且 image-publish 完成后自动部署
+  workflow_run:
+    workflows: ["orchestrator-ci"]
+    types: [completed]
+    branches: [main]
+  # 手动触发（回滚 / 紧急部署 / 指定 tag）
+  workflow_dispatch:
+    inputs:
+      release_name:
+        description: 'Helm release name'
+        required: false
+        default: 'orch'
+        type: string
+      image_tag:
+        description: 'Docker image tag to deploy (e.g. sha-abc1234, main). Defaults to current SHA.'
+        required: false
+        type: string
+      namespace:
+        description: 'K8s namespace'
+        required: false
+        default: 'sisyphus'
+        type: string
+
+jobs:
+  deploy:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # workflow_run 触发时 checkout 触发 CI 的那次 commit
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Compute image tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            echo "tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            sha="${{ github.event.workflow_run.head_sha || github.sha }}"
+            echo "tag=sha-${sha:0:7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          printf '%s' "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+          kubectl cluster-info
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.16.3'
+
+      - name: Deploy to K8s
+        run: |
+          helm upgrade ${{ inputs.release_name || 'orch' }} orchestrator/helm \
+            --namespace ${{ inputs.namespace || 'sisyphus' }} \
+            --set image.tag=${{ steps.tag.outputs.tag }} \
+            --reuse-values \
+            --wait --timeout 5m
+
+      - name: Health check
+        run: |
+          NS="${{ inputs.namespace || 'sisyphus' }}"
+          REL="${{ inputs.release_name || 'orch' }}"
+          # 动态查找 deployment（不硬编码 release 名）
+          DEPLOY=$(kubectl get deploy -n "$NS" \
+            -l app.kubernetes.io/name=sisyphus-orchestrator \
+            -o jsonpath='{.items[0].metadata.name}')
+          echo "Target deployment: $DEPLOY"
+          # 集群内 curl /healthz（不依赖外部 ingress/DNS 可达性）
+          if ! kubectl exec -n "$NS" deploy/"$DEPLOY" -- \
+            curl -sf --max-time 10 http://localhost:8000/healthz; then
+            echo "Health check failed; rolling back"
+            helm rollback "$REL" -n "$NS"
+            exit 1
+          fi
+          echo "Health check OK"
