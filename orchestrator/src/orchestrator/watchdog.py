@@ -83,7 +83,6 @@ _SUB_AGENT_ROLE_TAGS: frozenset[str] = frozenset({
 _SKIP_STATES = {
     ReqState.DONE.value,
     ReqState.ESCALATED.value,
-    ReqState.GH_INCIDENT_OPEN.value,
     ReqState.INIT.value,
     ReqState.INTAKING.value,
     ReqState.PENDING_USER_REVIEW.value,
