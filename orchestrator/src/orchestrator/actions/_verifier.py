@@ -33,7 +33,7 @@ from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
 from ..state import Event, ReqState
-from ..store import db, dispatch_slugs, req_state, stage_runs
+from ..store import artifact_checks, db, dispatch_slugs, req_state, stage_runs
 from . import register, short_title
 
 log = structlog.get_logger(__name__)
@@ -72,6 +72,27 @@ _PASS_ROUTING: dict[str, tuple[ReqState, Event]] = {
     "pr_ci":                   (ReqState.PR_CI_RUNNING,            Event.PR_CI_PASS),
     "accept":                  (ReqState.ACCEPT_RUNNING,           Event.ACCEPT_PASS),
 }
+
+# prompt template stage 名 → artifact_checks.stage DB 值
+_STAGE_TO_DB: dict[str, str] = {
+    "spec_lint":              "spec-lint",
+    "dev_cross_check":        "dev-cross-check",
+    "staging_test":           "staging-test",
+    "pr_ci":                  "pr-ci-watch",
+    "analyze_artifact_check": "analyze-artifact-check",
+}
+
+# stdout/stderr 各保留最后多少行，避免 prompt 过长
+_CHECKER_TAIL_LINES = 50
+
+
+def _tail_lines(text: str | None, n: int = _CHECKER_TAIL_LINES) -> str:
+    if not text:
+        return ""
+    lines = text.splitlines()
+    if len(lines) <= n:
+        return text
+    return "\n".join(lines[-n:])
 
 # ─── invoke_verifier：起 BKD verifier issue ──────────────────────────────
 
@@ -117,6 +138,19 @@ async def invoke_verifier(
         })
         return {"verifier_issue_id": hit, "stage": stage, "trigger": trigger}
 
+    checker_stdout = ""
+    checker_stderr = ""
+    checker_exit_code = None
+    if trigger == "fail":
+        db_stage = _STAGE_TO_DB.get(stage)
+        if db_stage:
+            pool = db.get_pool()
+            row = await artifact_checks.get_latest(pool, req_id, db_stage)
+            if row:
+                checker_stdout = _tail_lines(row.get("stdout_tail") or "")
+                checker_stderr = _tail_lines(row.get("stderr_tail") or "")
+                checker_exit_code = row.get("exit_code")
+
     template_name = f"verifier/{stage}_{trigger}.md.j2"
     prompt = render(
         template_name,
@@ -128,6 +162,9 @@ async def invoke_verifier(
         history=history or [],
         project_id=project_id,
         project_alias=project_id,
+        checker_stdout=checker_stdout,
+        checker_stderr=checker_stderr,
+        checker_exit_code=checker_exit_code,
     )
 
     # PR-link tag 注入（REQ-issue-link-pr-quality-base-1777218242）：

@@ -314,6 +314,107 @@ async def test_invoke_verifier_renders_template(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_invoke_verifier_injects_checker_context_on_fail(monkeypatch):
+    """trigger=fail 时从 artifact_checks 读最新记录并注入 prompt。"""
+    from orchestrator.actions import _verifier as v
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, fake)
+
+    class FakePool:
+        async def fetchrow(self, sql, *args):
+            assert args[0] == "REQ-8"
+            assert args[1] == "dev-cross-check"
+            return {
+                "exit_code": 2,
+                "stdout_tail": "unit pass\nlint fail",
+                "stderr_tail": "ERROR: type mismatch",
+                "cmd": "make ci-lint",
+                "duration_sec": 45.0,
+                "attempts": 1,
+                "flake_reason": None,
+                "checked_at": None,
+            }
+
+        async def execute(self, sql, *args):
+            pass
+
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: FakePool())
+    monkeypatch.setattr(
+        "orchestrator.actions._verifier.req_state.update_context", AsyncMock()
+    )
+
+    await v.invoke_verifier(
+        stage="dev_cross_check", trigger="fail",
+        req_id="REQ-8", project_id="p",
+    )
+    _, kwargs = fake.follow_up_issue.await_args
+    prompt = kwargs["prompt"]
+    assert "exit_code: `2`" in prompt
+    assert "unit pass" in prompt
+    assert "ERROR: type mismatch" in prompt
+    assert "机械 checker 输出" in prompt
+
+
+@pytest.mark.asyncio
+async def test_invoke_verifier_skips_checker_context_on_success(monkeypatch):
+    """trigger=success 时不查 artifact_checks。"""
+    from orchestrator.actions import _verifier as v
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, fake)
+
+    queries: list = []
+
+    class FakePool:
+        async def fetchrow(self, sql, *args):
+            queries.append((sql, args))
+            return None
+
+        async def execute(self, sql, *args):
+            pass
+
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: FakePool())
+    monkeypatch.setattr(
+        "orchestrator.actions._verifier.req_state.update_context", AsyncMock()
+    )
+
+    await v.invoke_verifier(
+        stage="staging_test", trigger="success",
+        req_id="REQ-9", project_id="p",
+    )
+    assert queries == [], "success trigger should not query artifact_checks"
+    fake.follow_up_issue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_invoke_verifier_no_checker_context_when_db_empty(monkeypatch):
+    """artifact_checks 无记录时 prompt 正常渲染，不抛异常。"""
+    from orchestrator.actions import _verifier as v
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, fake)
+
+    class FakePool:
+        async def fetchrow(self, sql, *args):
+            return None
+
+        async def execute(self, sql, *args):
+            pass
+
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: FakePool())
+    monkeypatch.setattr(
+        "orchestrator.actions._verifier.req_state.update_context", AsyncMock()
+    )
+
+    await v.invoke_verifier(
+        stage="spec_lint", trigger="fail",
+        req_id="REQ-10", project_id="p",
+    )
+    _, kwargs = fake.follow_up_issue.await_args
+    prompt = kwargs["prompt"]
+    assert "verifier-agent" in prompt
+    assert "REQ-10" in prompt
+
+
+@pytest.mark.asyncio
 async def test_invoke_verifier_rejects_unknown_stage():
     from orchestrator.actions import _verifier as v
     with pytest.raises(ValueError):
@@ -337,6 +438,7 @@ async def test_invoke_verifier_rejects_unknown_trigger():
 
 @pytest.mark.parametrize("stage", [
     "analyze", "spec_lint", "dev_cross_check", "staging_test", "pr_ci", "accept",
+    "challenger", "analyze_artifact_check",
 ])
 @pytest.mark.parametrize("trigger", ["success", "fail"])
 def test_all_verifier_prompts_render(stage, trigger):
@@ -349,12 +451,37 @@ def test_all_verifier_prompts_render(stage, trigger):
         stderr_tail="boom",
         history=[],
         artifact_paths=[],
+        checker_stdout="out",
+        checker_stderr="err",
+        checker_exit_code=1,
     )
     assert "REQ-42" in out
     assert "verifier-agent" in out
     # decision schema 文本必须在 —— 强校验 agent 输出格式
     assert '"action":' in out
     assert "pass" in out and "escalate" in out
+
+
+def test_tail_lines_truncation():
+    from orchestrator.actions._verifier import _tail_lines
+    long = "\n".join(f"line{i}" for i in range(100))
+    got = _tail_lines(long, 50)
+    assert got.count("\n") == 49
+    assert "line49" not in got
+    assert "line50" in got
+    assert "line99" in got
+
+
+def test_tail_lines_short_text_preserved():
+    from orchestrator.actions._verifier import _tail_lines
+    short = "a\nb\nc"
+    assert _tail_lines(short, 50) == short
+
+
+def test_tail_lines_none_and_empty():
+    from orchestrator.actions._verifier import _tail_lines
+    assert _tail_lines(None, 50) == ""
+    assert _tail_lines("", 50) == ""
 
 
 # ─── 6. action handlers ─────────────────────────────────────────────────
@@ -719,7 +846,13 @@ async def test_invoke_verifier_for_staging_test_fail(monkeypatch):
     async def fake_update(pool, req_id, patch):
         pass
     monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+
+    class FakePool:
+        async def fetchrow(self, sql, *args):
+            return None
+        async def execute(self, sql, *args):
+            pass
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: FakePool())
 
     out = await v.invoke_verifier_for_staging_test_fail(
         body=make_body(project_id="proj-x"),
@@ -745,7 +878,13 @@ async def test_invoke_verifier_for_pr_ci_fail(monkeypatch):
     async def fake_update(pool, req_id, patch):
         pass
     monkeypatch.setattr("orchestrator.actions._verifier.req_state.update_context", fake_update)
-    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: None)
+
+    class FakePool:
+        async def fetchrow(self, sql, *args):
+            return None
+        async def execute(self, sql, *args):
+            pass
+    monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: FakePool())
 
     out = await v.invoke_verifier_for_pr_ci_fail(
         body=make_body(project_id="proj-x"),
