@@ -26,3 +26,4 @@ dist/
 
 # Claude Code local worktrees / cache
 .claude/
+.mcp.json
