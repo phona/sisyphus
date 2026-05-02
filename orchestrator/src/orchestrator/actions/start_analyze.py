@@ -129,7 +129,14 @@ async def start_analyze(*, body, req_id, tags, ctx):
         log.info("start_analyze.runner_ready", req_id=req_id, pod=pod_name)
 
     # 1.5 解析 base:* tag 并注入 ctx（REQ-base-branch-override-1777480690）
+    # 三层 fallback：tag > finalized_intent > settings 配置 > origin/HEAD
     default_base, base_overrides = extract_base_branches(tags)
+    if not default_base:
+        default_base = settings.default_base_branch or None
+    if settings.default_base_branches:
+        for repo, branch in settings.default_base_branches.items():
+            if repo not in base_overrides:
+                base_overrides[repo] = branch
     if default_base or base_overrides:
         await req_state.update_context(db.get_pool(), req_id, {
             "base_branch": default_base,
