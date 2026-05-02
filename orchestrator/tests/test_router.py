@@ -131,6 +131,32 @@ def test_extract_base_branches(tags, expected_default, expected_overrides):
     assert overrides == expected_overrides
 
 
+def test_extract_base_branches_from_finalized_intent():
+    """B 路径：tag 缺失时 fallback 到 finalized_intent JSON。"""
+    # tag 为空，但 finalized_intent 有 base_branch
+    default, overrides = extract_base_branches(
+        [],
+        finalized_intent={"base_branch": "develop", "base_branches": {"ttpos-flutter": "feat/x"}},
+    )
+    assert default == "develop"
+    assert overrides == {"ttpos-flutter": "feat/x"}
+
+    # tag 优先级 > finalized_intent（tag 声明了就不看 intent）
+    default, overrides = extract_base_branches(
+        ["base:release"],
+        finalized_intent={"base_branch": "develop"},
+    )
+    assert default == "release"  # tag 赢了
+
+    # tag 有 per-repo override，intent 有另一个 repo 的 → 合并
+    default, overrides = extract_base_branches(
+        ["base:ttpos-flutter:feat/hwt"],
+        finalized_intent={"base_branches": {"ttpos-server-go": "release"}},
+    )
+    assert default is None
+    assert overrides == {"ttpos-flutter": "feat/hwt", "ttpos-server-go": "release"}
+
+
 def test_resolve_base_branch():
     # 无显式指定 → None
     assert resolve_base_branch("phona/ttpos-flutter", None, {}) is None

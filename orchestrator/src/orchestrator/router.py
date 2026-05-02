@@ -358,35 +358,47 @@ _BASE_TAG_PREFIX = "base:"
 _REPO_BASE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
-def extract_base_branches(tags: Iterable[str]) -> tuple[str | None, dict[str, str]]:
+def extract_base_branches(
+    tags: Iterable[str],
+    finalized_intent: dict | None = None,
+) -> tuple[str | None, dict[str, str]]:
     """解析 BKD intent issue 上的 base:* tag。
 
     支持两种语法：
     - ``base:<branch>`` — 默认 base 分支（单仓 / 全仓默认）
     - ``base:<repo-basename>:<branch>`` — per-repo override
 
+    额外支持从 ``finalized_intent`` 读取（intake-agent 在 chat 中理解用户意图后写入），
+    作为 tag 缺失时的 fallback。优先级：tag > finalized_intent。
+
     返回 ``(default_branch, repo_overrides)``。
-    同一 issue 可以多个 ``base:*`` tag，per-repo 优先于全仓默认。
-    没任何 ``base:*`` tag 时返 ``(None, {})``（向后兼容：走 origin/HEAD 兜底）。
+    没任何 ``base:*`` tag 或 finalized_intent 时返 ``(None, {})``（向后兼容）。
     """
     default: str | None = None
     overrides: dict[str, str] = {}
+
+    # 1. 先从 BKD tag 解析（最高优先级）
     for t in tags or []:
         if not isinstance(t, str) or not t.startswith(_BASE_TAG_PREFIX):
             continue
         rest = t[len(_BASE_TAG_PREFIX):]
         if not rest:
             continue
-        # 区分 base:<repo>:<branch> 与 base:<branch>
-        # 如果第一段匹配 repo basename 规则 → 认为是 per-repo override
         if ":" in rest:
             parts = rest.split(":", 1)
             maybe_repo = parts[0]
             if _REPO_BASE_RE.match(maybe_repo):
                 overrides[maybe_repo] = parts[1]
                 continue
-        # 默认分支（无 repo 前缀）
         default = rest
+
+    # 2. tag 没命中时 fallback 到 finalized intent（intake-agent 理解产物）
+    if finalized_intent:
+        default = default or finalized_intent.get("base_branch")
+        for repo, branch in (finalized_intent.get("base_branches") or {}).items():
+            if repo not in overrides:
+                overrides[repo] = branch
+
     return default, overrides
 
 

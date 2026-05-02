@@ -57,8 +57,10 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
         pod_name = await rc.ensure_runner(req_id, wait_ready=True)
         log.info("start_analyze_with_finalized_intent.runner_ready", req_id=req_id, pod=pod_name)
 
-    # 1.5 解析 base:* tag 并注入 ctx（REQ-base-branch-override-1777480690）
-    default_base, base_overrides = extract_base_branches(tags)
+    # 1.5 解析 base:* tag 并注入 ctx（REQ-base-branch-override-1777480690）。
+    # intake 路径：tag 没声明 base 时 fallback 到 finalized_intent（用户在 intake
+    # chat 中口头表达 base branch 意图，agent 写进 JSON）。
+    default_base, base_overrides = extract_base_branches(tags, finalized_intent=finalized)
     if default_base or base_overrides:
         pool = db.get_pool()
         await req_state.update_context(pool, req_id, {
