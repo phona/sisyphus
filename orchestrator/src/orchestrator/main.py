@@ -5,7 +5,7 @@ import asyncio
 import logging
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from . import accept_env_gc, k8s_runner, runner_gc, snapshot, watchdog
 from .admin import admin as admin_api
@@ -109,4 +109,10 @@ async def shutdown() -> None:
 
 @app.get("/healthz")
 async def healthz() -> dict:
+    pool = db.get_pool()
+    try:
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+    except Exception:
+        raise HTTPException(status_code=503, detail="db_unavailable") from None
     return {"status": "ok"}
