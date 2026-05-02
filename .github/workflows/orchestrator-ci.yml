@@ -55,10 +55,11 @@ jobs:
           version: 'v3.16.3'
 
       - name: helm lint (defaults)
-        # 默认 values 缺 secret.bkd_token 会 fail-by-design，是预期行为
+        # 默认 values 缺 image.tag / secret.bkd_token 会 fail-by-design，是预期行为
         run: |
           set +e
           helm lint helm/ 2>&1 | tee /tmp/lint.txt
+          grep -q 'values.image.tag is required' /tmp/lint.txt || exit 1
           grep -q 'values.secret.bkd_token is required' /tmp/lint.txt || exit 1
 
       - name: helm lint (with dev values)

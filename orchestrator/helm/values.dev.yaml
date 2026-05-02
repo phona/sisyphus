@@ -1,9 +1,16 @@
 # dev override：本地 K3s 用，开发自填密钥
 # helm -n sisyphus install orch ./helm -f helm/values.dev.yaml --create-namespace
+#
+# 部署时必须 --set image.tag=sha-<short> 和 --set runner.image=...:sha-<short>
+# 覆盖下面的占位 sha-DEV-PLACEHOLDER（issue #267：部署侧禁止 mutable tag）。
 
 image:
-  pullPolicy: Always
-  tag: "main"   # CI 推到 main 分支会更新这个 tag
+  pullPolicy: IfNotPresent
+  tag: "sha-DEV-PLACEHOLDER"   # 部署时 --set image.tag=sha-<short> 覆盖
+
+runner:
+  # 部署时 --set runner.image=ghcr.io/phona/sisyphus-runner:sha-<short> 覆盖
+  image: "ghcr.io/phona/sisyphus-runner:sha-DEV-PLACEHOLDER"
 
 ingress:
   hosts:

@@ -34,7 +34,7 @@ spec:
             {{- toYaml .Values.redroid.resources | nindent 12 }}
         {{- end }}
         - name: thanatos
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ required "values.image.tag is required: must pin to immutable git-sha (e.g. sha-abc1234), see issue #267" .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # MCP stdio server — accept-agent talks to it via `kubectl exec`,
           # so we don't expose any TCP listener from the container itself.

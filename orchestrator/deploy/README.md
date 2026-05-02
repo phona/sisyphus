@@ -69,16 +69,27 @@ git commit + push。部署方拉最新版再跑 helm。
 ### 步骤 5：部署方 helm upgrade + verify
 
 ```bash
+# 获取最近一次 CI build 的 orchestrator sha tag（或本地 git sha）
+SHA="sha-$(git rev-parse --short HEAD)"
+
 # 部署方通过 aissh 跑（两个 values file：非敏感 my-values + 敏感 secrets-values）
 helm -n sisyphus upgrade --install orch ./orchestrator/helm \
   -f orchestrator/deploy/my-values.yaml \
-  -f /tmp/secrets-values.yaml
+  -f /tmp/secrets-values.yaml \
+  --set image.tag="$SHA" \
+  --set runner.image="ghcr.io/phona/sisyphus-runner:$SHA"
 rm -f /tmp/secrets-values.yaml            # 敏感文件用完立即清
 
 kubectl -n sisyphus rollout status deploy/orch-sisyphus-orchestrator
 curl -sSH 'Authorization: Bearer <webhook_token>' \
   http://sisyphus.43.239.84.24.nip.io/admin/metrics | jq .state_distribution
 ```
+
+> **image.tag / runner.image 必须 pin immutable sha**（issue #267）。
+> 部署时忘传 `--set image.tag` 会让 helm template 报错
+> `values.image.tag is required`，fail-loud 而不是渲染出损坏的 image ref。
+> `:main` / `:latest` / `:dev` 等 mutable tag 已禁止——它们看不出对应哪个
+> commit，且 `IfNotPresent` 时节点缓存的旧镜像永远不会被刷新。
 
 ### 步骤 6：BKD webhook 注册（一次性）
 
