@@ -109,6 +109,8 @@ async def clone_involved_repos_into_runner(
     *,
     tags: Iterable[str] | None = None,
     default_repos: Iterable[str] | None = None,
+    default_base: str | None = None,
+    base_overrides: dict[str, str] | None = None,
 ) -> tuple[list[str] | None, int | None]:
     """在 runner pod 里跑 sisyphus-clone-repos.sh。
 
@@ -130,9 +132,18 @@ async def clone_involved_repos_into_runner(
         log.warning("clone.no_runner_controller", req_id=req_id, error=str(e))
         return None, None
 
+    # 构建 base branch 参数（REQ-base-branch-override-1777480690）
+    base_args = ""
+    if default_base:
+        base_args += f" --base {shlex.quote(default_base)}"
+    if base_overrides:
+        for repo_basename, branch in base_overrides.items():
+            base_args += f" --base-for {shlex.quote(repo_basename)} {shlex.quote(branch)}"
+
     args = " ".join(shlex.quote(r) for r in repos)
-    cmd = f"{_CLONE_HELPER} {args}"
-    log.info("clone.exec", req_id=req_id, repos=repos, source=source)
+    cmd = f"{_CLONE_HELPER}{base_args} {args}"
+    log.info("clone.exec", req_id=req_id, repos=repos, source=source,
+             default_base=default_base, base_overrides=base_overrides)
     result = await rc.exec_in_runner(req_id, cmd, timeout_sec=_CLONE_TIMEOUT_SEC)
 
     if result.exit_code != 0:

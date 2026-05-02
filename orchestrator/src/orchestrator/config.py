@@ -182,6 +182,17 @@ class Settings(BaseSettings):
     # 或 JSON 数组 `["phona/sisyphus","phona/foo"]`。
     default_involved_repos: list[str] = Field(default_factory=list)
 
+    # ─── REQ-base-branch-override-1777480690：全局默认 base branch ───────────
+    # 当 BKD intent issue 没打 base:* tag、且 finalized intent 也没声明 base_branch
+    # 时，用这个配置作为 fallback。解决"GitHub default branch = release 但开发主线是
+    # develop"的场景：operator 配 `default_base_branch=develop`，所有 REQ 默认走 develop，
+    # 特殊 REQ 再手动打 tag 覆盖。
+    # 空字符串 = 不覆盖（走 origin/HEAD 兜底）。
+    default_base_branch: str = ""
+    # per-repo 默认 base branch：{"ttpos-flutter": "develop", "ttpos-server-go": "release"}
+    # 优先级：tag > finalized_intent > per-repo settings > global settings > origin/HEAD
+    default_base_branches: dict[str, str] = Field(default_factory=dict)
+
     # ─── M14b/M14c：verifier-agent 框架 ─────────────────────────────────
     # 每个 stage transition（成功 or 失败）先起一个 verifier-agent 做主观判断
     # —— 3 路决策：pass / fix / escalate，再由 webhook 路由推进状态机。

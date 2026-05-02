@@ -349,3 +349,70 @@ def get_parent_stage(tags: Iterable[str]) -> str | None:
         if t.startswith("parent:") and not t.startswith("parent-id:"):
             return t.removeprefix("parent:")
     return None
+
+
+# ─── base:* tag 解析（REQ-base-branch-override-1777480690）───────────────────
+
+_BASE_TAG_PREFIX = "base:"
+# repo basename 规则：字母数字开头，后续可跟字母数字 . _ -
+_REPO_BASE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def extract_base_branches(
+    tags: Iterable[str],
+    finalized_intent: dict | None = None,
+) -> tuple[str | None, dict[str, str]]:
+    """解析 BKD intent issue 上的 base:* tag。
+
+    支持两种语法：
+    - ``base:<branch>`` — 默认 base 分支（单仓 / 全仓默认）
+    - ``base:<repo-basename>:<branch>`` — per-repo override
+
+    额外支持从 ``finalized_intent`` 读取（intake-agent 在 chat 中理解用户意图后写入），
+    作为 tag 缺失时的 fallback。优先级：tag > finalized_intent。
+
+    返回 ``(default_branch, repo_overrides)``。
+    没任何 ``base:*`` tag 或 finalized_intent 时返 ``(None, {})``（向后兼容）。
+    """
+    default: str | None = None
+    overrides: dict[str, str] = {}
+
+    # 1. 先从 BKD tag 解析（最高优先级）
+    for t in tags or []:
+        if not isinstance(t, str) or not t.startswith(_BASE_TAG_PREFIX):
+            continue
+        rest = t[len(_BASE_TAG_PREFIX):]
+        if not rest:
+            continue
+        if ":" in rest:
+            parts = rest.split(":", 1)
+            maybe_repo = parts[0]
+            if _REPO_BASE_RE.match(maybe_repo):
+                overrides[maybe_repo] = parts[1]
+                continue
+        default = rest
+
+    # 2. tag 没命中时 fallback 到 finalized intent（intake-agent 理解产物）
+    if finalized_intent:
+        default = default or finalized_intent.get("base_branch")
+        for repo, branch in (finalized_intent.get("base_branches") or {}).items():
+            if repo not in overrides:
+                overrides[repo] = branch
+
+    return default, overrides
+
+
+def resolve_base_branch(
+    repo_slug: str,
+    default_base: str | None,
+    base_overrides: dict[str, str],
+) -> str | None:
+    """给定 repo slug，解析应使用的 base branch。
+
+    优先顺序：
+    1. ``base_overrides[repo_basename]``（per-repo 显式指定）
+    2. ``default_base``（全局默认）
+    3. ``None``（无显式指定，走 origin/HEAD 兜底）
+    """
+    basename = repo_slug.rsplit("/", 1)[-1] if "/" in repo_slug else repo_slug
+    return base_overrides.get(basename) or default_base or None

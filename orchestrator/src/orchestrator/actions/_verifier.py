@@ -343,6 +343,8 @@ async def start_fixer(*, body, req_id, tags, ctx):
             model=settings.agent_model,
         )
         # 通用 bugfix prompt 作为过渡；PR4 再做每类 fixer 专用模板。
+        # REQ-base-branch-override-1777480690: forward base branch info so fixer
+        # lint uses the correct merge-base.
         prompt = render(
             "bugfix.md.j2",
             req_id=req_id, round_n=next_round,
@@ -352,6 +354,8 @@ async def start_fixer(*, body, req_id, tags, ctx):
             workdir=f"{settings.workdir_root}/feat-{req_id}",
             project_id=proj,
             project_alias=proj,
+            base_branch=ctx.get("base_branch"),
+            base_branches=ctx.get("base_branches") or {},
         )
         # 把 verifier 的 scope / reason 叠进 prompt 作为上下文
         if scope or reason:

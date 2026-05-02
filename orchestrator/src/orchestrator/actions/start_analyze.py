@@ -33,6 +33,7 @@ from ..config import settings
 from ..intent_tags import filter_propagatable_intent_tags
 from ..prompts import render
 from ..prompts.status_block import build_status_block_ctx
+from ..router import extract_base_branches
 from ..state import Event
 from ..store import db, req_state
 from . import register, short_title
@@ -142,10 +143,27 @@ async def start_analyze(*, body, req_id, tags, ctx):
         pod_name = await rc.ensure_runner(req_id, wait_ready=True)
         log.info("start_analyze.runner_ready", req_id=req_id, pod=pod_name)
 
+    # 1.5 解析 base:* tag 并注入 ctx（REQ-base-branch-override-1777480690）
+    # 三层 fallback：tag > finalized_intent > settings 配置 > origin/HEAD
+    default_base, base_overrides = extract_base_branches(tags)
+    if not default_base:
+        default_base = settings.default_base_branch or None
+    if settings.default_base_branches:
+        for repo, branch in settings.default_base_branches.items():
+            if repo not in base_overrides:
+                base_overrides[repo] = branch
+    if default_base or base_overrides:
+        await req_state.update_context(db.get_pool(), req_id, {
+            "base_branch": default_base,
+            "base_branches": base_overrides,
+        })
+        ctx = {**(ctx or {}), "base_branch": default_base, "base_branches": base_overrides}
+
     # 2. server-side clone（multi-layer fallback：ctx → tags → settings.default
     # 都没拿到 → 无声跳过，让 agent 按 prompt Part A.3 自跑 helper）
     cloned_repos, clone_rc = await clone_involved_repos_into_runner(
         req_id, ctx, tags=tags, default_repos=settings.default_involved_repos,
+        default_base=default_base, base_overrides=base_overrides,
     )
     if clone_rc is not None:
         # helper 跑过但失败 → 不 dispatch agent，直接 escalate
@@ -182,6 +200,10 @@ async def start_analyze(*, body, req_id, tags, ctx):
             # REQ-pr-issue-traceability-1777218612: lets analyze.md.j2 render
             # the PR-body cross-link footer with a clickable BKD link.
             bkd_intent_issue_url=bkd_intent_issue_url,
+            # REQ-base-branch-override-1777480690: forward base branch info to
+            # analyze-agent so gh pr create uses the right --base.
+            base_branch=default_base,
+            base_branches=base_overrides,
             # REQ-ux-status-block-1777257283: canonical at-a-glance REQ status
             # block at the top of the analyze prompt. ctx.pr_urls is populated
             # by later stages (pr_ci_watch.discover_pr_urls); on first analyze
