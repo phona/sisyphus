@@ -27,11 +27,13 @@ service:
 
 # redroid sidecar settings (only used when driver=adb).
 redroid:
-  image: redroid/redroid:11.0.0-latest
-  # pullPolicy 跟 image.pullPolicy 解耦：自包装的 redroid-fixed 镜像（含 /etc/passwd
-  # 修复 + flatten 顶层符号链接、解 containerd 2.x mount safety check）通常
-  # `k3s ctr images import` 进集群本地 cache，需要走 IfNotPresent / Never；而
-  # thanatos 镜像仍可走 dev tag 滚动 Always。空值则 fallback 到 image.pullPolicy。
+  # 默认走 phona 自包装的 redroid-fixed（解 containerd 2.x runc1.4
+  # `openat etc/passwd=*** escapes from parent` mount safety check —— 上游
+  # `redroid/redroid:11.0.0-latest` / `:13.0.0_64only-latest` 都炸）。
+  # build 流水：sisyphus repo `redroid-fixed/` + `.github/workflows/redroid-fixed-image.yml`。
+  image: ghcr.io/phona/redroid-fixed:13.0.0
+  # pullPolicy 跟 image.pullPolicy 解耦：thanatos 镜像走 dev tag 滚动可能 Always；
+  # redroid 走稳定 13.0.0 tag IfNotPresent 即可。空值则 fallback 到 image.pullPolicy。
   pullPolicy: ""
   port: 5555
   resources:
