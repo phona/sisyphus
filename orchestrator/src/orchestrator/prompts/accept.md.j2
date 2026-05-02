@@ -1,7 +1,9 @@
+{% set stage = "accept" %}
 {% include "_shared/tools_whitelist.md.j2" %}
 
 ─────────
 
+{% include "_shared/mcp_preflight.md.j2" %}
 {% include "_shared/self_issue_constraint.md.j2" %}
 
 ─────────

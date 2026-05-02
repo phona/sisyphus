@@ -78,6 +78,9 @@ def _setup_bkd_mock(mock_bkd_cls: Any, tags: list[str] | None = None) -> None:
 
 def _render_jinja2(template_name: str, **kwargs: Any) -> str:
     import jinja2
+
+    from orchestrator.config import settings as _runtime_settings
+
     prompts_dir = os.path.join(
         os.path.dirname(__file__), "..", "src", "orchestrator", "prompts"
     )
@@ -85,6 +88,12 @@ def _render_jinja2(template_name: str, **kwargs: Any) -> str:
         loader=jinja2.FileSystemLoader(prompts_dir),
         undefined=jinja2.Undefined,
     )
+    # REQ-feat-mcp-preflight-1777727213：mirror prompts/__init__.py 全局，
+    # 否则 _shared/tools_whitelist.md.j2 渲到 `mcp_capability_providers['ssh_exec']`
+    # 时 UndefinedError。本 helper 是 ad-hoc render harness，挂同款 globals 让它和
+    # 生产 render 行为一致。
+    env.globals["mcp_capability_providers"] = _runtime_settings.mcp_capability_providers
+    env.globals["stage_mcp_requirements"] = _runtime_settings.stage_mcp_requirements
     return env.get_template(template_name).render(**kwargs)
 
 

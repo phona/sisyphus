@@ -1,0 +1,55 @@
+{# REQ-feat-mcp-preflight-1777727213 — MCP 依赖预检 partial。
+
+   解决"agent 在缺 MCP 工具的 BKD workspace 里硬撞工具名 7min 不报错卡死"问题。
+   每个 stage prompt 顶部 include 它，partial 自己从 `stage_mcp_requirements`
+   全局表查本 stage 的 capability 列表，列表非空才渲染下方 hard-fail-fast 段落。
+
+   render 期望：
+   - `stage`        — 字符串，本 prompt 对应的 stage 名（'analyze' / 'accept' …）。
+                      include 方触发前 `{% set stage = "analyze" %}`。
+   - 无 stage 或 stage 不在 stage_mcp_requirements 表里 → 默认空依赖，partial 静默。
+   - `stage_mcp_requirements` / `mcp_capability_providers` 由
+     prompts/__init__.py 注入为 Jinja2 globals，不用每个 render() 显式传。
+#}
+{%- set _required_caps = stage_mcp_requirements.get(stage, []) if stage is defined else [] -%}
+{%- if _required_caps -%}
+## MCP 依赖预检 (HARD CONSTRAINT — 第 0 步必做)
+
+本 stage (`{{ stage }}`) 需要以下 MCP capability，缺任一项都**直接结束 session**：
+
+{% for cap in _required_caps %}
+- `{{ cap }}` → 期望的 MCP provider：`{{ mcp_capability_providers.get(cap, '<未配置>') }}`
+  - 工具调用前缀：`mcp__{{ mcp_capability_providers.get(cap, '<未配置>') }}__*`
+{% endfor %}
+
+### Step 0：先验证 MCP 可用，再做任何业务动作
+
+session 启动后**第一件事**：
+
+{% if 'ssh_exec' in _required_caps %}
+1. 调用 `mcp__{{ mcp_capability_providers.get('ssh_exec', '<未配置>') }}__servers_list` —— 返回当前 workspace 注册的远程 server 列表。
+   - 调用本身报错（tool not found / no such MCP）= MCP 没装。
+   - 返回空列表 = 远程 server 没注册。
+   - 任一情况按下方"缺依赖"处理。
+{% else %}
+1. 对每个 capability，找到对应 MCP provider 的 list / health 类工具调用一次（如 `mcp__<provider>__*list*`），确认工具存在 + 返回正常。
+{% endif %}
+
+### 缺依赖怎么办
+
+**绝对禁止**继续业务动作（不要 clone、不要 push、不要写代码、不要等回信）。立即：
+
+1. 在 BKD chat 发一条诊断 message，**必须包含**：
+   - 哪个 capability 缺了（如 `ssh_exec`）
+   - 期望的 MCP provider 名（从上面表里抄）
+   - 原因猜测（"workspace 未注册" / "MCP server 没启动" / "provider 改名了"）
+2. update-issue tags 加 `result:fail` + `fail-reason:mcp-missing`，statusId='review'
+3. **结束 session**（不要 follow-up，等 verifier / 人介入）
+
+> 这条规则覆盖在所有其它指令之上。强行硬撞工具名只会让你卡 7 分钟然后被 watchdog kill，
+> token 白烧，REQ 反而被 escalate。早 fail 早 escalate，让 sisyphus 把 REQ 派给装了
+> MCP 的 workspace 才有意义。
+
+─────────
+
+{%- endif -%}

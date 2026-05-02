@@ -1,3 +1,4 @@
+{% set stage = "analyze" %}
 {% if status_block -%}
 {% include "_shared/status_block.md.j2" %}
 
@@ -8,6 +9,7 @@
 
 ─────────
 
+{% include "_shared/mcp_preflight.md.j2" %}
 {% include "_shared/self_issue_constraint.md.j2" %}
 
 ─────────

@@ -1,7 +1,9 @@
+{% set stage = "challenger" %}
 {% include "_shared/tools_whitelist.md.j2" %}
 
 ─────────
 
+{% include "_shared/mcp_preflight.md.j2" %}
 {% include "_shared/self_issue_constraint.md.j2" %}
 
 ─────────
@@ -24,9 +26,9 @@ REQ={{ req_id }}
 
 ## Part A: 设置 + 读 spec
 
-### A.1 进 runner pod 准备工作树（用 mcp__aissh-tao）
+### A.1 进 runner pod 准备工作树（用 mcp__{{ mcp_capability_providers['ssh_exec'] }}）
 
-按 runner_container.md.j2 段。所有 kubectl 包成 `mcp__aissh-tao__exec_run` 跨 SSH。
+按 runner_container.md.j2 段。所有 kubectl 包成 `mcp__{{ mcp_capability_providers['ssh_exec'] }}__exec_run` 跨 SSH。
 
 ### A.2 找 spec home repo（spec 在哪个仓）
 

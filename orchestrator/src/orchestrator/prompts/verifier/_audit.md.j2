@@ -7,13 +7,13 @@
 
 ```
 # Step 1：找 PR 号（在 runner pod 里跑）
-mcp__aissh-tao__exec_run(
+mcp__{{ mcp_capability_providers['ssh_exec'] }}__exec_run(
   server_id="5b25f0cd-4fef-4a1f-a4c0-14ecf1395d84",
   command="kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c 'gh pr list --head feat/{{ req_id }} --json number,url 2>&1 | head -20'"
 )
 
 # Step 2：拿到 PR 号后获取 diff
-mcp__aissh-tao__exec_run(
+mcp__{{ mcp_capability_providers['ssh_exec'] }}__exec_run(
   server_id="5b25f0cd-4fef-4a1f-a4c0-14ecf1395d84",
   command="kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c 'gh pr diff <PR_NUMBER> 2>&1 | head -500'"
 )
