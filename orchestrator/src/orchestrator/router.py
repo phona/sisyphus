@@ -78,11 +78,38 @@ def validate_audit_soft(audit: dict | None) -> str | None:
     return None
 
 
-def decision_to_event(decision: dict) -> Event:
-    """合规 decision → Event。调用前必须先跑 validate_decision。"""
+# verifier decision=pass 时 stage → 对应主链 pass 事件
+#（REQ-refactor-verify-pass-transition-1777727230：把 apply_verify_pass 自循环拆成
+# 显式 transition，router 负责在 decision 解析层做事件映射）。
+_VERIFY_PASS_ROUTING: dict[str, Event] = {
+    "analyze":                Event.ANALYZE_DONE,
+    "analyze_artifact_check": Event.ANALYZE_ARTIFACT_CHECK_PASS,
+    "spec_lint":              Event.SPEC_LINT_PASS,
+    "challenger":             Event.CHALLENGER_PASS,
+    "dev_cross_check":        Event.DEV_CROSS_CHECK_PASS,
+    "staging_test":           Event.STAGING_TEST_PASS,
+    "pr_ci":                  Event.PR_CI_PASS,
+    "accept":                 Event.ACCEPT_PASS,
+}
+
+
+def pass_event_for_stage(stage: str | None) -> Event | None:
+    """verifier decision=pass 时，按 stage 返回对应主链 pass 事件。
+
+    None 表示 stage 不在已知路由表（应 escalate）。
+    """
+    return _VERIFY_PASS_ROUTING.get(stage) if stage else None
+
+
+def decision_to_event(decision: dict, stage: str | None = None) -> Event:
+    """合规 decision → Event。调用前必须先跑 validate_decision。
+
+    stage 只在 action=pass 时使用；缺省或未知 stage 时回退 VERIFY_PASS
+   （调用方应检查 None 并 escalate）。
+    """
     action = decision["action"]
     if action == "pass":
-        return Event.VERIFY_PASS
+        return pass_event_for_stage(stage) or Event.VERIFY_PASS
     if action == "fix":
         return Event.VERIFY_FIX_NEEDED
     if action == "retry":
@@ -102,6 +129,13 @@ def derive_verifier_event(
     """
     event, decision, reason, _ = derive_verifier_event_with_retry_info(description, tags)
     return event, decision, reason
+
+
+def _stage_from_tags(tags: Iterable[str] | None) -> str | None:
+    for t in (tags or []):
+        if t.startswith("verify:"):
+            return t.removeprefix("verify:")
+    return None
 
 
 def derive_verifier_event_with_retry_info(
@@ -128,7 +162,11 @@ def derive_verifier_event_with_retry_info(
     ok, why = validate_decision(decision)
     if not ok:
         return Event.VERIFY_ESCALATE, decision, f"invalid decision: {why}", True
-    return decision_to_event(decision), decision, "", False
+    stage = _stage_from_tags(tags)
+    event = decision_to_event(decision, stage=stage)
+    if event == Event.VERIFY_PASS:
+        return Event.VERIFY_ESCALATE, decision, f"unknown verifier stage: {stage!r}", False
+    return event, decision, "", False
 
 
 def extract_decision_from_issue(

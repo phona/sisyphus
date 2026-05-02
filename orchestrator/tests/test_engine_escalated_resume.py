@@ -260,7 +260,7 @@ async def test_ert_s6_pr_ci_timeout_escalates_with_cleanup(
 
 
 # ───────────────────────────────────────────────────────────────────────
-# ERT-S7: ESCALATED + VERIFY_PASS — end-to-end resume to next stage via chain emit
+# ERT-S7: ESCALATED + STAGING_TEST_PASS — end-to-end resume to next stage
 # ───────────────────────────────────────────────────────────────────────
 
 
@@ -269,34 +269,19 @@ async def test_ert_s7_escalated_verify_pass_chains_to_next_stage(
     stub_actions, mock_runner_controller,
 ):
     """Spec ERT-S7: 人工 resume from ESCALATED 端到端。
-    apply_verify_pass stub 模拟生产 action 行为：内部 CAS ESCALATED→STAGING_TEST_RUNNING
-    + emit STAGING_TEST_PASS。engine 必须 chain-dispatch create_pr_ci_watch，最终
-    pool row state = PR_CI_RUNNING。
+    router 把 verifier decision=pass 译成 STAGING_TEST_PASS；transition 表显式推进
+    ESCALATED → PR_CI_RUNNING + create_pr_ci_watch。无需 chain emit，一步到位。
 
-    这是 sisyphus 唯一让人手把"卡死"REQ 续起来的路径，dispatch-level 测（VLT-S12）
-    没法证明 chain emit 真把 REQ 推过 ESCALATED 边界 —— 必须有专门的端到端断言。
+    REQ-refactor-verify-pass-transition-1777727230：apply_verify_pass 自循环已拆，
+    所有 pass 路径都是显式 transition。
     """
-    apply_calls: list = []
     pr_ci_calls: list = []
-
-    async def apply_verify_pass(*, body, req_id, tags, ctx):
-        # 模拟生产 apply_verify_pass：手 CAS ESCALATED → 下游 stage_running。
-        # FakePool.fetchrow 在 UPDATE req_state 分支按 expected==actual 做 CAS。
-        from orchestrator.store import req_state as rs
-        ok = await rs.cas_transition(
-            pool, req_id, ReqState.ESCALATED, ReqState.STAGING_TEST_RUNNING,
-            Event.VERIFY_PASS, "apply_verify_pass",
-        )
-        assert ok, "stub apply_verify_pass: ESCALATED→STAGING_TEST_RUNNING CAS must succeed"
-        apply_calls.append({"tags": list(tags or []), "ctx": dict(ctx or {})})
-        return {"emit": Event.STAGING_TEST_PASS.value}
 
     async def create_pr_ci_watch(*, body, req_id, tags, ctx):
         pr_ci_calls.append({"tags": list(tags or [])})
         return {"ok": True}
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.ESCALATED.value)})
-    stub_actions["apply_verify_pass"] = apply_verify_pass
     stub_actions["create_pr_ci_watch"] = create_pr_ci_watch
 
     body = _body(issueId="vfy-resume", projectId="p", event="session.completed")
@@ -306,22 +291,16 @@ async def test_ert_s7_escalated_verify_pass_chains_to_next_stage(
         tags=["verifier", "REQ-1", "verify:staging_test"],
         cur_state=ReqState.ESCALATED,
         ctx={"verifier_stage": "staging_test"},
-        event=Event.VERIFY_PASS,
+        event=Event.STAGING_TEST_PASS,
     )
     await _drain_tasks()
 
-    # 顶层 step：apply_verify_pass dispatched, transition 表声明 self-loop
-    assert result["action"] == "apply_verify_pass"
-    assert result["next_state"] == ReqState.ESCALATED.value
-
-    # chain：staging-test.pass → create_pr_ci_watch → PR_CI_RUNNING
-    assert "chained" in result, f"chain emit lost: {result!r}"
-    assert result["chained"]["action"] == "create_pr_ci_watch"
-    assert result["chained"]["next_state"] == ReqState.PR_CI_RUNNING.value
+    # 显式 transition：ESCALATED → PR_CI_RUNNING
+    assert result["action"] == "create_pr_ci_watch"
+    assert result["next_state"] == ReqState.PR_CI_RUNNING.value
 
     # 端到端：行真被推到 PR_CI_RUNNING
     assert pool.rows["REQ-1"].state == ReqState.PR_CI_RUNNING.value
-    assert len(apply_calls) == 1
     assert len(pr_ci_calls) == 1
 
     # cur 已是 terminal (ESCALATED) → engine 跳过 cleanup（防误删 resume 路径拉的 pod）
@@ -442,14 +421,15 @@ async def test_ert_s9_full_transition_sweep(
     )
 
 
-def test_ert_s9_sweep_covers_exactly_70():
-    """Sanity: TRANSITIONS 必须正好 70 条 —— 加 / 减 transition 时这条 fail 提醒
+def test_ert_s9_sweep_covers_exactly_76():
+    """Sanity: TRANSITIONS 必须正好 76 条 —— 加 / 减 transition 时这条 fail 提醒
     review 是否同步加 spec scenario / 文档（state-machine.md / dump_transitions）。
 
     历史：47 → 49（PENDING_USER_REVIEW 入/出）→ 51（再 +1）→ 70（REQ-escalated-stage-resume：
-    + 19 条 ESCALATED 主链反激活，让 stage-issue 续 follow-up 也能恢复）。"""
-    assert len(state_mod.TRANSITIONS) == 70, (
-        f"expected 70 transitions, got {len(state_mod.TRANSITIONS)}; "
+    + 19 条 ESCALATED 主链反激活）→ 76（REQ-refactor-verify-pass-transition-1777727230：
+    apply_verify_pass 自循环拆 8 条显式 transition，drop 2 条 VERIFY_PASS）="""
+    assert len(state_mod.TRANSITIONS) == 76, (
+        f"expected 76 transitions, got {len(state_mod.TRANSITIONS)}; "
         "if you intentionally added/removed a transition, update this assertion "
         "AND add granular ERT/MCT/APT/VLT scenario coverage for it."
     )

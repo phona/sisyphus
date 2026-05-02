@@ -1,6 +1,6 @@
 """
 Contract tests for REQ-verifier-stagerun-close-1777105576:
-fix(verifier): close orphan verifier stage_run on VERIFY_PASS path
+fix(verifier): close orphan verifier stage_run on pass transition from REVIEW_RUNNING
 
 Black-box behavioral contracts derived from:
   openspec/changes/REQ-verifier-stagerun-close-1777105576/specs/verifier-stagerun-close/spec.md
@@ -10,7 +10,7 @@ Dev MUST NOT modify these tests to make them pass — fix the implementation ins
 If a test is wrong, escalate to spec_fixer to correct the spec, not the test.
 
 Scenarios covered:
-  VSC-S1  VERIFY_PASS self-loop closes verifier stage_run with outcome=pass
+  VSC-S1  Explicit pass transition leaving REVIEW_RUNNING closes verifier stage_run with outcome=pass
   VSC-S2  close 是 best-effort，失败只 log 不抛
   VSC-S3  VERIFY_FIX_NEEDED 仍走原 close+open 路径
   VSC-S4  REVIEW_RUNNING + SESSION_FAILED self-loop 不触发 verifier close
@@ -83,16 +83,17 @@ def _make_fake_stage_runs(close_side_effect=None) -> _FakeStageRuns:
     return _FakeStageRuns(close_side_effect=close_side_effect)
 
 
-# ─── VSC-S1: VERIFY_PASS self-loop MUST close verifier stage_run ─────────────
+# ─── VSC-S1: explicit pass transition from REVIEW_RUNNING MUST close verifier stage_run ─
 
 
-async def test_vsc_s1_verify_pass_closes_verifier_stage_run(monkeypatch):
+async def test_vsc_s1_explicit_pass_closes_verifier_stage_run(monkeypatch):
     """
     VSC-S1: _record_stage_transitions MUST call close_latest_stage_run(pool, req_id,
-    "verifier", outcome="pass") exactly once when cur_state=REVIEW_RUNNING and
-    event=VERIFY_PASS, even though next_state == cur_state (self-loop in transition table).
+    "verifier", outcome="pass") exactly once when leaving REVIEW_RUNNING via an explicit
+    pass transition (e.g., STAGING_TEST_PASS → PR_CI_RUNNING).
 
-    Invariant: close MUST happen regardless of cur_state == next_state equality.
+    REQ-refactor-verify-pass-transition-1777727230: VERIFY_PASS self-loop removed;
+    pass transitions are now explicit (cur ≠ next) and the generic leave path closes verifier.
     """
     import orchestrator.engine as engine_mod
     from orchestrator.state import Event, ReqState
@@ -107,16 +108,15 @@ async def test_vsc_s1_verify_pass_closes_verifier_stage_run(monkeypatch):
         pool,
         req_id=req_id,
         cur_state=ReqState.REVIEW_RUNNING,
-        next_state=ReqState.REVIEW_RUNNING,  # self-loop
-        event=Event.VERIFY_PASS,
+        next_state=ReqState.CHALLENGER_RUNNING,
+        event=Event.SPEC_LINT_PASS,
     )
 
     verifier_closes = [c for c in fake_sr._close_calls if c["stage"] == "verifier"]
 
     assert len(verifier_closes) == 1, (
         f"VSC-S1: close_latest_stage_run MUST be called exactly once for stage='verifier' "
-        f"on (REVIEW_RUNNING, VERIFY_PASS) self-loop; "
-        f"got {len(verifier_closes)} call(s): {verifier_closes}"
+        f"when leaving REVIEW_RUNNING; got {len(verifier_closes)} call(s): {verifier_closes}"
     )
     assert verifier_closes[0]["outcome"] == "pass", (
         f"VSC-S1: outcome MUST be 'pass'; got {verifier_closes[0]['outcome']!r}. "
@@ -127,10 +127,10 @@ async def test_vsc_s1_verify_pass_closes_verifier_stage_run(monkeypatch):
         f"got {verifier_closes[0]['req_id']!r}"
     )
 
-    # Invariant: self-loop means no new stage_run should be inserted
+    # CHALLENGER_RUNNING has no entry in STATE_TO_STAGE → no insert
     assert fake_sr._open_calls == [], (
-        f"VSC-S1: on (REVIEW_RUNNING→REVIEW_RUNNING) self-loop, insert_stage_run MUST NOT "
-        f"be called (no new stage is entered); got: {fake_sr._open_calls}"
+        f"VSC-S1: on REVIEW_RUNNING → CHALLENGER_RUNNING, insert_stage_run MUST NOT "
+        f"be called (CHALLENGER_RUNNING has no mapped stage); got: {fake_sr._open_calls}"
     )
 
 
@@ -158,8 +158,8 @@ async def test_vsc_s2_close_error_logged_not_raised(monkeypatch):
                 pool,
                 req_id="REQ-vsc-test-002",
                 cur_state=ReqState.REVIEW_RUNNING,
-                next_state=ReqState.REVIEW_RUNNING,
-                event=Event.VERIFY_PASS,
+                next_state=ReqState.CHALLENGER_RUNNING,
+                event=Event.SPEC_LINT_PASS,
             )
         except Exception as exc:
             pytest.fail(
@@ -193,7 +193,7 @@ async def test_vsc_s3_verify_fix_needed_normal_close_open(monkeypatch):
     - open a fixer stage_run via the generic open-on-enter path
 
     This verifies the existing behavior is preserved and not accidentally broken by the
-    VERIFY_PASS fix — the explicit close branch MUST only trigger on VERIFY_PASS.
+    refactor — verifier close only happens when leaving REVIEW_RUNNING (generic path).
     """
     import orchestrator.engine as engine_mod
     from orchestrator.state import Event, ReqState
@@ -236,8 +236,8 @@ async def test_vsc_s4_session_failed_self_loop_no_verifier_close(monkeypatch):
     """
     VSC-S4: (REVIEW_RUNNING, SESSION_FAILED) is a self-loop (next_state == cur_state).
     _record_stage_transitions MUST NOT call close_latest_stage_run for stage='verifier'.
-    Only event == VERIFY_PASS triggers the explicit verifier close; other self-loop
-    events (e.g. SESSION_FAILED dispatched by the watchdog) must not.
+    Self-loop events (e.g. SESSION_FAILED dispatched by the watchdog) do not leave
+    REVIEW_RUNNING, so the generic leave path must not trigger.
     """
     import orchestrator.engine as engine_mod
     from orchestrator.state import Event, ReqState
@@ -258,6 +258,6 @@ async def test_vsc_s4_session_failed_self_loop_no_verifier_close(monkeypatch):
     verifier_closes = [c for c in fake_sr._close_calls if c["stage"] == "verifier"]
     assert verifier_closes == [], (
         f"VSC-S4: close_latest_stage_run MUST NOT be called for stage='verifier' "
-        f"on (REVIEW_RUNNING, SESSION_FAILED) self-loop — only VERIFY_PASS triggers "
-        f"the explicit verifier close; got {len(verifier_closes)} call(s): {verifier_closes}"
+        f"on (REVIEW_RUNNING, SESSION_FAILED) self-loop — self-loop does not leave "
+        f"REVIEW_RUNNING; got {len(verifier_closes)} call(s): {verifier_closes}"
     )

@@ -605,7 +605,7 @@ async def test_resume_400_when_pass_missing_stage(monkeypatch):
 @pytest.mark.asyncio
 async def test_resume_pass_dispatches_verify_pass_event(monkeypatch):
     """ARE-S1: state=escalated, ctx.verifier_stage=staging_test, action=pass →
-    engine.step 被调一次 with event=VERIFY_PASS."""
+    engine.step 被调一次 with event=STAGING_TEST_PASS（pass_event_for_stage 翻译）."""
     pool = _FakePool()
     row = _FakeRow(
         req_id="REQ-X", project_id="p", state=ReqState.ESCALATED,
@@ -627,11 +627,11 @@ async def test_resume_pass_dispatches_verify_pass_event(monkeypatch):
 
     assert result["action"] == "resumed"
     assert result["from_state"] == "escalated"
-    assert result["event"] == "verify.pass"
+    assert result["event"] == "staging-test.pass"
     assert "chained" in result
-    # engine.step 被调一次，event 是 VERIFY_PASS
+    # engine.step 被调一次，event 是 STAGING_TEST_PASS（pass_event_for_stage 翻译）
     assert len(step_calls) == 1
-    assert step_calls[0]["event"] == Event.VERIFY_PASS
+    assert step_calls[0]["event"] == Event.STAGING_TEST_PASS
     assert step_calls[0]["cur_state"] == ReqState.ESCALATED
     assert step_calls[0]["req_id"] == "REQ-X"
     # ctx 被 patch（resumed_by_admin + resume_action）

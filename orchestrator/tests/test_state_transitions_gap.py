@@ -71,7 +71,6 @@ def test_verify_infra_retry_only_from_review_running():
 # ── 缺口 3：ESCALATED 恢复态 transition 实际值（此前只测了 existence）──────────────────
 
 ESCALATED_RESUME_CASES = [
-    (Event.VERIFY_PASS, ReqState.ESCALATED, "apply_verify_pass"),
     (Event.VERIFY_FIX_NEEDED, ReqState.FIXER_RUNNING, "start_fixer"),
 ]
 
@@ -250,9 +249,13 @@ def test_pending_user_review_illegal_events():
 
 
 def test_review_running_illegal_events():
-    """REVIEW_RUNNING 接受 verifier 4 路决策 + merged + SESSION_FAILED。"""
+    """REVIEW_RUNNING 接受 verifier pass（8 条 stage 显式）+ fix/escalate/retry + merged + SESSION_FAILED。"""
     legal = {
-        Event.VERIFY_PASS, Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE,
+        Event.ANALYZE_DONE, Event.ANALYZE_ARTIFACT_CHECK_PASS,
+        Event.SPEC_LINT_PASS, Event.CHALLENGER_PASS,
+        Event.DEV_CROSS_CHECK_PASS, Event.STAGING_TEST_PASS,
+        Event.PR_CI_PASS, Event.ACCEPT_PASS,
+        Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE,
         Event.VERIFY_INFRA_RETRY, Event.PR_MERGED, Event.SESSION_FAILED,
     }
     for ev in Event:
@@ -298,12 +301,12 @@ def test_all_transitions_reason_is_str_or_none():
 def test_transition_count_sanity():
     """transition 总数 sanity check：防止未来重构误删/误增。
 
-    当前总数 = 39 显式 + 12 SESSION_FAILED self-loop + 19 ESCALATED stage-resume 反激活
-    （REQ-escalated-stage-resume）= 70。
+    当前总数 = 45 显式 + 12 SESSION_FAILED self-loop + 19 ESCALATED stage-resume 反激活
+    （REQ-escalated-stage-resume）= 76。
     如果数字变了，说明有人增删 transition，本测试会 fail 提醒同步测试。
     """
-    assert len(TRANSITIONS) == 70, (
-        f"Expected 70 transitions, got {len(TRANSITIONS)}. "
+    assert len(TRANSITIONS) == 76, (
+        f"Expected 76 transitions, got {len(TRANSITIONS)}. "
         "If this is intentional, update this assertion and add corresponding tests."
     )
 
@@ -311,12 +314,12 @@ def test_transition_count_sanity():
 def test_explicit_transition_count():
     """非 SESSION_FAILED 的显式 + ESCALATED 反激活 transition 数量 sanity check。
 
-    包含 39 主链显式 + 19 ESCALATED 主链反激活（复用主链 transition 对象，但 key 是
-    (ESCALATED, ev) 独立计数）= 58 条非 SESSION_FAILED transition。
+    包含 45 主链显式 + 19 ESCALATED 主链反激活（复用主链 transition 对象，但 key 是
+    (ESCALATED, ev) 独立计数）= 64 条非 SESSION_FAILED transition。
     """
     explicit = [k for k in TRANSITIONS if k[1] != Event.SESSION_FAILED]
-    assert len(explicit) == 58, (
-        f"Expected 58 explicit transitions, got {len(explicit)}"
+    assert len(explicit) == 64, (
+        f"Expected 64 explicit transitions, got {len(explicit)}"
     )
 
 
@@ -331,15 +334,16 @@ def test_session_failed_transition_count():
 # ── 缺口 7：竞态路径 —— CAS 场景下的 transition 行为────────────────────────────────────
 
 
-def test_verify_pass_from_review_running_is_self_loop():
-    """VERIFY_PASS 从 REVIEW_RUNNING 出发是 self-loop：action 内部手动 CAS 推进。
+def test_verify_pass_from_review_running_is_explicit_transition():
+    """decision=pass 从 REVIEW_RUNNING 出发是显式 transition（非 self-loop）。
 
-    这是 M14b 设计要点：next_state 不动，action 自己决定跳到哪个 stage_running。
+    REQ-refactor-verify-pass-transition-1777727230：router 按 stage 译成主链 pass 事件，
+    transition 表直接写死 next_state，不再靠 action 内部 CAS。
     """
-    t = decide(ReqState.REVIEW_RUNNING, Event.VERIFY_PASS)
+    t = decide(ReqState.REVIEW_RUNNING, Event.STAGING_TEST_PASS)
     assert t is not None
-    assert t.next_state == ReqState.REVIEW_RUNNING
-    assert t.action == "apply_verify_pass"
+    assert t.next_state == ReqState.PR_CI_RUNNING
+    assert t.action == "create_pr_ci_watch"
 
 
 def test_verify_infra_retry_from_review_running_is_self_loop():
@@ -362,15 +366,16 @@ def test_done_no_transitions_at_all():
 def test_escalated_non_resume_events_all_none():
     """ESCALATED 接受 3 类恢复事件，其余非法：
 
-    1. verifier 决策续 follow-up：VERIFY_PASS / VERIFY_FIX_NEEDED / VERIFY_ESCALATE
+    1. verifier 决策续 follow-up：VERIFY_FIX_NEEDED / VERIFY_ESCALATE；
+       decision=pass 时 router 译成对应主链 pass 事件，走 stage-issue 反激活路径。
     2. stage-issue 续 follow-up（REQ-escalated-stage-resume）：19 条主链事件
        —— intake/analyze/spec_lint/challenger/dev_cross_check/staging_test/pr_ci/
        accept/teardown/fixer 各 pass+fail（无 timeout/env-up-fail/intake-fail/
        user-review-fix/PR_MERGED 这类直接进 ESCALATED 或不属于"恢复"语义的事件）
     """
     resume_events = {
-        # verifier 决策反激活
-        Event.VERIFY_PASS, Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE,
+        # verifier 决策反激活（pass 由主链 pass 事件代理）
+        Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE,
         # stage-issue 反激活
         Event.INTAKE_PASS,
         Event.ANALYZE_DONE,

@@ -284,20 +284,20 @@ async def test_vlt_s11_fixer_round_cap_escapes_to_escalated(
 
 
 # ───────────────────────────────────────────────────────────────────────
-# VLT-S12: ESCALATED + VERIFY_PASS resume (apply_verify_pass self-loop)
+# VLT-S12: ESCALATED + PR_CI_PASS resume (router 译 decision=pass → 主链 pass 事件)
 # ───────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_vlt_s12_escalated_verify_pass_dispatches_apply(
+async def test_vlt_s12_escalated_verify_pass_dispatches_create_accept(
     stub_actions, mock_runner_controller,
 ):
-    """Spec VLT-S12: ESCALATED + VERIFY_PASS → ESCALATED self-loop, action=apply_verify_pass。
+    """Spec VLT-S12: ESCALATED + PR_CI_PASS → ACCEPT_RUNNING + create_accept。
     用户在 BKD UI follow-up escalate 的 verifier issue 写新 decision=pass 触发；
-    engine 仅 dispatch action（实际 CAS 推下游 state 是 action 内部职责）。
-    自循环且 cur 已 terminal → engine 不应再触发 cleanup。"""
+    router 按 verify:pr_ci tag 译成 PR_CI_PASS，transition 表显式推进到 ACCEPT_RUNNING。
+    cur 已 terminal → engine 不应再触发 cleanup。"""
     calls: list = []
-    stub_actions["apply_verify_pass"] = _make_recorder("apply_verify_pass", calls)
+    stub_actions["create_accept"] = _make_recorder("create_accept", calls)
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.ESCALATED.value)})
     body = _body(issueId="vfy-resume", projectId="p", event="session.completed")
@@ -306,13 +306,13 @@ async def test_vlt_s12_escalated_verify_pass_dispatches_apply(
         pool, body=body, req_id="REQ-1", project_id="p",
         tags=["verifier", "REQ-1", "verify:pr_ci"],
         cur_state=ReqState.ESCALATED, ctx={"verifier_stage": "pr_ci"},
-        event=Event.VERIFY_PASS,
+        event=Event.PR_CI_PASS,
     )
     await _drain_tasks()
 
-    assert result["action"] == "apply_verify_pass"
-    # transition 表声明的 self-loop：state 不动（stub 不内部 CAS）
-    assert pool.rows["REQ-1"].state == ReqState.ESCALATED.value
+    assert result["action"] == "create_accept"
+    assert result["next_state"] == ReqState.ACCEPT_RUNNING.value
+    assert pool.rows["REQ-1"].state == ReqState.ACCEPT_RUNNING.value
     assert len(calls) == 1
     # cur 已 terminal → engine 跳过 cleanup
     mock_runner_controller.cleanup_runner.assert_not_awaited()

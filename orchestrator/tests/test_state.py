@@ -42,8 +42,15 @@ EXPECTED = [
     (ReqState.PENDING_USER_REVIEW,  Event.USER_REVIEW_PASS,    ReqState.DONE,                None),
     (ReqState.PENDING_USER_REVIEW,  Event.USER_REVIEW_FIX,     ReqState.ESCALATED,           "escalate"),
     (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_FAIL,  ReqState.REVIEW_RUNNING,      "invoke_verifier_for_accept_fail"),
-    # M14b verifier 子链（3 路：pass / fix / escalate）
-    (ReqState.REVIEW_RUNNING,       Event.VERIFY_PASS,         ReqState.REVIEW_RUNNING,      "apply_verify_pass"),
+    # verifier 子链（pass 拆成 N 条显式 transition，REQ-refactor-verify-pass-transition-1777727230）
+    (ReqState.REVIEW_RUNNING,       Event.ANALYZE_DONE,                 ReqState.ANALYZE_ARTIFACT_CHECKING, "create_analyze_artifact_check"),
+    (ReqState.REVIEW_RUNNING,       Event.ANALYZE_ARTIFACT_CHECK_PASS,  ReqState.SPEC_LINT_RUNNING,         "create_spec_lint"),
+    (ReqState.REVIEW_RUNNING,       Event.SPEC_LINT_PASS,               ReqState.CHALLENGER_RUNNING,        "start_challenger"),
+    (ReqState.REVIEW_RUNNING,       Event.CHALLENGER_PASS,              ReqState.DEV_CROSS_CHECK_RUNNING,   "create_dev_cross_check"),
+    (ReqState.REVIEW_RUNNING,       Event.DEV_CROSS_CHECK_PASS,         ReqState.STAGING_TEST_RUNNING,      "create_staging_test"),
+    (ReqState.REVIEW_RUNNING,       Event.STAGING_TEST_PASS,            ReqState.PR_CI_RUNNING,             "create_pr_ci_watch"),
+    (ReqState.REVIEW_RUNNING,       Event.PR_CI_PASS,                   ReqState.ACCEPT_RUNNING,            "create_accept"),
+    (ReqState.REVIEW_RUNNING,       Event.ACCEPT_PASS,                  ReqState.ACCEPT_TEARING_DOWN,       "teardown_accept_env"),
     (ReqState.REVIEW_RUNNING,       Event.VERIFY_FIX_NEEDED,   ReqState.FIXER_RUNNING,       "start_fixer"),
     (ReqState.REVIEW_RUNNING,       Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
     (ReqState.FIXER_RUNNING,        Event.FIXER_DONE,          ReqState.REVIEW_RUNNING,      "invoke_verifier_after_fix"),
@@ -143,8 +150,12 @@ def test_done_terminal_has_no_outgoing():
 
 
 def test_escalated_resumable_via_verifier_followup():
-    """ESCALATED 不是死终态：用户续 verifier issue → BKD 新 decision → 走原 verifier 同链。"""
-    for ev in (Event.VERIFY_PASS, Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE):
+    """ESCALATED 不是死终态：用户续 verifier issue → BKD 新 decision → 走原 verifier 同链。
+
+    decision=pass 时 router 译成对应主链 pass 事件（如 STAGING_TEST_PASS），
+    ESCALATED 反激活 transition 处理；VERIFY_FIX_NEEDED / VERIFY_ESCALATE 仍走 verifier 子链。
+    """
+    for ev in (Event.STAGING_TEST_PASS, Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE):
         assert decide(ReqState.ESCALATED, ev) is not None, ev
 
 
