@@ -39,3 +39,18 @@ data:
   # JSON-encoded list[str]，跟 default_involved_repos 同。
   SISYPHUS_GH_INCIDENT_LABELS: {{ toJson . | quote }}
   {{- end }}
+  # ─── REQ-feat-mcp-preflight-1777727213：pluggable prompt hook + MCP capability ─
+  # 4 个字段都用 JSON-encoded（pydantic-settings v2 的 list/dict 复合字段默认走
+  # JSON 解析）。values 留空时不渲染 env，走 orchestrator config.py 的 default_factory。
+  {{- with .Values.env.enabled_prompt_hooks }}
+  SISYPHUS_ENABLED_PROMPT_HOOKS: {{ toJson . | quote }}
+  {{- end }}
+  {{- with .Values.env.mcp_capability_providers }}
+  SISYPHUS_MCP_CAPABILITY_PROVIDERS: {{ toJson . | quote }}
+  {{- end }}
+  {{- with .Values.env.mcp_capability_probe_tools }}
+  SISYPHUS_MCP_CAPABILITY_PROBE_TOOLS: {{ toJson . | quote }}
+  {{- end }}
+  {{- with .Values.env.stage_mcp_requirements }}
+  SISYPHUS_STAGE_MCP_REQUIREMENTS: {{ toJson . | quote }}
+  {{- end }}

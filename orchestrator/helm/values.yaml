@@ -107,6 +107,24 @@ env:
   # 优先级：tag > finalized_intent > per-repo settings > global settings > origin/HEAD
   default_base_branches: {}
 
+  # ─── REQ-feat-mcp-preflight-1777727213：可插拔 prompt hook + MCP capability ───
+  # 留空 = 走 orchestrator/src/orchestrator/config.py 的 default_factory
+  # （analyze/challenger/accept 用 aissh-tao + servers_list，hook 列表 =
+  # [mcp_preflight, self_issue_constraint]）；非空 = 全量覆盖 default。
+  # 调试时关 preflight：`--set 'env.enabled_prompt_hooks={self_issue_constraint}'`。
+  # 换 MCP（aissh-tao → 自家 SSH MCP）：覆盖 mcp_capability_providers.ssh_exec
+  # 跟 mcp_capability_probe_tools.ssh_exec，prompt 模板不动。
+  enabled_prompt_hooks: []
+  # capability → 提供该 capability 的 MCP provider 名（mcp__<provider>__* 的 provider）。
+  # k8s_exec 跟 ssh_exec 共用 aissh-tao（aissh-tao 通过 SSH 跑 kubectl）。
+  mcp_capability_providers: {}
+  # capability → MCP 探活工具名（preflight 段渲出的 mcp__<provider>__<tool>）。
+  # 换 MCP 时如果工具表面变了（aissh-tao servers_list → 别家 list_servers），改这里。
+  mcp_capability_probe_tools: {}
+  # stage → 该 stage 必须的 MCP capability 列表，控制哪些 stage 渲 preflight 段。
+  # intake = [] 是有意：brainstorm chat 不该被 preflight 卡住。
+  stage_mcp_requirements: {}
+
   # ─── Mock / 调试开关（生产全 false）─────────────────────────────
   # 任一 stage skip = create_<stage> 不调 BKD agent，直接 emit done/pass
   # test_mode: true = 全部 skip，秒级走完整 state 机

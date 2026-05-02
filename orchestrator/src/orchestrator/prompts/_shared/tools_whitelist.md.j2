@@ -2,7 +2,9 @@
 
 **仅允许**调用以下工具：
 
-- `mcp__aissh-tao__*` —— vm-node04 上 exec_run 命令、file_deploy 文件
+- `mcp__{{ mcp_capability_providers['ssh_exec'] }}__*` —— vm-node04 上 exec_run 命令、file_deploy 文件
+  （`ssh_exec` capability 对应的 provider 由 `mcp_capability_providers` 决定，
+  当前默认 = `{{ mcp_capability_providers['ssh_exec'] }}`；helm values 可改 provider）
 - `Bash` —— 跑 curl 调 BKD REST API（见下方）、跑本地 git/gh CLI 命令、跑本地 openspec 等
 - `Read` / `Write` / `Edit` / `Glob` / `Grep` —— agent 自己 cwd 的文件操作
 
