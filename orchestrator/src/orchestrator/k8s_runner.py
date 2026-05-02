@@ -200,6 +200,12 @@ class RunnerController:
             client.V1EnvVar(name="GOCACHE", value="/workspace/.cache/go/build"),
             client.V1EnvVar(name="npm_config_cache", value="/workspace/.cache/npm"),
             client.V1EnvVar(name="UV_CACHE_DIR", value="/workspace/.cache/uv"),
+            # 指向 entrypoint.sh 重写过 in-cluster URL 的 kubeconfig (#292)。文件
+            # 不存在时 helm/kubectl 自动降级到 ~/.kube/config 或 in-cluster sa，无害。
+            # 这条让 `kubectl exec runner-pod -- bash -c "kubectl get ns"` 这类
+            # 非交互 exec 也能读到正确 server URL —— /etc/profile.d 在
+            # `bash -c` 下不会 source，必须 pod env 注入。
+            client.V1EnvVar(name="KUBECONFIG", value="/workspace/.kubeconfig"),
         ]
         # 从 runner-secrets 注入 GitHub 凭证（optional，secret 缺了 pod 还能起）
         for env_name, secret_key in (

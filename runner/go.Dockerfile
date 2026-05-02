@@ -43,6 +43,16 @@ RUN curl -fsSL https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz \
       | tar -xz --strip-components=1 -C /usr/local/bin linux-amd64/helm \
     && helm version
 
+# ─── 2b. kubectl (#293) ──────────────────────────────────────────────────
+# 业务仓 accept-env-up Makefile / staging_test 偶用 `kubectl exec/get/...` 直接
+# 跟 cluster API 打交道。helm 自带 k8s client 但 kubectl 是独立 binary，没装就
+# `kubectl: command not found`。Pin 到 v1.31.x 跟 K3s 默认 server version 兼容。
+ARG KUBECTL_VERSION=v1.31.4
+RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+      -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl \
+    && kubectl version --client --output=yaml | head -5
+
 # ─── 3. openspec CLI ─────────────────────────────────────────────────────
 # 真包名是 @fission-ai/openspec（旧版本误装 npm 上的占位 openspec@0.0.0 是空的，导致
 # REQ-997 analyze 报 "openspec: command not found"）
