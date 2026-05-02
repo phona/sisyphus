@@ -62,7 +62,8 @@ def _build_server() -> Server:
                 name="recall",
                 description=(
                     "Recall product knowledge fragments matching an intent. "
-                    "M0 always returns an empty list."
+                    "Searches all .md files under the skill directory, scores "
+                    "snippets by keyword overlap, and returns the best hits."
                 ),
                 inputSchema={
                     "type": "object",
@@ -70,6 +71,11 @@ def _build_server() -> Server:
                     "properties": {
                         "skill_path": {"type": "string"},
                         "intent": {"type": "string"},
+                        "limit": {"type": "integer", "default": 10},
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                     },
                 },
             ),
@@ -100,7 +106,12 @@ def _build_server() -> Server:
                 )
             ]
         if name == "recall":
-            hits = _recall(arguments["skill_path"], arguments["intent"])
+            hits = _recall(
+                arguments["skill_path"],
+                arguments["intent"],
+                limit=arguments.get("limit", 10),
+                tags=arguments.get("tags"),
+            )
             return [TextContent(type="text", text=_json.dumps(hits))]
         raise ValueError(f"unknown tool: {name!r}")
 
