@@ -269,11 +269,13 @@ class RunnerController:
         container = client.V1Container(
             name="runner",
             image=self.runner_image,
-            # Always pull —— runner image 是 :main 浮动 tag，IfNotPresent 时节点
-            # 缓存的旧 image 永远不会被刷新（实测：PR #34 加 sisyphus-clone-repos.sh
-            # + check-scenario-refs --specs-search-path 后，runner pod 仍跑老 script
-            # 报 'cd: --: invalid option'，因为节点缓存没更新）。
-            image_pull_policy="Always",
+            # IfNotPresent —— runner image 现在强制 immutable git-sha
+            # （issue #267：helm values runner.image 必填且必须 sha-<short>）。
+            # 同 sha = 同镜像，节点缓存反而是好事；deploy 升级 = bump sha 触发新 pull。
+            # 历史背景：之前是 Always 兜 mutable :main tag（PR #34 加 sisyphus-clone-repos.sh
+            # 后 IfNotPresent + :main 节点缓存没刷新报 'cd: --: invalid option'）；
+            # 切 sha tag 后这个 workaround 不再需要。
+            image_pull_policy="IfNotPresent",
             command=["/usr/local/bin/sisyphus-entrypoint.sh"],
             args=["sleep", "infinity"],
             # privileged: DinD 必须；fuse-overlayfs 要 /dev/fuse + CAP_SYS_ADMIN

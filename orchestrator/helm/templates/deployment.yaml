@@ -59,7 +59,7 @@ spec:
       {{- end }}
       containers:
         - name: orchestrator
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.image.repository }}:{{ required "values.image.tag is required: must pin to immutable git-sha (e.g. sha-abc1234), see issue #267" .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
@@ -87,7 +87,7 @@ spec:
             - name: SISYPHUS_RUNNER_NAMESPACE
               value: {{ .Values.runner.namespace | quote }}
             - name: SISYPHUS_RUNNER_IMAGE
-              value: {{ .Values.runner.image | quote }}
+              value: {{ required "values.runner.image is required: must pin to immutable git-sha (e.g. ghcr.io/phona/sisyphus-runner:sha-abc1234), see issue #267" .Values.runner.image | quote }}
             - name: SISYPHUS_RUNNER_SERVICE_ACCOUNT
               value: {{ .Values.runner.serviceAccountName | quote }}
             - name: SISYPHUS_RUNNER_STORAGE_CLASS

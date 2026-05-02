@@ -10,7 +10,10 @@ driver: playwright
 
 image:
   repository: ghcr.io/phona/thanatos
-  tag: dev
+  # tag 必填且必须 immutable git-sha（issue #267）。
+  # 部署时 helm upgrade --set image.tag=sha-<short> 注入；
+  # mutable :dev / :latest 已禁止——节点缓存 + IfNotPresent 永远跑老镜像。
+  tag: ""
   pullPolicy: IfNotPresent
 
 resources:
@@ -32,7 +35,7 @@ redroid:
   # `redroid/redroid:11.0.0-latest` / `:13.0.0_64only-latest` 都炸）。
   # build 流水：sisyphus repo `redroid-fixed/` + `.github/workflows/redroid-fixed-image.yml`。
   image: ghcr.io/phona/redroid-fixed:13.0.0
-  # pullPolicy 跟 image.pullPolicy 解耦：thanatos 镜像走 dev tag 滚动可能 Always；
+  # pullPolicy 跟 image.pullPolicy 解耦：thanatos 镜像走 immutable sha tag IfNotPresent；
   # redroid 走稳定 13.0.0 tag IfNotPresent 即可。空值则 fallback 到 image.pullPolicy。
   pullPolicy: ""
   port: 5555
