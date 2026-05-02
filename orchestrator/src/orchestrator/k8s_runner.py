@@ -703,11 +703,17 @@ class RunnerController:
     ) -> ExecResult:
         pod_name = self.pod_name(req_id)
 
+        # 环境变量用 inline `export` 在 bash -c 上下文里赋值，**不**用 `env KEY=VAL <cmd>` shim。
+        # 历史教训（#277 / #280）：`env KEY=VAL <cmd>` 把 <cmd> 头一个 token 当二进制找，
+        # 但 caller 经常传 `cd <dir> && make ...` / `set +e ...` 这种 builtin-headed 命令 →
+        # `env: 'cd': No such file or directory` / `env: 'set': No such file or directory`。
+        # newline-separator 还会让后续行继续跑，让 debug 极难看出根因。
+        # inline export 在同一个 bash -c 子 shell 里完成，所有后续 builtin / 控制结构都正常。
         env_prefix = ""
         if env:
-            env_prefix = "env " + " ".join(
-                f"{k}={_shell_quote(v)}" for k, v in env.items()
-            ) + " "
+            env_prefix = "; ".join(
+                f"export {k}={_shell_quote(v)}" for k, v in env.items()
+            ) + "; "
 
         full_cmd = f"cd {workdir} && {env_prefix}{command}; echo {_EXIT_MARKER}$?"
         exec_argv = ["/bin/bash", "-c", full_cmd]
