@@ -42,7 +42,9 @@ _bg_tasks: list[asyncio.Task] = []
 @app.on_event("startup")
 async def startup() -> None:
     # 1. 跑 schema 迁移（同步，启动时一次性）
-    apply_pending(settings.pg_dsn)
+    #    helm init-container 负责时跳过，避免与 init-container 重复竞争锁
+    if not settings.skip_migration_on_startup:
+        apply_pending(settings.pg_dsn, lock_timeout=settings.migration_lock_timeout)
     # 2. 起业务 pool + observability pool（obs DSN 空就跳过）
     await db.init_pool(settings.pg_dsn)
     await db.init_obs_pool(settings.obs_pg_dsn)

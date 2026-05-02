@@ -41,11 +41,19 @@ def _resolve_default_dir() -> Path:
 _DEFAULT_MIGRATIONS_DIR = _resolve_default_dir()
 
 
-def apply_pending(dsn: str, migrations_dir: Path | None = None) -> int:
+def apply_pending(
+    dsn: str,
+    migrations_dir: Path | None = None,
+    *,
+    lock_timeout: int = 300,
+) -> int:
     """同步跑所有未 apply 的迁移。返回新 apply 的迁移数。
 
     yoyo 用 psycopg2 同步 driver；因为只在启动时跑一次，没必要 async。
     DSN 必须是 yoyo 支持的形式，`postgresql://...` 直接可用。
+
+    :param lock_timeout: yoyo 分布式锁等待超时（秒）。默认 300s，防止多副本
+        K8s Deployment 同时启动时排队 Pod 因 10s 默认超时 crashloop。
     """
     path = migrations_dir or _DEFAULT_MIGRATIONS_DIR
     if not path.is_dir():
@@ -53,7 +61,7 @@ def apply_pending(dsn: str, migrations_dir: Path | None = None) -> int:
         return 0
 
     backend = get_backend(dsn)
-    with backend.lock():
+    with backend.lock(timeout=lock_timeout):
         migrations = backend.to_apply(read_migrations(str(path)))
         if not migrations:
             log.info("migrate.up_to_date", dir=str(path))
