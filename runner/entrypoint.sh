@@ -60,6 +60,29 @@ else
   echo "[sisyphus-entrypoint] GH_TOKEN missing — git private-repo clone will fail" >&2
 fi
 
+# ── Kubeconfig in-cluster URL rewrite (#292) ──────────────────────────
+# helm values 让用户填 runner.secret.kubeconfig，期望 "runner pod 跑 accept 阶
+# 段 helm install 用"。典型用法是把 host 的 ~/.kube/config 直接复制进来 ——
+# 内容是 `server: https://127.0.0.1:6443`（k3s 默认）。这个 URL 从 runner
+# pod 内**不可达**——pod 的 127.0.0.1 = pod 自己。
+#
+# entrypoint 扫描 secret-mounted kubeconfig (read-only at /root/.kube/config)，
+# 发现 host loopback 时 sed 改成 in-cluster service URL `kubernetes.default.svc:443`
+# 写到 /workspace/.kubeconfig（PVC 上，writable + cross-restart persist），
+# 同时 export KUBECONFIG 让 helm/kubectl 优先读改写后的版本。
+# kubernetes.default.svc 在 pod DNS 内永远 resolves 到 cluster API 的 ClusterIP，
+# 跨 cloud / on-prem / k3s / kind 全通用。
+if [[ -f /root/.kube/config ]] && grep -q "127.0.0.1:6443" /root/.kube/config; then
+  mkdir -p /workspace
+  sed "s|server: https://127.0.0.1:6443|server: https://kubernetes.default.svc.cluster.local:443|" \
+      /root/.kube/config > /workspace/.kubeconfig
+  chmod 600 /workspace/.kubeconfig
+  export KUBECONFIG=/workspace/.kubeconfig
+  echo "[sisyphus-entrypoint] kubeconfig server URL rewritten to in-cluster service (KUBECONFIG=/workspace/.kubeconfig)"
+elif [[ -f /root/.kube/config ]]; then
+  echo "[sisyphus-entrypoint] kubeconfig present, server URL not localhost (passing through)"
+fi
+
 # ── Workspace 目录契约 + restart 恢复 ──────────────────────────────────
 # Pod restart（restartPolicy=Always）时，entrypoint.sh 会重新跑。
 # 用 /.sisyphus-runner-init 标记检测 restart：标记存在 → 清掉 /workspace/* 从零开始。

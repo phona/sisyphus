@@ -45,6 +45,17 @@ RUN curl -fsSL https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz \
       | tar -xz --strip-components=1 -C /usr/local/bin linux-amd64/helm \
     && helm version
 
+# ─── 2b. kubectl (#293) ──────────────────────────────────────────────────
+# 业务仓 accept-env-up Makefile 大量用 `kubectl exec deploy/xxx`、`kubectl get
+# pods` 等 cluster API 操作。helm 自带 k8s client 但 kubectl 是独立 binary，
+# image 里没装会直接 `kubectl: command not found` 让 accept-env-up 无下文。
+# Pin 到 v1.31.x 跟 K3s 默认 server version 兼容（client/server skew ±1 minor）。
+ARG KUBECTL_VERSION=v1.31.4
+RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+      -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl \
+    && kubectl version --client --output=yaml | head -5
+
 # ─── 3. Go 1.23 ─────────────────────────────────────────────────────────
 ARG GO_VERSION=1.23.4
 RUN curl -fsSL https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz \
