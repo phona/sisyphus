@@ -29,6 +29,12 @@ data:
   {{- if .Values.env.gh_incident_repo }}
   SISYPHUS_GH_INCIDENT_REPO: {{ .Values.env.gh_incident_repo | quote }}
   {{- end }}
+  {{- if .Values.env.default_base_branch }}
+  SISYPHUS_DEFAULT_BASE_BRANCH: {{ .Values.env.default_base_branch | quote }}
+  {{- end }}
+  {{- if .Values.env.default_base_branches }}
+  SISYPHUS_DEFAULT_BASE_BRANCHES: {{ toJson .Values.env.default_base_branches | quote }}
+  {{- end }}
   {{- with .Values.env.gh_incident_labels }}
   # JSON-encoded list[str]，跟 default_involved_repos 同。
   SISYPHUS_GH_INCIDENT_LABELS: {{ toJson . | quote }}
