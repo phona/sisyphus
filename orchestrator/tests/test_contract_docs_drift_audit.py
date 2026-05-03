@@ -271,12 +271,12 @@ def test_docs_s6_tag_spec_not_apifox_content():
 # ──────────────────────────────────────────────────────────────────────────
 
 def test_docs_s7_forward_migration_count_is_13():
-    """DOCS-S7: orchestrator/migrations/ has exactly 14 forward migration files
-    (0001..0015 with 0012 missing: 0011 = baseline_results, 0013 = pr_drift_log,
-    0014 = req_terminal_outcome, 0015 = agent_turns)."""
+    """DOCS-S7: orchestrator/migrations/ has exactly 15 forward migration files
+    (0001..0016 with 0012 missing: 0011 = baseline_results, 0013 = pr_drift_log,
+    0014 = req_terminal_outcome, 0015 = agent_turns, 0016 = stage_runs_context)."""
     forward = [f for f in MIGRATIONS_DIR.glob("*.sql") if ".rollback." not in f.name]
-    assert len(forward) == 14, (
-        f"orchestrator/migrations/ has {len(forward)} forward migration(s), expected 14: "
+    assert len(forward) == 15, (
+        f"orchestrator/migrations/ has {len(forward)} forward migration(s), expected 15: "
         f"{sorted(f.name for f in forward)}"
     )
 
