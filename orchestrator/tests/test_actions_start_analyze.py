@@ -39,6 +39,13 @@ def _admit_by_default(monkeypatch):
     monkeypatch.setattr(
         start_analyze_with_finalized_intent.dispatch_slugs, "put", AsyncMock()
     )
+    # REQ-fix-intent-issue-hijacking-1777427339: start_analyze 现在也走 dispatch_slugs。
+    monkeypatch.setattr(
+        start_analyze.dispatch_slugs, "get", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        start_analyze.dispatch_slugs, "put", AsyncMock()
+    )
 
 
 @dataclass
@@ -77,23 +84,26 @@ def _patch_runner(monkeypatch, *, exec_fn: AsyncMock, ensure_ready_fn: AsyncMock
 
 def _patch_bkd_client(monkeypatch, *, target_module, follow_up: AsyncMock | None = None,
                      update_issue: AsyncMock | None = None,
-                     create_issue: AsyncMock | None = None):
-    """patch target module 的 BKDClient，捕获 follow_up_issue / update_issue / create_issue 调用。"""
+                     create_issue: AsyncMock | None = None,
+                     merge_tags_and_update: AsyncMock | None = None):
+    """patch target module 的 BKDClient，捕获 follow_up_issue / update_issue / create_issue / merge_tags_and_update 调用。"""
     follow_up = follow_up or AsyncMock(return_value=None)
     update_issue = update_issue or AsyncMock(return_value=None)
     create_issue = create_issue or AsyncMock(
         return_value=SimpleNamespace(id="created-issue-X"),
     )
+    merge_tags_and_update = merge_tags_and_update or AsyncMock(return_value=None)
 
     bkd_instance = MagicMock()
     bkd_instance.follow_up_issue = follow_up
     bkd_instance.update_issue = update_issue
     bkd_instance.create_issue = create_issue
+    bkd_instance.merge_tags_and_update = merge_tags_and_update
     bkd_instance.__aenter__ = AsyncMock(return_value=bkd_instance)
     bkd_instance.__aexit__ = AsyncMock(return_value=None)
 
     monkeypatch.setattr(target_module, "BKDClient", lambda *a, **kw: bkd_instance)
-    return follow_up, update_issue, create_issue
+    return follow_up, update_issue, create_issue, merge_tags_and_update
 
 
 # ── start_analyze: server-side clone happy path ─────────────────────────────
@@ -104,7 +114,7 @@ async def test_start_analyze_server_side_clones_when_involved_repos_present(monk
     """ctx 含 involved_repos → exec_in_runner 跑 sisyphus-clone-repos.sh，agent 收到 prompt。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    follow_up, update_issue, _ = _patch_bkd_client(
+    follow_up, update_issue, create_issue, merge_tags = _patch_bkd_client(
         monkeypatch, target_module=start_analyze,
     )
 
@@ -124,11 +134,15 @@ async def test_start_analyze_server_side_clones_when_involved_repos_present(monk
     assert "ZonEaseTech/ttpos-server-go" in clone_cmd
 
     # 2) agent 收到 prompt（clone 之后）
-    follow_up.assert_awaited_once()
-    update_issue.assert_awaited()  # 至少 rename + status=working 两次
+    # 2) 创建独立 analyze sub-issue + follow-up + status=working
+    merge_tags.assert_awaited_once()   # intent issue 加 req_id tag
+    create_issue.assert_awaited_once() # 新建 analyze sub-issue
+    follow_up.assert_awaited_once()    # 对 analyze sub-issue 发 prompt
+    update_issue.assert_awaited_once() # analyze sub-issue status=working
 
-    # 3) return 包含 cloned_repos
+    # 3) return 包含 cloned_repos，issue_id 指向新建的 analyze sub-issue
     assert rv["cloned_repos"] == ["phona/repo-a", "ZonEaseTech/ttpos-server-go"]
+    assert rv["issue_id"] == "created-issue-X"
     assert "emit" not in rv  # 没 escalate
 
 
@@ -137,7 +151,7 @@ async def test_start_analyze_skips_clone_when_no_involved_repos(monkeypatch):
     """直接路径：ctx 没 involved_repos → 不调 exec_in_runner，agent 还是被 dispatch。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_analyze)
+    follow_up, _, _create_issue, _merge_tags = _patch_bkd_client(monkeypatch, target_module=start_analyze)
 
     rv = await start_analyze.start_analyze(
         body=_make_body(), req_id="REQ-X", tags=[],
@@ -154,7 +168,7 @@ async def test_start_analyze_clone_failure_emits_verify_escalate(monkeypatch):
     """clone helper exit 非 0 → return emit=VERIFY_ESCALATE，agent 不被 dispatch。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=5, stderr="auth error"))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_analyze)
+    follow_up, _, _create_issue, _merge_tags = _patch_bkd_client(monkeypatch, target_module=start_analyze)
 
     ctx = {"intake_finalized_intent": {"involved_repos": ["phona/typo-repo"]}}
     rv = await start_analyze.start_analyze(
@@ -176,7 +190,7 @@ async def test_start_analyze_with_finalized_intent_clones_involved_repos(monkeyp
     """intake 路径必有 finalized intent；server-side clone 拿 involved_repos。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    follow_up, _, create_issue = _patch_bkd_client(
+    follow_up, _, create_issue, _ = _patch_bkd_client(
         monkeypatch, target_module=start_analyze_with_finalized_intent,
     )
 
@@ -207,7 +221,7 @@ async def test_start_analyze_with_finalized_intent_clone_failure_escalates(monke
     """intake 路径 clone 失败 → VERIFY_ESCALATE，且不 create analyze issue。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=2, stderr="repo not found"))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    follow_up, _, create_issue = _patch_bkd_client(
+    follow_up, _, create_issue, _ = _patch_bkd_client(
         monkeypatch, target_module=start_analyze_with_finalized_intent,
     )
 
@@ -448,7 +462,7 @@ async def test_start_analyze_passes_repo_tags_and_default_to_clone(monkeypatch):
     """直接 analyze 入口：ctx 没 involved，但 tags 带 `repo:`，sisyphus 替 clone。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_analyze)
+    follow_up, _, _create_issue, _merge_tags = _patch_bkd_client(monkeypatch, target_module=start_analyze)
 
     rv = await start_analyze.start_analyze(
         body=_make_body(), req_id="REQ-X",
@@ -492,7 +506,7 @@ async def test_start_analyze_skip_remains_when_all_layers_empty(monkeypatch):
     """ctx + tags + settings.default 全空 → 沿用旧 fallback，不调 helper，agent 自己 clone。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    follow_up, _, _ = _patch_bkd_client(monkeypatch, target_module=start_analyze)
+    follow_up, _, create_issue, merge_tags = _patch_bkd_client(monkeypatch, target_module=start_analyze)
     monkeypatch.setattr(start_analyze.settings, "default_involved_repos", [])
 
     rv = await start_analyze.start_analyze(
@@ -501,6 +515,8 @@ async def test_start_analyze_skip_remains_when_all_layers_empty(monkeypatch):
         ctx={"intent_title": "no repos anywhere"},
     )
     exec_fn.assert_not_awaited()
+    merge_tags.assert_awaited_once()
+    create_issue.assert_awaited_once()
     follow_up.assert_awaited_once()
     assert rv["cloned_repos"] is None
 
@@ -510,10 +526,10 @@ async def test_start_analyze_skip_remains_when_all_layers_empty(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_start_analyze_forwards_user_hint_tags(monkeypatch):
-    """tags 含 repo: + ux: → PATCH 的 tags kwarg 把它们追加到 ['analyze', req_id]。"""
+    """tags 含 repo: + ux: → create_issue 的 tags kwarg 把它们追加到 ['analyze', req_id]。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    _, update_issue, _ = _patch_bkd_client(
+    _, _update_issue, create_issue, merge_tags = _patch_bkd_client(
         monkeypatch, target_module=start_analyze,
     )
 
@@ -523,18 +539,22 @@ async def test_start_analyze_forwards_user_hint_tags(monkeypatch):
         ctx={"intent_title": "with hint tags"},
     )
 
-    # 第一次 update_issue = rename + tags（第二次是 status_id=working）
-    _, kwargs = update_issue.call_args_list[0]
+    # create_issue 的 tags 包含 forwarded hint tags
+    _, kwargs = create_issue.call_args
     tags = kwargs["tags"]
     assert tags == ["analyze", "REQ-X", "repo:phona/sisyphus", "ux:fast-track"]
+    # intent issue 也加 req_id + forwarded tags
+    _, mt_kwargs = merge_tags.call_args
+    assert "REQ-X" in mt_kwargs["add"]
+    assert "repo:phona/sisyphus" in mt_kwargs["add"]
 
 
 @pytest.mark.asyncio
 async def test_start_analyze_strips_sisyphus_managed_tags(monkeypatch):
-    """stale intent:* / result:* / pr:* 不被转发到 PATCH tags。"""
+    """stale intent:* / result:* / pr:* 不被转发到 create_issue tags。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    _, update_issue, _ = _patch_bkd_client(
+    _, _update_issue, create_issue, _merge_tags = _patch_bkd_client(
         monkeypatch, target_module=start_analyze,
     )
 
@@ -546,7 +566,7 @@ async def test_start_analyze_strips_sisyphus_managed_tags(monkeypatch):
         ],
         ctx={},
     )
-    _, kwargs = update_issue.call_args_list[0]
+    _, kwargs = create_issue.call_args
     tags = kwargs["tags"]
     assert tags == ["analyze", "REQ-X", "repo:phona/foo", "ux:fast-track"]
     # 不重复 / 不混入 managed
@@ -559,10 +579,10 @@ async def test_start_analyze_strips_sisyphus_managed_tags(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_start_analyze_no_hint_tags_keeps_base_only(monkeypatch):
-    """tags 全是 sisyphus-managed → PATCH 的 tags 只剩 ['analyze', req_id]，向后兼容。"""
+    """tags 全是 sisyphus-managed → create_issue 的 tags 只剩 ['analyze', req_id]，向后兼容。"""
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    _, update_issue, _ = _patch_bkd_client(
+    _, _update_issue, create_issue, _merge_tags = _patch_bkd_client(
         monkeypatch, target_module=start_analyze,
     )
 
@@ -571,7 +591,7 @@ async def test_start_analyze_no_hint_tags_keeps_base_only(monkeypatch):
         tags=["intent:analyze"],
         ctx={},
     )
-    _, kwargs = update_issue.call_args_list[0]
+    _, kwargs = create_issue.call_args
     assert kwargs["tags"] == ["analyze", "REQ-X"]
 
 
@@ -592,16 +612,7 @@ async def test_start_analyze_admission_denied_emits_escalate(monkeypatch):
 
     exec_fn = AsyncMock(return_value=FakeExec(exit_code=0))
     fake_rc = _patch_runner(monkeypatch, exec_fn=exec_fn)
-
-    # 自定义 BKD mock，需要捕获 merge_tags_and_update + follow_up
-    merge_tags = AsyncMock(return_value=None)
-    follow_up = AsyncMock(return_value=None)
-    bkd_instance = MagicMock()
-    bkd_instance.merge_tags_and_update = merge_tags
-    bkd_instance.follow_up_issue = follow_up
-    bkd_instance.__aenter__ = AsyncMock(return_value=bkd_instance)
-    bkd_instance.__aexit__ = AsyncMock(return_value=None)
-    monkeypatch.setattr(start_analyze, "BKDClient", lambda *a, **kw: bkd_instance)
+    follow_up, _, create_issue, merge_tags = _patch_bkd_client(monkeypatch, target_module=start_analyze)
 
     rv = await start_analyze.start_analyze(
         body=_make_body(), req_id="REQ-X",
@@ -625,6 +636,9 @@ async def test_start_analyze_admission_denied_emits_escalate(monkeypatch):
     # 不能花 runner / clone / agent 的成本
     fake_rc.ensure_runner.assert_not_awaited()
     exec_fn.assert_not_awaited()
+    # admission denied 不应新建 analyze issue（visible feedback 用 merge_tags+follow_up
+    # 在原 intent issue 上做，已在上面 assert）
+    create_issue.assert_not_awaited()
 
 
 @pytest.mark.asyncio

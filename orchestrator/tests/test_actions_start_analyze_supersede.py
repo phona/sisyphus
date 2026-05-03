@@ -50,6 +50,12 @@ class _FakeBKD:
     async def follow_up_issue(self, *a, **kw):
         pass
 
+    async def merge_tags_and_update(self, *a, **kw):
+        pass
+
+    async def create_issue(self, *a, **kw):
+        return SimpleNamespace(id="created-issue-x")
+
 
 @pytest.fixture(autouse=True)
 def _base_patches(monkeypatch):
@@ -60,6 +66,8 @@ def _base_patches(monkeypatch):
     )
     monkeypatch.setattr(sa_mod.db, "get_pool", lambda: object())
     monkeypatch.setattr(sa_mod.req_state, "update_context", AsyncMock())
+    monkeypatch.setattr(sa_mod.dispatch_slugs, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(sa_mod.dispatch_slugs, "put", AsyncMock())
     monkeypatch.setattr(sa_mod, "BKDClient", _FakeBKD)
     monkeypatch.setattr(sa_mod, "render", lambda *a, **kw: "prompt")
     monkeypatch.setattr(sa_mod, "filter_propagatable_intent_tags", lambda tags: [])
