@@ -698,3 +698,25 @@ async def test_bkd_merge_tags_preserves(monkeypatch):
     )
     assert set(captured["tags"]) == {"REQ-9", "ci-passed"}
     assert captured["status_id"] == "done"
+
+
+# ─── REQ-fix-watchdog-liveness-1777809646 (#353): auto-resume must not pollute tags
+@pytest.mark.asyncio
+async def test_escalate_auto_resume_never_tags_intent_issue(monkeypatch):
+    """WLC-S7: transient escalate within retry slack must NOT add `escalated`
+    or `reason:*` tag to BKD intent issue. Lock-down for #353."""
+    from orchestrator.actions import escalate as mod
+    fake = make_fake_bkd()
+    patch_bkd(monkeypatch, "escalate", fake)
+    patch_db(monkeypatch, "escalate")
+    body = make_body(issue_id="src-1", event="watchdog.stuck")
+    out = await mod.escalate(
+        body=body, req_id="REQ-WLC-S7", tags=["analyze"],
+        ctx={"intent_issue_id": "intent-1", "auto_retry_count": 0},
+    )
+    assert out["auto_resumed"] is True
+    assert out["retry"] == 1
+    # 关键不变量：BKD merge_tags_and_update 不应被 await
+    fake.merge_tags_and_update.assert_not_awaited()
+    # follow-up 是允许的（auto-resume 唤醒 agent）
+    fake.follow_up_issue.assert_awaited_once()

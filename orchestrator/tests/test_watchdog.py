@@ -48,12 +48,20 @@ class FakeIssue:
     tags: list = field(default_factory=list)
 
 
-def _patch_bkd(monkeypatch, issue: FakeIssue | None, side_effect: Exception | None = None):
+def _patch_bkd(
+    monkeypatch,
+    issue: FakeIssue | None,
+    side_effect: Exception | None = None,
+    last_activity_at=None,
+):
+    """Patch BKDClient context manager. last_activity_at defaults to None so
+    REQ-fix-watchdog-liveness probe is a noop (existing tests preserve behavior)."""
     fake = AsyncMock()
     if side_effect:
         fake.get_issue = AsyncMock(side_effect=side_effect)
     else:
         fake.get_issue = AsyncMock(return_value=issue)
+    fake.last_log_activity_at = AsyncMock(return_value=last_activity_at)
 
     @asynccontextmanager
     async def _ctx(*a, **kw):
@@ -892,3 +900,107 @@ async def test_self_heal_bkd_lookup_falls_back_to_escalate(monkeypatch):
     assert len(step_calls) == 1
     # issue 查不到时 follow_up 也会失败，所以不会调用
     follow_up_mock.assert_not_called()
+
+
+# ─── REQ-fix-watchdog-liveness-1777809646 ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_recent_log_activity_skips_escalate_even_if_session_not_running(monkeypatch):
+    """WLC-S1: BKD /logs 最新 entry createdAt 在 grace 窗口内 → 跳过，
+    不论 sessionStatus 是 completed / failed。"""
+    from datetime import UTC, datetime, timedelta
+
+    pool = FakePool(rows=[
+        _row("REQ-WLC-1", ReqState.ANALYZING.value,
+             ctx={"intent_issue_id": "intent-wlc-1"}, stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    fresh = datetime.now(UTC) - timedelta(seconds=30)
+    _patch_bkd(
+        monkeypatch,
+        FakeIssue(session_status="completed", id="intent-wlc-1"),
+        last_activity_at=fresh,
+    )
+    monkeypatch.setattr(
+        "orchestrator.watchdog.settings.watchdog_liveness_grace_sec", 120,
+    )
+    step_calls = _patch_engine(monkeypatch)
+    art_calls = _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 0}
+    assert step_calls == []
+    assert art_calls == []
+
+
+@pytest.mark.asyncio
+async def test_stale_log_activity_falls_through_to_escalate(monkeypatch):
+    """WLC-S2: 最新 log entry 在 grace 窗口外 → 落回原 escalate 路径。
+    使用 ANALYZING + intent_issue_id（有 issue_key 映射，活体探针会 fire）。"""
+    from datetime import UTC, datetime, timedelta
+
+    pool = FakePool(rows=[
+        _row("REQ-WLC-2", ReqState.ANALYZING.value,
+             ctx={"intent_issue_id": "intent-wlc-2"}, stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    stale = datetime.now(UTC) - timedelta(seconds=600)
+    _patch_bkd(
+        monkeypatch,
+        FakeIssue(session_status="completed", id="intent-wlc-2"),
+        last_activity_at=stale,
+    )
+    monkeypatch.setattr(
+        "orchestrator.watchdog.settings.watchdog_liveness_grace_sec", 120,
+    )
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 1}
+    assert len(step_calls) == 1
+    assert step_calls[0]["event"] == Event.SESSION_FAILED
+
+
+@pytest.mark.asyncio
+async def test_fixer_round_cap_escalates_regardless_of_recent_activity(monkeypatch):
+    """WLC-S3: fixer-round-cap 是确定性硬封顶，活体探针 MUST NOT 短路它。"""
+    from datetime import UTC, datetime, timedelta
+
+    pool = FakePool(rows=[
+        _row("REQ-WLC-3", ReqState.FIXER_RUNNING.value,
+             ctx={
+                 "fixer_issue_id": "fx-wlc-3",
+                 "intent_issue_id": "intent-wlc-3",
+                 "fixer_round": 99,  # >> default cap (5)
+             },
+             stuck_sec=400),
+    ])
+    _patch_pool(monkeypatch, pool)
+    fresh = datetime.now(UTC) - timedelta(seconds=5)  # very fresh
+    # session_status="failed" matches the real fixer-cap incident: fixer agent
+    # died but stuck > ended_sec; round count alone determines escalate.
+    _patch_bkd(
+        monkeypatch,
+        FakeIssue(session_status="failed", id="fx-wlc-3"),
+        last_activity_at=fresh,
+    )
+    monkeypatch.setattr("orchestrator.watchdog.settings.fixer_round_cap", 5)
+    step_calls = _patch_engine(monkeypatch)
+    _patch_artifact(monkeypatch)
+
+    # update_context shim — watchdog calls it for fixer-round-cap branch
+    async def fake_update_context(pool_, req_id_, patch):
+        return None
+    monkeypatch.setattr(
+        "orchestrator.watchdog.req_state.update_context", fake_update_context,
+    )
+
+    result = await watchdog._tick()
+
+    assert result == {"checked": 1, "escalated": 1}
+    assert len(step_calls) == 1
+    assert step_calls[0]["ctx"].get("escalated_reason") == "fixer-round-cap"
