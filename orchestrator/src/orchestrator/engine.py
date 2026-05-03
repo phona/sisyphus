@@ -21,7 +21,7 @@ from .actions import REGISTRY
 from .bkd import BKDClient
 from .config import settings
 from .state import Event, ReqState, decide
-from .store import req_state, stage_runs
+from .store import req_state, stage_runs, verifier_decisions
 
 log = structlog.get_logger(__name__)
 
@@ -243,6 +243,22 @@ async def _auto_archive(req_id: str, ctx: dict) -> None:
         log.warning("archive.error", req_id=req_id, error=str(e))
 
 
+async def _backfill_verifier_outcomes(
+    pool: asyncpg.Pool,
+    req_id: str,
+    terminal_state: ReqState,
+) -> None:
+    """P0-1：终态时回填该 REQ 所有 verifier_decisions.actual_outcome。best-effort。"""
+    try:
+        n = await verifier_decisions.backfill_outcomes_for_req(
+            pool, req_id, terminal_state.value
+        )
+        log.info("engine.verifier_backfill",
+                 req_id=req_id, terminal=terminal_state.value, updated=n)
+    except Exception as e:
+        log.warning("engine.verifier_backfill.failed", req_id=req_id, error=str(e))
+
+
 async def _cleanup_runner_on_terminal(req_id: str, terminal_state: ReqState) -> None:
     try:
         rc = k8s_runner.get_controller()
@@ -362,6 +378,18 @@ async def step(
             archive_task = asyncio.create_task(_auto_archive(req_id, ctx))
             _cleanup_tasks.add(archive_task)
             archive_task.add_done_callback(_cleanup_tasks.discard)
+            # REQ-fix-req-termination-accounting: 终态记账（best-effort）
+            try:
+                await req_state.set_terminal_outcome(pool, req_id, "merged")
+            except Exception as _e:
+                log.warning("engine.terminal_outcome_failed", req_id=req_id, error=str(_e))
+
+        # P0-1：回填 verifier_decisions.actual_outcome（best-effort，fire-and-forget）
+        backfill_task = asyncio.create_task(
+            _backfill_verifier_outcomes(pool, req_id, transition.next_state)
+        )
+        _cleanup_tasks.add(backfill_task)
+        backfill_task.add_done_callback(_cleanup_tasks.discard)
 
     # REQ-pr-ready-for-review-notify: REVIEW_RUNNING 进入时给 BKD intent issue 打 pr-ready tag
     if transition.next_state == ReqState.REVIEW_RUNNING:

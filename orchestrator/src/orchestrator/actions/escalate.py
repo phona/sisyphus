@@ -33,7 +33,7 @@ from .. import gh_incident, k8s_runner
 from ..bkd import BKDClient
 from ..config import settings
 from ..state import Event, ReqState
-from ..store import db, req_state
+from ..store import db, req_state, verifier_decisions
 from . import register
 from ._clone import resolve_repos
 
@@ -185,6 +185,12 @@ async def _apply_pr_merged_done_override(
                  req_id=req_id, expected=cur.value)
         return None
 
+    try:
+        await req_state.set_terminal_outcome(pool, req_id, "merged")
+    except Exception as e:
+        log.warning("escalate.pr_merged_override.terminal_outcome_failed",
+                    req_id=req_id, error=str(e))
+
     add_tags = ["done", "via:pr-merge"]
     try:
         async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
@@ -209,6 +215,19 @@ async def _apply_pr_merged_done_override(
         # dev 环境 / runner controller 没装 → 跳过；runner_gc 兜底
         log.debug("escalate.pr_merged_override.no_runner_controller",
                   req_id=req_id, error=str(e))
+
+    # P0-1：回填 verifier_decisions.actual_outcome（bypass engine.step，需在此补调）
+    async def _backfill() -> None:
+        try:
+            n = await verifier_decisions.backfill_outcomes_for_req(pool, req_id, "DONE")
+            log.info("escalate.pr_merged_override.verifier_backfill",
+                     req_id=req_id, updated=n)
+        except Exception as exc:
+            log.warning("escalate.pr_merged_override.verifier_backfill.failed",
+                        req_id=req_id, error=str(exc))
+    bf_task = asyncio.create_task(_backfill())
+    _pr_merged_cleanup_tasks.add(bf_task)
+    bf_task.add_done_callback(_pr_merged_cleanup_tasks.discard)
 
     log.warning(
         "escalate.pr_merged_override",
@@ -488,10 +507,23 @@ async def escalate(*, body, req_id, tags, ctx):
                         error=str(e),
                     )
 
+    # P0-1：session-failed 路径手动 CAS 到 ESCALATED 后回填 verifier_decisions（best-effort）
+    if is_session_failed_path:
+        try:
+            n = await verifier_decisions.backfill_outcomes_for_req(pool, req_id, "ESCALATED")
+            log.info("escalate.verifier_backfill", req_id=req_id, updated=n)
+        except Exception as exc:
+            log.warning("escalate.verifier_backfill.failed", req_id=req_id, error=str(exc))
+
     # ─── openspec/changes cleanup（fail-open） ───────────────────────────────
     # 从 PR 分支删孤儿 openspec/changes/REQ-XXX/，防止 escalated PR 被人手 merge 后
     # 遗留未 apply 的 spec changes 进 main。cleanup 失败不阻塞 escalate。
     await _cleanup_openspec_changes_in_runner(req_id, involved_repos)
+
+    try:
+        await req_state.set_terminal_outcome(pool, req_id, "sisyphus-escalated")
+    except Exception as e:
+        log.warning("escalate.terminal_outcome_failed", req_id=req_id, error=str(e))
 
     log.warning("escalate.final",
                 req_id=req_id, reason=final_reason,

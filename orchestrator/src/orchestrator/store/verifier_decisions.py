@@ -70,3 +70,63 @@ async def mark_correct(
         actual_outcome,
         correct,
     )
+
+
+async def backfill_outcomes_for_req(
+    pool: asyncpg.Pool,
+    req_id: str,
+    terminal_state: str,
+) -> int:
+    """REQ 到终态时批量回填该 req_id 所有未标 actual_outcome 的 verifier 判决。
+
+    terminal_state: "DONE" 或 "ESCALATED"（ReqState.value）。
+
+    映射（P0-1）：
+      pass/fix  + DONE      → hit         (correct=True)
+      pass      + ESCALATED → silent_pass  (correct=False)
+      fix       + ESCALATED → fixer_failed (correct=False)
+      escalate  + DONE      → over_cautious(correct=False)
+      escalate  + ESCALATED → hit          (correct=True)
+
+    返回更新行数；异常由调用方处理。
+    """
+    result = await pool.execute(
+        """
+        UPDATE verifier_decisions SET
+            actual_outcome = CASE
+                WHEN decision_action IN ('pass', 'fix') AND $2 = 'DONE'
+                    THEN 'hit'
+                WHEN decision_action = 'pass'  AND $2 = 'ESCALATED'
+                    THEN 'silent_pass'
+                WHEN decision_action = 'fix'   AND $2 = 'ESCALATED'
+                    THEN 'fixer_failed'
+                WHEN decision_action = 'escalate' AND $2 = 'DONE'
+                    THEN 'over_cautious'
+                WHEN decision_action = 'escalate' AND $2 = 'ESCALATED'
+                    THEN 'hit'
+                ELSE actual_outcome
+            END,
+            decision_correct = CASE
+                WHEN decision_action IN ('pass', 'fix') AND $2 = 'DONE'
+                    THEN TRUE
+                WHEN decision_action = 'pass'  AND $2 = 'ESCALATED'
+                    THEN FALSE
+                WHEN decision_action = 'fix'   AND $2 = 'ESCALATED'
+                    THEN FALSE
+                WHEN decision_action = 'escalate' AND $2 = 'DONE'
+                    THEN FALSE
+                WHEN decision_action = 'escalate' AND $2 = 'ESCALATED'
+                    THEN TRUE
+                ELSE decision_correct
+            END
+        WHERE req_id = $1
+          AND actual_outcome IS NULL
+          AND decision_action IN ('pass', 'fix', 'escalate')
+        """,
+        req_id,
+        terminal_state,
+    )
+    try:
+        return int(result.split()[-1])
+    except (ValueError, IndexError, AttributeError):
+        return -1

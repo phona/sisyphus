@@ -203,27 +203,27 @@ def test_docs_s4_architecture_mentions_challenger():
 # ──────────────────────────────────────────────────────────────────────────
 
 def test_docs_s5_sql_file_count_is_18():
-    """DOCS-S5: observability/queries/sisyphus/ contains exactly 20 SQL files."""
+    """DOCS-S5: observability/queries/sisyphus/ contains exactly 22 SQL files."""
     sql_files = list(OBS_QUERIES_DIR.glob("*.sql"))
-    assert len(sql_files) == 20, (
-        f"observability/queries/sisyphus/ has {len(sql_files)} SQL files, expected 20"
+    assert len(sql_files) == 22, (
+        f"observability/queries/sisyphus/ has {len(sql_files)} SQL files, expected 22"
     )
 
 
 def test_docs_s5_readme_claims_18_metabase():
-    """DOCS-S5: README.md claims 18 near Metabase/看板."""
+    """DOCS-S5: README.md claims 22 near Metabase/看板."""
     readme = (REPO_ROOT / "README.md").read_text()
-    assert re.search(r"18.{0,40}(Metabase|看板|SQL)", readme) or re.search(
-        r"(Metabase|看板|SQL).{0,40}18", readme
-    ), "README.md must claim 18 Metabase/SQL questions"
+    assert re.search(r"22.{0,40}(Metabase|看板|SQL)", readme) or re.search(
+        r"(Metabase|看板|SQL).{0,40}22", readme
+    ), "README.md must claim 22 Metabase/SQL questions"
 
 
 def test_docs_s5_claude_claims_18_metabase():
-    """DOCS-S5: CLAUDE.md claims 18 near Metabase/看板."""
+    """DOCS-S5: CLAUDE.md claims 22 near Metabase/看板."""
     claude = (REPO_ROOT / "CLAUDE.md").read_text()
-    assert re.search(r"18.{0,40}(Metabase|看板|SQL)", claude) or re.search(
-        r"(Metabase|看板|SQL).{0,40}18", claude
-    ), "CLAUDE.md must claim 18 Metabase/SQL questions"
+    assert re.search(r"22.{0,40}(Metabase|看板|SQL)", claude) or re.search(
+        r"(Metabase|看板|SQL).{0,40}22", claude
+    ), "CLAUDE.md must claim 22 Metabase/SQL questions"
 
 
 def test_docs_s5_dashboard_documents_q17():
@@ -269,12 +269,13 @@ def test_docs_s6_tag_spec_not_apifox_content():
 # DOCS-S7: migration count 0001–0007 reflected in docs
 # ──────────────────────────────────────────────────────────────────────────
 
-def test_docs_s7_forward_migration_count_is_11():
-    """DOCS-S7: orchestrator/migrations/ has exactly 12 forward migration files
-    (0001..0013 contiguous; 0012 = baseline_results, 0013 = pr_drift_log)."""
+def test_docs_s7_forward_migration_count_is_13():
+    """DOCS-S7: orchestrator/migrations/ has exactly 13 forward migration files
+    (0001..0014 with 0012 missing post-merge ordering: 0011 = baseline_results,
+    0013 = pr_drift_log, 0014 = req_terminal_outcome)."""
     forward = [f for f in MIGRATIONS_DIR.glob("*.sql") if ".rollback." not in f.name]
-    assert len(forward) == 12, (
-        f"orchestrator/migrations/ has {len(forward)} forward migration(s), expected 12: "
+    assert len(forward) == 13, (
+        f"orchestrator/migrations/ has {len(forward)} forward migration(s), expected 13: "
         f"{sorted(f.name for f in forward)}"
     )
 

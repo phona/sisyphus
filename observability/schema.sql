@@ -134,6 +134,9 @@ CREATE TABLE IF NOT EXISTS config_version (
 CREATE INDEX IF NOT EXISTS idx_cfg_active ON config_version (kind, target)
   WHERE retired_at IS NULL;
 
+-- P0-2：startup hook 写入时存变更文件列表（ADD COLUMN IF NOT EXISTS，幂等）
+ALTER TABLE config_version ADD COLUMN IF NOT EXISTS changed_files JSONB;
+
 
 -- ===================================================================
 -- 4. improvement_log — 假设 → 验证循环（人工维护为主）

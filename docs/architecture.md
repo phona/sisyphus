@@ -475,6 +475,8 @@ wait
 > **PAT 配置 + 验证 playbook**：见 [integration-contracts.md §1c](./integration-contracts.md#1c-runner-github-pat只读)。
 > patch K8s secret 前必跑 4 步 API 探测（curl /user / /user/orgs / /repos/x / git ls-remote），
 > 否则 GitHub "Write access not granted" 错误文案常误导根因判断。
+>
+> **完整 token / secret / vars 清单（sisyphus 侧 + 业务仓侧）**：见 [integration-contracts.md §10](./integration-contracts.md#10-required-tokens--secrets--vars)。
 
 每个 REQ 在 `sisyphus-runners` namespace 起一个：
 - **Pod** `runner-<REQ>` —— privileged + DinD + fuse-overlayfs

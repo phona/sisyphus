@@ -20,6 +20,7 @@ from . import (
 )
 from .admin import admin as admin_api
 from .config import settings
+from .config_version import maybe_record_config_change
 from .maintenance import table_ttl
 from .migrate import apply_pending
 from .obs_schema import apply_obs_schema
@@ -60,6 +61,13 @@ async def startup() -> None:
     await db.init_obs_pool(settings.obs_pg_dsn)
     # 2b. 自动 apply observability schema（幂等，失败不阻断）
     await apply_obs_schema()
+    # 2c. P0-2：检测 prompt/checker/config 变更，有则写 config_version 行（best-effort）
+    obs_pool = db.get_obs_pool()
+    if obs_pool is not None and settings.config_version_startup_hook_enabled:
+        try:
+            await maybe_record_config_change(obs_pool)
+        except Exception as e:
+            log.warning("startup.config_version.failed", error=str(e))
     # 3. 起 snapshot 后台同步 task（interval 0 不起）。
     # 这个 loop 现在两件事：obs UPSERT（依赖 obs pool） + intent:analyze orphan 恢复
     # （只依赖 main pool）。后者跟 obs DSN 无关，所以 startup gate 不再 require obs_pg_dsn。

@@ -1,10 +1,13 @@
-"""start_analyze (v0.2)：intent:analyze 入口。
+"""start_analyze (v0.3)：intent:analyze 入口。
+
+v0.3 变化（REQ-fix-intent-issue-hijacking-1777427339）：analyze-agent 跑在独立
+sub-issue 上，不再改名/改 tags/改 status 劫持用户的原始 intent issue。
 
 v0.2 变化：agent 跑前先 ensure_runner 拉起 K8s Pod + PVC，保证 analyze-agent
 kubectl exec 进去能立刻用。Pod 生命周期绑本 REQ 直到 done/escalate。
 
-REQ-clone-and-pr-ci-fallback-1777115925：在 ensure_runner 之后、follow-up
-prompt 之前，把 ctx 里的 involved_repos 替 agent server-side clone 进
+REQ-clone-and-pr-ci-fallback-1777115925：在 ensure_runner 之后、create
+analyze issue 之前，把 ctx 里的 involved_repos 替 agent server-side clone 进
 /workspace/source/<basename>/。clone 失败 → 直接 emit VERIFY_ESCALATE，不
 让 agent 进空 PVC 干活。
 
@@ -16,9 +19,10 @@ ctx 没 involved_repos）也试 multi-layer fallback —— 把 BKD intent issue
 行为：
 1. ensure_runner（K8s：建 PVC + Pod，等 Ready）
 2. server-side clone involved_repos（如果 ctx 有；失败 → VERIFY_ESCALATE）
-3. update-issue 把 intent issue 改名 [REQ-xxx] [ANALYZE] — <title> + tags=[analyze, REQ-xxx]
-4. follow-up-issue 发 analyze prompt
-5. update-issue statusId=working 触发 agent
+3. merge_tags_and_update 给 intent issue 加 req_id + hint tags（不碰 title/status）
+4. create_issue 新建 analyze sub-issue（title=[REQ-xxx] [ANALYZE]...，tags=[analyze, REQ-xxx]）
+5. follow-up-issue 对 analyze sub-issue 发 analyze prompt
+6. update-issue 把 analyze sub-issue statusId=working 触发 agent
 """
 from __future__ import annotations
 
@@ -35,7 +39,7 @@ from ..prompts import render
 from ..prompts.status_block import build_status_block_ctx
 from ..router import extract_base_branches
 from ..state import Event
-from ..store import db, req_state
+from ..store import db, dispatch_slugs, req_state
 from . import register, short_title
 from ._clone import clone_involved_repos_into_runner
 from ._skip import skip_if_enabled
@@ -177,17 +181,33 @@ async def start_analyze(*, body, req_id, tags, ctx):
     await _supersede_stale_openspec_changes(req_id, cloned_repos or [])
 
     # 3-5. BKD 调度 analyze-agent
-    # REQ-ux-tags-injection-1777257283: forward user hint tags (`repo:`, `ux:`, ...)
-    # so they survive the rename PATCH and stay visible to downstream agents /
-    # dashboards / fallback layers.
+    # REQ-fix-intent-issue-hijacking-1777427339: analyze-agent 跑在独立的 sub-issue
+    # 上，不再改名/改 tags/改 status 劫持用户的原始 intent issue。
     forwarded = filter_propagatable_intent_tags(tags)
     bkd_intent_issue_url = links.bkd_issue_url(proj, issue_id) or ""
+    pool = db.get_pool()
+    slug = f"analyze|{req_id}|{getattr(body, 'executionId', None) or ''}"
+    if hit := await dispatch_slugs.get(pool, slug):
+        log.info("start_analyze.slug_hit", req_id=req_id, analyze_issue_id=hit)
+        await req_state.update_context(pool, req_id, {"analyze_issue_id": hit})
+        return {"issue_id": hit, "req_id": req_id, "cloned_repos": cloned_repos}
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
-        await bkd.update_issue(
+        # 3a. 给 intent issue 轻量打 req_id tag（不碰 title/status），让用户原始 issue
+        # 保持可见、可追踪，后续 PENDING_USER_REVIEW 仍在这条 issue 上交互。
+        await bkd.merge_tags_and_update(
             project_id=proj,
             issue_id=issue_id,
+            add=[req_id, *forwarded],
+        )
+        # 3b. 创建独立 analyze sub-issue（跟 intake 路径的
+        # start_analyze_with_finalized_intent 同模式）。
+        analyze_issue = await bkd.create_issue(
+            project_id=proj,
             title=f"[{req_id}] [ANALYZE]{short_title(ctx)}",
             tags=["analyze", req_id, *forwarded],
+            status_id="todo",
+            use_worktree=True,
+            model=settings.agent_model,
         )
         prompt = render(
             "analyze.md.j2",
@@ -195,10 +215,8 @@ async def start_analyze(*, body, req_id, tags, ctx):
             aissh_server_id=settings.aissh_server_id,
             project_id=proj,
             project_alias=proj,   # BKD REST 接 id 也接 alias，二者等价
-            issue_id=issue_id,
+            issue_id=analyze_issue.id,
             cloned_repos=cloned_repos,
-            # REQ-pr-issue-traceability-1777218612: lets analyze.md.j2 render
-            # the PR-body cross-link footer with a clickable BKD link.
             bkd_intent_issue_url=bkd_intent_issue_url,
             # REQ-base-branch-override-1777480690: forward base branch info to
             # analyze-agent so gh pr create uses the right --base.
@@ -217,16 +235,21 @@ async def start_analyze(*, body, req_id, tags, ctx):
                 pr_urls=(ctx or {}).get("pr_urls"),
             ),
         )
-        await bkd.follow_up_issue(project_id=proj, issue_id=issue_id, prompt=prompt)
-        await bkd.update_issue(project_id=proj, issue_id=issue_id, status_id="working")
+        await bkd.follow_up_issue(
+            project_id=proj, issue_id=analyze_issue.id, prompt=prompt,
+        )
+        await bkd.update_issue(
+            project_id=proj, issue_id=analyze_issue.id, status_id="working",
+        )
 
     # stash analyze_issue_id 进 ctx：让后续 pr_links.ensure_pr_links_in_ctx 第一次
     # discover 成功时能 backfill 这条 analyze issue 的 pr:* tag
     # （REQ-issue-link-pr-quality-base-1777218242）
-    await req_state.update_context(db.get_pool(), req_id, {
-        "analyze_issue_id": issue_id,
+    await dispatch_slugs.put(pool, slug, analyze_issue.id)
+    await req_state.update_context(pool, req_id, {
+        "analyze_issue_id": analyze_issue.id,
     })
 
-    log.info("start_analyze.done", req_id=req_id, issue_id=issue_id,
+    log.info("start_analyze.done", req_id=req_id, issue_id=analyze_issue.id,
              cloned_repos=cloned_repos)
-    return {"issue_id": issue_id, "req_id": req_id, "cloned_repos": cloned_repos}
+    return {"issue_id": analyze_issue.id, "req_id": req_id, "cloned_repos": cloned_repos}

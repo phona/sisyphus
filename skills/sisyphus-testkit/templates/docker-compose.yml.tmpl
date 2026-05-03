@@ -1,0 +1,95 @@
+# Integration test lab — render from sisyphus-testkit skill template.
+# Replace all {{VARS}} before committing to your repo.
+#
+# Design:
+#  - MySQL on tmpfs: fast CREATE/DROP DATABASE (~0.3s vs ~25s on disk)
+#  - Redis: session/cache layer
+#  - WireMock: downstream HTTP stubs (Phase B)
+#  - {{SERVICE_NAME}}-coverage: service binary with -cover flag for coverage merge
+#  - test-runner: executes go test, collects coverage
+
+version: "3.9"
+
+volumes:
+  go-cache:   # shared Go module + build cache across runs
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: testroot
+      MYSQL_USER: test
+      MYSQL_PASSWORD: test
+    tmpfs:
+      - /var/lib/mysql:size=512m
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ptestroot"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 10
+
+  wiremock:
+    # Phase B: replace with phona/wiremock image once upstream is confirmed
+    image: wiremock/wiremock:3.5.2-alpine
+    ports:
+      - "8089:8080"
+    volumes:
+      - ./wiremock:/home/wiremock
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/__admin/health || exit 1"]
+      interval: 2s
+      retries: 10
+
+  {{SERVICE_NAME}}-coverage:
+    build:
+      context: ../..
+      dockerfile: tests/Dockerfile.runner
+      target: service-coverage
+    environment:
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_ROOT_USERNAME: root
+      DB_ROOT_PASSWORD: testroot
+      DB_USERNAME: test
+      DB_PASSWORD: test
+      REDIS_ADDR: redis:6379
+    ports:
+      - "{{SERVICE_PORT}}:{{SERVICE_PORT}}"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:{{SERVICE_PORT}}/health || exit 1"]
+      interval: 2s
+      retries: 20
+
+  test-runner:
+    build:
+      context: ../..
+      dockerfile: tests/Dockerfile.runner
+      target: test-runner
+    volumes:
+      - go-cache:/root/go
+      - ./coverage:/out/coverage
+    environment:
+      SERVICE_URL: "http://{{SERVICE_NAME}}-coverage:{{SERVICE_PORT}}"
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_ROOT_USERNAME: root
+      DB_ROOT_PASSWORD: testroot
+      DB_USERNAME: test
+      DB_PASSWORD: test
+      GOCOVERDIR: /out/coverage
+    depends_on:
+      {{SERVICE_NAME}}-coverage:
+        condition: service_healthy
+    command: ["go", "test", "-v", "-count=1", "./tests/..."]

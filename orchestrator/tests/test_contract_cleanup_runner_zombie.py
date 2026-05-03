@@ -31,6 +31,7 @@ def _row(state: str, req_id: str = "REQ-X") -> dict:
         "context": "{}",
         "created_at": datetime.now(UTC),
         "updated_at": datetime.now(UTC),
+        "terminal_outcome": None,
     }
 
 
