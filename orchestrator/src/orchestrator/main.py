@@ -9,7 +9,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from . import accept_env_gc, k8s_runner, runner_gc, snapshot, watchdog
+from . import accept_env_gc, k8s_runner, pr_health, runner_gc, snapshot, watchdog
 from .admin import admin as admin_api
 from .config import settings
 from .maintenance import table_ttl
@@ -89,6 +89,9 @@ async def startup() -> None:
     # 7. 起 TTL 清理后台任务（event_seen / dispatch_slugs / verifier_decisions / stage_runs）
     if settings.ttl_cleanup_enabled and settings.ttl_cleanup_interval_sec > 0:
         _bg_tasks.append(asyncio.create_task(table_ttl.run_loop(), name="table_ttl"))
+    # 8. 起 PR drift cron（REQ-fix-pr-queue-health-monitoring-1777789759）
+    if settings.pr_health_enabled and settings.pr_health_interval_sec > 0:
+        _bg_tasks.append(asyncio.create_task(pr_health.run_loop(), name="pr_health"))
     log.info(
         "startup.ok",
         port=settings.port,

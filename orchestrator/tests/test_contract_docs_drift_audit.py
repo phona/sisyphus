@@ -203,10 +203,10 @@ def test_docs_s4_architecture_mentions_challenger():
 # ──────────────────────────────────────────────────────────────────────────
 
 def test_docs_s5_sql_file_count_is_18():
-    """DOCS-S5: observability/queries/sisyphus/ contains exactly 18 SQL files."""
+    """DOCS-S5: observability/queries/sisyphus/ contains exactly 20 SQL files."""
     sql_files = list(OBS_QUERIES_DIR.glob("*.sql"))
-    assert len(sql_files) == 18, (
-        f"observability/queries/sisyphus/ has {len(sql_files)} SQL files, expected 18"
+    assert len(sql_files) == 20, (
+        f"observability/queries/sisyphus/ has {len(sql_files)} SQL files, expected 20"
     )
 
 
@@ -270,11 +270,11 @@ def test_docs_s6_tag_spec_not_apifox_content():
 # ──────────────────────────────────────────────────────────────────────────
 
 def test_docs_s7_forward_migration_count_is_11():
-    """DOCS-S7: orchestrator/migrations/ has exactly 10 forward migration files
-    (0001..0010 contiguous; 0009 = artifact_checks_flake, 0010 = dispatch_slugs)."""
+    """DOCS-S7: orchestrator/migrations/ has exactly 12 forward migration files
+    (0001..0013 contiguous; 0012 = baseline_results, 0013 = pr_drift_log)."""
     forward = [f for f in MIGRATIONS_DIR.glob("*.sql") if ".rollback." not in f.name]
-    assert len(forward) == 11, (
-        f"orchestrator/migrations/ has {len(forward)} forward migration(s), expected 11: "
+    assert len(forward) == 12, (
+        f"orchestrator/migrations/ has {len(forward)} forward migration(s), expected 12: "
         f"{sorted(f.name for f in forward)}"
     )
 
