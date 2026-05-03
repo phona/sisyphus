@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ── /livez ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -62,8 +61,8 @@ def _fake_httpx_client(status_code: int = 200, error: Exception | None = None):
 
 @pytest.mark.asyncio
 async def test_readyz_all_ok(monkeypatch):
-    import orchestrator.store.db as db_mod
     import orchestrator.k8s_runner as k8s_mod
+    import orchestrator.store.db as db_mod
     from orchestrator.main import readyz
 
     monkeypatch.setattr(db_mod, "get_pool", lambda: _fake_pool(ok=True))
@@ -80,9 +79,10 @@ async def test_readyz_all_ok(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_readyz_db_fail(monkeypatch):
-    import orchestrator.store.db as db_mod
-    import orchestrator.k8s_runner as k8s_mod
     from fastapi.responses import JSONResponse
+
+    import orchestrator.k8s_runner as k8s_mod
+    import orchestrator.store.db as db_mod
     from orchestrator.main import readyz
 
     monkeypatch.setattr(db_mod, "get_pool", lambda: _fake_pool(ok=False))
@@ -103,9 +103,10 @@ async def test_readyz_db_fail(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_readyz_bkd_connect_fail(monkeypatch):
-    import orchestrator.store.db as db_mod
-    import orchestrator.k8s_runner as k8s_mod
     from fastapi.responses import JSONResponse
+
+    import orchestrator.k8s_runner as k8s_mod
+    import orchestrator.store.db as db_mod
     from orchestrator.main import readyz
 
     monkeypatch.setattr(db_mod, "get_pool", lambda: _fake_pool(ok=True))
@@ -124,9 +125,10 @@ async def test_readyz_bkd_connect_fail(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_readyz_bkd_5xx(monkeypatch):
-    import orchestrator.store.db as db_mod
-    import orchestrator.k8s_runner as k8s_mod
     from fastapi.responses import JSONResponse
+
+    import orchestrator.k8s_runner as k8s_mod
+    import orchestrator.store.db as db_mod
     from orchestrator.main import readyz
 
     monkeypatch.setattr(db_mod, "get_pool", lambda: _fake_pool(ok=True))
@@ -145,9 +147,10 @@ async def test_readyz_bkd_5xx(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_readyz_k8s_fail(monkeypatch):
-    import orchestrator.store.db as db_mod
-    import orchestrator.k8s_runner as k8s_mod
     from fastapi.responses import JSONResponse
+
+    import orchestrator.k8s_runner as k8s_mod
+    import orchestrator.store.db as db_mod
     from orchestrator.main import readyz
 
     monkeypatch.setattr(db_mod, "get_pool", lambda: _fake_pool(ok=True))
@@ -171,8 +174,8 @@ async def test_readyz_k8s_fail(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_readyz_k8s_not_initialized_ok(monkeypatch):
-    import orchestrator.store.db as db_mod
     import orchestrator.k8s_runner as k8s_mod
+    import orchestrator.store.db as db_mod
     from orchestrator.main import readyz
 
     monkeypatch.setattr(db_mod, "get_pool", lambda: _fake_pool(ok=True))
@@ -189,9 +192,10 @@ async def test_readyz_k8s_not_initialized_ok(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_readyz_multiple_fail(monkeypatch):
-    import orchestrator.store.db as db_mod
-    import orchestrator.k8s_runner as k8s_mod
     from fastapi.responses import JSONResponse
+
+    import orchestrator.k8s_runner as k8s_mod
+    import orchestrator.store.db as db_mod
     from orchestrator.main import readyz
 
     monkeypatch.setattr(db_mod, "get_pool", lambda: _fake_pool(ok=False))
