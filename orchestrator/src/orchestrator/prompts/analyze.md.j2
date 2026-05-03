@@ -53,7 +53,6 @@ REQ={{ req_id }}
 {% if intake_summary is defined %}
 ### Intake 摘要（验收标准）
 
-{% if intake_summary is defined %}
 以下是从 intake 阶段确定的验收要求，**你写 spec 时必须把每一条 acceptance criteria 翻译成一个或多个 `#### Scenario`**，不能漏、不能写空壳 scenario（只有 heading 没有 GIVEN/WHEN/THEN）：
 
 - **Business behavior**：{{ intake_summary.business_behavior }}
@@ -64,17 +63,12 @@ REQ={{ req_id }}
 
 > **关键**：spec.md 里的 scenario 不是装饰，是之后 `accept-env-up` 阶段 thanatos MCP 会直接读取并执行的验收用例。每个 scenario 必须有清晰的 GIVEN/WHEN/THEN step，否则 check-scenario-refs.sh 会报空壳 scenario 直接 fail。
 {% else %}
+### 直接 analyze 入口（无 intake 阶段）
+
 本次是**直接 analyze 入口**（无 intake 阶段）。请自行分析 BKD intent issue
-title/description/chat history，推导业务需求，并写完整 spec。
+title/description/chat history，推导业务需求，确定验收标准，并写完整 spec。
 
 > **关键**：spec.md 里的 scenario 不是装饰，是之后 `accept-env-up` 阶段 thanatos MCP 会直接读取并执行的验收用例。每个 scenario 必须有清晰的 GIVEN/WHEN/THEN step，否则 check-scenario-refs.sh 会报空壳 scenario 直接 fail。
-{% endif %}
-
-{% else %}
-### 需求分析
-
-本 REQ 未经过 intake 阶段，请直接基于 intent description 和上下文进行需求分析，确定验收标准，并在 spec 中写出完整的 `#### Scenario`。
-
 {% endif -%}
 你**全权负责**这个 REQ 从 0 到可合并 PR 的端到端交付。
 
