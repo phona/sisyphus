@@ -48,15 +48,13 @@ wiring MUST live inside a `{{- with ... }}` conditional block keyed on
 - **AND** the surrounding ~400 chars MUST contain `toJson`
 - **AND** the surrounding ~400 chars MUST NOT contain `join "," .`
 
-### Requirement: orchestrator Settings MUST parse JSON-encoded SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS into list[str]
+### Requirement: orchestrator Settings MUST parse JSON-encoded SNAPSHOT_EXCLUDE env into a string list
 
-The `Settings.snapshot_exclude_project_ids` field in
-`orchestrator/src/orchestrator/config.py` SHALL be typed as `list[str]`
-with `default_factory=list`. When the env var
-`SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS` is set to a JSON-encoded array
-string (e.g. `'["proj-a","proj-b"]'`), Settings MUST resolve the field
-to the matching `list[str]`. This contract MUST hold for both
-multi-element and single-element JSON arrays.
+Settings SHALL parse the env var SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS
+as a JSON-encoded array of strings and resolve the field
+snapshot_exclude_project_ids to the matching list of strings. The field
+SHALL default to an empty list when the env var is unset. The contract
+MUST hold for both multi-element and single-element JSON arrays.
 
 #### Scenario: CSEPI-S3 multi-element JSON env resolves to list[str]
 
