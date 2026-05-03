@@ -150,7 +150,8 @@ def _readyz_harness(
             )
         )
 
-    started = [p.start() for p in patches]
+    for p in patches:
+        p.start()
     try:
         yield
     finally:
