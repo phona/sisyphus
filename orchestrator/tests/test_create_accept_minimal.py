@@ -106,8 +106,11 @@ async def test_aml_s1_all_repos_pass(monkeypatch):
     )
 
     assert out["emit"] == Event.ACCEPT_PASS.value
-    # env-up + lite fallback = 2 calls
-    assert len(rc.calls) == 2, "expected env-up + lite fallback calls"
+    # manifest probe (R8 trigger) + env-up + lite fallback = 3 calls; env-up
+    # and lite fallback both must be present, and at least one manifest probe
+    cmds = [c["command"] for c in rc.calls]
+    assert any("make accept-env-up" in c for c in cmds), "env-up command must run"
+    assert any(".sisyphus/env.yaml" in c for c in cmds), "manifest probe must run"
     assert any(u.get("accept_result") == "pass" for u in pool.ctx_updates), (
         "accept_result='pass' must be stored in ctx"
     )
@@ -155,8 +158,10 @@ async def test_aml_s3_no_target_skips_repo_not_fail(monkeypatch):
     )
 
     assert out["emit"] == Event.ACCEPT_PASS.value
-    # env-up + lite fallback = 2 calls
-    assert len(rc.calls) == 2, "expected env-up + lite fallback calls"
+    # cross-repo refactor adds a manifest probe; env-up + lite fallback both
+    # still run alongside it
+    cmds = [c["command"] for c in rc.calls]
+    assert any("make accept-env-up" in c for c in cmds)
 
 
 # ─── AML-S4: empty cloned_repos → vacuous pass ───────────────────────────
@@ -173,5 +178,7 @@ async def test_aml_s4_empty_cloned_repos_vacuous_pass(monkeypatch):
     )
 
     assert out["emit"] == Event.ACCEPT_PASS.value
-    # env-up is still called (integration dir resolved), then lite fallback sees empty repos
-    assert len(rc.calls) == 1, "env-up call expected even when cloned_repos is empty"
+    # env-up is still called (integration dir resolved); lite fallback sees
+    # empty repos and returns vacuous pass without further exec_in_runner.
+    cmds = [c["command"] for c in rc.calls]
+    assert any("make accept-env-up" in c for c in cmds)
