@@ -8,7 +8,6 @@ Mock httpx（BKD REST 层）+ asyncpg pool，校验：
 """
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,7 +15,6 @@ import pytest
 
 from orchestrator.bkd import Turn
 from orchestrator.bkd_rest import BKDRestClient
-
 
 # ── BKDRestClient.fetch_turns 单测 ────────────────────────────────────────────
 

@@ -9,7 +9,15 @@ import structlog
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from . import accept_env_gc, agent_turns_collector, k8s_runner, pr_health, runner_gc, snapshot, watchdog
+from . import (
+    accept_env_gc,
+    agent_turns_collector,
+    k8s_runner,
+    pr_health,
+    runner_gc,
+    snapshot,
+    watchdog,
+)
 from .admin import admin as admin_api
 from .config import settings
 from .maintenance import table_ttl
