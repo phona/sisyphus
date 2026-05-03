@@ -13,7 +13,6 @@ import pytest
 
 from orchestrator.store.verifier_decisions import backfill_outcomes_for_req, insert_decision
 
-
 # ── FakePool ────────────────────────────────────────────────────────────────
 
 class _FakePool:

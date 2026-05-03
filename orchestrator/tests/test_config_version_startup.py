@@ -19,7 +19,6 @@ import pytest
 
 from orchestrator.config_version import _is_watched, maybe_record_config_change
 
-
 # ── _is_watched 白名单 ───────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("path,expected", [
