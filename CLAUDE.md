@@ -91,6 +91,54 @@ sisyphus/
 └── values/                   # helm values（postgresql / metabase）
 ```
 
+## CLI 工具
+
+### scripts/bkd-cli.py —— BKD REST 客户端
+
+单条/批量派单、列 issues、给现有 issue 补 intent tag、取 agent 日志。
+
+```bash
+# 单条派单并触发 orchestrator（--intent analyze / intake）
+python3 scripts/bkd-cli.py inline --slug my-feature --title "REQ 标题" --prompt-file prompt.md --intent analyze
+
+# 批量 YAML 派单
+python3 scripts/bkd-cli.py yaml reqs.yaml
+
+# 列 working 状态的 issues
+python3 scripts/bkd-cli.py list --status working
+
+# 取 issue agent 日志
+python3 scripts/bkd-cli.py logs <issue_id>
+
+# 给现有 issue 补 intent tag 重新触发
+python3 scripts/bkd-cli.py trigger-existing <issue_id> --intent analyze
+```
+
+`--base-url` 默认 `http://localhost:3000/api`；`--project` 默认 `nnvxh8wj`。完整子命令：`python3 scripts/bkd-cli.py --help`。
+
+### scripts/sisyphus-admin.py —— orch admin endpoint 客户端
+
+手动 escalate / complete / pr-merged 事件 + 直连 PG 查 `req_state`。
+
+```bash
+# 查所有 in-flight REQ（直连 PG）
+python3 scripts/sisyphus-admin.py req-status
+
+# 查单 REQ 状态历史
+python3 scripts/sisyphus-admin.py req-status <req_id>
+
+# 手动 escalate（故障兜底）
+python3 scripts/sisyphus-admin.py admin escalate <req_id> --reason "人工介入" --kind infra-bug
+
+# 手动 complete
+python3 scripts/sisyphus-admin.py admin complete <req_id>
+
+# 注入 pr-merged 事件
+python3 scripts/sisyphus-admin.py admin pr-merged <req_id> --pr-url <url> --merged-sha <sha>
+```
+
+环境变量：`SISYPHUS_ADMIN_TOKEN`（Bearer token，留空从 kubectl secret 取）。`--base-url` 留空绕 kubectl port-forward，提供（如 `http://sisyphus.43.239.84.24.nip.io`）则直接走 HTTP。完整子命令：`python3 scripts/sisyphus-admin.py --help`。
+
 ## 文档索引
 
 | 文档 | 内容 |
