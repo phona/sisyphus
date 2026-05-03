@@ -185,6 +185,12 @@ async def _apply_pr_merged_done_override(
                  req_id=req_id, expected=cur.value)
         return None
 
+    try:
+        await req_state.set_terminal_outcome(pool, req_id, "merged")
+    except Exception as e:
+        log.warning("escalate.pr_merged_override.terminal_outcome_failed",
+                    req_id=req_id, error=str(e))
+
     add_tags = ["done", "via:pr-merge"]
     try:
         async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
@@ -492,6 +498,11 @@ async def escalate(*, body, req_id, tags, ctx):
     # 从 PR 分支删孤儿 openspec/changes/REQ-XXX/，防止 escalated PR 被人手 merge 后
     # 遗留未 apply 的 spec changes 进 main。cleanup 失败不阻塞 escalate。
     await _cleanup_openspec_changes_in_runner(req_id, involved_repos)
+
+    try:
+        await req_state.set_terminal_outcome(pool, req_id, "sisyphus-escalated")
+    except Exception as e:
+        log.warning("escalate.terminal_outcome_failed", req_id=req_id, error=str(e))
 
     log.warning("escalate.final",
                 req_id=req_id, reason=final_reason,

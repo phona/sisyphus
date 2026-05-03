@@ -496,6 +496,33 @@ async def _sync_stuck_sub_agent_statuses_tick() -> dict:
     return {"patched": patched, "failed": failed}
 
 
+async def _mark_abandoned_escalated_reqs() -> int:
+    """ESCALATED + 7 天无续 → 标 abandoned-by-user（best-effort）。
+
+    不覆盖已标 merged 的（用户曾续跑成功），跳过已标 abandoned-by-user 的（幂等）。
+    """
+    pool = db.get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT req_id FROM req_state
+         WHERE state = 'escalated'
+           AND terminal_outcome IS DISTINCT FROM 'abandoned-by-user'
+           AND terminal_outcome IS DISTINCT FROM 'merged'
+           AND updated_at < NOW() - INTERVAL '7 days'
+        """,
+    )
+    count = 0
+    for row in rows:
+        req_id = row["req_id"]
+        try:
+            await req_state.set_terminal_outcome(pool, req_id, "abandoned-by-user")
+            count += 1
+            log.info("watchdog.abandoned_marked", req_id=req_id)
+        except Exception as e:
+            log.warning("watchdog.abandoned_mark_failed", req_id=req_id, error=str(e))
+    return count
+
+
 async def run_loop() -> None:
     """orchestrator 启动起的后台任务。"""
     if not settings.watchdog_enabled:
@@ -527,6 +554,15 @@ async def run_loop() -> None:
                         log.debug("watchdog.bkd_sync", **sync_result)
                 except Exception as e:
                     log.exception("watchdog.bkd_sync.error", error=str(e))
+
+            # 每 50 个 tick（默认 ~50min）扫一次长期 ESCALATED → abandoned-by-user
+            if tick_count % 50 == 0:
+                try:
+                    abandoned = await _mark_abandoned_escalated_reqs()
+                    if abandoned:
+                        log.info("watchdog.abandoned_sweep", marked=abandoned)
+                except Exception as e:
+                    log.exception("watchdog.abandoned_sweep.error", error=str(e))
         except asyncio.CancelledError:
             log.info("watchdog.loop.stopped")
             raise
