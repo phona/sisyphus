@@ -114,6 +114,13 @@ async def invoke_verifier(
     fixer_round = (ctx or {}).get("fixer_round", 0)
     slug = f"verifier|{req_id}|{stage}|{trigger}|r{fixer_round}"
     pool = db.get_pool()
+    # Clear stale verifier_issue_id from prior round (#324, same pattern as #316).
+    # invoke_verifier 创建新 verifier issue 期间 watchdog 可能基于 ctx 里残留的
+    # 上轮 stale verifier_issue_id (early-ended session) 误判 watchdog_stuck →
+    # 强制 escalate 把 in-flight invoke_verifier 打断。入口先清，让 watchdog
+    # 走 line 310 defense-in-depth (issue_id is None and stuck_sec is None) skip。
+    if ctx and ctx.get("verifier_issue_id"):
+        await req_state.update_context(pool, req_id, {"verifier_issue_id": None})
     if hit := await dispatch_slugs.get(pool, slug):
         log.info("invoke_verifier.slug_hit", req_id=req_id, slug=slug, issue_id=hit)
         await req_state.update_context(pool, req_id, {
