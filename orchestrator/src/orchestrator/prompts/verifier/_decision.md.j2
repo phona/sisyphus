@@ -58,5 +58,59 @@ sisyphus 解析顺序（实际工作的）：
 
 任意一条命中即可。**最简单**：把 JSON 块写进你最后回复里就行。
 
-也建议另外加个 human-readable summary tag（如 `decision:fix-spec`、`decision:escalate`），
-方便人 review BKD UI 时一眼看判决（这种 tag 不影响 sisyphus 解析，纯 UX）。
+## decision:<action> tag（HARD CONSTRAINT — 强制兜底信号）
+
+**在写最后一条 assistant message 前**，你**必须**先 PATCH 自己的 BKD issue
+加一个 `decision:<action>[-<fixer>]` tag。tag 是 sisyphus 的"第二条腿"：
+即便最后一条 assistant message 没写 / 被 watchdog 截断 / JSON 解析失败，
+sisyphus 也能从这个 tag 读到判决，把 REQ 路由下去（confidence=low 标记，
+但不再卡死）。
+
+tag 取值表（**完全对齐 JSON 的 `action` + `fixer`**）：
+
+| JSON action | JSON fixer | tag 值                |
+|-------------|-----------|------------------------|
+| `pass`      | null      | `decision:pass`        |
+| `fix`       | `dev`     | `decision:fix-dev`     |
+| `fix`       | `spec`    | `decision:fix-spec`    |
+| `escalate`  | null      | `decision:escalate`    |
+| `retry`     | null      | `decision:retry`       |
+
+> ⚠️ `decision:fix` 不带 `-dev` / `-spec` 后缀**不算**有效兜底（sisyphus 不
+> 敢替你猜 fixer），仍会按 escalate 走。务必带后缀。
+
+curl 调用范例（**tag 是替换不是追加**，先 GET 现有 tags 再 merge 后再 PATCH）：
+
+```bash
+PROJECT={{ project_id }}     # 跟 tools_whitelist 里的 PROJECT 一致
+MY={{ issue_id or '<your-issue-id-from-cwd>' }}
+
+# 1) 取当前 tags
+EXISTING=$(curl -sS http://localhost:3000/api/projects/$PROJECT/issues/$MY \
+  | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["data"]["tags"]))')
+
+# 2) merge：保留现有 tag + 追加 decision:<action>[-<fixer>]
+NEW_TAGS=$(python3 -c "
+import json,sys
+existing=json.loads(sys.argv[1])
+new=[t for t in existing if not t.startswith('decision:')]+[sys.argv[2]]
+print(json.dumps(new))
+" "$EXISTING" "decision:pass")     # ← 把 'decision:pass' 换成你的实际判决
+
+# 3) PATCH
+curl -sS -X PATCH http://localhost:3000/api/projects/$PROJECT/issues/$MY \
+  -H 'content-type: application/json' \
+  -d "{\"tags\": $NEW_TAGS}"
+```
+
+> 顺序：**先 PATCH tag，再写最后一条 assistant message（含 JSON 块）**。
+> 反过来的话 BKD session 可能已经 commit completed，PATCH 抢不上了。
+
+### sisyphus 解析顺序（实际工作的）
+
+1. tag base64 块：`decision:<urlsafe-base64-json>` （历史路径，仍支持）
+2. 最后一条 assistant message 里的 ```json ... ``` 代码块（**主路径**）
+3. **NEW** 兜底：tag 里的 `decision:<action>[-<fixer>]`（本节强制要求的那个）
+
+任意一条命中即可。**不要省第 3 步** —— 它就是给你这次 session 提前出意外
+准备的安全网。

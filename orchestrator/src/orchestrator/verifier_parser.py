@@ -241,6 +241,51 @@ def _extract_from_text(text: str | None) -> tuple[dict | None, list[ParseAttempt
     return None, attempts
 
 
+# ─── 兜底：plain `decision:<action>[-<fixer>]` tag ────────────────────────
+
+# REQ-fix-verifier-decision-tag-1777812498：当 tag base64 + text JSON 双双失败时，
+# 接受 verifier-agent PATCH 上来的纯文本 tag 作为兜底信号。confidence=low 标记，
+# 让 dashboard 区分"agent 写齐了 JSON"vs"靠 tag 兜底推进"。
+_PLAIN_TAG_TO_DECISION: dict[str, dict] = {
+    "decision:pass":     {"action": "pass",     "fixer": None},
+    "decision:escalate": {"action": "escalate", "fixer": None},
+    "decision:retry":    {"action": "retry",    "fixer": None},
+    "decision:fix-dev":  {"action": "fix",      "fixer": "dev"},
+    "decision:fix-spec": {"action": "fix",      "fixer": "spec"},
+}
+
+
+def _extract_from_plain_decision_tag(
+    tags: Iterable[str] | None,
+) -> tuple[dict | None, list[ParseAttempt]]:
+    """从 tags 里识别 plain `decision:<action>[-<fixer>]`。
+
+    `decision:fix` 不带 fixer 后缀**不识别**（无法判 dev/spec，宁可让上层 escalate
+    也不胡猜）；这条规则在 spec VDTF-S3 锁住。
+    """
+    attempts: list[ParseAttempt] = []
+    for t in tags or []:
+        if not isinstance(t, str):
+            continue
+        spec = _PLAIN_TAG_TO_DECISION.get(t)
+        if spec is None:
+            continue
+        synthesized = {
+            **spec,
+            "scope": None,
+            "reason": f"orch-fallback: inferred from {t} tag",
+            "confidence": "low",
+        }
+        attempts.append(ParseAttempt(
+            source="plain_decision_tag",
+            success=True,
+            detail=f"synthesized from {t}",
+            raw=t,
+        ))
+        return synthesized, attempts
+    return None, attempts
+
+
 # ─── 主入口 ──────────────────────────────────────────────────────────────
 
 def extract_decision_robust(
@@ -256,21 +301,29 @@ def extract_decision_robust(
     """
     result = ParseResult()
 
-    # 1. tag 层
+    # 1. tag 层（base64 编码的完整 JSON）
     decision, tag_attempts = _extract_from_tags(tags)
     result.attempts.extend(tag_attempts)
     if decision is not None:
         result.decision = decision
         return result
 
-    # 2. text 层
+    # 2. text 层（assistant message 里的 JSON 块）
     decision, text_attempts = _extract_from_text(description)
     result.attempts.extend(text_attempts)
     if decision is not None:
         result.decision = decision
         return result
 
-    # 3. 都没找到 → retry_worthy 看有没有"接近成功"的尝试
+    # 3. 兜底：plain `decision:<action>[-<fixer>]` tag
+    #    （REQ-fix-verifier-decision-tag-1777812498 / closes phona/sisyphus#356）
+    decision, plain_tag_attempts = _extract_from_plain_decision_tag(tags)
+    result.attempts.extend(plain_tag_attempts)
+    if decision is not None:
+        result.decision = decision
+        return result
+
+    # 4. 都没找到 → retry_worthy 看有没有"接近成功"的尝试
     # 只要有任何 attempt 的 raw 里含 action 就算 retry_worthy
     for att in result.attempts:
         if att.raw and ("action" in att.raw or "action" in (att.detail or "")):
