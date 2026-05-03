@@ -36,6 +36,7 @@ from ..config import settings
 from ..cross_repo_env import (
     Manifest,
     ManifestError,
+    PreResolveError,
     TopologyError,
 )
 from ..prompts import render
@@ -827,6 +828,61 @@ async def _run_multi_layer_with_cache(
     source_branch = (ctx or {}).get("branch") or f"feat/{req_id}"
     dir_map = cross_repo_env.workspace_dir_map(topo)
 
+    # ── R12 pre-resolve ──────────────────────────────────────────────────
+    # before any per-layer accept-env-up runs, resolve every pattern-form emit
+    # against (manifests, REQ context). this seeds the bundle so consumers see
+    # pattern-form values without parsing layer accept-env-up JSON output, and
+    # makes the bundle observable at stage_runs.context.endpoint_bundle_pre_resolved
+    # before any layer side-effect.
+    req_context = {
+        "SISYPHUS_NAMESPACE": namespace,
+        "SISYPHUS_REQ_ID": req_id,
+        "SISYPHUS_REQ_BRANCH": source_branch,
+        "SISYPHUS_SOURCE_REPO_SHA": (ctx or {}).get("source_sha") or "",
+    }
+    pool = db.get_pool()
+    try:
+        pre_resolved = cross_repo_env.pre_resolve_endpoint_bundle(
+            topo, lambda r: manifests.get(r), req_context,
+        )
+    except PreResolveError as e:
+        log.warning(
+            "create_accept.pre_resolve_failed",
+            req_id=req_id, failed_layer=e.failed_layer, error=str(e),
+        )
+        layers_record = _build_layers_skeleton(
+            topo, source_repo, fail_index=topo.index(e.failed_layer),
+        )
+        await _record_accept_attribution(
+            req_id, failed_layer=e.failed_layer, failed_field=None, layers=layers_record,
+        )
+        try:
+            await stage_runs.update_latest_stage_run_context(
+                pool, req_id, "accept", {"failed_phase": e.failed_phase},
+            )
+        except Exception as ctx_exc:
+            log.warning(
+                "create_accept.pre_resolve_attribution_write_failed",
+                req_id=req_id, error=str(ctx_exc),
+            )
+        return {
+            "emit": Event.ACCEPT_ENV_UP_FAIL.value,
+            "reason": str(e),
+            "failed_phase": e.failed_phase,
+            "failed_layer": e.failed_layer,
+        }
+    if pre_resolved:
+        try:
+            await stage_runs.update_latest_stage_run_context(
+                pool, req_id, "accept",
+                {"endpoint_bundle_pre_resolved": pre_resolved},
+            )
+        except Exception as ctx_exc:
+            log.warning(
+                "create_accept.pre_resolve_persist_failed",
+                req_id=req_id, error=str(ctx_exc),
+            )
+
     # ── Branch resolution + idempotent re-clone on resolved branch ────────
     for repo in topo:
         if repo == source_repo:
@@ -872,7 +928,9 @@ async def _run_multi_layer_with_cache(
             }
 
     # ── Sequential per-layer env-up ──────────────────────────────────────
-    bundle: dict[str, dict] = {}
+    # bundle starts seeded with pattern-form emits (R12); bare-string emits get merged
+    # in by the per-layer JSON parse below (R4).
+    bundle: dict[str, dict] = {repo: dict(fields) for repo, fields in pre_resolved.items()}
     layers_record: list[dict] = [
         {"repo": r, "status": "skipped", "duration_ms": 0} for r in topo
     ]
@@ -952,8 +1010,14 @@ async def _run_multi_layer_with_cache(
                 "failed_layer": repo,
             }
 
+        # R4 amendment: pattern-form emits are pre-resolved (already in bundle from R12).
+        # the JSON parse only extracts bare-string emits — pattern-form fields MUST NOT
+        # be re-extracted from the layer's accept-env-up output.
+        bare_string_emits = [
+            fld for fld in manifest.emits if fld not in manifest.emit_patterns
+        ]
         emits_extracted: dict = {}
-        for fld in manifest.emits:
+        for fld in bare_string_emits:
             if fld not in parsed:
                 layers_record[idx]["status"] = "failed"
                 log.warning("create_accept.layer_emit_missing",
@@ -968,7 +1032,8 @@ async def _run_multi_layer_with_cache(
                     "failed_field": fld,
                 }
             emits_extracted[fld] = parsed[fld]
-        bundle[repo] = emits_extracted
+        # merge bare-string emits onto whatever R12 pre-resolve already seeded for this repo
+        bundle.setdefault(repo, {}).update(emits_extracted)
         layers_record[idx]["status"] = "success"
         if repo == source_repo:
             final_endpoint_json = parsed

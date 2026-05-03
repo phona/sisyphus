@@ -318,3 +318,170 @@ def test_resolve_topology_self_cycle():
     graph = {"A": ["A"]}
     with pytest.raises(TopologyError, match=r"A -> A"):
         resolve_topology("A", _loader(graph))
+
+
+# ─── R12: pattern-form parse + pre_resolve_endpoint_bundle ─────────────────
+
+def test_parse_emits_records_pattern_alongside_bare_string():
+    """IMPL-S2: mixed bare-string + pattern-form emits in one list parse cleanly."""
+    from orchestrator.cross_repo_env import EmitPattern
+    text = """
+emits:
+  - namespace
+  - endpoint:
+      pattern: "svc.{NS}:8080"
+      vars:
+        NS: "${SISYPHUS_NAMESPACE}"
+"""
+    m = parse_manifest(text)
+    assert m.emits == ("namespace", "endpoint")
+    assert "namespace" not in m.emit_patterns
+    assert m.emit_patterns["endpoint"] == EmitPattern(
+        field="endpoint",
+        pattern="svc.{NS}:8080",
+        vars={"NS": "${SISYPHUS_NAMESPACE}"},
+    )
+
+
+def test_parse_emits_rejects_pattern_with_undeclared_placeholder():
+    """EPCA-S3: pattern referencing a placeholder absent from `vars` is rejected."""
+    text = """
+emits:
+  - endpoint:
+      pattern: "svc.{NS}.local:{PORT}"
+      vars:
+        NS: "${SISYPHUS_NAMESPACE}"
+"""
+    with pytest.raises(ManifestError, match=r"\bPORT\b"):
+        parse_manifest(text)
+
+
+def test_parse_emits_rejects_non_sisyphus_dollar_ref():
+    """vars values may only reference ${SISYPHUS_*}; ${ENV_X} is rejected (R12 out-of-scope)."""
+    text = """
+emits:
+  - endpoint:
+      pattern: "svc.{X}"
+      vars:
+        X: "${ENV_FOO}"
+"""
+    with pytest.raises(ManifestError, match=r"SISYPHUS"):
+        parse_manifest(text)
+
+
+def test_parse_emits_rejects_multi_key_dict_form():
+    """A pattern-form entry must be a single-key mapping."""
+    text = """
+emits:
+  - {endpoint: {pattern: "x", vars: {}}, extra: 1}
+"""
+    with pytest.raises(ManifestError, match="single-key"):
+        parse_manifest(text)
+
+
+def test_parse_emits_rejects_duplicate_field_names():
+    """Bare-string and pattern-form emits cannot redeclare the same field."""
+    text = """
+emits:
+  - endpoint
+  - endpoint:
+      pattern: "x"
+      vars: {}
+"""
+    with pytest.raises(ManifestError, match="more than once"):
+        parse_manifest(text)
+
+
+def test_pre_resolve_skips_bare_string_emits():
+    """IMPL-S6: bare-string emits don't appear in pre-resolve bundle."""
+    from orchestrator.cross_repo_env import pre_resolve_endpoint_bundle
+    manifests: dict[str, Manifest] = {
+        "org/be": parse_manifest(
+            """
+emits:
+  - endpoint:
+      pattern: "svc.{NS}:{PORT}"
+      vars:
+        NS: "${SISYPHUS_NAMESPACE}"
+        PORT: "8080"
+"""
+        ),
+        "org/fe": parse_manifest(
+            """
+needs:
+  - org/be
+inputs:
+  BACKEND_ENDPOINT: "org/be.endpoint"
+"""
+        ),
+    }
+    bundle = pre_resolve_endpoint_bundle(
+        ["org/be", "org/fe"],
+        lambda r: manifests.get(r),
+        {"SISYPHUS_NAMESPACE": "ns-x"},
+    )
+    assert bundle == {"org/be": {"endpoint": "svc.ns-x:8080"}}
+
+
+def test_pre_resolve_unresolved_sisyphus_var_raises():
+    """IMPL-S5: unresolved ${SISYPHUS_GHOST} raises PreResolveError naming the var."""
+    from orchestrator.cross_repo_env import (
+        PreResolveError,
+        pre_resolve_endpoint_bundle,
+    )
+    manifests = {
+        "org/x": parse_manifest(
+            """
+emits:
+  - endpoint:
+      pattern: "svc.{NS}"
+      vars:
+        NS: "${SISYPHUS_GHOST}"
+"""
+        ),
+    }
+    with pytest.raises(PreResolveError) as ei:
+        pre_resolve_endpoint_bundle(
+            ["org/x"], lambda r: manifests.get(r), {"SISYPHUS_NAMESPACE": "ns-x"},
+        )
+    assert ei.value.failed_phase == "pre_resolve"
+    assert ei.value.failed_layer == "org/x"
+    assert "SISYPHUS_GHOST" in str(ei.value)
+
+
+def test_pre_resolve_manifest_fetch_failure_raises():
+    """IMPL-S4: loader exception becomes PreResolveError mentioning manifest fetch."""
+    from orchestrator.cross_repo_env import (
+        PreResolveError,
+        pre_resolve_endpoint_bundle,
+    )
+
+    def loader(repo: str) -> Manifest | None:
+        raise RuntimeError("simulated 5xx")
+
+    with pytest.raises(PreResolveError) as ei:
+        pre_resolve_endpoint_bundle(["org/some-repo"], loader, {})
+    assert ei.value.failed_phase == "pre_resolve"
+    assert ei.value.failed_layer == "org/some-repo"
+    assert "manifest fetch" in str(ei.value)
+
+
+def test_pre_resolve_substitutes_partial_sisyphus_ref_in_vars_value():
+    """IMPL-S3 + EPCA-S6: ${SISYPHUS_*} can appear inside a longer literal."""
+    from orchestrator.cross_repo_env import pre_resolve_endpoint_bundle
+    manifests = {
+        "org/x": parse_manifest(
+            """
+emits:
+  - endpoint:
+      pattern: "http://{HOST}:{PORT}/api"
+      vars:
+        HOST: "${SISYPHUS_NAMESPACE}.svc"
+        PORT: "8080"
+"""
+        ),
+    }
+    bundle = pre_resolve_endpoint_bundle(
+        ["org/x"], lambda r: manifests.get(r), {"SISYPHUS_NAMESPACE": "ns-x"},
+    )
+    assert bundle["org/x"]["endpoint"] == "http://ns-x.svc:8080/api"
