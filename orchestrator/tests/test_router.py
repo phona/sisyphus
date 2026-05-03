@@ -9,6 +9,7 @@ from orchestrator.router import (
     extract_req_id,
     get_parent_id,
     get_round,
+    normalize_base_overrides,
     resolve_base_branch,
 )
 from orchestrator.state import Event
@@ -172,3 +173,25 @@ def test_resolve_base_branch():
     ) == "develop"
     # basename 不含 owner
     assert resolve_base_branch("ttpos-flutter", "develop", {"ttpos-flutter": "feat/x"}) == "feat/x"
+
+
+def test_normalize_base_overrides():
+    # GitHub issue #345 修复：把混合形式归一到 basename，让下游 sisyphus-clone-repos.sh
+    # 按 basename 查找时能命中。
+    # 1. 全部 owner/repo 形式 → 全部归一
+    assert normalize_base_overrides({"phona/sisyphus": "main"}) == {"sisyphus": "main"}
+    # 2. basename 形式不变
+    assert normalize_base_overrides({"sisyphus": "main"}) == {"sisyphus": "main"}
+    # 3. 混合形式（tag 来源 = basename，settings 来源 = owner/repo）一并归一
+    assert normalize_base_overrides({
+        "ttpos-flutter": "feat/hwt",
+        "phona/ttpos-server-go": "release",
+    }) == {"ttpos-flutter": "feat/hwt", "ttpos-server-go": "release"}
+    # 4. .git 后缀剥掉
+    assert normalize_base_overrides({"phona/sisyphus.git": "main"}) == {"sisyphus": "main"}
+    assert normalize_base_overrides({"sisyphus.git": "main"}) == {"sisyphus": "main"}
+    # 5. 空 dict 不炸
+    assert normalize_base_overrides({}) == {}
+    # 6. 同一 basename 多个 owner 写法 → 后者覆盖（dict 语义保留）
+    result = normalize_base_overrides({"phona/sisyphus": "main", "other/sisyphus": "develop"})
+    assert result == {"sisyphus": "develop"}
