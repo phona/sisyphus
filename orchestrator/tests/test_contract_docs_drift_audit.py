@@ -203,10 +203,11 @@ def test_docs_s4_architecture_mentions_challenger():
 # ──────────────────────────────────────────────────────────────────────────
 
 def test_docs_s5_sql_file_count_is_18():
-    """DOCS-S5: observability/queries/sisyphus/ contains exactly 22 SQL files."""
+    """DOCS-S5: observability/queries/sisyphus/ contains exactly 25 SQL files
+    (Q1-Q20 + Q21/Q22/Q23 added by agent_turns observability collector)."""
     sql_files = list(OBS_QUERIES_DIR.glob("*.sql"))
-    assert len(sql_files) == 22, (
-        f"observability/queries/sisyphus/ has {len(sql_files)} SQL files, expected 22"
+    assert len(sql_files) == 25, (
+        f"observability/queries/sisyphus/ has {len(sql_files)} SQL files, expected 25"
     )
 
 
@@ -270,12 +271,12 @@ def test_docs_s6_tag_spec_not_apifox_content():
 # ──────────────────────────────────────────────────────────────────────────
 
 def test_docs_s7_forward_migration_count_is_13():
-    """DOCS-S7: orchestrator/migrations/ has exactly 13 forward migration files
-    (0001..0014 with 0012 missing post-merge ordering: 0011 = baseline_results,
-    0013 = pr_drift_log, 0014 = req_terminal_outcome)."""
+    """DOCS-S7: orchestrator/migrations/ has exactly 14 forward migration files
+    (0001..0015 with 0012 missing: 0011 = baseline_results, 0013 = pr_drift_log,
+    0014 = req_terminal_outcome, 0015 = agent_turns)."""
     forward = [f for f in MIGRATIONS_DIR.glob("*.sql") if ".rollback." not in f.name]
-    assert len(forward) == 13, (
-        f"orchestrator/migrations/ has {len(forward)} forward migration(s), expected 13: "
+    assert len(forward) == 14, (
+        f"orchestrator/migrations/ has {len(forward)} forward migration(s), expected 14: "
         f"{sorted(f.name for f in forward)}"
     )
 
