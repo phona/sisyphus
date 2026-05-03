@@ -178,6 +178,15 @@ async def create_accept(*, body, req_id, tags, ctx):
     source_issue_id = body.issueId
     namespace = f"accept-{req_id.lower()}"
 
+    # Clear stale accept_issue_id from prior round (#315): create_accept env-up
+    # 阶段 5-15min；watchdog 看 ctx.accept_issue_id 检 stuck，stale id 指向上轮
+    # 早 escalate 关闭的 issue，没新事件 → 误判 watchdog_stuck → 强制 session.failed
+    # 把当前 in-flight create_accept 打断。入口先清 stale id，让 watchdog 知道
+    # 当前没 active acceptance agent，跳过 stuck 检查。
+    pool = db.get_pool()
+    if ctx and ctx.get("accept_issue_id"):
+        await req_state.update_context(pool, req_id, {"accept_issue_id": None})
+
     # Phase 1: env-up via sisyphus (runner exec)
     try:
         rc = k8s_runner.get_controller()
