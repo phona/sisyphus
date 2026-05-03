@@ -197,7 +197,52 @@
 2. 现在做的所有事跟"挡 80% ttpos 需求"距离多远？
 3. 是不是把工具当成了目的？
 
-## 12. 一句话总结
+## 12. Dogfood 期间 prompt 热更
+
+改 `.j2` 模板无需重建镜像。前置一次性配置完成后，每次改模板只需 ~30s。
+
+### 前置（只需做一次）
+
+```bash
+# 1. 建 ConfigMap（内容来自本地 .j2 文件）
+make hotreload-prompts
+
+# 2. helm 开启挂载 flag
+helm -n sisyphus upgrade orch ./orchestrator/helm \
+  -f my-values.yaml \
+  --set prompts.configMap.enabled=true \
+  --set image.tag="<current-sha>" \
+  --set runner.image="<current-runner-sha>"
+```
+
+### 日常热更（改完模板即跑）
+
+```bash
+make hotreload-prompts
+```
+
+这条命令做三件事：
+1. 把 `orchestrator/src/orchestrator/prompts/` 下所有 `.j2`（含 `verifier/`、`_shared/`、`_shared/hooks/`）同步到 4 个 ConfigMap
+2. `kubectl -n sisyphus rollout restart deploy/orch-sisyphus-orchestrator`
+3. 等 rollout 完成（`rollout status`）
+
+全程约 30s，新请求即用新模板。
+
+### 实现原理
+
+- k8s ConfigMap key 不允许含 `/`，故 4 个目录层用 4 个独立 ConfigMap，每个挂载到 pod 对应路径：
+
+  | ConfigMap | mountPath |
+  |---|---|
+  | `sisyphus-prompts` | `/etc/sisyphus/prompts/` |
+  | `sisyphus-prompts-verifier` | `/etc/sisyphus/prompts/verifier/` |
+  | `sisyphus-prompts-shared` | `/etc/sisyphus/prompts/_shared/` |
+  | `sisyphus-prompts-shared-hooks` | `/etc/sisyphus/prompts/_shared/hooks/` |
+
+- `SISYPHUS_PROMPTS_DIR=/etc/sisyphus/prompts` 注入到 pod，`prompts/__init__.py` 读环境变量优先使用该目录；目录为空（ConfigMap 尚未建立）时自动回退 package dir（prod 安全）。
+- `prompts.configMap.enabled=false`（默认）= 完全不挂 ConfigMap，prod 路径不变。
+
+## 13. 一句话总结
 
 **节奏不靠规划，靠 cap。** 设定每周 3-5 REQ / 每月 1 个 sisyphus release / 周末空白 / 不一句话派 REQ。Cap 是 hard limit，超过就 defer。
 

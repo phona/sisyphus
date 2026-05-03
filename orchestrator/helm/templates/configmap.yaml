@@ -54,3 +54,6 @@ data:
   {{- with .Values.env.stage_mcp_requirements }}
   SISYPHUS_STAGE_MCP_REQUIREMENTS: {{ toJson . | quote }}
   {{- end }}
+  {{- if .Values.prompts.configMap.enabled }}
+  SISYPHUS_PROMPTS_DIR: /etc/sisyphus/prompts
+  {{- end }}

@@ -253,6 +253,16 @@ observability:
   database: sisyphus_obs    # 用 postgres.user/passwordSecret 同账号连
   snapshotIntervalSec: 300  # 0 = 关掉 BKD snapshot 同步循环
 
+# ─── Prompt 热更（dogfood only）─────────────────────────────────────────────
+# 启用后 orchestrator pod 把 4 个 ConfigMap 挂到 /etc/sisyphus/prompts/，
+# 并设 SISYPHUS_PROMPTS_DIR 让 prompts/__init__.py 优先读该目录。
+# prod 默认 false：走 image 内置模板，不依赖集群 ConfigMap。
+# 使用：先 make hotreload-prompts（建 ConfigMap），再 helm upgrade 带此 flag；
+#        后续改模板只跑 make hotreload-prompts 即可（~30s rolling restart）。
+prompts:
+  configMap:
+    enabled: false
+
 probes:
   liveness:
     path: /livez

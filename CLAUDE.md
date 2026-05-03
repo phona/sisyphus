@@ -13,7 +13,7 @@
 - **薄编排，agent 决定** —— 路由 / 状态机 / checker 是 sisyphus；判 PR 内容、bug 该不该修是 agent。**永远不抢 AI 决定权**。
 - **机械层 ≠ agent 层** —— 跑测试 / 轮 GHA / 校 schema 不绕 agent，sisyphus 是唯一裁判（4 个 checker：spec_lint / dev_cross_check / staging_test / pr_ci_watch）。
 - **失败先验，再试错** —— stage fail 不直接 bugfix，verifier-agent 主观判 pass / fix / escalate（M14b/c，3 路）。
-- **指标驱动改进** —— 每条决策入 `stage_runs` / `verifier_decisions`，18 条 Metabase SQL（Q1–Q18，跨 M7 + M14e + fixer-audit + silent-pass detector）回答"哪条 prompt 该改"。
+- **指标驱动改进** —— 每条决策入 `stage_runs` / `verifier_decisions`，22 条 Metabase SQL（Q1–Q22，跨 M7 + M14e + fixer-audit + silent-pass detector + termination accounting）回答"哪条 prompt 该改"。
 - **生产用最强模型** —— 不做"失败升级模型"自适应；haiku 只用于测试加速。
 - **runner = 只读 checker** —— K8s runner pod 只 clone 源、跑测试、跑 accept-env-*；**所有 GH 写操作（push / PR create / merge）都打回 BKD Coder workspace 执行**，由 Coder gh auth 处理，跟 runner secret 完全无关。runner GH_TOKEN 应是 fine-grained PAT, Contents: Read-only。详见 [docs/architecture.md §8](docs/architecture.md)。
 
@@ -85,11 +85,59 @@ sisyphus/
 ├── scripts/                  # ACL/scenario lint 脚本（runner 镜像挂这些）
 ├── observability/
 │   ├── schema.sql / agent_quality.sql
-│   ├── queries/sisyphus/     # 18 条 Metabase SQL (Q1-Q18; M7 + M14e + fixer-audit + silent-pass)
+│   ├── queries/sisyphus/     # 22 条 Metabase SQL (Q1-Q22; M7 + M14e + fixer-audit + silent-pass + termination)
 │   └── sisyphus-dashboard.md
 ├── docs/                     # 见下方文档索引
 └── values/                   # helm values（postgresql / metabase）
 ```
+
+## CLI 工具
+
+### scripts/bkd-cli.py —— BKD REST 客户端
+
+单条/批量派单、列 issues、给现有 issue 补 intent tag、取 agent 日志。
+
+```bash
+# 单条派单并触发 orchestrator（--intent analyze / intake）
+python3 scripts/bkd-cli.py inline --slug my-feature --title "REQ 标题" --prompt-file prompt.md --intent analyze
+
+# 批量 YAML 派单
+python3 scripts/bkd-cli.py yaml reqs.yaml
+
+# 列 working 状态的 issues
+python3 scripts/bkd-cli.py list --status working
+
+# 取 issue agent 日志
+python3 scripts/bkd-cli.py logs <issue_id>
+
+# 给现有 issue 补 intent tag 重新触发
+python3 scripts/bkd-cli.py trigger-existing <issue_id> --intent analyze
+```
+
+`--base-url` 默认 `http://localhost:3000/api`；`--project` 默认 `nnvxh8wj`。完整子命令：`python3 scripts/bkd-cli.py --help`。
+
+### scripts/sisyphus-admin.py —— orch admin endpoint 客户端
+
+手动 escalate / complete / pr-merged 事件 + 直连 PG 查 `req_state`。
+
+```bash
+# 查所有 in-flight REQ（直连 PG）
+python3 scripts/sisyphus-admin.py req-status
+
+# 查单 REQ 状态历史
+python3 scripts/sisyphus-admin.py req-status <req_id>
+
+# 手动 escalate（故障兜底）
+python3 scripts/sisyphus-admin.py admin escalate <req_id> --reason "人工介入" --kind infra-bug
+
+# 手动 complete
+python3 scripts/sisyphus-admin.py admin complete <req_id>
+
+# 注入 pr-merged 事件
+python3 scripts/sisyphus-admin.py admin pr-merged <req_id> --pr-url <url> --merged-sha <sha>
+```
+
+环境变量：`SISYPHUS_ADMIN_TOKEN`（Bearer token，留空从 kubectl secret 取）。`--base-url` 留空绕 kubectl port-forward，提供（如 `http://sisyphus.43.239.84.24.nip.io`）则直接走 HTTP。完整子命令：`python3 scripts/sisyphus-admin.py --help`。
 
 ## 文档索引
 
@@ -98,9 +146,9 @@ sisyphus/
 | [docs/architecture.md](docs/architecture.md) | 架构权威：哲学、角色分工、流程图、stage 契约（含 mermaid） |
 | [docs/playbook.md](docs/playbook.md) | **开发节奏 / phase / cap / 反 pattern**（一个人+AI 搭平台的执行手册，产品 owner 自用） |
 | [docs/state-machine.md](docs/state-machine.md) | 状态机权威：state / event / transition 表 + stateDiagram |
-| [docs/integration-contracts.md](docs/integration-contracts.md) | sisyphus ↔ 业务 repo 契约（Makefile target、env、JSON 输出） |
+| [docs/integration-contracts.md](docs/integration-contracts.md) | sisyphus ↔ 业务 repo 契约（Makefile target、env、JSON 输出）；§10 接入必配 token / secret / vars 清单 |
 | [docs/observability.md](docs/observability.md) | 观测设计哲学（Postgres + Metabase） |
-| [observability/sisyphus-dashboard.md](observability/sisyphus-dashboard.md) | 18 条 Metabase SQL + 看板布局（Q1–Q18：M7 + M14e + fixer-audit + silent-pass） |
+| [observability/sisyphus-dashboard.md](observability/sisyphus-dashboard.md) | 22 条 Metabase SQL + 看板布局（Q1–Q22：M7 + M14e + fixer-audit + silent-pass + termination） |
 | [docs/prompts.md](docs/prompts.md) | 各阶段 agent prompt 总览（按 role） |
 | [docs/api-tag-management-spec.md](docs/api-tag-management-spec.md) | BKD issue tag 命名规范（router 依赖） |
 | [docs/cookbook/](docs/cookbook/) | 按 lab 形态分给 `accept-env-up/down` 实现样板（mobile lab 见 `ttpos-arch-lab-accept-env.md`） |

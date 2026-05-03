@@ -125,6 +125,36 @@ spec:
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.prompts.configMap.enabled }}
+          volumeMounts:
+            - name: prompts-root
+              mountPath: /etc/sisyphus/prompts
+            - name: prompts-verifier
+              mountPath: /etc/sisyphus/prompts/verifier
+            - name: prompts-shared
+              mountPath: /etc/sisyphus/prompts/_shared
+            - name: prompts-shared-hooks
+              mountPath: /etc/sisyphus/prompts/_shared/hooks
+          {{- end }}
+      {{- if .Values.prompts.configMap.enabled }}
+      volumes:
+        - name: prompts-root
+          configMap:
+            name: sisyphus-prompts
+            optional: true
+        - name: prompts-verifier
+          configMap:
+            name: sisyphus-prompts-verifier
+            optional: true
+        - name: prompts-shared
+          configMap:
+            name: sisyphus-prompts-shared
+            optional: true
+        - name: prompts-shared-hooks
+          configMap:
+            name: sisyphus-prompts-shared-hooks
+            optional: true
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{ toYaml . | nindent 8 }}
       {{- end }}

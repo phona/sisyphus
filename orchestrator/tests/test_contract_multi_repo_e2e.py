@@ -209,6 +209,12 @@ async def test_mrepo_clone_s9_start_analyze_passes_tags_and_default():
         async def __aexit__(self, *a):
             return False
 
+        async def merge_tags_and_update(self, *a, **kw):
+            pass
+
+        async def create_issue(self, *a, **kw):
+            return MagicMock(id="created-issue-x")
+
         async def update_issue(self, *a, **kw):
             pass
 
@@ -221,6 +227,8 @@ async def test_mrepo_clone_s9_start_analyze_passes_tags_and_default():
         patch.object(sa, "check_admission", AsyncMock(return_value=MagicMock(admit=True))),
         patch.object(sa.db, "get_pool", lambda: MagicMock()),
         patch.object(sa.req_state, "update_context", AsyncMock()),
+        patch.object(sa.dispatch_slugs, "get", AsyncMock(return_value=None)),
+        patch.object(sa.dispatch_slugs, "put", AsyncMock()),
         patch.object(sa, "BKDClient", _FakeBKD),
         patch.object(sa, "render", return_value="prompt"),
     ):

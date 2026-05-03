@@ -1,16 +1,36 @@
 """Jinja2 模板渲染 helper。
 
 模板放本目录 *.md.j2；render() 接 dict 上下文返字符串。
+热更路径：设 SISYPHUS_PROMPTS_DIR 指向 ConfigMap 挂载目录（/etc/sisyphus/prompts），
+          目录含 *.j2 时优先使用；否则回退 package dir（prod 默认路径）。
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..config import settings
 
-_PROMPT_DIR = Path(__file__).parent
+_PACKAGE_DIR = Path(__file__).parent
+
+
+def _get_prompt_dir() -> Path:
+    """返回 Jinja2 模板根目录。
+
+    SISYPHUS_PROMPTS_DIR 存在且含 *.j2 文件时返回该目录（ConfigMap 热更路径）；
+    否则回退到 package dir（prod 默认，image 内置模板）。
+    """
+    env_dir = os.environ.get("SISYPHUS_PROMPTS_DIR")
+    if env_dir:
+        candidate = Path(env_dir)
+        if candidate.is_dir() and any(candidate.glob("*.j2")):
+            return candidate
+    return _PACKAGE_DIR
+
+
+_PROMPT_DIR = _get_prompt_dir()
 _env = Environment(
     loader=FileSystemLoader(str(_PROMPT_DIR)),
     autoescape=select_autoescape(disabled_extensions=("md", "j2", "txt"), default=False),

@@ -362,6 +362,11 @@ async def step(
             archive_task = asyncio.create_task(_auto_archive(req_id, ctx))
             _cleanup_tasks.add(archive_task)
             archive_task.add_done_callback(_cleanup_tasks.discard)
+            # REQ-fix-req-termination-accounting: 终态记账（best-effort）
+            try:
+                await req_state.set_terminal_outcome(pool, req_id, "merged")
+            except Exception as _e:
+                log.warning("engine.terminal_outcome_failed", req_id=req_id, error=str(_e))
 
     # REQ-pr-ready-for-review-notify: REVIEW_RUNNING 进入时给 BKD intent issue 打 pr-ready tag
     if transition.next_state == ReqState.REVIEW_RUNNING:
