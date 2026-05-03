@@ -9,7 +9,11 @@
 # ── orchestrator image ────────────────────────────────────────────
 image:
   repository: ghcr.io/phona/sisyphus-orchestrator
-  tag: main                       # 实际跑的 tag；CI 自动覆盖到最新 sha
+  # tag 必填且必须 immutable git-sha（issue #267）。
+  # 部署时 helm upgrade --set image.tag=sha-<short> 注入；
+  # 这里留空字符串占位，让"忘记 --set"时 helm 报 "values.image.tag is required"
+  # 而不是渲染出 `:` 这种损坏的 image ref。
+  tag: ""
   pullPolicy: IfNotPresent
 
 replicaCount: 1                    # 多副本对状态机 dedup 无帮助
@@ -76,7 +80,7 @@ runner:
   createRbac: true               # 建 SA/Role/RoleBinding
   serviceAccountName: sisyphus-runner-sa
 
-  image: ghcr.io/phona/sisyphus-runner-go:main
+  image: ""                      # 必填且必须 immutable sha；部署时 --set runner.image=ghcr.io/phona/sisyphus-runner-go:sha-<short>
   storageClass: local-path       # K3s 默认
   workspaceSize: 10Gi
   readyTimeoutSec: 120

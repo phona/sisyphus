@@ -566,6 +566,106 @@ def test_parse_exit_marker_nonzero():
     assert _parse_exit_marker(stdout) == 127
 
 
+# ─── exec env injection (#280): inline export, not `env KEY=VAL <cmd>` shim ──
+
+@pytest.mark.asyncio
+async def test_exec_in_runner_uses_inline_export_not_env_shim(monkeypatch):
+    """Regression #280: env injection must work with builtin-headed commands.
+
+    Old impl wrapped command as `env KEY=VAL <cmd>`, which made `env` try to
+    fork the next token as a binary. For commands like `cd <dir> && make ...`
+    or `set +e`, env saw `cd` / `set` (shell builtins) and exit-127'd with
+    `env: 'cd': No such file or directory` —— exact failure observed on
+    REQ-657 accept-env-up retry. Fix: inline `export K=V; <cmd>` so all
+    builtin / control-flow constructs run inside the bash -c subshell.
+    """
+    captured: dict = {}
+
+    class _FakeStream:
+        def __init__(self):
+            self._open = False  # no I/O — we just want to capture command
+
+        def update(self, timeout=None):
+            self._open = False
+
+        def is_open(self):
+            return self._open
+
+        def peek_stdout(self):
+            return False
+
+        def peek_stderr(self):
+            return False
+
+        def read_stdout(self):
+            return ""
+
+        def read_stderr(self):
+            return ""
+
+    def _fake_exec(api_fn, *args, command=None, **kwargs):
+        captured["command"] = command
+        return _FakeStream()
+
+    rc = _make_controller()
+
+    # patch the internal stream wrapper
+    async def _k8s_passthrough(fn, *args, **kwargs):
+        return _fake_exec(fn, *args, **kwargs)
+
+    monkeypatch.setattr(rc, "_k8s", _k8s_passthrough)
+
+    # Builtin-headed command — old shim would explode.
+    await rc._exec_once(
+        "REQ-test", "cd /workspace/source/foo && make accept-env-up",
+        env={"SISYPHUS_REQ_ID": "REQ-test", "SISYPHUS_STAGE": "accept"},
+        workdir="/workspace", timeout_sec=5,
+    )
+
+    cmd_argv = captured["command"]
+    assert cmd_argv[:2] == ["/bin/bash", "-c"]
+    full_cmd = cmd_argv[2]
+    # New form: env vars exported inline (no `env KEY=VAL <cmd>` shim).
+    assert "export SISYPHUS_REQ_ID=" in full_cmd
+    assert "export SISYPHUS_STAGE=" in full_cmd
+    assert "env SISYPHUS_REQ_ID=" not in full_cmd
+    assert "env SISYPHUS_STAGE=" not in full_cmd
+    # Original command is preserved verbatim downstream of the exports.
+    assert "cd /workspace/source/foo && make accept-env-up" in full_cmd
+
+
+@pytest.mark.asyncio
+async def test_exec_in_runner_no_env_keeps_command_clean(monkeypatch):
+    """No env arg → no export prefix; command runs directly."""
+    captured: dict = {}
+
+    class _FakeStream:
+        def update(self, timeout=None): pass
+        def is_open(self): return False
+        def peek_stdout(self): return False
+        def peek_stderr(self): return False
+        def read_stdout(self): return ""
+        def read_stderr(self): return ""
+
+    rc = _make_controller()
+
+    async def _k8s_passthrough(fn, *args, **kwargs):
+        captured["command"] = kwargs.get("command")
+        return _FakeStream()
+
+    monkeypatch.setattr(rc, "_k8s", _k8s_passthrough)
+
+    await rc._exec_once(
+        "REQ-x", "make ci-unit-test", env=None,
+        workdir="/workspace", timeout_sec=5,
+    )
+
+    full_cmd = captured["command"][2]
+    assert "export " not in full_cmd
+    assert "env " not in full_cmd  # no shim
+    assert "make ci-unit-test" in full_cmd
+
+
 def test_parse_exit_marker_missing():
     assert _parse_exit_marker("no marker here\n") is None
 

@@ -77,13 +77,29 @@ _SUB_AGENT_ROLE_TAGS: frozenset[str] = frozenset({
     "analyze", "challenger", "fixer", "accept",
 })
 
+# REQ-feat-watchdog-self-heal-1777723955：这些 stage 的 session.completed 必须带 result tag
+# 才能被 router 识别并推进状态机。若 session ended 但 result tag 缺失，说明是 BKD empty-text
+# 双 retry 用尽或 PATCH race 导致 —— 直接 follow-up 唤醒 agent，不消耗 auto_retry_count。
+_STAGES_NEEDING_RESULT_TAG: frozenset[ReqState] = frozenset({
+    ReqState.INTAKING,
+    ReqState.CHALLENGER_RUNNING,
+    ReqState.STAGING_TEST_RUNNING,
+    ReqState.PR_CI_RUNNING,
+    ReqState.ACCEPT_RUNNING,
+    ReqState.FIXER_RUNNING,
+})
+
+
+def _has_result_tag(tags: list[str]) -> bool:
+    """issue tags 中是否包含 result/pr-ci 类完工标记。"""
+    return any(t.startswith(("result:", "pr-ci:")) for t in tags)
+
 # 排除：终态 + 等人态（human-in-loop）+ 未入链
 # human-in-loop states 同时存于 _NO_WATCHDOG_STATES（ReqState 对象）和此处（string value），
 # 使 _SKIP_STATES 成为 canonical container（spec USER-S12 / watchdog skip 查询均引用此集合）。
 _SKIP_STATES = {
     ReqState.DONE.value,
     ReqState.ESCALATED.value,
-    ReqState.GH_INCIDENT_OPEN.value,
     ReqState.INIT.value,
     ReqState.INTAKING.value,
     ReqState.PENDING_USER_REVIEW.value,
@@ -251,6 +267,7 @@ async def _check_and_escalate(row) -> bool:
 
     # 1. 查 BKD session 状态（有 issue_id 才查）
     still_running = False
+    issue = None
     if issue_id:
         try:
             async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
@@ -315,6 +332,43 @@ async def _check_and_escalate(row) -> bool:
                 stuck_sec=stuck_sec, ended_cap=policy.ended_sec,
             )
             return False
+
+        # REQ-feat-watchdog-self-heal-1777723955：session ended 但 result tag 缺失
+        # → BKD empty-text 双 retry 用尽或 PATCH race。直接 follow-up 唤醒 agent，
+        # 不消耗 auto_retry_count，避免误 escalate 正常只差 tag 的 session。
+        # 限制：
+        #   - issue 必须能查到（BKD lookup 失败 → 保守 escalate）
+        #   - session_status 必须是 "completed"（"failed" 是真失败，走 escalate）
+        if issue is not None and issue.session_status == "completed" and state in _STAGES_NEEDING_RESULT_TAG:
+            if not _has_result_tag(issue.tags or []):
+                log.warning(
+                    "watchdog.session_ended_without_result",
+                    req_id=req_id, state=state_str,
+                    issue_id=issue_id, stuck_sec=stuck_sec,
+                )
+                try:
+                    async with BKDClient(
+                        settings.bkd_base_url, settings.bkd_token,
+                    ) as bkd:
+                        await bkd.follow_up_issue(
+                            project_id, issue_id,
+                            "Session completed but no result tag was found. "
+                            "Please review your previous work and output "
+                            "the required result tag.",
+                        )
+                    log.info(
+                        "watchdog.self_healed",
+                        req_id=req_id, state=state_str,
+                        issue_id=issue_id,
+                    )
+                    return False
+                except Exception as e:
+                    log.warning(
+                        "watchdog.self_heal_follow_up_failed",
+                        req_id=req_id, issue_id=issue_id,
+                        error=str(e),
+                    )
+                    # fall through to normal escalate
 
     # 4. 选 body.event：未列出的 state 通用 watchdog.stuck
     body_event = _STATE_FAILURE_EVENT.get(state, "watchdog.stuck")

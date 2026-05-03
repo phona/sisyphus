@@ -15,6 +15,8 @@ sisyphus M18：challenger-agent 设了 `result:fail`。它的任务是**根据 s
 ```
 {% endif %}
 
+{% include "verifier/_checker_output.md.j2" %}
+
 ### 关注点
 - challenger 在 BKD chat 写"spec 自相矛盾" → `fix` + `fixer=spec` + `target_repo=<spec home repo>` + scope 指 spec.md / contract.spec.yaml 的具体段落
 - challenger 写"spec 漏关键字段"（比如说"返 JSON" 但没说 schema）→ `fix` + `fixer=spec`

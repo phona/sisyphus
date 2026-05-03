@@ -1,0 +1,68 @@
+name: thanatos-image
+
+# build & push thanatos MCP server image to GHCR.
+# 触发：
+#   - pull_request: build but don't push（验证 Dockerfile 改动能 build）
+#   - push main / 打 thanatos-v* tag: build + push
+# 输出 tag：sha-<short> + branch tag (:main，仅 debug；deployment 一律 pin sha)
+#         + 打 thanatos-v* 时 semver + :latest
+
+on:
+  pull_request:
+    paths:
+      - 'thanatos/**'
+      - '.github/workflows/thanatos-image.yml'
+  push:
+    branches: [main]
+    tags: ['thanatos-v*']
+    paths:
+      - 'thanatos/**'
+      - '.github/workflows/thanatos-image.yml'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/thanatos
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=match,pattern=thanatos-v(.*),group=1
+            type=match,pattern=thanatos-v(\d+\.\d+),group=1
+            type=match,pattern=thanatos-v(\d+),group=1
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/thanatos-v') }}
+
+      - name: Build (push only on push events; PR 阶段只验 Dockerfile 能 build)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./thanatos
+          file: ./thanatos/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -554,37 +554,37 @@ async def test_recursion_depth_guard(stub_actions, monkeypatch):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# REQ-verifier-stagerun-close: VERIFY_PASS self-loop must close verifier stage_run
+# REQ-verifier-stagerun-close: 显式 transition 离开 REVIEW_RUNNING 时自动 close verifier
 # ═══════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
-async def test_verify_pass_closes_orphan_verifier_stage_run(stub_actions):
-    """(REVIEW_RUNNING, VERIFY_PASS) 是 transition 表的 self-loop，但
-    apply_verify_pass 内部手 CAS，绕过 _record_stage_transitions。fix 后 engine 必须
-    显式 close verifier 那条 stage_run（outcome='pass'），否则 ended_at 永远 NULL。
+async def test_verify_pass_explicit_transition_closes_verifier_and_opens_next_stage(stub_actions):
+    """REQ-refactor-verify-pass-transition-1777727230：(REVIEW_RUNNING, DEV_CROSS_CHECK_PASS) 是
+    显式 transition → STAGING_TEST_RUNNING + create_staging_test。engine._record_stage_transitions
+    看到 cur≠next，自动 close verifier（outcome='pass'）+ open staging_test。
     """
     calls, reg = stub_actions
 
-    async def apply_verify_pass(*, body, req_id, tags, ctx):
-        calls.append(("apply_verify_pass", {"req_id": req_id}))
+    async def create_staging_test(*, body, req_id, tags, ctx):
+        calls.append(("create_staging_test", {"req_id": req_id}))
         return {"ok": True}
 
-    reg["apply_verify_pass"] = apply_verify_pass
+    reg["create_staging_test"] = create_staging_test
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.REVIEW_RUNNING.value)})
     body = type("B", (), {"issueId": "v-1", "projectId": "p", "event": "session.completed"})()
     await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p",
-        tags=["verifier", "REQ-1", "verify:spec_lint"],
+        tags=["verifier", "REQ-1", "verify:dev_cross_check"],
         cur_state=ReqState.REVIEW_RUNNING,
-        ctx={"verifier_stage": "spec_lint"}, event=Event.VERIFY_PASS,
+        ctx={"verifier_stage": "dev_cross_check"}, event=Event.DEV_CROSS_CHECK_PASS,
     )
 
-    # transition 表声明的 self-loop：state 不变
-    assert pool.rows["REQ-1"].state == ReqState.REVIEW_RUNNING.value
+    # 显式 transition：state 推进到 STAGING_TEST_RUNNING
+    assert pool.rows["REQ-1"].state == ReqState.STAGING_TEST_RUNNING.value
 
-    # close_latest_stage_run 必须被调一次：req_id, stage='verifier', outcome='pass', fail_reason=None
+    # close verifier（outcome='pass'）
     closes = [c for c in pool.stage_runs_calls if c[0] == "close"]
     assert len(closes) == 1, f"expected exactly 1 close, got {pool.stage_runs_calls!r}"
     _, _, args = closes[0]
@@ -593,9 +593,11 @@ async def test_verify_pass_closes_orphan_verifier_stage_run(stub_actions):
     assert args[2] == "pass"
     assert args[3] is None
 
-    # 不应该 open 任何新 stage_run（self-loop 不进入新 *_RUNNING）
+    # open staging_test
     inserts = [c for c in pool.stage_runs_calls if c[0] == "insert"]
-    assert inserts == []
+    assert len(inserts) == 1
+    _, _, insert_args = inserts[0]
+    assert insert_args[1] == "staging_test"
 
 
 @pytest.mark.asyncio
@@ -637,8 +639,8 @@ async def test_verify_fix_needed_still_closes_verifier_via_normal_path(stub_acti
 
 @pytest.mark.asyncio
 async def test_review_running_self_loop_other_event_does_not_close_verifier(stub_actions):
-    """fix 必须只在 event == VERIFY_PASS 触发；其他 REVIEW_RUNNING self-loop 事件
-    （如 SESSION_FAILED 经状态机 self-loop 给 escalate action 自决）不动 verifier stage_run。
+    """SESSION_FAILED 等 REVIEW_RUNNING self-loop 事件不动 verifier stage_run。
+    verifier stage_run 只在离开 REVIEW_RUNNING（如显式 pass transition）时由通用 leave 路径关闭。
     """
     calls, reg = stub_actions
 

@@ -20,7 +20,7 @@
   `staging-test-running` 三个 checker stage 内部从单仓变成 for-each-repo 遍历
   （任一仓红 → stage fail）。状态机层面无影响。
 
-## 2. ReqState 枚举（17 个）
+## 2. ReqState 枚举（16 个）
 
 | state | 含义 | 类型 |
 |---|---|---|
@@ -38,7 +38,7 @@
 | `pending-user-review` | **REQ-bkd-acceptance-feedback-loop-1777278984** accept teardown 通过后停一手等用户 BKD intent issue statusId 表态（`done` = approve, `review`/`blocked` = 要返工）—— human-loop-conversation 类，watchdog 不杀 | in-flight |
 | `review-running` | **M14b** verifier-agent 在跑（success / fail 两触发统一入口） | in-flight |
 | `fixer-running` | **M14b** decision=fix → 起对应 fixer agent | in-flight |
-| `gh-incident-open` | ~~（已规划，未启用）GitHub issue 已开等人 \| wait-human~~ — 设计被 PR #118 / #122 重新走"escalate side-effect"路：进 ESCALATED 时 `escalate` action 调 `gh_incident.open_incident()`，对**每个 involved source repo**（intake_finalized_intent / ctx.involved_repos / `repo:` tag / `default_involved_repos` / `settings.gh_incident_repo` 5 层 fallback）独立 POST 一条 GH issue，URL 写入 `ctx.gh_incident_urls: dict[str, str]`，**不引入新 state**。enum 仍保留，但 TRANSITIONS 表无任何条目用到它，相当于 dead code，下次大改 state 表时删 |
+| `gh-incident-open` | ~~（已规划，未启用）GitHub issue 已开等人 \| wait-human~~ — 设计被 PR #118 / #122 重新走"escalate side-effect"路：进 ESCALATED 时 `escalate` action 调 `gh_incident.open_incident()`，对**每个 involved source repo**（intake_finalized_intent / ctx.involved_repos / `repo:` tag / `default_involved_repos` / `settings.gh_incident_repo` 5 层 fallback）独立 POST 一条 GH issue，URL 写入 `ctx.gh_incident_urls: dict[str, str]`，**不引入新 state**。enum 已于本次 cleanup 移除，仅保留在文档作为历史记录 |
 | **`done`** | REQ 完成 | **terminal** |
 | **`escalated`** | 熔断 / session-failed / 人工止损 | **terminal** |
 

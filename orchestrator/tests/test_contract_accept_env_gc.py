@@ -614,7 +614,7 @@ async def test_aegc_s13_startup_starts_loop_when_controller_ok_and_interval_posi
     from orchestrator import k8s_runner
 
     monkeypatch.setattr(main_mod, "_bg_tasks", [])
-    monkeypatch.setattr("orchestrator.main.apply_pending", lambda dsn: None)
+    monkeypatch.setattr("orchestrator.main.apply_pending", lambda *a, **kw: None)
     monkeypatch.setattr("orchestrator.main.db.init_pool", AsyncMock())
     monkeypatch.setattr("orchestrator.main.db.init_obs_pool", AsyncMock())
     monkeypatch.setattr("orchestrator.main.settings.accept_env_gc_interval_sec", 900)
@@ -665,7 +665,7 @@ async def test_aegc_s14_startup_skips_loop_when_controller_fails(monkeypatch):
     import orchestrator.main as main_mod
 
     monkeypatch.setattr(main_mod, "_bg_tasks", [])
-    monkeypatch.setattr("orchestrator.main.apply_pending", lambda dsn: None)
+    monkeypatch.setattr("orchestrator.main.apply_pending", lambda *a, **kw: None)
     monkeypatch.setattr("orchestrator.main.db.init_pool", AsyncMock())
     monkeypatch.setattr("orchestrator.main.db.init_obs_pool", AsyncMock())
     monkeypatch.setattr("orchestrator.main.settings.accept_env_gc_interval_sec", 900)

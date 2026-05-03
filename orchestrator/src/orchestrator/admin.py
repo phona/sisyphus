@@ -37,6 +37,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from . import accept_env_gc, engine, k8s_runner, runner_gc
+from . import router as router_lib
 from .bkd import BKDClient
 from .config import settings
 from .state import Event, ReqState
@@ -314,7 +315,7 @@ async def resume_req(
     """从 ESCALATED 派 verifier 决策 Event，走合法 transition 推进状态机。
 
     跟 BKD verifier follow-up 路径并行：两条路径都最终命中
-    `(ESCALATED, VERIFY_PASS) → REVIEW_RUNNING (apply_verify_pass)` 或
+    `(ESCALATED, <stage>_PASS) → <next_stage>_RUNNING`（显式 transition）或
     `(ESCALATED, VERIFY_FIX_NEEDED) → FIXER_RUNNING (start_fixer)`，
     区别仅在事件来源（BKD verifier 路径有 verifier_decisions 行；admin
     路径靠 ctx.resumed_by_admin 标识）。
@@ -341,8 +342,8 @@ async def resume_req(
             ),
         )
 
-    # action=pass 必须有可路由的 verifier_stage（apply_verify_pass 拿不到会
-    # emit VERIFY_ESCALATE 走自循环，对调用方静默 —— 早 fail 给清晰错误）。
+    # action=pass 必须有可路由的 verifier_stage（pass_event_for_stage 拿不到 stage
+    # 会回退 VERIFY_PASS，而 transition 表已无 VERIFY_PASS → 引擎 skip；早 fail 给清晰错误）。
     effective_stage = body.stage or (row.context or {}).get("verifier_stage")
     if body.action == "pass" and not effective_stage:
         raise HTTPException(
@@ -371,9 +372,18 @@ async def resume_req(
     if row is None:  # 极小概率：admin 调用前并发删 row
         raise HTTPException(status_code=404, detail=f"req {req_id} not found")
 
-    event = (
-        Event.VERIFY_PASS if body.action == "pass" else Event.VERIFY_FIX_NEEDED
-    )
+    if body.action == "pass":
+        event = router_lib.pass_event_for_stage(effective_stage)
+        if event is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"unknown verifier stage {effective_stage!r} for action=pass; "
+                    f"known stages: {list(router_lib._VERIFY_PASS_ROUTING.keys())}"
+                ),
+            )
+    else:
+        event = Event.VERIFY_FIX_NEEDED
     fake = _FakeBody(req_id, row.project_id)
     log.warning(
         "admin.resume",

@@ -1,8 +1,11 @@
+{% set stage = "accept" %}
 {% include "_shared/tools_whitelist.md.j2" %}
 
 ─────────
 
-{% include "_shared/self_issue_constraint.md.j2" %}
+{% for _hook in enabled_prompt_hooks %}
+{% include "_shared/hooks/" + _hook + ".md.j2" %}
+{% endfor %}
 
 ─────────
 
@@ -83,12 +86,48 @@ kubectl -n {{ thanatos_namespace }} exec -i {{ thanatos_pod }} -- python -m than
 - `spec_path`: `$SPEC_PATH`
 - `endpoint`: `{{ endpoint }}`
 
-thanatos 会返回每个 scenario 的 pass/fail + evidence。你只需：
+thanatos 会返回每个 scenario 的 pass/fail + evidence + **kb_updates**。你需要：
 1. 确认 thanatos server 能启动
 2. 调用 `run_all` 或逐个调用 `run_scenario`
-3. 收集结果，写报告
+3. 收集结果，**合并所有 scenario 的 kb_updates**
+4. 写报告 + commit kb_updates 到 feature 分支
 
-### Step 4: 报告
+### Step 4: 把 kb_updates commit 到 feature 分支
+
+每个 scenario 返回的 `kb_updates` 是 `[{path, action: "patch"|"append", content}]`
+列表，对应 `.thanatos/anchors.md` / `flows.md` / `pitfalls.md` 等 KB 文件的
+增量。**这一步是「漂移自愈 KB」机制的写入路径**——thanatos 算 delta，
+accept-agent 顺手 commit；下次 recall 就能命中，省去重新探索。
+
+**仅当至少一个 scenario 返回非空 kb_updates 时执行**：
+
+1. 在 BKD Coder workspace（你跑 BKD agent 这边）clone source repo（如果还没）：
+   ```bash
+   cd /tmp && rm -rf source-{{ thanatos_skill_repo }} && \
+     git clone -b "{{ branch }}" \
+       "https://x-access-token:$GITHUB_TOKEN@github.com/<org>/{{ thanatos_skill_repo }}.git" \
+       source-{{ thanatos_skill_repo }}
+   cd source-{{ thanatos_skill_repo }}
+   ```
+
+2. 合并 kb_updates 后 apply：
+   - `action=patch`：定位文件中的 marker / 上下文做 in-place 替换
+   - `action=append`：追加到文件末尾
+   - 跨 scenario 同 path 同 action 的 content 去重
+   - 如果文件不存在，按 path 创建（如首次跑出 `.thanatos/pitfalls.md`）
+
+3. commit + push：
+   ```bash
+   git add .thanatos/
+   git -c user.email='accept-agent@sisyphus' -c user.name='sisyphus accept-agent' \
+     commit -m "chore(.thanatos): kb_updates from accept run [{{ req_id }}]"
+   git push origin HEAD
+   ```
+
+> **不要在 runner pod 里跑 git push**——runner GH_TOKEN 是 Read-only PAT。
+> 必须在 BKD Coder workspace（写权限那侧）。
+
+### Step 5: 报告
 
 在本 issue follow-up 追加：
 
@@ -97,6 +136,11 @@ thanatos 会返回每个 scenario 的 pass/fail + evidence。你只需：
 
 - <scenario-id>: PASS
 - <scenario-id>: FAIL — <failure_hint>
+
+## KB Updates
+
+- 写入 N 条 kb_updates（patches=X append=Y）→ commit `<sha>` 推到 `<branch>`
+- 或：本次无 kb_updates
 ```
 
 ### Step 5: 贴 PR 管理 comment（含 BKD 反向控制通道入口）

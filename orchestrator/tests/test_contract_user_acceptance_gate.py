@@ -458,7 +458,6 @@ def test_USER_S12_pending_user_review_in_skip_states():
     for legacy in (
         ReqState.DONE.value,
         ReqState.ESCALATED.value,
-        ReqState.GH_INCIDENT_OPEN.value,
         ReqState.INIT.value,
         ReqState.INTAKING.value,
     ):

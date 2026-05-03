@@ -18,7 +18,7 @@ Scenarios covered:
   VLT-S9   (REVIEW_RUNNING, VERIFY_ESCALATE) → ESCALATED + cleanup_runner fire-and-forget
   VLT-S10  (FIXER_RUNNING, FIXER_DONE) → REVIEW_RUNNING, stage_runs: close fixer/pass + insert verifier
   VLT-S11  (FIXER_RUNNING, VERIFY_ESCALATE) → ESCALATED + escalate dispatched
-  VLT-S12  (ESCALATED, VERIFY_PASS) → ESCALATED self-loop + apply_verify_pass dispatched, no cleanup
+  VLT-S12  (ESCALATED, PR_CI_PASS) → ACCEPT_RUNNING + create_accept (explicit transition resume), no cleanup
   VLT-S13  (ESCALATED, VERIFY_FIX_NEEDED) → FIXER_RUNNING + start_fixer dispatched
   VLT-S14  (ESCALATED, VERIFY_ESCALATE) → ESCALATED no-op self-loop, no cleanup_runner
   VLT-S15  13× (*_RUNNING, SESSION_FAILED) → self-loop + escalate dispatch, no cleanup
@@ -427,14 +427,17 @@ async def test_vlt_s11_fixer_round_cap_escapes_to_escalated(monkeypatch) -> None
     )
 
 
-# ─── VLT-S12: ESCALATED + VERIFY_PASS → self-loop, apply_verify_pass ─────────
+# ─── VLT-S12: ESCALATED + stage pass → resume via explicit transition ─────────
 
 
 @pytest.mark.asyncio
-async def test_vlt_s12_escalated_verify_pass_dispatches_apply_verify_pass(
+async def test_vlt_s12_escalated_stage_pass_resumes_via_explicit_transition(
     monkeypatch,
 ) -> None:
-    """VLT-S12: (ESCALATED, VERIFY_PASS) → ESCALATED self-loop + apply_verify_pass.
+    """VLT-S12: (ESCALATED, PR_CI_PASS) → ACCEPT_RUNNING + create_accept.
+    REQ-refactor-verify-pass-transition-1777727230: VERIFY_PASS removed;
+    router translates decision=pass to stage-specific pass event.
+    ESCALATED uses _ESCALATED_RESUME_EVENT_SOURCES to reuse main-chain transition.
     cur_state is terminal → engine MUST NOT trigger cleanup_runner."""
     from orchestrator import engine
     from orchestrator.actions import REGISTRY
@@ -453,28 +456,30 @@ async def test_vlt_s12_escalated_verify_pass_dispatches_apply_verify_pass(
     calls: list[str] = []
 
     async def _stub(**_kw):
-        calls.append("apply_verify_pass")
+        calls.append("create_accept")
         return {}
 
-    REGISTRY["apply_verify_pass"] = _stub
+    REGISTRY["create_accept"] = _stub
 
     result = await _step(
         cur_state=ReqState.ESCALATED,
-        event=Event.VERIFY_PASS,
+        event=Event.PR_CI_PASS,
         tags=["verifier", _REQ_ID, "verify:pr_ci"],
         ctx={"verifier_stage": "pr_ci"},
     )
     await asyncio.sleep(0)
 
-    assert result.get("action") == "apply_verify_pass", (
-        f"VLT-S12: action MUST be 'apply_verify_pass'; got {result!r}"
+    assert result.get("action") == "create_accept", (
+        f"VLT-S12: action MUST be 'create_accept'; got {result!r}"
     )
-    # self-loop: CAS next_state == ESCALATED
+    assert result.get("next_state") == ReqState.ACCEPT_RUNNING.value, (
+        f"VLT-S12: next_state MUST be 'accept-running'; got {result!r}"
+    )
     cas_next = cas.call_args.args[3]
-    assert cas_next == ReqState.ESCALATED, (
-        f"VLT-S12: CAS MUST be self-loop to ESCALATED; got {cas_next!r}"
+    assert cas_next == ReqState.ACCEPT_RUNNING, (
+        f"VLT-S12: CAS MUST advance to ACCEPT_RUNNING; got {cas_next!r}"
     )
-    assert len(calls) == 1, "VLT-S12: apply_verify_pass MUST be awaited exactly once"
+    assert len(calls) == 1, "VLT-S12: create_accept MUST be awaited exactly once"
     assert cleanup_calls == [], (
         f"VLT-S12: cleanup_runner MUST NOT be triggered (cur is terminal); "
         f"got {cleanup_calls!r}"

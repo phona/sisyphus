@@ -2,7 +2,9 @@
 
 ─────────
 
-{% include "_shared/self_issue_constraint.md.j2" %}
+{% for _hook in enabled_prompt_hooks %}
+{% include "_shared/hooks/" + _hook + ".md.j2" %}
+{% endfor %}
 
 ─────────
 
@@ -82,13 +84,17 @@ kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
 
 防 trivial 回归把球踢回 verifier 多走一轮（本来 fixer 就是来修问题的，又引入新的 lint 错就是浪费 round）。
 
-对你这轮**修过的每个 source repo** 跑（BASE_REV 用仓真实 default_branch，
-default 非 main 的仓如 ttpos-server-go/release 同样能算到 merge-base，避免全量
-扫历史包袱）：
+对你这轮**修过的每个 source repo** 跑（BASE_REV 优先用显式指定的 base_branch，
+没有则 fallback 到 origin/HEAD，避免全量扫历史包袱）：
 ```bash
 kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
   "cd /workspace/source/REPO && \
-   default_branch=\$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@') && \
+   {% if base_branch %}base_branch='{{ base_branch }}'{% else %}base_branch=''{% endif %} && \
+   if [ -n \"\$base_branch\" ]; then \
+     default_branch=\"\$base_branch\"; \
+   else \
+     default_branch=\$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@'); \
+   fi && \
    BASE_REV=\$(git merge-base HEAD \"origin/\${default_branch:-main}\") make ci-lint"
 ```
 

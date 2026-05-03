@@ -202,3 +202,57 @@
 **节奏不靠规划，靠 cap。** 设定每周 3-5 REQ / 每月 1 个 sisyphus release / 周末空白 / 不一句话派 REQ。Cap 是 hard limit，超过就 defer。
 
 **Cap 比 plan 重要**——一个人 + AI 的项目死在"我应该再做点"的本能上，活在"我今天不做了"的纪律上。
+
+## 13. 运维 Troubleshooting
+
+### Helm field manager 冲突（`conflict with "kubectl-patch"`）
+
+**症状**
+
+```
+Error: UPGRADE FAILED: conflict occurred while applying object sisyphus/orch-sisyphus-orchestrator /v1, Kind=ConfigMap:
+  Apply failed with 1 conflict: conflict with "kubectl-patch" using v1: .data.SISYPHUS_SKIP_ACCEPT
+```
+
+**根因**
+
+之前用过 `kubectl patch` / `kubectl edit` 直接改了 helm chart 管的资源。helm upgrade 走 server-side apply，看见同一字段同时被 `helm` 和 `kubectl-patch` 两个 field manager 声明 → conflict。
+
+**诊断**
+
+```bash
+kubectl get <kind> <name> -n sisyphus -o yaml --show-managed-fields \
+  | grep -A5 managedFields
+```
+
+找到占用字段的 manager（如 `kubectl-patch`），确认是哪个字段冲突。
+
+**临时解（短期 unblock）**
+
+选项 A — 让 helm 抢回 ownership（推荐）：
+
+```bash
+helm template <release> <chart> -f values.yaml \
+  | kubectl apply -f - --server-side --force-conflicts -n sisyphus
+```
+
+选项 B — 手动把字段 ownership 转回 helm：
+
+```bash
+kubectl patch <kind> <name> -n sisyphus \
+  --type=json \
+  -p='[{"op":"replace","path":"/data/<FIELD>","value":"<VALUE>"}]' \
+  --field-manager=helm
+```
+
+选项 B 只转一个字段，冲突字段多时改用选项 A。
+
+**长期修法**（跟踪 #297，待后续 PR）
+
+用脚本批量把所有字段 ownership 归还给 helm，或在 helm chart 上加 `force-conflicts` annotation。#297 继续 open 跟踪。
+
+**预防原则**
+
+- **禁止** 用 `kubectl patch` / `kubectl edit` 修改 chart 管的资源字段。
+- 要改配置 → 改 `values/` 下的 yaml + `helm upgrade --reuse-values -f new-values.yaml`。
+- 紧急临时改用 `helm upgrade --set key=value` 而非直接 kubectl 写字段。

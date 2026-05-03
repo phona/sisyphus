@@ -6,9 +6,15 @@ replicaCount: 1   # 状态机靠 PG CAS 串行，多副本无害但 dedup 无意
 
 image:
   # GHCR：CI 推到 ghcr.io/<github-owner>/sisyphus-orchestrator
-  # tag 推送规则见 .github/workflows/orchestrator-ci.yml
+  # tag 推送规则见 .github/workflows/orchestrator-image.yml
   repository: ghcr.io/phona/sisyphus-orchestrator
-  tag: ""                     # 留空 → 用 Chart.appVersion；用 main 镜像填 "main"
+  # tag 必填，且必须是 immutable git-sha（如 "sha-abc1234"）。**禁止用 mutable tag**
+  # （:main / :latest）—— mutable tag 看不出对应哪个 commit，且 IfNotPresent 时
+  # 节点缓存的旧镜像永远不会刷新（issue #267）。
+  # 部署：helm upgrade --set image.tag="sha-${GITHUB_SHA::7}" ...
+  # tag 留空时 deployment.yaml 的 required 校验会让 helm template / install 报错。
+  tag: ""
+  # immutable tag 下 IfNotPresent 是正解（同 tag = 同镜像，节点缓存反而是好事）
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -65,6 +71,14 @@ resources:
 # 跑 yoyo apply 用的初始化 init-container（同样的镜像）
 migrations:
   enabled: true
+  timeout: 300
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
 
 # ─── 业务配置（注入 SISYPHUS_* env）──────────────────────────────────────
 env:
@@ -83,6 +97,34 @@ env:
   # 多仓 / 跨项目部署：在你的 my-values.yaml 里 override 成空 [] 或 ['phona/foo','phona/bar']。
   default_involved_repos:
     - phona/sisyphus
+
+  # ─── REQ-base-branch-override-1777480690：全局默认 base branch ───────────
+  # 当用户没打 base:* tag、且 intake finalized intent 也没声明 base_branch 时，
+  # 用这里配置的值作为 fallback。解决"GitHub default branch = release 但开发主线
+  # 是 develop"的场景。空字符串 = 不覆盖（走 origin/HEAD 兜底）。
+  default_base_branch: ""
+  # per-repo 默认：{"ttpos-flutter": "develop", "ttpos-server-go": "release"}
+  # 优先级：tag > finalized_intent > per-repo settings > global settings > origin/HEAD
+  default_base_branches: {}
+
+  # ─── REQ-feat-mcp-preflight-1777727213：可插拔 prompt hook + MCP capability ───
+  # 留空 = 走 orchestrator/src/orchestrator/config.py 的 default_factory
+  # （analyze/challenger/accept 用 aissh-tao + servers_list，hook 列表 =
+  # [mcp_preflight, self_issue_constraint]）；非空 = 全量覆盖 default。
+  # 调试时关 preflight：`--set 'env.enabled_prompt_hooks={self_issue_constraint}'`。
+  # 换 MCP（aissh-tao → 自家 SSH MCP）：覆盖 mcp_capability_providers.ssh_exec
+  # 跟 mcp_capability_probe_tools.ssh_exec，prompt 模板不动。
+  enabled_prompt_hooks: []
+  # capability → 提供该 capability 的 MCP provider 名（mcp__<provider>__* 的 provider）。
+  # k8s_exec 跟 ssh_exec 共用 aissh-tao（aissh-tao 通过 SSH 跑 kubectl）。
+  mcp_capability_providers: {}
+  # capability → MCP 探活工具名（preflight 段渲出的 mcp__<provider>__<tool>）。
+  # 换 MCP 时如果工具表面变了（aissh-tao servers_list → 别家 list_servers），改这里。
+  mcp_capability_probe_tools: {}
+  # stage → 该 stage 必须的 MCP capability 列表，控制哪些 stage 渲 preflight 段。
+  # intake = [] 是有意：brainstorm chat 不该被 preflight 卡住。
+  stage_mcp_requirements: {}
+
   # ─── Mock / 调试开关（生产全 false）─────────────────────────────
   # 任一 stage skip = create_<stage> 不调 BKD agent，直接 emit done/pass
   # test_mode: true = 全部 skip，秒级走完整 state 机
@@ -118,7 +160,16 @@ runner:
   createRbac: true            # 自动建 Role/RoleBinding 给 orchestrator SA 管 ns
   serviceAccountName: sisyphus-runner-sa   # runner Pod 跑的 SA
 
-  image: ghcr.io/phona/sisyphus-runner-go:main
+  # runner image **必填且必须是 immutable git-sha** —— 见上方 image.tag 注释。
+  # 之前默认 sisyphus-runner-go:main 是 Go-only 轻量（~1GB），现在切 full flavor
+  # （Flutter SDK + Android SDK + Java + Go + Node + Docker DinD），但 mutable
+  # `:main` tag 已不再允许（issue #267）。
+  # full image ~5GB，cold pull 慢一点（~30s vs ~5s），但镜像 cache 命中后所有
+  # REQ 复用，跟 Go-only 实际差不多。
+  # `sisyphus-runner-go` 仍保留 build（runner-image.yml matrix 不动），有需要
+  # 可换成 `ghcr.io/phona/sisyphus-runner-go:sha-<short>` 切回。
+  # 部署：helm upgrade --set runner.image="ghcr.io/phona/sisyphus-runner:sha-..." ...
+  image: ""
   storageClass: local-path    # K3s 默认；多节点场景换 longhorn / NFS
   workspaceSize: 10Gi         # PVC 大小（runner 峰值 ~5GB + 余量）
   readyTimeoutSec: 120        # ensure_runner 等 Pod Ready 的超时
@@ -204,11 +255,11 @@ observability:
 
 probes:
   liveness:
-    path: /healthz
+    path: /livez
     initialDelaySeconds: 10
     periodSeconds: 30
   readiness:
-    path: /healthz
+    path: /readyz
     initialDelaySeconds: 5
     periodSeconds: 10
 

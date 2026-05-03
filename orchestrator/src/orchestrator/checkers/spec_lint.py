@@ -37,7 +37,10 @@ def _build_cmd(req_id: str) -> str:
        —— spec/dev 文件由 agent 推到 feat/<REQ> 分支，runner pod 默认在 main。
        fetch 失败 / 没有该 branch → 该仓视为 not involved（agent 没改它），跳过不算 fail。
     2. openspec validate openspec/changes/<REQ>
-    3. check-scenario-refs.sh --specs-search-path /workspace/source .
+    3. check-scenario-refs.sh --specs-search-path /workspace/source --current-change <REQ> .
+       —— `--current-change` 把空壳 scenario 检测限到当前 REQ 的 specs；引用解析
+       （DEFINED 集合）仍全量收集。避免别的 REQ（已合 / 历史遗留 / 别人没合的旧
+       openspec/changes/）的空壳 scenario 把当前 REQ 的 spec_lint 拖红。
 
     任一仓任一检查失败 → exit 1。
     """
@@ -66,7 +69,7 @@ def _build_cmd(req_id: str) -> str:
         '      echo "=== FAIL: $name ===" >&2; '
         "      fail=1; "
         "    fi; "
-        '    if ! (cd "$repo" && check-scenario-refs.sh --specs-search-path /workspace/source .); then '
+        f'    if ! (cd "$repo" && check-scenario-refs.sh --specs-search-path /workspace/source --current-change "{req_id}" .); then '
         '      echo "=== FAIL scenario-refs: $name ===" >&2; '
         "      fail=1; "
         "    fi; "

@@ -100,23 +100,9 @@ async def _record_stage_transitions(
 
     - 离开 *_RUNNING（cur ≠ next）→ close 上条 run（按事件映射 outcome）
     - 进入 *_RUNNING（cur ≠ next）→ open 新一条 run
-    - 自循环（mark_*_reviewed_and_check / apply_verify_pass 等）不动
+    - 自循环不动
     任何错误只 log 不抛，避免拖垮主流程。
-
-    例外：(REVIEW_RUNNING, VERIFY_PASS) 是 transition 表声明的 self-loop，但
-    apply_verify_pass action 内部手工 CAS 把 state 推到 target stage_running，那条手工
-    CAS 绕过本函数。如果不在这里显式 close verifier 那条 run，stage_runs 会留 orphan
-    （ended_at IS NULL），Q12/Q13 verifier 看板漏掉 PASS 决策。
     """
-    if cur_state == ReqState.REVIEW_RUNNING and event == Event.VERIFY_PASS:
-        try:
-            await stage_runs.close_latest_stage_run(
-                pool, req_id, "verifier", outcome="pass",
-            )
-        except Exception as e:
-            log.warning("engine.stage_runs.write_failed",
-                        req_id=req_id, cur=cur_state.value, nxt=next_state.value,
-                        evt=event.value, error=str(e))
     if cur_state == next_state:
         return
     try:
@@ -348,9 +334,8 @@ async def step(
     )
 
     # M10：转 terminal state 时立即清 runner（fire-and-forget）。
-    # 但跳过 terminal self-loop（cur 已是 terminal）—— 出现在 ESCALATED 接 verifier 续 follow-up
-    # 的场景：engine 表面 self-loop，apply_verify_pass 内部把 state CAS 推到下游 stage_running
-    # 并 ensure_runner；这时再清 pod 会误删 resume 路径刚拉起的 pod。
+    # 但跳过 terminal self-loop（cur 已是 terminal）—— ESCALATED + VERIFY_ESCALATE
+    # 是 no-op 自循环，不应重复清 runner（首次进 ESCALATED 时已清过）。
     if (transition.next_state in _TERMINAL_STATES
             and cur_state not in _TERMINAL_STATES):
         task = asyncio.create_task(

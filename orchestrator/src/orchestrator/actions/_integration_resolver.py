@@ -41,9 +41,18 @@ log = structlog.get_logger(__name__)
 # 用 `make -p -n` 解析 Makefile + include 子 mk（实证 ttpos-server-go：
 # accept-env-up 在 ttpos-scripts/accept-env.mk via include，顶层 grep 漏判 →
 # resolver 误判"无 integration repo"），跟 dev_cross_check / staging_test 同根因。
+#
+# 注意两个历史坑（REQ-integration-resolver-marker-1777250000 修）：
+#   1. 不能开头 `set +e` —— exec_in_runner 用 `env KEY=VAL <cmd>` 注入环境变量，
+#      env 会把 `set` 当二进制找，stderr 喷 `env: 'set': No such file`，整个第一行
+#      退非 0；后续靠 newline-separator 反而正常跑（迷惑 debug）。直接不用 set +e；
+#      下面所有候选探测都 wrap 在 `(cd ... && ...)` 子 shell + 逻辑 OR，本身不会因
+#      单仓 Makefile 怪异 fail 整个脚本。
+#   2. 不能末尾 `exit 0` —— exec_in_runner 在命令尾巴 append `; echo __MARKER__$?` 抓 exit code，
+#      `exit 0` 会跳过 marker echo 让 caller 把 exit_code 解析成 -1（marker 缺失）→
+#      caller 返回 `scan exec returned exit_code=-1` 即使扫描其实跑通了。让脚本自然
+#      结束在最后一个 for loop（`set +e` 心智已不需要了，去掉）。
 _SCAN_SCRIPT = r"""
-set +e
-# 诊断输出到 stderr（供 verifier / 日志审阅时定位空目录根因）
 if [ ! -d /workspace ]; then
   echo "[resolver-diag] /workspace does not exist" >&2
 else
@@ -70,7 +79,6 @@ for d in /workspace/source/*/; do
     printf 'S:%s\n' "${d%/}"
   fi
 done
-exit 0
 """.strip()
 
 
@@ -172,7 +180,6 @@ async def resolve_integration_dir(rc, req_id: str) -> ResolveResult:
     result = await rc.exec_in_runner(
         req_id,
         command=_SCAN_SCRIPT,
-        env={"SISYPHUS_STAGE": "accept-resolve"},
         timeout_sec=15,
     )
     if result.exit_code != 0:

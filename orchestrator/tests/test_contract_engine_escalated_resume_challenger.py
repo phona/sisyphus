@@ -13,7 +13,7 @@ Scenarios covered:
   ERT-S4  (INTAKING, VERIFY_ESCALATE) → ESCALATED + escalate + cleanup_runner(retain_pvc=True)
   ERT-S5  (ANALYZING, VERIFY_ESCALATE) → ESCALATED + escalate + cleanup_runner(retain_pvc=True)
   ERT-S6  (PR_CI_RUNNING, PR_CI_TIMEOUT) → ESCALATED + escalate + cleanup_runner(retain_pvc=True)
-  ERT-S7  ESCALATED + VERIFY_PASS → apply_verify_pass chains to create_pr_ci_watch, final PR_CI_RUNNING
+  ERT-S7  ESCALATED + PR_CI_PASS → ACCEPT_RUNNING + create_accept (explicit transition, no chaining)
   ERT-S8  ESCALATED + VERIFY_FIX_NEEDED → FIXER_RUNNING, start_fixer receives verify:staging_test tag + ctx
   ERT-S9  47/47 TRANSITIONS sweep — every declared transition round-trips through engine.step
 
@@ -257,63 +257,45 @@ async def test_ert_s3_to_s6_non_terminal_escalate_triggers_cleanup(
     )
 
 
-# ─── ERT-S7: ESCALATED + VERIFY_PASS chains end-to-end to PR_CI_RUNNING ──────
+# ─── ERT-S7: ESCALATED + stage pass → direct resume via explicit transition ────
 
 
-async def test_ert_s7_escalated_verify_pass_chains_to_pr_ci_running(monkeypatch) -> None:
-    """ERT-S7: ESCALATED + VERIFY_PASS → apply_verify_pass chains to create_pr_ci_watch.
-    apply_verify_pass internally CAS-advances to STAGING_TEST_RUNNING and emits
-    staging-test.pass; engine MUST chain-dispatch create_pr_ci_watch; final state = PR_CI_RUNNING.
-    This is the sole human-driven path to resume a stranded REQ end-to-end."""
+async def test_ert_s7_escalated_stage_pass_resumes_directly(monkeypatch) -> None:
+    """ERT-S7: ESCALATED + PR_CI_PASS → ACCEPT_RUNNING + create_accept.
+    REQ-refactor-verify-pass-transition-1777727230: VERIFY_PASS removed;
+    router translates decision=pass to stage-specific pass event.
+    ESCALATED reuses main-chain transition directly — no apply_verify_pass chaining."""
     from orchestrator.actions import REGISTRY
     from orchestrator.state import Event, ReqState
 
-    _patch_io(
-        monkeypatch,
-        get_side_effects=[_FakeRow(ReqState.STAGING_TEST_RUNNING)],
-    )
+    cas, _ = _patch_io(monkeypatch)
+    calls: list[str] = []
 
-    avp_calls: list[int] = []
-    cpcw_calls: list[int] = []
-
-    async def _apply_verify_pass(**_kw):
-        avp_calls.append(1)
-        return {"emit": "staging-test.pass"}
-
-    async def _create_pr_ci_watch(**_kw):
-        cpcw_calls.append(1)
+    async def _create_accept(**_kw):
+        calls.append("create_accept")
         return {}
 
-    REGISTRY["apply_verify_pass"] = _apply_verify_pass
-    REGISTRY["create_pr_ci_watch"] = _create_pr_ci_watch
+    REGISTRY["create_accept"] = _create_accept
 
     result = await _step(
         cur_state=ReqState.ESCALATED,
-        event=Event.VERIFY_PASS,
-        tags=["verifier", _REQ_ID, "verify:staging_test"],
-        ctx={"verifier_stage": "staging_test"},
+        event=Event.PR_CI_PASS,
+        tags=["verifier", _REQ_ID, "verify:pr_ci"],
+        ctx={"verifier_stage": "pr_ci"},
     )
 
-    assert result.get("action") == "apply_verify_pass", (
-        f"ERT-S7: action MUST be 'apply_verify_pass'; got {result!r}"
+    assert result.get("action") == "create_accept", (
+        f"ERT-S7: action MUST be 'create_accept'; got {result!r}"
     )
-    assert len(avp_calls) == 1, (
-        f"ERT-S7: apply_verify_pass MUST be awaited exactly once; got {len(avp_calls)}"
+    assert result.get("next_state") == ReqState.ACCEPT_RUNNING.value, (
+        f"ERT-S7: next_state MUST be {ReqState.ACCEPT_RUNNING.value!r}; got {result!r}"
     )
-    assert len(cpcw_calls) == 1, (
-        f"ERT-S7: create_pr_ci_watch MUST be awaited exactly once (chained); got {len(cpcw_calls)}"
+    assert len(calls) == 1, (
+        f"ERT-S7: create_accept MUST be awaited exactly once; got {len(calls)}"
     )
-
-    chained = result.get("chained")
-    assert chained is not None, (
-        f"ERT-S7: result MUST contain 'chained' sub-result; got {result!r}"
-    )
-    assert chained.get("action") == "create_pr_ci_watch", (
-        f"ERT-S7: chained.action MUST be 'create_pr_ci_watch'; got chained={chained!r}"
-    )
-    assert chained.get("next_state") == ReqState.PR_CI_RUNNING.value, (
-        f"ERT-S7: chained.next_state MUST be {ReqState.PR_CI_RUNNING.value!r}; "
-        f"got chained={chained!r}"
+    cas_next = cas.call_args.args[3]
+    assert cas_next == ReqState.ACCEPT_RUNNING, (
+        f"ERT-S7: CAS MUST advance to ACCEPT_RUNNING; got {cas_next!r}"
     )
 
 

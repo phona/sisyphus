@@ -12,10 +12,16 @@ orch admin endpoint。通用 BKD REST 操作请见同目录 ``bkd-cli.py``。
 依赖
 ====
 
+模式 A（默认）：
 - 本地有 ``kubectl`` 且上下文指向 sisyphus 集群（K3s on vm-node04）
 - PG pod 名 ``sisyphus-postgresql-0``，从 pod env ``POSTGRES_PASSWORD_FILE`` 取密码
 - orch admin endpoint 通过 ``kubectl exec deploy/orch-sisyphus-orchestrator`` curl localhost:8000
   调用，token 从 secret ``orch-sisyphus-orchestrator`` ``.data.webhook_token`` 取
+
+模式 B（直接 HTTP）：
+- ``--base-url`` 指向外部可访问的 orch 地址（如 http://sisyphus.43.239.84.24.nip.io）
+- ``--token`` 或环境变量 ``SISYPHUS_ADMIN_TOKEN`` 提供 Bearer token
+- PG 仍走 kubectl exec（除非未来加 PG 外部端口）
 
 token / 密码全程不打到 transcript（在 pod 内部用，结果只回 admin endpoint 响应）。
 
@@ -44,6 +50,9 @@ Examples
         --pr-url https://github.com/phona/sisyphus/pull/123 \\
         --merged-sha abc1234
 
+    # 直接走 HTTP API（不走 kubectl）
+    sisyphus-admin.py --base-url http://sisyphus.43.239.84.24.nip.io --token $TOKEN admin complete REQ-XXX
+
 退出码
 ======
 
@@ -55,9 +64,12 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import shlex
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from typing import Any
 
 DEFAULT_NAMESPACE = "sisyphus"
@@ -102,6 +114,26 @@ def _admin_token(namespace: str, secret: str) -> str:
     return base64.b64decode(out).decode().strip()
 
 
+def _resolve_token(
+    token: str | None,
+    *,
+    namespace: str,
+    secret: str,
+    base_url: str | None = None,
+) -> str:
+    """按优先级：显式传入 > 环境变量 > kubectl secret（仅非 HTTP 模式）。"""
+    if token:
+        return token
+    env_token = os.getenv("SISYPHUS_ADMIN_TOKEN")
+    if env_token:
+        return env_token
+    if base_url:
+        raise RuntimeError(
+            "HTTP 模式需要提供 token：--token <token> 或环境变量 SISYPHUS_ADMIN_TOKEN"
+        )
+    return _admin_token(namespace, secret)
+
+
 def _admin_post(
     path: str,
     body: dict[str, Any] | None,
@@ -109,23 +141,53 @@ def _admin_post(
     namespace: str,
     deploy: str,
     secret: str,
+    base_url: str | None = None,
+    token: str | None = None,
 ) -> dict[str, Any]:
-    """从 orch pod 内 curl localhost:8000（避免外网 / 解决 SVC IP 漂移）。"""
-    if not _have_kubectl():
-        raise RuntimeError("kubectl 不可用；本机无集群上下文")
-    token = _admin_token(namespace, secret)
+    """调 orch admin endpoint。
+
+    模式 A（base_url=None）：从 orch pod 内 curl localhost:8000（避免外网 / 解决 SVC IP 漂移）。
+    模式 B（base_url 非空）：直接走外部 HTTP。
+    """
     body_json = json.dumps(body or {}, ensure_ascii=False)
-    inner = (
-        f"curl -sS -X POST -H 'Authorization: Bearer {token}' "
-        f"-H 'content-type: application/json' "
-        f"-d {shlex.quote(body_json)} "
-        f"http://localhost:8000{path}"
-    )
-    cmd = ["kubectl", "-n", namespace, "exec", deploy, "--", "bash", "-c", inner]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    if proc.returncode != 0:
-        raise RuntimeError(f"admin POST failed: {proc.stderr}")
-    out = proc.stdout.strip()
+    resolved_token = _resolve_token(token, namespace=namespace, secret=secret, base_url=base_url)
+
+    if base_url:
+        url = f"{base_url.rstrip('/')}{path}"
+        req = urllib.request.Request(
+            url,
+            data=body_json.encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {resolved_token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                out = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            out = e.read().decode("utf-8")
+            try:
+                parsed = json.loads(out)
+                raise RuntimeError(f"admin POST {e.code}: {parsed}")
+            except json.JSONDecodeError:
+                raise RuntimeError(f"admin POST {e.code}: {out}")
+    else:
+        if not _have_kubectl():
+            raise RuntimeError("kubectl 不可用；本机无集群上下文。请用 --base-url 走 HTTP 模式")
+        inner = (
+            f"curl -sS -X POST -H 'Authorization: Bearer {resolved_token}' "
+            f"-H 'content-type: application/json' "
+            f"-d {shlex.quote(body_json)} "
+            f"http://localhost:8000{path}"
+        )
+        cmd = ["kubectl", "-n", namespace, "exec", deploy, "--", "bash", "-c", inner]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if proc.returncode != 0:
+            raise RuntimeError(f"admin POST failed: {proc.stderr}")
+        out = proc.stdout.strip()
+
     try:
         return json.loads(out)
     except json.JSONDecodeError:
@@ -192,6 +254,8 @@ def cmd_admin(args: argparse.Namespace) -> int:
             namespace=args.namespace,
             deploy=args.orch_deploy,
             secret=args.orch_secret,
+            base_url=args.base_url,
+            token=args.token,
         )
     except RuntimeError as e:
         print(f"ERR: {e}", file=sys.stderr)
@@ -210,6 +274,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--namespace", default=DEFAULT_NAMESPACE,
                    help=f"K8s namespace (default: {DEFAULT_NAMESPACE})")
+    p.add_argument("--base-url", default="",
+                   help="orch 外部地址（如 http://sisyphus.43.239.84.24.nip.io），提供时直接走 HTTP 不绕 kubectl")
+    p.add_argument("--token", default="",
+                   help="Bearer token；留空从环境变量 SISYPHUS_ADMIN_TOKEN 或 kubectl secret 取")
     sub = p.add_subparsers(dest="cmd")
 
     # req-status

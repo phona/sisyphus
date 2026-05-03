@@ -19,12 +19,13 @@ from ..prompts import render
 from ..state import Event
 from ..store import db, req_state
 from . import register, short_title
+from ._clone import ensure_runner_with_clone
 from ._integration_resolver import resolve_integration_dir
 from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
 
-_TIMEOUT_ENV_UP_SEC = 600  # 10 min for helm install + wait ready
+_TIMEOUT_ENV_UP_SEC = 1800  # 30 min: helm install + wait ready + APK GHA build poll (5-10min) + download + adb install
 _TIMEOUT_LITE_SEC = 1800   # 30 min for up × N + sleep + smoke × N + down × N
 
 # #247 Phase 1: 收 BKD stage agent issue id（人可续 follow-up 触发 PENDING_USER_REVIEW
@@ -226,12 +227,47 @@ async def create_accept(*, body, req_id, tags, ctx):
     source_issue_id = body.issueId
     namespace = f"accept-{req_id.lower()}"
 
+    # Clear stale accept_issue_id from prior round (#315): create_accept env-up
+    # 阶段 5-15min；watchdog 看 ctx.accept_issue_id 检 stuck，stale id 指向上轮
+    # 早 escalate 关闭的 issue，没新事件 → 误判 watchdog_stuck → 强制 session.failed
+    # 把当前 in-flight create_accept 打断。入口先清 stale id，让 watchdog 知道
+    # 当前没 active acceptance agent，跳过 stuck 检查。
+    pool = db.get_pool()
+    if ctx and ctx.get("accept_issue_id"):
+        await req_state.update_context(pool, req_id, {"accept_issue_id": None})
+
     # Phase 1: env-up via sisyphus (runner exec)
     try:
         rc = k8s_runner.get_controller()
     except RuntimeError as e:
         log.warning("create_accept.no_runner_controller", req_id=req_id, error=str(e))
         return {"emit": Event.ACCEPT_PASS.value, "note": "no runner controller, skipped env-up"}
+
+    # Ensure runner pod exists: admin/resume may have skipped staging_test,
+    # leaving the pod never created.  ensure_runner is idempotent (409 = skip).
+    status = await rc.get_runner_status(req_id)
+    if status is None or status.pod_phase == "NotFound":
+        log.info("create_accept.runner_pod_missing", req_id=req_id,
+                 pod_phase=status.pod_phase if status else "NotFound")
+        branch = (ctx or {}).get("branch") or f"feat/{req_id}"
+        _cloned, clone_exit = await ensure_runner_with_clone(
+            req_id, ctx,
+            tags=tags,
+            default_repos=settings.default_involved_repos or [],
+            branch=branch,
+        )
+        if clone_exit is not None:
+            log.error("create_accept.ensure_runner_clone_failed",
+                      req_id=req_id, exit_code=clone_exit)
+            pool = db.get_pool()
+            await req_state.update_context(pool, req_id, {
+                "accept_result": "fail",
+                "accept_error": f"ensure runner+clone failed: exit_code={clone_exit}",
+            })
+            return {
+                "emit": Event.ACCEPT_ENV_UP_FAIL.value,
+                "reason": f"runner pod clone failed: exit_code={clone_exit}",
+            }
 
     resolved = await resolve_integration_dir(rc, req_id)
     if resolved.dir is None:
@@ -332,6 +368,7 @@ async def create_accept(*, body, req_id, tags, ctx):
             accept_env=accept_env,
             project_id=proj,
             project_alias=proj,
+            branch=branch_for_links,
             thanatos_pod=thanatos_pod,
             thanatos_namespace=thanatos_namespace,
             thanatos_skill_repo=thanatos_skill_repo,

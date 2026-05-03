@@ -5,11 +5,9 @@ issue，让它做主观判断 —— 3 路决策：**pass / fix / escalate**。v
 webhook.py 解析 decision JSON，映射成 Event 推状态机。
 
 本模块只管"起 issue + 挂 prompt"：同步返回 verifier_issue_id，不等决策
-（异步走 session.completed webhook）。决策 → Event 映射在 webhook.py。
+（异步走 session.completed webhook）。决策 → Event 映射在 router.py。
 
 同时提供 action handler：
-- `apply_verify_pass`：decision=pass → 手工 CAS 回 stage_running + 链式 emit
-   对应 stage 的 done/pass 事件（走原主链 transition）
 - `start_fixer`：decision=fix → 起 fixer agent（dev / spec）
 - `invoke_verifier_after_fix`：fixer 完 → 再调 verifier 复查
 - `invoke_verifier_for_staging_test_fail` / `_pr_ci_fail` / `_accept_fail`：
@@ -21,6 +19,10 @@ webhook.py 解析 decision JSON，映射成 Event 推状态机。
 兜 retry —— 避免假阳性 retry 死循环 + 跟"薄编排，不抢 AI 决定权"哲学一致。
 
 M14c：verifier_enabled 默认 True，旧 fail_kind / bugfix 子链已砍。
+
+REQ-refactor-verify-pass-transition-1777727230：
+apply_verify_pass 已删，decision=pass 由 router 译成对应主链 pass 事件
+（如 STAGING_TEST_PASS），transition 表显式写死 REVIEW_RUNNING → next_state。
 """
 from __future__ import annotations
 
@@ -28,12 +30,12 @@ from typing import Literal
 
 import structlog
 
-from .. import k8s_runner, pr_links
+from .. import pr_links
 from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
 from ..state import Event, ReqState
-from ..store import db, dispatch_slugs, req_state, stage_runs
+from ..store import artifact_checks, db, dispatch_slugs, req_state, stage_runs
 from . import register, short_title
 
 log = structlog.get_logger(__name__)
@@ -58,21 +60,26 @@ _RETRY_ROUTING: dict[str, tuple[ReqState, str]] = {
     "pr_ci":           (ReqState.PR_CI_RUNNING,           "create_pr_ci_watch"),
 }
 
-# stage → decision=pass 时要 emit 的原主链 event + 目标 stage_running state
-# 用于 apply_verify_pass 手工把 state 从 REVIEW_RUNNING 回推到对应 stage_running，
-# 随后链式 emit 该 stage 的 done/pass 事件走原 transition。
-_PASS_ROUTING: dict[str, tuple[ReqState, Event]] = {
-    "analyze":                 (ReqState.ANALYZING,                Event.ANALYZE_DONE),
-    "analyze_artifact_check":  (ReqState.ANALYZE_ARTIFACT_CHECKING,
-                                Event.ANALYZE_ARTIFACT_CHECK_PASS),
-    "spec_lint":               (ReqState.SPEC_LINT_RUNNING,        Event.SPEC_LINT_PASS),
-    "challenger":              (ReqState.CHALLENGER_RUNNING,       Event.CHALLENGER_PASS),
-    "dev_cross_check":         (ReqState.DEV_CROSS_CHECK_RUNNING,  Event.DEV_CROSS_CHECK_PASS),
-    "staging_test":            (ReqState.STAGING_TEST_RUNNING,     Event.STAGING_TEST_PASS),
-    "pr_ci":                   (ReqState.PR_CI_RUNNING,            Event.PR_CI_PASS),
-    "accept":                  (ReqState.ACCEPT_RUNNING,           Event.ACCEPT_PASS),
+# prompt template stage 名 → artifact_checks.stage DB 值
+_STAGE_TO_DB: dict[str, str] = {
+    "spec_lint":              "spec-lint",
+    "dev_cross_check":        "dev-cross-check",
+    "staging_test":           "staging-test",
+    "pr_ci":                  "pr-ci-watch",
+    "analyze_artifact_check": "analyze-artifact-check",
 }
 
+# stdout/stderr 各保留最后多少行，避免 prompt 过长
+_CHECKER_TAIL_LINES = 50
+
+
+def _tail_lines(text: str | None, n: int = _CHECKER_TAIL_LINES) -> str:
+    if not text:
+        return ""
+    lines = text.splitlines()
+    if len(lines) <= n:
+        return text
+    return "\n".join(lines[-n:])
 # ─── invoke_verifier：起 BKD verifier issue ──────────────────────────────
 
 async def invoke_verifier(
@@ -107,6 +114,13 @@ async def invoke_verifier(
     fixer_round = (ctx or {}).get("fixer_round", 0)
     slug = f"verifier|{req_id}|{stage}|{trigger}|r{fixer_round}"
     pool = db.get_pool()
+    # Clear stale verifier_issue_id from prior round (#324, same pattern as #316).
+    # invoke_verifier 创建新 verifier issue 期间 watchdog 可能基于 ctx 里残留的
+    # 上轮 stale verifier_issue_id (early-ended session) 误判 watchdog_stuck →
+    # 强制 escalate 把 in-flight invoke_verifier 打断。入口先清，让 watchdog
+    # 走 line 310 defense-in-depth (issue_id is None and stuck_sec is None) skip。
+    if ctx and ctx.get("verifier_issue_id"):
+        await req_state.update_context(pool, req_id, {"verifier_issue_id": None})
     if hit := await dispatch_slugs.get(pool, slug):
         log.info("invoke_verifier.slug_hit", req_id=req_id, slug=slug, issue_id=hit)
         await req_state.update_context(pool, req_id, {
@@ -116,6 +130,19 @@ async def invoke_verifier(
             "verifier_parse_retry_count": 0,
         })
         return {"verifier_issue_id": hit, "stage": stage, "trigger": trigger}
+
+    checker_stdout = ""
+    checker_stderr = ""
+    checker_exit_code = None
+    if trigger == "fail":
+        db_stage = _STAGE_TO_DB.get(stage)
+        if db_stage:
+            pool = db.get_pool()
+            row = await artifact_checks.get_latest(pool, req_id, db_stage)
+            if row:
+                checker_stdout = _tail_lines(row.get("stdout_tail") or "")
+                checker_stderr = _tail_lines(row.get("stderr_tail") or "")
+                checker_exit_code = row.get("exit_code")
 
     template_name = f"verifier/{stage}_{trigger}.md.j2"
     prompt = render(
@@ -128,6 +155,9 @@ async def invoke_verifier(
         history=history or [],
         project_id=project_id,
         project_alias=project_id,
+        checker_stdout=checker_stdout,
+        checker_stderr=checker_stderr,
+        checker_exit_code=checker_exit_code,
     )
 
     # PR-link tag 注入（REQ-issue-link-pr-quality-base-1777218242）：
@@ -188,69 +218,6 @@ def _stage_from_tags_or_ctx(tags: list[str] | None, ctx: dict | None) -> str | N
         if t.startswith("verify:"):
             return t.removeprefix("verify:")
     return (ctx or {}).get("verifier_stage")
-
-
-@register("apply_verify_pass", idempotent=True)
-async def apply_verify_pass(*, body, req_id, tags, ctx):
-    """decision=pass：读 verifier issue 的 verify:<stage> tag，手工 CAS REVIEW_RUNNING
-    → stage_running，链式 emit 该 stage 的 done/pass 事件（走原主链 transition）。
-    """
-    stage = _stage_from_tags_or_ctx(tags, ctx)
-    route = _PASS_ROUTING.get(stage) if stage else None
-    if route is None:
-        log.error("apply_verify_pass.unknown_stage", req_id=req_id, stage=stage)
-        return {"emit": Event.VERIFY_ESCALATE.value,
-                "reason": f"unknown verifier_stage: {stage!r}"}
-
-    target_state, next_event = route
-    pool = db.get_pool()
-    # CAS 接 REVIEW_RUNNING（正常 verifier 完成）+ ESCALATED（人续 escalate 的 verifier）
-    src_state = None
-    for src in (ReqState.REVIEW_RUNNING, ReqState.ESCALATED):
-        if await req_state.cas_transition(
-            pool, req_id, src, target_state,
-            Event.VERIFY_PASS, "apply_verify_pass",
-        ):
-            src_state = src
-            break
-    if src_state is None:
-        log.warning("apply_verify_pass.cas_failed", req_id=req_id, stage=stage)
-        return {"cas_failed": True}
-
-    # 收尾 stage_runs.verifier 行（best-effort）。
-    # transition (REVIEW_RUNNING, VERIFY_PASS) -> REVIEW_RUNNING 是 self-loop —
-    # engine._record_stage_transitions 看到 cur==next 直接 return，**不写**
-    # stage_runs；这里手 CAS 推到 target_state 也绕过 engine 的钩子。结果是
-    # verifier 行 insert 后没人 close（DB 实证：18 条 outcome=NULL，污染
-    # Metabase 的 stage_stats / agent_quality 看板）。
-    # 仅 src=REVIEW_RUNNING 路径需要 close（ESCALATED 续是 self-loop 重入，
-    # 上一轮 verifier 行已被前次 escalate 路径关掉，不会有新的 open verifier 行）。
-    if src_state == ReqState.REVIEW_RUNNING:
-        try:
-            await stage_runs.close_latest_stage_run(
-                pool, req_id, "verifier", outcome="pass",
-            )
-        except Exception as e:
-            log.warning("apply_verify_pass.stage_runs.close_failed",
-                        req_id=req_id, error=str(e))
-
-    # 推下一 stage 前 ensure_runner（idempotent，pod 在则秒返）。
-    # 关键场景：从 ESCALATED 续 → escalate 时 runner pod 被删了；fixer 跑完续也可能没 pod。
-    # PVC 因 #40 retain，workspace 状态不丢。
-    try:
-        rc = k8s_runner.get_controller()
-    except RuntimeError:
-        log.warning("apply_verify_pass.no_runner_controller", req_id=req_id)
-    else:
-        pod = await rc.ensure_runner(req_id, wait_ready=True)
-        log.info("apply_verify_pass.runner_ready",
-                 req_id=req_id, stage=stage, pod=pod, src_state=src_state.value)
-
-    log.info("apply_verify_pass.done",
-             req_id=req_id, stage=stage,
-             src_state=src_state.value, target_state=target_state.value,
-             emit=next_event.value)
-    return {"emit": next_event.value, "stage": stage}
 
 
 @register("start_fixer", idempotent=False)
@@ -343,6 +310,8 @@ async def start_fixer(*, body, req_id, tags, ctx):
             model=settings.agent_model,
         )
         # 通用 bugfix prompt 作为过渡；PR4 再做每类 fixer 专用模板。
+        # REQ-base-branch-override-1777480690: forward base branch info so fixer
+        # lint uses the correct merge-base.
         prompt = render(
             "bugfix.md.j2",
             req_id=req_id, round_n=next_round,
@@ -352,6 +321,8 @@ async def start_fixer(*, body, req_id, tags, ctx):
             workdir=f"{settings.workdir_root}/feat-{req_id}",
             project_id=proj,
             project_alias=proj,
+            base_branch=ctx.get("base_branch"),
+            base_branches=ctx.get("base_branches") or {},
         )
         # 把 verifier 的 scope / reason 叠进 prompt 作为上下文
         if scope or reason:
@@ -563,7 +534,7 @@ async def apply_verify_infra_retry(*, body, req_id, tags, ctx):
         log.warning("apply_verify_infra_retry.cas_failed", req_id=req_id, stage=stage)
         return {"cas_failed": True}
 
-    # close verifier stage_run（同 apply_verify_pass 的模式）
+    # close verifier stage_run（离开 REVIEW_RUNNING 时收尾）
     try:
         await stage_runs.close_latest_stage_run(
             pool, req_id, "verifier", outcome="infra-retry",
