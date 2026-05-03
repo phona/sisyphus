@@ -37,7 +37,7 @@ from ..config import settings
 from ..intent_tags import filter_propagatable_intent_tags
 from ..prompts import render
 from ..prompts.status_block import build_status_block_ctx
-from ..router import extract_base_branches
+from ..router import extract_base_branches, normalize_base_overrides
 from ..state import Event
 from ..store import db, dispatch_slugs, req_state
 from . import register, short_title
@@ -156,6 +156,10 @@ async def start_analyze(*, body, req_id, tags, ctx):
         for repo, branch in settings.default_base_branches.items():
             if repo not in base_overrides:
                 base_overrides[repo] = branch
+    # GitHub issue #345: helm `env.default_base_branches: {phona/sisyphus: main}`
+    # 用 owner/repo 形式写 key，但 sisyphus-clone-repos.sh 按 basename 查找。
+    # 不归一会让 per-repo override 被回落到 --base 全局值（实证 5/3 多次 escalate）。
+    base_overrides = normalize_base_overrides(base_overrides)
     if default_base or base_overrides:
         await req_state.update_context(db.get_pool(), req_id, {
             "base_branch": default_base,
