@@ -101,6 +101,10 @@ class Settings(BaseSettings):
     # 留空 = 关闭观测写入和快照同步（dev 模式可不开）
     obs_pg_dsn: str = ""
 
+    # P0-2：config_version startup hook（默认 True — 例外说明：写入纯 metadata、幂等、
+    # best-effort，对 prod 零侵入；flag 仅供 dev/test 消除无 git 环境的 debug log 噪音）
+    config_version_startup_hook_enabled: bool = True
+
     # bkd_snapshot 同步间隔（秒）。0 = 不跑（替代 n8n 5min cron）
     snapshot_interval_sec: int = 300
 
