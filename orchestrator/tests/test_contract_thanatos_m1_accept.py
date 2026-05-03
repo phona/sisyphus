@@ -37,6 +37,14 @@ class _FakeRC:
         self.calls: list[dict] = []
         self._idx = 0
 
+    async def get_runner_status(self, req_id):
+        from orchestrator.k8s_runner import RunnerStatus
+        return RunnerStatus(
+            req_id=req_id, pod_name=f"runner-{req_id.lower()}",
+            pvc_name=f"workspace-{req_id.lower()}",
+            pod_phase="Running", pvc_phase="Bound", created_at=None,
+        )
+
     async def exec_in_runner(self, req_id, command, env=None, timeout_sec=None):
         self.calls.append({"req_id": req_id, "command": command, "env": env})
         result = self.results[self._idx] if self._idx < len(self.results) else _FakeExecResult()

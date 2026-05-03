@@ -19,6 +19,7 @@ from ..prompts import render
 from ..state import Event
 from ..store import db, req_state
 from . import register, short_title
+from ._clone import ensure_runner_with_clone
 from ._integration_resolver import resolve_integration_dir
 from ._skip import skip_if_enabled
 
@@ -184,6 +185,32 @@ async def create_accept(*, body, req_id, tags, ctx):
     except RuntimeError as e:
         log.warning("create_accept.no_runner_controller", req_id=req_id, error=str(e))
         return {"emit": Event.ACCEPT_PASS.value, "note": "no runner controller, skipped env-up"}
+
+    # Ensure runner pod exists: admin/resume may have skipped staging_test,
+    # leaving the pod never created.  ensure_runner is idempotent (409 = skip).
+    status = await rc.get_runner_status(req_id)
+    if status is None or status.pod_phase == "NotFound":
+        log.info("create_accept.runner_pod_missing", req_id=req_id,
+                 pod_phase=status.pod_phase if status else "NotFound")
+        branch = (ctx or {}).get("branch") or f"feat/{req_id}"
+        _cloned, clone_exit = await ensure_runner_with_clone(
+            req_id, ctx,
+            tags=tags,
+            default_repos=settings.default_involved_repos or [],
+            branch=branch,
+        )
+        if clone_exit is not None:
+            log.error("create_accept.ensure_runner_clone_failed",
+                      req_id=req_id, exit_code=clone_exit)
+            pool = db.get_pool()
+            await req_state.update_context(pool, req_id, {
+                "accept_result": "fail",
+                "accept_error": f"ensure runner+clone failed: exit_code={clone_exit}",
+            })
+            return {
+                "emit": Event.ACCEPT_ENV_UP_FAIL.value,
+                "reason": f"runner pod clone failed: exit_code={clone_exit}",
+            }
 
     resolved = await resolve_integration_dir(rc, req_id)
     if resolved.dir is None:
