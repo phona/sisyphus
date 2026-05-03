@@ -71,6 +71,10 @@ REQ={{ req_id }}
 
 本 REQ 未经过 intake 阶段，请直接基于 intent description 和上下文进行需求分析，确定验收标准，并在 spec 中写出完整的 `#### Scenario`。
 
+**注意：直跳 analyze 没走 intake，下面"派 REQ 之前先看相关 PR / issue"段你要自己跑一遍**，命中相关 REQ（反向 / 重复 / 重蹈覆辙）时在 BKD intent issue chat 里给用户一条 follow-up message 提示，再继续执行。命中不到正常推进。
+
+{% include "_shared/check_related_reqs.md.j2" %}
+
 {% endif -%}
 你**全权负责**这个 REQ 从 0 到可合并 PR 的端到端交付。
 

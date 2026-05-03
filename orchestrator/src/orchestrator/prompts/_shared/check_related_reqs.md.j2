@@ -1,0 +1,37 @@
+## 派 REQ 之前先看相关 PR / issue
+
+正式开始之前，**先花一分钟对照一下现有 OPEN REQ 和最近被关掉的 REQ**，避免派出去之后才发现跟别的 REQ 在做反向的事 / 重复派 / 重蹈覆辙（参考 #243 reframe 后的轻量方案）。
+
+### 怎么做
+
+```bash
+# 1. 看现在有哪些 OPEN REQ 在跑（同 sisyphus label）
+gh issue list --repo <owner>/<sisyphus-repo> \
+  --state open --label sisyphus --limit 30 \
+  --json number,title,labels
+
+# 2. 看最近被关掉的 REQ（30 天内），尤其看 reject reason
+gh issue list --repo <owner>/<sisyphus-repo> \
+  --state closed --label sisyphus --limit 20 \
+  --search "<本 intent 关键词>" \
+  --json number,title,closedAt,stateReason
+```
+
+### 命中要怎么处理
+
+如果发现这次 intent 跟现有 REQ 有以下任一关系，**在 BKD chat 里跟用户提一下**，让用户拍板（supersede / 等 / 重派 / 继续 / "误判 continue"）：
+
+- **方向反向**：另一个 OPEN REQ 在做相反的事（例：你要删 X，#N 在加强 X）
+- **主题重复**：另一个 OPEN REQ 已经在做这件事
+- **重蹈覆辙**：最近被 reject 的 REQ 描述跟你这次很像，看下上次的 reject reason 是不是已经被解决
+
+提示语气要克制：每条对照一句话 + 引用 issue 编号 + 给用户选项。**不要硬阻塞**，最终拍板权在用户。
+
+### 命中不到怎么办
+
+完全没相关 REQ → **不要在 chat 里提**，正常走流程。这一步是后台自查，不是固定汇报项。
+
+### 边缘情况
+
+- `gh` 调用失败 / 超时 → 跳过本步，正常推进（fail-open，跟现有 admission 一致）
+- 低置信度 / 模糊关联 → 自己判断要不要提，宁可漏报不要轰炸用户
