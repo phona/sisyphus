@@ -55,7 +55,7 @@ async def startup() -> None:
     await apply_obs_schema()
     # 2c. P0-2：检测 prompt/checker/config 变更，有则写 config_version 行（best-effort）
     obs_pool = db.get_obs_pool()
-    if obs_pool is not None:
+    if obs_pool is not None and settings.config_version_startup_hook_enabled:
         try:
             await maybe_record_config_change(obs_pool)
         except Exception as e:
