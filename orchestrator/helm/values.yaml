@@ -89,9 +89,9 @@ env:
   # 不存任何 project_id / repo_url —— project_id 来自 webhook，
   # repo_url 来自 agent 自己 `git remote get-url origin`
   # snapshot loop 排除已知死项目（每 5min 一次的 BKD list_issues 失败 noise）。
-  # 新增死项目走这里加 env，不动代码。
-  snapshot_exclude_project_ids:
-    - 77k9z58j
+  # 新增死项目走这里加 env，不动代码。空 list 默认跳过整个 ConfigMap key，
+  # orchestrator 走 Settings default_factory=list 拿到 []。
+  snapshot_exclude_project_ids: []
   # multi-layer involved_repos fallback 的 L4（env SISYPHUS_DEFAULT_INVOLVED_REPOS）。
   # 这个 chart 是 sisyphus self-deployment 专用 → ship 单仓 dogfood 默认。
   # 多仓 / 跨项目部署：在你的 my-values.yaml 里 override 成空 [] 或 ['phona/foo','phona/bar']。
