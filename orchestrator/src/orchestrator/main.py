@@ -4,8 +4,10 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import httpx
 import structlog
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from . import accept_env_gc, k8s_runner, runner_gc, snapshot, watchdog
 from .admin import admin as admin_api
@@ -109,12 +111,54 @@ async def shutdown() -> None:
     log.info("shutdown.ok")
 
 
+@app.get("/livez")
+async def livez() -> dict:
+    """Liveness probe — 进程存活即 ok，不探依赖。"""
+    return {"status": "ok"}
+
+
 @app.get("/healthz")
 async def healthz() -> dict:
-    pool = db.get_pool()
+    # deprecated: alias for /livez; readiness checks moved to /readyz
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+async def readyz():
+    """Readiness probe — 探 DB / BKD / K8s，任一失败返 503。"""
+    failed: list[str] = []
+
+    # DB ping (1s timeout)
     try:
+        pool = db.get_pool()
         async with pool.acquire() as conn:
-            await conn.fetchval("SELECT 1")
+            await conn.fetchval("SELECT 1", timeout=1.0)
     except Exception:
-        raise HTTPException(status_code=503, detail="db_unavailable") from None
+        failed.append("db")
+
+    # BKD ping (2s timeout)
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as hc:
+            r = await hc.get(settings.bkd_base_url)
+        if r.status_code >= 500:
+            failed.append("bkd")
+    except Exception:
+        failed.append("bkd")
+
+    # K8s ping (2s timeout; skip if controller not initialized — dev mode)
+    try:
+        controller = k8s_runner.get_controller()
+        await asyncio.to_thread(
+            controller.core_v1.list_namespace, _request_timeout=2
+        )
+    except RuntimeError:
+        pass  # controller not initialized in dev/test mode
+    except Exception:
+        failed.append("k8s")
+
+    if failed:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "failed": failed},
+        )
     return {"status": "ok"}
