@@ -18,9 +18,9 @@ PostgreSQL is reachable and MUST map pytest exit 5 to exit 0 for the orchestrato
 
 #### Scenario: TCIF-S3 thanatos-ci workflow provides GHA check-runs for thanatos PRs
 
-The sisyphus project MUST have a `.github/workflows/thanatos-ci.yml` workflow
-that triggers on `thanatos/**` changes and MUST produce GitHub Actions check-runs
-so that `pr_ci_watch` does not see `no-gha` for thanatos PRs.
+- **GIVEN** the sisyphus repo with a `.github/workflows/thanatos-ci.yml` workflow that triggers on `thanatos/**` path changes
+- **WHEN** a PR modifies files under `thanatos/` and `pr_ci_watch` polls the GitHub check-runs API for the PR's HEAD SHA
+- **THEN** at least one check-run from `thanatos-ci.yml` is reported for that SHA and `pr_ci_watch` does not classify the PR as `no-gha`
 
 #### Scenario: TCIF-S4 uv run pytest succeeds in thanatos directory
 
