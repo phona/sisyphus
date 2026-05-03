@@ -1,12 +1,9 @@
 """pr_health.check_pr_drift_once 单测：mock httpx + PG pool。"""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
 
 from orchestrator import pr_health
-
 
 # ──────────────────────────────────────────────────────────────────────
 # 共用 fixtures / helpers
