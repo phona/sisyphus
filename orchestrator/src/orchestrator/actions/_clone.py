@@ -103,6 +103,35 @@ def resolve_repos(
     return [], "none"
 
 
+async def ensure_runner_with_clone(
+    req_id: str,
+    ctx: dict | None,
+    *,
+    tags: Iterable[str] | None = None,
+    default_repos: Iterable[str] | None = None,
+    branch: str | None = None,
+) -> tuple[list[str] | None, int | None]:
+    """Ensure runner pod exists then clone repos into it.
+
+    Used by create_accept when the runner pod never existed (e.g. admin/resume
+    skipped staging_test).  Returns same (repos, exit_code) as
+    clone_involved_repos_into_runner.
+    """
+    try:
+        rc = k8s_runner.get_controller()
+    except RuntimeError as e:
+        log.warning("ensure_runner_with_clone.no_controller", req_id=req_id, error=str(e))
+        return None, None
+
+    await rc.ensure_runner(req_id, wait_ready=True)
+    return await clone_involved_repos_into_runner(
+        req_id, ctx,
+        tags=tags,
+        default_repos=default_repos,
+        default_base=branch,
+    )
+
+
 async def clone_involved_repos_into_runner(
     req_id: str,
     ctx: dict | None,

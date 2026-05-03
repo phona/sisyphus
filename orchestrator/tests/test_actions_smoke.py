@@ -370,6 +370,14 @@ async def test_create_accept(monkeypatch):
     monkeypatch.setattr("orchestrator.actions.create_accept.settings.accept_smoke_delay_sec", 0)
 
     class FakeRC:
+        async def get_runner_status(self, req_id):
+            from orchestrator.k8s_runner import RunnerStatus
+            return RunnerStatus(
+                req_id=req_id, pod_name=f"runner-{req_id.lower()}",
+                pvc_name=f"workspace-{req_id.lower()}",
+                pod_phase="Running", pvc_phase="Bound", created_at=None,
+            )
+
         async def exec_in_runner(self, req_id, command, env=None, timeout_sec=None):
             if "make accept-env-up" in command:
                 return ExecResult(
@@ -416,6 +424,14 @@ async def test_create_accept_env_up_fail(monkeypatch):
     monkeypatch.setattr("orchestrator.actions.create_accept.settings.accept_smoke_delay_sec", 0)
 
     class FakeRC:
+        async def get_runner_status(self, req_id):
+            from orchestrator.k8s_runner import RunnerStatus
+            return RunnerStatus(
+                req_id=req_id, pod_name=f"runner-{req_id.lower()}",
+                pvc_name=f"workspace-{req_id.lower()}",
+                pod_phase="Running", pvc_phase="Bound", created_at=None,
+            )
+
         async def exec_in_runner(self, req_id, command, env=None, timeout_sec=None):
             if "make accept-env-up" in command:
                 return ExecResult(
@@ -464,6 +480,9 @@ async def test_create_accept_skipped(monkeypatch):
     monkeypatch.setattr("orchestrator.actions.create_accept.settings.test_mode", False)
 
     class FakeRC:
+        async def get_runner_status(self, req_id):
+            raise AssertionError("get_runner_status must NOT be called when skipped")
+
         async def exec_in_runner(self, *a, **kw):
             raise AssertionError("exec_in_runner must NOT be called when skipped")
 

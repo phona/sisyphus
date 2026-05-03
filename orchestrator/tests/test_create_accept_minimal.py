@@ -26,6 +26,14 @@ class _FakeRC:
         self.lite_stderr = lite_stderr
         self.calls: list[dict] = []
 
+    async def get_runner_status(self, req_id):
+        from orchestrator.k8s_runner import RunnerStatus
+        return RunnerStatus(
+            req_id=req_id, pod_name=f"runner-{req_id.lower()}",
+            pvc_name=f"workspace-{req_id.lower()}",
+            pod_phase="Running", pvc_phase="Bound", created_at=None,
+        )
+
     async def exec_in_runner(self, req_id, command, env=None, timeout_sec=None):
         self.calls.append({"req_id": req_id, "command": command, "env": env})
         # env-up call
