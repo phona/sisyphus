@@ -12,7 +12,7 @@
 # accept-env-up/down 不带 ci- 前缀：它们是 accept 阶段 lab 边界，不在 PR-CI 热路径
 # （REQ-rename-accept-targets-1777124774）。
 
-.PHONY: help ci-lint ci-unit-test ci-integration-test accept-env-up accept-env-down test-all test-flutter test-go
+.PHONY: help ci-lint ci-unit-test ci-integration-test accept-env-up accept-env-down test-all test-flutter test-go hotreload-prompts
 
 SCRIPT_DIR := $(shell pwd)
 
@@ -70,6 +70,40 @@ accept-env-down: ## docker compose down -v（幂等；best-effort）
 	@./scripts/sisyphus-accept-down-compose.sh
 
 # ========== 项目级测试聚合（保留） ==========
+
+# ========== Prompt 热更（dogfood only）==========
+#
+# 前置：helm upgrade --set prompts.configMap.enabled=true（只需跑一次）
+# 之后每次改 .j2 只跑本 target，~30s 完成，无需重建镜像。
+#
+# 实现方式：4 个 ConfigMap 对应 prompts/ 下 4 个目录层，每个挂到 pod 对应路径：
+#   sisyphus-prompts          → /etc/sisyphus/prompts/
+#   sisyphus-prompts-verifier → /etc/sisyphus/prompts/verifier/
+#   sisyphus-prompts-shared   → /etc/sisyphus/prompts/_shared/
+#   sisyphus-prompts-shared-hooks → /etc/sisyphus/prompts/_shared/hooks/
+# 不用单 ConfigMap 的原因：k8s ConfigMap key 不允许含 /，无法在一个 CM 里保留目录结构。
+
+PROMPTS_SRC := orchestrator/src/orchestrator/prompts
+ORCH_NS     := sisyphus
+ORCH_DEPLOY := orch-sisyphus-orchestrator
+
+hotreload-prompts: ## dogfood: push .j2 模板到集群并 rolling-restart orchestrator (~30s)
+	@echo "==> [hotreload-prompts] 同步 prompt ConfigMaps..."
+	kubectl create configmap sisyphus-prompts \
+	  $$(find $(PROMPTS_SRC) -maxdepth 1 -name '*.j2' | sort | xargs printf -- '--from-file=%s ') \
+	  --dry-run=client -o yaml | kubectl apply -f -
+	kubectl create configmap sisyphus-prompts-verifier \
+	  $$(find $(PROMPTS_SRC)/verifier -maxdepth 1 -name '*.j2' | sort | xargs printf -- '--from-file=%s ') \
+	  --dry-run=client -o yaml | kubectl apply -f -
+	kubectl create configmap sisyphus-prompts-shared \
+	  $$(find $(PROMPTS_SRC)/_shared -maxdepth 1 -name '*.j2' | sort | xargs printf -- '--from-file=%s ') \
+	  --dry-run=client -o yaml | kubectl apply -f -
+	kubectl create configmap sisyphus-prompts-shared-hooks \
+	  $$(find $(PROMPTS_SRC)/_shared/hooks -maxdepth 1 -name '*.j2' | sort | xargs printf -- '--from-file=%s ') \
+	  --dry-run=client -o yaml | kubectl apply -f -
+	@echo "==> [hotreload-prompts] rolling restart orchestrator..."
+	kubectl -n $(ORCH_NS) rollout restart deploy/$(ORCH_DEPLOY)
+	kubectl -n $(ORCH_NS) rollout status deploy/$(ORCH_DEPLOY)
 
 test-all: test-flutter test-go ## 运行所有项目测试
 
