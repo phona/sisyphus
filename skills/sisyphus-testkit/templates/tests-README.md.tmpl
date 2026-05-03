@@ -1,0 +1,51 @@
+# Integration Tests
+
+This directory contains the integration test suite for `{{SERVICE_NAME}}`.
+
+## Running locally
+
+```bash
+# Start the lab and run tests
+make test-local
+
+# Tear down
+make test-clean
+```
+
+## Lab topology
+
+| Container | Purpose |
+|---|---|
+| `mysql` | MySQL 8 on tmpfs — fast CREATE/DROP |
+| `redis` | Redis 7 |
+| `wiremock` | Downstream HTTP stubs |
+| `{{SERVICE_NAME}}-coverage` | Service binary with -cover for coverage merge |
+| `test-runner` | Executes `go test ./tests/...` |
+
+## Writing tests
+
+Use `testkit/httpx.NewServiceClient` for HTTP assertions:
+
+```go
+import "github.com/phona/sisyphus/testkit/httpx"
+
+func TestMyEndpoint(t *testing.T) {
+    client := httpx.NewServiceClient(env.GetEnv("SERVICE_URL", "http://localhost:{{SERVICE_PORT}}"))
+    resp := client.Post(t, "/api/v1/resource", map[string]any{"key": "value"})
+    resp.AssertCreated(t).AssertSuccess(t)
+}
+```
+
+## Coverage
+
+Coverage data is written to `tests/coverage/`. Merge and fix paths for SonarQube:
+
+```bash
+go tool covdata textfmt -i tests/coverage -o coverage.out
+./testkit/scripts/fix-coverage-paths.sh coverage.out main/go.mod
+```
+
+## Stub priority
+
+WireMock stubs are in `tests/wiremock/mappings/`. Lower priority number = matched first.
+Use `priority: 1` for exact-match stubs; leave default (5) for catch-all fallbacks.

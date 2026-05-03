@@ -1,0 +1,37 @@
+# Dockerfile.runner.tmpl — multi-stage test runner.
+# Replace {{SERVICE_NAME}}, {{SERVICE_PORT}}, {{COVERAGE_BINARY}}.
+
+# Stage: build service binary with coverage instrumentation
+FROM golang:1.23-alpine AS service-coverage-builder
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+# -cover builds a coverage-instrumented binary; GOCOVERDIR must be set at runtime
+RUN go build -cover -o /bin/{{SERVICE_NAME}}-coverage ./cmd/{{SERVICE_NAME}}
+
+# Stage: service-coverage runtime
+FROM alpine:3.19 AS service-coverage
+
+RUN apk add --no-cache ca-certificates tzdata
+COPY --from=service-coverage-builder /bin/{{SERVICE_NAME}}-coverage /bin/{{SERVICE_NAME}}
+
+EXPOSE {{SERVICE_PORT}}
+ENV GOCOVERDIR=/out/coverage
+RUN mkdir -p /out/coverage
+
+ENTRYPOINT ["/bin/{{SERVICE_NAME}}"]
+
+# Stage: test runner
+FROM golang:1.23-alpine AS test-runner
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# tests/ contains the integration test suite
+ENTRYPOINT ["go", "test", "-v", "-count=1", "./tests/..."]

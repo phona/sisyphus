@@ -1,0 +1,24 @@
+# Makefile.snippet — paste into your repo's Makefile.
+# Targets follow sisyphus integration-contracts (no ci- prefix for accept env targets).
+
+.PHONY: test-local test-clean accept-env-up accept-env-down
+
+TESTS_DIR := tests
+
+# Run integration tests locally via Docker Compose lab.
+test-local:
+	docker compose -f $(TESTS_DIR)/docker-compose.yml run --rm test-runner
+
+# Tear down the lab and remove volumes.
+test-clean:
+	docker compose -f $(TESTS_DIR)/docker-compose.yml down -v --remove-orphans
+
+# accept-env-up: start ephemeral lab and emit endpoint JSON to stdout (last line).
+# Called by sisyphus accept stage; must exit 0 and print JSON on last stdout line.
+accept-env-up:
+	@docker compose -f $(TESTS_DIR)/docker-compose.yml up -d --wait
+	@echo '{"service_url":"http://localhost:{{SERVICE_PORT}}"}'
+
+# accept-env-down: idempotent teardown. Always exits 0.
+accept-env-down:
+	@docker compose -f $(TESTS_DIR)/docker-compose.yml down -v --remove-orphans 2>/dev/null || true

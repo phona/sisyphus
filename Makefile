@@ -12,7 +12,7 @@
 # accept-env-up/down 不带 ci- 前缀：它们是 accept 阶段 lab 边界，不在 PR-CI 热路径
 # （REQ-rename-accept-targets-1777124774）。
 
-.PHONY: help ci-lint ci-unit-test ci-integration-test accept-env-up accept-env-down test-all test-flutter test-go
+.PHONY: help ci-lint ci-unit-test ci-integration-test accept-env-up accept-env-down test-all test-flutter test-go skill-install
 
 SCRIPT_DIR := $(shell pwd)
 
@@ -80,3 +80,8 @@ test-flutter: ## 运行 Flutter 测试
 test-go: ## 运行 Go 测试
 	@echo "测试 ttpos-server-go..."
 	@cd $(SCRIPT_DIR)/projects/ttpos-server-go && make ci
+
+skill-install: ## 软链 skills/sisyphus-testkit → ~/.claude/skills/sisyphus-testkit
+	@mkdir -p ~/.claude/skills
+	@ln -sf $(shell pwd)/skills/sisyphus-testkit ~/.claude/skills/sisyphus-testkit
+	@echo "skill-install: ~/.claude/skills/sisyphus-testkit -> $(shell pwd)/skills/sisyphus-testkit"

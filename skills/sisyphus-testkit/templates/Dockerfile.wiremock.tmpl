@@ -1,0 +1,28 @@
+# Dockerfile.wiremock.tmpl — WireMock image with pre-compiled proto stubs.
+# Replace {{PROTO_PATH}} with the path to your .proto files (e.g. api/proto).
+#
+# Phase B placeholder: upstream phona/wiremock source not yet confirmed.
+# Replace the base image once Phase B lands.
+
+# Stage 1: compile proto → JSON stub descriptors
+FROM golang:1.23-alpine AS proto-compiler
+
+RUN apk add --no-cache protobuf
+RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@latest \
+ && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+WORKDIR /src
+COPY {{PROTO_PATH}} ./proto
+
+RUN protoc \
+    --proto_path=./proto \
+    --go_out=./gen \
+    --go-grpc_out=./gen \
+    $(find ./proto -name "*.proto")
+
+# Stage 2: WireMock with generated stubs
+FROM wiremock/wiremock:3.5.2-alpine
+
+COPY --from=proto-compiler /src/gen /home/wiremock/extensions
+COPY tests/wiremock/mappings /home/wiremock/mappings
+COPY tests/wiremock/__files  /home/wiremock/__files
