@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -71,19 +72,40 @@ DEFAULT_PROJECT = "nnvxh8wj"
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_ENGINE_TYPE = "claude-code"
 SLUG_TS_LIMIT = 46  # tag 整体 ≤ 50；REQ-<slug> 后 4 字 prefix
+# Cloudflare 在 BKD ingress 前装了 WAF，默认 `Python-urllib/3.x` UA 直接 1010。
+# 任何具名 UA 都通过；这里跟 orchestrator/bkd_rest.py 的 httpx default 风格对齐。
+USER_AGENT = "sisyphus-bkd-cli/1.0"
 
 
 # ─── BKD REST helpers ──────────────────────────────────────────────────────
 
 
+def _bkd_token() -> str | None:
+    """从 env 读 Coder-Session-Token。
+
+    优先 SISYPHUS_BKD_TOKEN（跟 orchestrator helm values 对齐），fallback CODER_SESSION_TOKEN
+    （Coder workspace 内置 env，bkd-cli 在 workspace 里跑时直接复用）。
+    本地 BKD（base_url=http://localhost:3000/api）无 auth，返 None。
+    """
+    return os.environ.get("SISYPHUS_BKD_TOKEN") or os.environ.get("CODER_SESSION_TOKEN")
+
+
 def _req(method: str, url: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-    """发 HTTP 到 BKD，返回解析后 dict。"""
+    """发 HTTP 到 BKD，返回解析后 dict。
+
+    自动注入：
+      - User-Agent: 绕过 cloudflare WAF 默认拦 Python-urllib UA
+      - Coder-Session-Token: 远端 BKD（gated by Coder）必须；从 env 读
+    """
     data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body else None
-    r = urllib.request.Request(
-        url, data=data,
-        headers={"Content-Type": "application/json"},
-        method=method,
-    )
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
+    }
+    tok = _bkd_token()
+    if tok:
+        headers["Coder-Session-Token"] = tok
+    r = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(r, timeout=30) as resp:
             return json.loads(resp.read().decode("utf-8"))
@@ -175,7 +197,7 @@ def cmd_inline(args: argparse.Namespace) -> int:
     intent_tag = f"intent:{args.intent}"
     title = f"[REQ-{slug}] {args.title}"
     base_tags = [f"REQ-{slug}", *args.tag]
-    final_tags = [intent_tag, *base_tags]
+    final_tags = base_tags if args.no_intent else [intent_tag, *base_tags]
 
     if args.prompt_file:
         with open(args.prompt_file, "r", encoding="utf-8") as f:
@@ -398,6 +420,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-worktree", action="store_true", help="useWorktree=False")
     sp.add_argument("--no-activate", dest="activate", action="store_false",
                     help="不 PATCH statusId=working（让 orchestrator 自取）")
+    sp.add_argument("--no-intent", action="store_true",
+                    help="不 PATCH intent tag（纯 BKD 派单，不走 orchestrator）")
     sp.set_defaults(activate=True, func=cmd_inline)
 
     # yaml

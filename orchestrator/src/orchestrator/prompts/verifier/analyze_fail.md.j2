@@ -12,6 +12,8 @@ analyze-agent 跑不下去了（session failed / 超时 / 写不出 openspec 或
 ```
 {% endif %}
 
+{% include "verifier/_checker_output.md.j2" %}
+
 ### 关注点
 - openspec validate 报格式错 / spec 写错 → `fix` + `fixer=spec`
 - analyze-agent 本身 LLM 抽风（空输出 / 格式乱 / 无法完成拆解）→ `escalate`

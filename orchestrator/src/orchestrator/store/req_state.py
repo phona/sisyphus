@@ -19,11 +19,12 @@ class ReqRow:
     context: dict
     created_at: datetime
     updated_at: datetime
+    terminal_outcome: str | None = None
 
 
 async def get(pool: asyncpg.Pool, req_id: str) -> ReqRow | None:
     row = await pool.fetchrow(
-        "SELECT req_id, project_id, state, history, context, created_at, updated_at "
+        "SELECT req_id, project_id, state, history, context, created_at, updated_at, terminal_outcome "
         "FROM req_state WHERE req_id = $1",
         req_id,
     )
@@ -37,6 +38,7 @@ async def get(pool: asyncpg.Pool, req_id: str) -> ReqRow | None:
         context=json.loads(row["context"]) if isinstance(row["context"], str) else (row["context"] or {}),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        terminal_outcome=row.get("terminal_outcome"),  # migration 0012 新增列，旧 mock 无此键
     )
 
 
@@ -94,6 +96,14 @@ async def cas_transition(
     """
     row = await pool.fetchrow(sql, *args)
     return row is not None
+
+
+async def set_terminal_outcome(pool: asyncpg.Pool, req_id: str, outcome: str) -> None:
+    """记录 REQ 终态结果，最后写入覆盖（best-effort，不更新 updated_at 避免干扰 watchdog 时钟）。"""
+    await pool.execute(
+        "UPDATE req_state SET terminal_outcome = $2 WHERE req_id = $1",
+        req_id, outcome,
+    )
 
 
 async def update_context(pool: asyncpg.Pool, req_id: str, patch: dict) -> None:

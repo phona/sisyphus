@@ -8,6 +8,7 @@ marked failed.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from thanatos.drivers import AdbDriver, Driver, HttpDriver, PlaywrightDriver
@@ -127,11 +128,15 @@ async def run_all(skill_path: str, spec_path: str, endpoint: str) -> list[Scenar
     ]
 
 
-def recall(skill_path: str, intent: str) -> list[dict]:
+def recall(
+    skill_path: str, intent: str, *, limit: int = 10, tags: list[str] | None = None
+) -> list[dict]:
     """Look up product knowledge fragments matching an intent.
 
-    Searches all ``.md`` files in the same directory as ``skill.yaml`` and
-    returns snippets ranked by keyword overlap with *intent*.
+    Recursively searches all ``.md`` files under the same directory as
+    ``skill.yaml`` and returns snippets ranked by keyword overlap with
+    *intent*.  Optional *tags* filters to files whose YAML frontmatter
+    ``tags`` list intersects the requested set.
     """
     from pathlib import Path
 
@@ -143,12 +148,18 @@ def recall(skill_path: str, intent: str) -> list[dict]:
     if not intent_words:
         return []
 
-    hits: list[tuple[float, dict]] = []
+    filter_tags = {t.lower() for t in (tags or [])}
+    hits: list[tuple[float, float, dict]] = []
 
-    for md_path in skill_dir.glob("*.md"):
+    for md_path in skill_dir.rglob("*.md"):
         text = md_path.read_text(encoding="utf-8")
-        # Split into chunks by double-newline or headings
-        chunks = _split_into_chunks(text)
+        frontmatter_tags = _extract_frontmatter_tags(text)
+
+        if filter_tags and not filter_tags.intersection(frontmatter_tags):
+            continue
+
+        body = _strip_frontmatter(text)
+        chunks = _split_into_chunks(body)
         for chunk in chunks:
             if not chunk.strip():
                 continue
@@ -158,6 +169,7 @@ def recall(skill_path: str, intent: str) -> list[dict]:
                 hits.append(
                     (
                         score,
+                        mtime,
                         {
                             "kind": md_path.name,
                             "snippet": chunk.strip()[:800],
@@ -166,8 +178,9 @@ def recall(skill_path: str, intent: str) -> list[dict]:
                     )
                 )
 
-    hits.sort(key=lambda x: x[0], reverse=True)
-    return [h[1] for h in hits[:10]]
+    # sort by relevance desc, then freshness desc
+    hits.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return [h[2] for h in hits[:limit]]
 
 
 def _split_into_chunks(text: str) -> list[str]:
@@ -182,6 +195,38 @@ def _split_into_chunks(text: str) -> list[str]:
         sub = [s.strip() for s in part.split("\n\n") if s.strip()]
         chunks.extend(sub)
     return chunks
+
+
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+
+
+def _extract_frontmatter_tags(text: str) -> set[str]:
+    """Return lowercase tags from YAML frontmatter, if present."""
+    import yaml  # type: ignore[import-untyped]
+
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        return set()
+    try:
+        fm = yaml.safe_load(m.group(1))
+    except yaml.YAMLError:
+        return set()
+    if not isinstance(fm, dict):
+        return set()
+    raw = fm.get("tags")
+    if isinstance(raw, list):
+        return {str(t).lower() for t in raw}
+    if isinstance(raw, str):
+        return {raw.lower()}
+    return set()
+
+
+def _strip_frontmatter(text: str) -> str:
+    """Return text with YAML frontmatter removed."""
+    m = _FRONTMATTER_RE.match(text)
+    if m:
+        return text[m.end() :]
+    return text
 
 
 def _score_chunk(chunk: str, intent_words: set[str]) -> float:

@@ -200,6 +200,12 @@ class RunnerController:
             client.V1EnvVar(name="GOCACHE", value="/workspace/.cache/go/build"),
             client.V1EnvVar(name="npm_config_cache", value="/workspace/.cache/npm"),
             client.V1EnvVar(name="UV_CACHE_DIR", value="/workspace/.cache/uv"),
+            # 指向 entrypoint.sh 重写过 in-cluster URL 的 kubeconfig (#292)。文件
+            # 不存在时 helm/kubectl 自动降级到 ~/.kube/config 或 in-cluster sa，无害。
+            # 这条让 `kubectl exec runner-pod -- bash -c "kubectl get ns"` 这类
+            # 非交互 exec 也能读到正确 server URL —— /etc/profile.d 在
+            # `bash -c` 下不会 source，必须 pod env 注入。
+            client.V1EnvVar(name="KUBECONFIG", value="/workspace/.kubeconfig"),
         ]
         # 从 runner-secrets 注入 GitHub 凭证（optional，secret 缺了 pod 还能起）
         for env_name, secret_key in (
@@ -269,11 +275,13 @@ class RunnerController:
         container = client.V1Container(
             name="runner",
             image=self.runner_image,
-            # Always pull —— runner image 是 :main 浮动 tag，IfNotPresent 时节点
-            # 缓存的旧 image 永远不会被刷新（实测：PR #34 加 sisyphus-clone-repos.sh
-            # + check-scenario-refs --specs-search-path 后，runner pod 仍跑老 script
-            # 报 'cd: --: invalid option'，因为节点缓存没更新）。
-            image_pull_policy="Always",
+            # IfNotPresent —— runner image 现在强制 immutable git-sha
+            # （issue #267：helm values runner.image 必填且必须 sha-<short>）。
+            # 同 sha = 同镜像，节点缓存反而是好事；deploy 升级 = bump sha 触发新 pull。
+            # 历史背景：之前是 Always 兜 mutable :main tag（PR #34 加 sisyphus-clone-repos.sh
+            # 后 IfNotPresent + :main 节点缓存没刷新报 'cd: --: invalid option'）；
+            # 切 sha tag 后这个 workaround 不再需要。
+            image_pull_policy="IfNotPresent",
             command=["/usr/local/bin/sisyphus-entrypoint.sh"],
             args=["sleep", "infinity"],
             # privileged: DinD 必须；fuse-overlayfs 要 /dev/fuse + CAP_SYS_ADMIN
@@ -703,11 +711,17 @@ class RunnerController:
     ) -> ExecResult:
         pod_name = self.pod_name(req_id)
 
+        # 环境变量用 inline `export` 在 bash -c 上下文里赋值，**不**用 `env KEY=VAL <cmd>` shim。
+        # 历史教训（#277 / #280）：`env KEY=VAL <cmd>` 把 <cmd> 头一个 token 当二进制找，
+        # 但 caller 经常传 `cd <dir> && make ...` / `set +e ...` 这种 builtin-headed 命令 →
+        # `env: 'cd': No such file or directory` / `env: 'set': No such file or directory`。
+        # newline-separator 还会让后续行继续跑，让 debug 极难看出根因。
+        # inline export 在同一个 bash -c 子 shell 里完成，所有后续 builtin / 控制结构都正常。
         env_prefix = ""
         if env:
-            env_prefix = "env " + " ".join(
-                f"{k}={_shell_quote(v)}" for k, v in env.items()
-            ) + " "
+            env_prefix = "; ".join(
+                f"export {k}={_shell_quote(v)}" for k, v in env.items()
+            ) + "; "
 
         full_cmd = f"cd {workdir} && {env_prefix}{command}; echo {_EXIT_MARKER}$?"
         exec_argv = ["/bin/bash", "-c", full_cmd]

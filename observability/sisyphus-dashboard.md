@@ -280,6 +280,61 @@ Q12/Q13 是"此刻在出事吗"，放最上；Q6/Q8 是周度趋势；Q9/Q11 是
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## PR queue health 看板（Q19–Q20，REQ-fix-pr-queue-health-monitoring-1777789759）
+
+pr_health cron（30min 周期）把 behind > 5 commit 的 OPEN PR 写入 `pr_drift_log`，供以下两条 Question 查询。
+
+### Q19. PR base drift 最新快照
+
+- **SQL**：[queries/sisyphus/19-pr-drift.sql](queries/sisyphus/19-pr-drift.sql)
+- **Visualization**：Table（列：`repo, pr_number, behind_count, drift_kind, conflict_predicted, checked_at`）
+- **条件格式**：`conflict_predicted = true` 行标红
+- **人工介入阈值**：`drift_kind = 'semantic-drift'` 行 > 0 应检查受影响 PR 是否需要人工 rebase
+
+### Q20. PR queue 年龄 + dirty rate 分桶
+
+- **SQL**：[queries/sisyphus/20-pr-aging.sql](queries/sisyphus/20-pr-aging.sql)
+- **Visualization**：Bar chart（X = `age_bucket`，Y = `pr_count`，颜色表示 `dirty_rate_pct`）
+- **注意**：仅含 behind > threshold 的 PR（fresh PR 不写 pr_drift_log）；完整 PR 生命周期统计需 pr_links 扩展（TODO followup）
+
+**PR queue health 看板布局（建议挂 M7 看板底部）**：
+
+```
+┌──────────────────────────────┬──────────────────────────────┐
+│  Q19. PR drift 最新快照       │  Q20. PR 年龄 + dirty rate   │
+│  (table，冲突行标红)          │  (bar chart，按年龄分桶)      │
+
+## REQ 终态记账（Q21/Q22）
+
+`req_state.terminal_outcome` 列由三个 hook 协同填充（best-effort）：
+- `merged` — engine.step 推 DONE 时 / escalate PR-merged shortcut 时
+- `sisyphus-escalated` — escalate action 进 ESCALATED 终态时
+- `abandoned-by-user` — watchdog 扫到 ESCALATED + 7 天无续时
+- 其余（`pr-rejected` / `pr-closed-no-merge` / `replaced-by-other-req` / `merged-then-reverted`）— 当前版本留 NULL，后续 GH webhook 接管
+
+NULL bucket 是"在途或未覆盖"，Q21 单独一行显示。
+
+### Q21. Termination breakdown（按终态切分资源消耗）
+
+- **SQL**：[queries/sisyphus/21-termination-breakdown.sql](queries/sisyphus/21-termination-breakdown.sql)
+- **Visualization**：Bar chart（X 轴 `terminal_outcome`，Y 轴 `total_tokens`）+ Table 下钻（列：`terminal_outcome, req_count, total_stage_runs, total_tokens, est_cost_usd, avg_wall_clock_h`）
+- **人工介入阈值**：`sisyphus-escalated` + `abandoned-by-user` 合计占 total_tokens 超过 30% → 检查近期高耗 REQ intent 类型
+
+### Q22. Wasted-token leaderboard（浪费 token Top-20）
+
+- **SQL**：[queries/sisyphus/22-wasted-token-leaderboard.sql](queries/sisyphus/22-wasted-token-leaderboard.sql)
+- **Visualization**：Table（列顺序：`req_id, terminal_outcome, intent_summary, total_runs, total_tokens, est_cost_usd, wall_clock_h, created_at`），按 `total_tokens` 降序，`terminal_outcome ∈ ('pr-rejected', 'abandoned-by-user')` 整行标红
+- **用途**：找高浪费 REQ 的共同 intent 模式（删核心模块 / 大 rename / 新加 stage），指导 intent 澄清阶段拦截
+
+**建议单独一个 Dashboard（终态记账）**：
+
+```
+┌──────────────────────────────┬──────────────────────────────┐
+│  Q21. Termination breakdown  │  Q22. Wasted-token leaderboard│
+│  (bar chart + table)         │  (table，标红行优先)           │
+└──────────────────────────────┴──────────────────────────────┘
+```
+
 ## 刷新频率
 
 M7 看板：
@@ -297,6 +352,13 @@ M14e 质量看板：
 
 Webhook dedup 看板：
 - Q17：每 5 分钟（pending_or_crashed > 0 通常意味 webhook handler 崩了，越早发现越好）
+
+PR queue health 看板：
+- Q19 / Q20：每 30 分钟（和 pr_health cron 同步，数据不比 cron 更新）
+
+终态记账看板：
+- Q21：每 1 小时（趋势类，token 分布变化慢）
+- Q22：每 1 小时（leaderboard 变化慢；有新高耗 REQ 完成时才需关注）
 
 Metabase Question 设置 `Results cache TTL`：Q5/Q1 设 30s，Q2/Q3/Q4/Q12/Q13/Q17/Q18 设 120s，其余设 1800s。
 

@@ -14,6 +14,8 @@ sisyphus 的机械 spec_lint checker 红了。它**遍历所有 source repo**—
 ```
 {% endif %}
 
+{% include "verifier/_checker_output.md.j2" %}
+
 ### 多仓识别（重要）
 
 stderr 里 sisyphus 用 `=== FAIL: <repo-basename> ===` 标记**哪个仓**挂了。

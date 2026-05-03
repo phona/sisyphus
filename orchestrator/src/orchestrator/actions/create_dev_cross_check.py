@@ -30,8 +30,19 @@ async def create_dev_cross_check(*, body, req_id, tags, ctx):
     """下发开发交叉验证任务到 runner pod。"""
     log.info("create_dev_cross_check.start", req_id=req_id)
 
+    # REQ-base-branch-override-1777480690: forward per-repo base branch map
+    # so dev_cross_check computes BASE_REV against the right merge-base.
+    base_branch = (ctx or {}).get("base_branch")
+    base_branches = (ctx or {}).get("base_branches") or {}
+    repo_base_map = dict(base_branches)
+    if base_branch:
+        # _default key is the global default applied to all repos unless overridden
+        repo_base_map["_default"] = base_branch
+
     try:
-        result = await checker.run_dev_cross_check(req_id, timeout_sec=300)
+        result = await checker.run_dev_cross_check(
+            req_id, timeout_sec=300, repo_base_map=repo_base_map or None,
+        )
     except TimeoutError:
         log.error("create_dev_cross_check.timeout", req_id=req_id)
         return {

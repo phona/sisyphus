@@ -13,7 +13,7 @@
 - **薄编排，agent 决定** —— 路由 / 状态机 / checker 是 sisyphus；判 PR 内容、bug 该不该修是 agent。**永远不抢 AI 决定权**。
 - **机械层 ≠ agent 层** —— 跑测试 / 轮 GHA / 校 schema 不绕 agent，sisyphus 是唯一裁判（4 个 checker：spec_lint / dev_cross_check / staging_test / pr_ci_watch）。
 - **失败先验，再试错** —— stage fail 不直接 bugfix，verifier-agent 主观判 pass / fix / escalate（M14b/c，3 路）。
-- **指标驱动改进** —— 每条决策入 `stage_runs` / `verifier_decisions`，18 条 Metabase SQL（Q1–Q18，跨 M7 + M14e + fixer-audit + silent-pass detector）回答"哪条 prompt 该改"。
+- **指标驱动改进** —— 每条决策入 `stage_runs` / `verifier_decisions`，22 条 Metabase SQL（Q1–Q22，跨 M7 + M14e + fixer-audit + silent-pass detector + termination accounting）回答"哪条 prompt 该改"。
 - **生产用最强模型** —— 不做"失败升级模型"自适应；haiku 只用于测试加速。
 - **runner = 只读 checker** —— K8s runner pod 只 clone 源、跑测试、跑 accept-env-*；**所有 GH 写操作（push / PR create / merge）都打回 BKD Coder workspace 执行**，由 Coder gh auth 处理，跟 runner secret 完全无关。runner GH_TOKEN 应是 fine-grained PAT, Contents: Read-only。详见 [docs/architecture.md §8](docs/architecture.md)。
 
@@ -55,7 +55,7 @@ intent:analyze → analyze(全责交付：写 spec + 业务码 + push feat/REQ-x
 
 **ESCALATED 是暂停态，不是死终态**——用户在任意 stage agent issue（含 verifier issue）BKD UI 续 follow-up，agent 重跑产出 result tag → router 派出对应主链事件 → ESCALATED 复用主链 transition 继续推。零新概念 / 零新 tag / 零新 endpoint。详见 [docs/state-machine.md §5](docs/state-machine.md)。
 
-state 转移完整定义在 [orchestrator/src/orchestrator/state.py](orchestrator/src/orchestrator/state.py)（17 ReqState × 27 Event × 70 transition）。
+state 转移完整定义在 [orchestrator/src/orchestrator/state.py](orchestrator/src/orchestrator/state.py)（16 ReqState × 27 Event × 70 transition）。
 
 ## 技术栈
 
@@ -85,7 +85,7 @@ sisyphus/
 ├── scripts/                  # ACL/scenario lint 脚本（runner 镜像挂这些）
 ├── observability/
 │   ├── schema.sql / agent_quality.sql
-│   ├── queries/sisyphus/     # 18 条 Metabase SQL (Q1-Q18; M7 + M14e + fixer-audit + silent-pass)
+│   ├── queries/sisyphus/     # 22 条 Metabase SQL (Q1-Q22; M7 + M14e + fixer-audit + silent-pass + termination)
 │   └── sisyphus-dashboard.md
 ├── docs/                     # 见下方文档索引
 └── values/                   # helm values（postgresql / metabase）
@@ -96,10 +96,11 @@ sisyphus/
 | 文档 | 内容 |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | 架构权威：哲学、角色分工、流程图、stage 契约（含 mermaid） |
+| [docs/playbook.md](docs/playbook.md) | **开发节奏 / phase / cap / 反 pattern**（一个人+AI 搭平台的执行手册，产品 owner 自用） |
 | [docs/state-machine.md](docs/state-machine.md) | 状态机权威：state / event / transition 表 + stateDiagram |
 | [docs/integration-contracts.md](docs/integration-contracts.md) | sisyphus ↔ 业务 repo 契约（Makefile target、env、JSON 输出） |
 | [docs/observability.md](docs/observability.md) | 观测设计哲学（Postgres + Metabase） |
-| [observability/sisyphus-dashboard.md](observability/sisyphus-dashboard.md) | 18 条 Metabase SQL + 看板布局（Q1–Q18：M7 + M14e + fixer-audit + silent-pass） |
+| [observability/sisyphus-dashboard.md](observability/sisyphus-dashboard.md) | 22 条 Metabase SQL + 看板布局（Q1–Q22：M7 + M14e + fixer-audit + silent-pass + termination） |
 | [docs/prompts.md](docs/prompts.md) | 各阶段 agent prompt 总览（按 role） |
 | [docs/api-tag-management-spec.md](docs/api-tag-management-spec.md) | BKD issue tag 命名规范（router 依赖） |
 | [docs/cookbook/](docs/cookbook/) | 按 lab 形态分给 `accept-env-up/down` 实现样板（mobile lab 见 `ttpos-arch-lab-accept-env.md`） |

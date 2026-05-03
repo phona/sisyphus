@@ -1,0 +1,85 @@
+### 5.1 为什么贴
+
+accept teardown 完后 sisyphus 进 `PENDING_USER_REVIEW`，等用户拍板（done / review /
+blocked）。用户大概率打开 GitHub PR / 看实际 lab 效果，发现"按钮挪 5px"这种
+"看到才知道偏了"的小调整时，需要一个**反向控制通道**重新触发主链：
+
+- 用户在某个 BKD stage agent issue（intake / analyze / challenger / accept / fixer）
+  续 follow-up（"按钮挪 5px"）
+- BKD wake agent → 重跑 → 出 `result:pass` tag
+- router 派对应 `*_PASS` 主链事件 → PENDING_USER_REVIEW 复用主链 transition →
+  自然推到 dev-cross-check / staging-test / pr-ci 重跑
+- 再次 PENDING_USER_REVIEW，用户继续 loop 直到满意 → BKD intent statusId="done"
+
+PR 上贴一条 comment 列出这些 BKD 入口链接，让用户不用回 BKD 翻 issue 找路。
+
+### 5.2 怎么贴（marker 幂等替换）
+
+用 HTML comment marker 锁定本管理 comment，**幂等**：第二次跑（用户多轮 follow-up
+触发 accept 重跑场景）必须**替换不追加**，让 PR 永远只有一条 sisyphus acceptance
+comment。
+
+```bash
+MARKER='<!-- sisyphus:acceptance-status REQ={{ req_id }} -->'
+
+# 每个 PR 一条 comment（多仓 REQ 各仓各贴）
+{% if pr_urls %}
+{%- for repo, url in pr_urls.items() %}
+upsert_acceptance_comment "{{ repo }}" "{{ url }}"
+{%- endfor %}
+{% else %}
+# ctx 里没 pr_urls 时，pr_links.ensure_pr_links_in_ctx 应已写过；如仍空则跳过
+# （PENDING_USER_REVIEW 出口仍可走 BKD intent statusId 表态，PR comment 是锦上添花）
+{% endif %}
+```
+
+`upsert_acceptance_comment` 实现要点（pseudo）：
+
+```bash
+upsert_acceptance_comment() {
+  local repo="$1"      # owner/repo
+  local pr_url="$2"    # https://github.com/owner/repo/pull/N
+  local pr_number="${pr_url##*/pull/}"
+
+  # 1. body 里包 MARKER，accept 摘要 + BKD 入口清单
+  local body
+  body=$(cat <<EOF
+$MARKER
+
+## sisyphus 验收已通过（REQ {{ req_id }}）
+
+**Lab endpoint**: \`{{ endpoint }}\`
+
+**调整通道**：在以下任意 BKD issue 续 follow-up，sisyphus 会自动重跑后续 stage：
+
+{% for entry in bkd_entry_links -%}
+- [{{ entry.label }}]({{ entry.url }})
+{% endfor %}
+
+**拍板**：改 BKD intent issue 的 statusId 即可
+- \`done\` → approve，sisyphus 立即合 PR 归档
+- \`review\` / \`blocked\` → 不满意，sisyphus 进 escalated，可 chat 续聊描述具体问题
+EOF
+)
+
+  # 2. 找已有的 sisyphus comment（gh api list comments grep MARKER）
+  local existing
+  existing=$(gh api "repos/$repo/issues/$pr_number/comments" \
+              --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" \
+              | head -1)
+
+  # 3. 有 → PATCH（替换不追加）；无 → POST 新 comment
+  if [ -n "$existing" ]; then
+    gh api -X PATCH "repos/$repo/issues/comments/$existing" \
+           -f body="$body" >/dev/null
+  else
+    gh pr comment "$pr_url" --body "$body" >/dev/null
+  fi
+}
+```
+
+### 5.3 失败 best-effort
+
+⚠️ **贴 comment 是尾步副作用，失败不能阻断主任务**。`gh` 命令失败 / repo 没 PR
+权限 / 网络抖动 → log warning 继续，**仍要正常贴 `result:pass` / `result:fail` tag**。
+sisyphus 状态机推进不依赖 PR comment 落地。

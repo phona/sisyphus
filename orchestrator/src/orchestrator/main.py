@@ -4,10 +4,12 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import httpx
 import structlog
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
-from . import accept_env_gc, k8s_runner, runner_gc, snapshot, watchdog
+from . import accept_env_gc, k8s_runner, pr_health, runner_gc, snapshot, watchdog
 from .admin import admin as admin_api
 from .config import settings
 from .maintenance import table_ttl
@@ -42,7 +44,9 @@ _bg_tasks: list[asyncio.Task] = []
 @app.on_event("startup")
 async def startup() -> None:
     # 1. 跑 schema 迁移（同步，启动时一次性）
-    apply_pending(settings.pg_dsn)
+    #    helm init-container 负责时跳过，避免与 init-container 重复竞争锁
+    if not settings.skip_migration_on_startup:
+        apply_pending(settings.pg_dsn, lock_timeout=settings.migration_lock_timeout)
     # 2. 起业务 pool + observability pool（obs DSN 空就跳过）
     await db.init_pool(settings.pg_dsn)
     await db.init_obs_pool(settings.obs_pg_dsn)
@@ -85,6 +89,9 @@ async def startup() -> None:
     # 7. 起 TTL 清理后台任务（event_seen / dispatch_slugs / verifier_decisions / stage_runs）
     if settings.ttl_cleanup_enabled and settings.ttl_cleanup_interval_sec > 0:
         _bg_tasks.append(asyncio.create_task(table_ttl.run_loop(), name="table_ttl"))
+    # 8. 起 PR drift cron（REQ-fix-pr-queue-health-monitoring-1777789759）
+    if settings.pr_health_enabled and settings.pr_health_interval_sec > 0:
+        _bg_tasks.append(asyncio.create_task(pr_health.run_loop(), name="pr_health"))
     log.info(
         "startup.ok",
         port=settings.port,
@@ -107,6 +114,54 @@ async def shutdown() -> None:
     log.info("shutdown.ok")
 
 
+@app.get("/livez")
+async def livez() -> dict:
+    """Liveness probe — 进程存活即 ok，不探依赖。"""
+    return {"status": "ok"}
+
+
 @app.get("/healthz")
 async def healthz() -> dict:
+    # deprecated: alias for /livez; readiness checks moved to /readyz
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+async def readyz():
+    """Readiness probe — 探 DB / BKD / K8s，任一失败返 503。"""
+    failed: list[str] = []
+
+    # DB ping (1s timeout)
+    try:
+        pool = db.get_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1", timeout=1.0)
+    except Exception:
+        failed.append("db")
+
+    # BKD ping (2s timeout)
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as hc:
+            r = await hc.get(settings.bkd_base_url)
+        if r.status_code >= 500:
+            failed.append("bkd")
+    except Exception:
+        failed.append("bkd")
+
+    # K8s ping (2s timeout; skip if controller not initialized — dev mode)
+    try:
+        controller = k8s_runner.get_controller()
+        await asyncio.to_thread(
+            controller.core_v1.list_namespace, _request_timeout=2
+        )
+    except RuntimeError:
+        pass  # controller not initialized in dev/test mode
+    except Exception:
+        failed.append("k8s")
+
+    if failed:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "failed": failed},
+        )
     return {"status": "ok"}

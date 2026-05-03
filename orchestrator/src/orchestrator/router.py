@@ -78,11 +78,38 @@ def validate_audit_soft(audit: dict | None) -> str | None:
     return None
 
 
-def decision_to_event(decision: dict) -> Event:
-    """合规 decision → Event。调用前必须先跑 validate_decision。"""
+# verifier decision=pass 时 stage → 对应主链 pass 事件
+#（REQ-refactor-verify-pass-transition-1777727230：把 apply_verify_pass 自循环拆成
+# 显式 transition，router 负责在 decision 解析层做事件映射）。
+_VERIFY_PASS_ROUTING: dict[str, Event] = {
+    "analyze":                Event.ANALYZE_DONE,
+    "analyze_artifact_check": Event.ANALYZE_ARTIFACT_CHECK_PASS,
+    "spec_lint":              Event.SPEC_LINT_PASS,
+    "challenger":             Event.CHALLENGER_PASS,
+    "dev_cross_check":        Event.DEV_CROSS_CHECK_PASS,
+    "staging_test":           Event.STAGING_TEST_PASS,
+    "pr_ci":                  Event.PR_CI_PASS,
+    "accept":                 Event.ACCEPT_PASS,
+}
+
+
+def pass_event_for_stage(stage: str | None) -> Event | None:
+    """verifier decision=pass 时，按 stage 返回对应主链 pass 事件。
+
+    None 表示 stage 不在已知路由表（应 escalate）。
+    """
+    return _VERIFY_PASS_ROUTING.get(stage) if stage else None
+
+
+def decision_to_event(decision: dict, stage: str | None = None) -> Event:
+    """合规 decision → Event。调用前必须先跑 validate_decision。
+
+    stage 只在 action=pass 时使用；缺省或未知 stage 时回退 VERIFY_PASS
+   （调用方应检查 None 并 escalate）。
+    """
     action = decision["action"]
     if action == "pass":
-        return Event.VERIFY_PASS
+        return pass_event_for_stage(stage) or Event.VERIFY_PASS
     if action == "fix":
         return Event.VERIFY_FIX_NEEDED
     if action == "retry":
@@ -102,6 +129,13 @@ def derive_verifier_event(
     """
     event, decision, reason, _ = derive_verifier_event_with_retry_info(description, tags)
     return event, decision, reason
+
+
+def _stage_from_tags(tags: Iterable[str] | None) -> str | None:
+    for t in (tags or []):
+        if t.startswith("verify:"):
+            return t.removeprefix("verify:")
+    return None
 
 
 def derive_verifier_event_with_retry_info(
@@ -128,7 +162,11 @@ def derive_verifier_event_with_retry_info(
     ok, why = validate_decision(decision)
     if not ok:
         return Event.VERIFY_ESCALATE, decision, f"invalid decision: {why}", True
-    return decision_to_event(decision), decision, "", False
+    stage = _stage_from_tags(tags)
+    event = decision_to_event(decision, stage=stage)
+    if event == Event.VERIFY_PASS:
+        return Event.VERIFY_ESCALATE, decision, f"unknown verifier stage: {stage!r}", False
+    return event, decision, "", False
 
 
 def extract_decision_from_issue(
@@ -349,3 +387,70 @@ def get_parent_stage(tags: Iterable[str]) -> str | None:
         if t.startswith("parent:") and not t.startswith("parent-id:"):
             return t.removeprefix("parent:")
     return None
+
+
+# ─── base:* tag 解析（REQ-base-branch-override-1777480690）───────────────────
+
+_BASE_TAG_PREFIX = "base:"
+# repo basename 规则：字母数字开头，后续可跟字母数字 . _ -
+_REPO_BASE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def extract_base_branches(
+    tags: Iterable[str],
+    finalized_intent: dict | None = None,
+) -> tuple[str | None, dict[str, str]]:
+    """解析 BKD intent issue 上的 base:* tag。
+
+    支持两种语法：
+    - ``base:<branch>`` — 默认 base 分支（单仓 / 全仓默认）
+    - ``base:<repo-basename>:<branch>`` — per-repo override
+
+    额外支持从 ``finalized_intent`` 读取（intake-agent 在 chat 中理解用户意图后写入），
+    作为 tag 缺失时的 fallback。优先级：tag > finalized_intent。
+
+    返回 ``(default_branch, repo_overrides)``。
+    没任何 ``base:*`` tag 或 finalized_intent 时返 ``(None, {})``（向后兼容）。
+    """
+    default: str | None = None
+    overrides: dict[str, str] = {}
+
+    # 1. 先从 BKD tag 解析（最高优先级）
+    for t in tags or []:
+        if not isinstance(t, str) or not t.startswith(_BASE_TAG_PREFIX):
+            continue
+        rest = t[len(_BASE_TAG_PREFIX):]
+        if not rest:
+            continue
+        if ":" in rest:
+            parts = rest.split(":", 1)
+            maybe_repo = parts[0]
+            if _REPO_BASE_RE.match(maybe_repo):
+                overrides[maybe_repo] = parts[1]
+                continue
+        default = rest
+
+    # 2. tag 没命中时 fallback 到 finalized intent（intake-agent 理解产物）
+    if finalized_intent:
+        default = default or finalized_intent.get("base_branch")
+        for repo, branch in (finalized_intent.get("base_branches") or {}).items():
+            if repo not in overrides:
+                overrides[repo] = branch
+
+    return default, overrides
+
+
+def resolve_base_branch(
+    repo_slug: str,
+    default_base: str | None,
+    base_overrides: dict[str, str],
+) -> str | None:
+    """给定 repo slug，解析应使用的 base branch。
+
+    优先顺序：
+    1. ``base_overrides[repo_basename]``（per-repo 显式指定）
+    2. ``default_base``（全局默认）
+    3. ``None``（无显式指定，走 origin/HEAD 兜底）
+    """
+    basename = repo_slug.rsplit("/", 1)[-1] if "/" in repo_slug else repo_slug
+    return base_overrides.get(basename) or default_base or None

@@ -89,7 +89,7 @@ def _patch_runner_and_clone(monkeypatch, *, cloned_repos, clone_exit=None,
     monkeypatch.setattr(_clone.k8s_runner, "get_controller", lambda: fake_rc)
     monkeypatch.setattr(sa_mod.k8s_runner, "get_controller", lambda: fake_rc)
 
-    async def _fake_clone(req_id, ctx, *, tags=None, default_repos=None):
+    async def _fake_clone(req_id, ctx, *, tags=None, default_repos=None, **kwargs):
         return cloned_repos, clone_exit
 
     monkeypatch.setattr(sa_mod, "clone_involved_repos_into_runner", _fake_clone)

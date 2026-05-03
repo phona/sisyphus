@@ -14,6 +14,8 @@ stderr 里每仓挂了会带 `=== FAIL: <repo> ===` + unit / integration 各自 
 ```
 {% endif %}
 
+{% include "verifier/_checker_output.md.j2" %}
+
 ### Baseline 差量分析（重要——先看这里）
 
 如果 stderr 开头含 `=== SISYPHUS BASELINE DIFF: ===` 块，说明 sisyphus 已经跑了

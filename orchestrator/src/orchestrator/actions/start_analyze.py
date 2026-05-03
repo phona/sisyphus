@@ -37,6 +37,7 @@ from ..config import settings
 from ..intent_tags import filter_propagatable_intent_tags
 from ..prompts import render
 from ..prompts.status_block import build_status_block_ctx
+from ..router import extract_base_branches
 from ..state import Event
 from ..store import db, dispatch_slugs, req_state
 from . import register, short_title
@@ -116,6 +117,21 @@ async def start_analyze(*, body, req_id, tags, ctx):
         await req_state.update_context(db.get_pool(), req_id, {
             "escalated_reason": f"rate-limit:{decision.reason}",
         })
+        # 给用户可见反馈：tag + follow-up 消息说明拒绝原因
+        try:
+            async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+                await bkd.merge_tags_and_update(
+                    project_id=proj,
+                    issue_id=issue_id,
+                    add=["reason:rate-limit"],
+                )
+                await bkd.follow_up_issue(
+                    project_id=proj,
+                    issue_id=issue_id,
+                    prompt=f"当前并发 REQ 已满（{decision.reason}），请稍后重试或联系管理员扩容。",
+                )
+        except Exception as e:
+            log.warning("start_analyze.admission_bkd_sync_failed", req_id=req_id, error=str(e))
         return {
             "emit": Event.VERIFY_ESCALATE.value,
             "reason": f"admission denied: {decision.reason}",
@@ -131,10 +147,27 @@ async def start_analyze(*, body, req_id, tags, ctx):
         pod_name = await rc.ensure_runner(req_id, wait_ready=True)
         log.info("start_analyze.runner_ready", req_id=req_id, pod=pod_name)
 
+    # 1.5 解析 base:* tag 并注入 ctx（REQ-base-branch-override-1777480690）
+    # 三层 fallback：tag > finalized_intent > settings 配置 > origin/HEAD
+    default_base, base_overrides = extract_base_branches(tags)
+    if not default_base:
+        default_base = settings.default_base_branch or None
+    if settings.default_base_branches:
+        for repo, branch in settings.default_base_branches.items():
+            if repo not in base_overrides:
+                base_overrides[repo] = branch
+    if default_base or base_overrides:
+        await req_state.update_context(db.get_pool(), req_id, {
+            "base_branch": default_base,
+            "base_branches": base_overrides,
+        })
+        ctx = {**(ctx or {}), "base_branch": default_base, "base_branches": base_overrides}
+
     # 2. server-side clone（multi-layer fallback：ctx → tags → settings.default
     # 都没拿到 → 无声跳过，让 agent 按 prompt Part A.3 自跑 helper）
     cloned_repos, clone_rc = await clone_involved_repos_into_runner(
         req_id, ctx, tags=tags, default_repos=settings.default_involved_repos,
+        default_base=default_base, base_overrides=base_overrides,
     )
     if clone_rc is not None:
         # helper 跑过但失败 → 不 dispatch agent，直接 escalate
@@ -185,6 +218,15 @@ async def start_analyze(*, body, req_id, tags, ctx):
             issue_id=analyze_issue.id,
             cloned_repos=cloned_repos,
             bkd_intent_issue_url=bkd_intent_issue_url,
+            # REQ-base-branch-override-1777480690: forward base branch info to
+            # analyze-agent so gh pr create uses the right --base.
+            base_branch=default_base,
+            base_branches=base_overrides,
+            # REQ-ux-status-block-1777257283: canonical at-a-glance REQ status
+            # block at the top of the analyze prompt. ctx.pr_urls is populated
+            # by later stages (pr_ci_watch.discover_pr_urls); on first analyze
+            # it is absent so format_pr_links_inline returns "" and the row
+            # is omitted by the partial.
             status_block=build_status_block_ctx(
                 req_id=req_id,
                 stage="analyze",

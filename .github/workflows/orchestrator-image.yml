@@ -1,5 +1,14 @@
 name: orchestrator-image
 
+# build & push sisyphus-orchestrator image to GHCR.
+#
+# 触发：
+#   - push main：build + push（branch tag :main 也由 metadata-action 兜底产出，但
+#     部署侧禁止再用——helm values 一律 pin 到 sha-<short>，见 deploy/README.md）
+#   - 打 orchestrator-v* tag：build + push semver + :latest
+#
+# 输出 tag：sha-<short> + branch tag (:main 仅留作 debug，不让 deployment 引用)
+
 on:
   push:
     branches: [main]
@@ -31,18 +40,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract short SHA
-        id: vars
-        run: echo "sha_short=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=match,pattern=orchestrator-v(.*),group=1
+            type=match,pattern=orchestrator-v(\d+\.\d+),group=1
+            type=match,pattern=orchestrator-v(\d+),group=1
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/orchestrator-v') }}
 
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./orchestrator
           file: ./orchestrator/Dockerfile
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.vars.outputs.sha_short }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -600,7 +600,7 @@ async def test_start_analyze_no_hint_tags_keeps_base_only(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_start_analyze_admission_denied_emits_escalate(monkeypatch):
-    """admission deny → emit VERIFY_ESCALATE，不调 ensure_runner / clone / BKD。"""
+    """admission deny → emit VERIFY_ESCALATE，给用户可见 tag + 消息；不调 runner / clone。"""
     monkeypatch.setattr(
         start_analyze, "check_admission",
         AsyncMock(return_value=AdmissionDecision(
@@ -626,17 +626,24 @@ async def test_start_analyze_admission_denied_emits_escalate(monkeypatch):
     update_ctx.assert_awaited_once()
     patch = update_ctx.await_args.args[2]
     assert patch["escalated_reason"] == "rate-limit:inflight-cap-exceeded:10/10"
+    # 给用户可见反馈：tag + follow-up 消息说明原因
+    merge_tags.assert_awaited_once()
+    mt_args = merge_tags.await_args
+    assert "reason:rate-limit" in mt_args.kwargs["add"]
+    follow_up.assert_awaited_once()
+    follow_prompt = follow_up.await_args.kwargs["prompt"]
+    assert "inflight-cap-exceeded:10/10" in follow_prompt
     # 不能花 runner / clone / agent 的成本
     fake_rc.ensure_runner.assert_not_awaited()
     exec_fn.assert_not_awaited()
-    follow_up.assert_not_awaited()
+    # admission denied 不应新建 analyze issue（visible feedback 用 merge_tags+follow_up
+    # 在原 intent issue 上做，已在上面 assert）
     create_issue.assert_not_awaited()
-    merge_tags.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_start_analyze_admission_disk_pressure_escalates(monkeypatch):
-    """disk-pressure 拒绝同样 escalate；reason 标 disk-pressure。"""
+    """disk-pressure 拒绝同样 escalate；reason 标 disk-pressure；给用户可见反馈。"""
     monkeypatch.setattr(
         start_analyze, "check_admission",
         AsyncMock(return_value=AdmissionDecision(
@@ -647,7 +654,16 @@ async def test_start_analyze_admission_disk_pressure_escalates(monkeypatch):
     monkeypatch.setattr(start_analyze.req_state, "update_context", update_ctx)
     exec_fn = AsyncMock()
     _patch_runner(monkeypatch, exec_fn=exec_fn)
-    _patch_bkd_client(monkeypatch, target_module=start_analyze)
+
+    # 自定义 BKD mock，需要捕获 merge_tags_and_update + follow_up
+    merge_tags = AsyncMock(return_value=None)
+    follow_up = AsyncMock(return_value=None)
+    bkd_instance = MagicMock()
+    bkd_instance.merge_tags_and_update = merge_tags
+    bkd_instance.follow_up_issue = follow_up
+    bkd_instance.__aenter__ = AsyncMock(return_value=bkd_instance)
+    bkd_instance.__aexit__ = AsyncMock(return_value=None)
+    monkeypatch.setattr(start_analyze, "BKDClient", lambda *a, **kw: bkd_instance)
 
     rv = await start_analyze.start_analyze(
         body=_make_body(), req_id="REQ-X", tags=[], ctx={},
@@ -657,3 +673,8 @@ async def test_start_analyze_admission_disk_pressure_escalates(monkeypatch):
     assert "disk-pressure" in rv["reason"]
     patch = update_ctx.await_args.args[2]
     assert "disk-pressure" in patch["escalated_reason"]
+    merge_tags.assert_awaited_once()
+    assert "reason:rate-limit" in merge_tags.await_args.kwargs["add"]
+    follow_up.assert_awaited_once()
+    follow_prompt = follow_up.await_args.kwargs["prompt"]
+    assert "disk-pressure:0.85/0.75" in follow_prompt

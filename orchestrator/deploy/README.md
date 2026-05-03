@@ -69,16 +69,27 @@ git commit + push。部署方拉最新版再跑 helm。
 ### 步骤 5：部署方 helm upgrade + verify
 
 ```bash
+# 获取最近一次 CI build 的 orchestrator sha tag（或本地 git sha）
+SHA="sha-$(git rev-parse --short HEAD)"
+
 # 部署方通过 aissh 跑（两个 values file：非敏感 my-values + 敏感 secrets-values）
 helm -n sisyphus upgrade --install orch ./orchestrator/helm \
   -f orchestrator/deploy/my-values.yaml \
-  -f /tmp/secrets-values.yaml
+  -f /tmp/secrets-values.yaml \
+  --set image.tag="$SHA" \
+  --set runner.image="ghcr.io/phona/sisyphus-runner:$SHA"
 rm -f /tmp/secrets-values.yaml            # 敏感文件用完立即清
 
 kubectl -n sisyphus rollout status deploy/orch-sisyphus-orchestrator
 curl -sSH 'Authorization: Bearer <webhook_token>' \
   http://sisyphus.43.239.84.24.nip.io/admin/metrics | jq .state_distribution
 ```
+
+> **image.tag / runner.image 必须 pin immutable sha**（issue #267）。
+> 部署时忘传 `--set image.tag` 会让 helm template 报错
+> `values.image.tag is required`，fail-loud 而不是渲染出损坏的 image ref。
+> `:main` / `:latest` / `:dev` 等 mutable tag 已禁止——它们看不出对应哪个
+> commit，且 `IfNotPresent` 时节点缓存的旧镜像永远不会被刷新。
 
 ### 步骤 6：BKD webhook 注册（一次性）
 
@@ -99,6 +110,35 @@ BKD 那边加 webhook：
 - `.env*`（deploy-secrets.sh 里 `read -s` 输入后不落盘；默认也不存 `.env`）
 - 临时 kubeconfig（`/tmp/sisyphus-kubeconfig.tmp`，脚本结尾 `rm -f` 清掉）
 - PAT 本体（只进 K8s secret）
+
+## 自动化部署（GitHub Actions）
+
+`.github/workflows/deploy.yml` 在 `main` 分支的 `orchestrator-ci` 通过且 `image-publish` 完成后自动触发：
+
+1. 计算镜像 tag：`sha-<short>`（与 `orchestrator-ci` 推送到 GHCR 的 tag 对齐）
+2. `helm upgrade` 到 K8s 集群（`--reuse-values` 保留已有配置，仅更新镜像 tag）
+3. 部署后通过 `kubectl exec` 在 Pod 内 curl `/healthz` 做健康检查
+4. 健康检查失败自动 `helm rollback`
+
+### 需要配置的 Secrets
+
+在仓库 **Settings → Secrets and variables → Actions** 里添加：
+
+| Secret | 内容 |
+|---|---|
+| `KUBECONFIG` | **base64 编码**的 kubeconfig（`cat ~/.kube/config \| base64 -w0`）。用于 GH Actions runner 连 K3s 集群。 |
+
+### 手动触发
+
+`workflow_dispatch` 支持：
+- `image_tag`：指定镜像 tag（如 `sha-abc1234`、`main`）
+- `release_name`：Helm release 名（默认 `orch`，与现有部署一致）
+- `namespace`：K8s namespace（默认 `sisyphus`）
+
+### 镜像构建链路
+
+- `orchestrator-ci.yml` 在 `push` 到 `main` / tag 时构建并推送镜像到 GHCR（`:sha-<short>` / `:main` / semver tag）
+- `deploy.yml` 复用已推送的镜像，不重复 build
 
 ## 回滚
 

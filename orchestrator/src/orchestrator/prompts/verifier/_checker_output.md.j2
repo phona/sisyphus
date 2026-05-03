@@ -1,0 +1,17 @@
+{% if checker_stdout or checker_stderr or checker_exit_code is not none %}
+### 机械 checker 输出（artifact_checks 最新记录）
+
+- exit_code: `{{ checker_exit_code }}`
+{% if checker_stdout %}
+**stdout（尾部）**
+```
+{{ checker_stdout }}
+```
+{% endif %}
+{% if checker_stderr %}
+**stderr（尾部）**
+```
+{{ checker_stderr }}
+```
+{% endif %}
+{% endif %}

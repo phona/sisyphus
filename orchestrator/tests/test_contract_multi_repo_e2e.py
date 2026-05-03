@@ -186,13 +186,15 @@ async def test_mrepo_clone_s9_start_analyze_passes_tags_and_default():
 
     clone_calls: list[dict] = []
 
-    async def _fake_clone(req_id, ctx, *, tags=None, default_repos=None):
+    async def _fake_clone(req_id, ctx, *, tags=None, default_repos=None, default_base=None, base_overrides=None, **kwargs):
         clone_calls.append(
             {
                 "req_id": req_id,
                 "ctx": ctx,
                 "tags": list(tags or []),
                 "default_repos": list(default_repos or []),
+                "default_base": default_base,
+                "base_overrides": base_overrides,
             }
         )
         return ["phona/repo-a"], None
@@ -864,12 +866,14 @@ async def test_mrepo_intake_s1_start_analyze_with_finalized_intent_clones_multi_
 
     clone_calls: list[dict] = []
 
-    async def _fake_clone(req_id, ctx, *, tags=None, default_repos=None):
+    async def _fake_clone(req_id, ctx, *, tags=None, default_repos=None, default_base=None, base_overrides=None, **kwargs):
         clone_calls.append(
             {
                 "req_id": req_id,
                 "repos": _extract_repos(ctx),
                 "tags": list(tags or []),
+                "default_base": default_base,
+                "base_overrides": base_overrides,
             }
         )
         return ["phona/repo-a", "phona/repo-b"], None

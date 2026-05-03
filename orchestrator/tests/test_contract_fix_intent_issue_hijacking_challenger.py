@@ -408,6 +408,7 @@ def test_FIX_S6_analyze_prompt_renders_without_undefined_error():
             cloned_repos=None,
             bkd_intent_issue_url="https://bkd.example.test/projects/nnvxh8wj/issues/intent-issue-abc",
             status_block={"stage": "analyze", "req_id": "REQ-X"},
+            mcp_capability_providers={"ssh_exec": "aissh-tao"},
         )
     except jinja2.UndefinedError as e:
         pytest.fail(f"FIX-S6: analyze.md.j2 raised UndefinedError without intake_summary: {e}")

@@ -20,7 +20,7 @@
   `staging-test-running` 三个 checker stage 内部从单仓变成 for-each-repo 遍历
   （任一仓红 → stage fail）。状态机层面无影响。
 
-## 2. ReqState 枚举（17 个）
+## 2. ReqState 枚举（16 个）
 
 | state | 含义 | 类型 |
 |---|---|---|
@@ -38,7 +38,7 @@
 | `pending-user-review` | **REQ-bkd-acceptance-feedback-loop-1777278984** accept teardown 通过后停一手等用户 BKD intent issue statusId 表态（`done` = approve, `review`/`blocked` = 要返工）—— human-loop-conversation 类，watchdog 不杀 | in-flight |
 | `review-running` | **M14b** verifier-agent 在跑（success / fail 两触发统一入口） | in-flight |
 | `fixer-running` | **M14b** decision=fix → 起对应 fixer agent | in-flight |
-| `gh-incident-open` | ~~（已规划，未启用）GitHub issue 已开等人 \| wait-human~~ — 设计被 PR #118 / #122 重新走"escalate side-effect"路：进 ESCALATED 时 `escalate` action 调 `gh_incident.open_incident()`，对**每个 involved source repo**（intake_finalized_intent / ctx.involved_repos / `repo:` tag / `default_involved_repos` / `settings.gh_incident_repo` 5 层 fallback）独立 POST 一条 GH issue，URL 写入 `ctx.gh_incident_urls: dict[str, str]`，**不引入新 state**。enum 仍保留，但 TRANSITIONS 表无任何条目用到它，相当于 dead code，下次大改 state 表时删 |
+| `gh-incident-open` | ~~（已规划，未启用）GitHub issue 已开等人 \| wait-human~~ — 设计被 PR #118 / #122 重新走"escalate side-effect"路：进 ESCALATED 时 `escalate` action 调 `gh_incident.open_incident()`，对**每个 involved source repo**（intake_finalized_intent / ctx.involved_repos / `repo:` tag / `default_involved_repos` / `settings.gh_incident_repo` 5 层 fallback）独立 POST 一条 GH issue，URL 写入 `ctx.gh_incident_urls: dict[str, str]`，**不引入新 state**。enum 已于本次 cleanup 移除，仅保留在文档作为历史记录 |
 | **`done`** | REQ 完成 | **terminal** |
 | **`escalated`** | 熔断 / session-failed / 人工止损 | **terminal** |
 
@@ -177,6 +177,36 @@ stateDiagram-v2
 ESCALATED 类事件 `PR_CI_TIMEOUT` / `ACCEPT_ENV_UP_FAIL` / `VERIFY_ESCALATE` /
 `INTAKE_FAIL` / `USER_REVIEW_FIX`）和 `PR_MERGED`（escalate.py 入口的 PR-merged
 shortcut 处理）不在恢复列表里，避免恢复语义被误用。
+
+### 5a. PENDING_USER_REVIEW 同语义复活（#247 Phase 1）
+
+ESCALATED 是"人接管态"——`PENDING_USER_REVIEW` 是"happy-path 等用户拍板"。这
+两个 stable state 共享同一类反向控制通道：用户在任意 stage agent issue 续 follow-up
+→ BKD wake agent 重跑 → router 派对应主链事件 → stable state 复用主链 transition
+推进。
+
+实现镜像 `_ESCALATED_RESUME_EVENT_SOURCES`，在 state.py
+`_PENDING_USER_REVIEW_RESUME_EVENT_SOURCES` 声明，复用 `TRANSITIONS[(src, ev)]`
+（next_state / action 跟主链同一份；主链改了 PENDING_USER_REVIEW 复活路径自动跟）。
+
+**故意只列 `*_PASS`**，跟 ESCALATED resume 的 `*_PASS + *_FAIL` 边界不同：
+
+| 用户场景 | 触发 | 落点 |
+|---|---|---|
+| accept 后看 PR / lab 觉得"再调一下" | 续 stage issue → agent 重跑出 `result:pass` → `*_PASS` 主链事件 | PENDING_USER_REVIEW 复用主链 → 自然推到下一 stage |
+| agent 自爆 / 改不出 / 模型纠结 | 用户看到 BKD agent 输出 fail → 改 BKD intent statusId="review"/"blocked" → `USER_REVIEW_FIX` → ESCALATED | 走已有 ESCALATED resume（含 `*_FAIL` 完整集） |
+
+让 PENDING_USER_REVIEW 仍然是"happy-path 微调等待态"的纯净语义；ESCALATED 是
+"人接管态"。两个稳定态各司其职，不互相污染。
+
+**PENDING_USER_REVIEW 出口的 4 条通道**（CAS 抢同 REQ 时只有一条赢，互不冲突）：
+
+| 用户操作 | 派事件 | 出口 |
+|---|---|---|
+| BKD intent statusId="done" | `USER_REVIEW_PASS` | → DONE |
+| **续 stage agent issue + agent 出 `result:pass`**（**#247 新主通道**） | `*_PASS` 主链事件 | **→ 下一 stage**（复用主链 transition） |
+| BKD intent statusId="review"/"blocked" | `USER_REVIEW_FIX` | → ESCALATED（reason=user-requested-fix；后续仍可走 ESCALATED resume） |
+| 手合 GitHub PR | `PR_MERGED`（admin endpoint） | → DONE |
 
 `VERIFY_PASS` 在 transition 表里看起来是 self-loop（next_state 还是 `review-running`），
 但 **action 内部手工 CAS 推到目标 stage_running 再链式 emit 该 stage 的 done/pass 事件**。
