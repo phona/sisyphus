@@ -13,7 +13,6 @@ from orchestrator.actions._integration_resolver import ResolveResult
 from orchestrator.k8s_runner import ExecResult, RunnerStatus
 from orchestrator.state import Event
 
-
 # ─── Fakes ────────────────────────────────────────────────────────────────
 
 
