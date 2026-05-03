@@ -156,7 +156,8 @@ async def test_readyz_k8s_fail(monkeypatch):
     monkeypatch.setattr(db_mod, "get_pool", lambda: _fake_pool(ok=True))
 
     mock_controller = MagicMock()
-    mock_controller.core_v1.list_namespace = MagicMock(side_effect=Exception("k8s api error"))
+    mock_controller.namespace = "sisyphus-runners"
+    mock_controller.core_v1.list_namespaced_pod = MagicMock(side_effect=Exception("k8s api error"))
     monkeypatch.setattr(k8s_mod, "get_controller", lambda: mock_controller)
 
     with patch("httpx.AsyncClient", return_value=_fake_httpx_client(200)):
@@ -168,6 +169,32 @@ async def test_readyz_k8s_fail(monkeypatch):
     assert "k8s" in body["failed"]
     assert "db" not in body["failed"]
     assert "bkd" not in body["failed"]
+
+
+# ── /readyz — K8s 用 namespaced pod list（issue #344） ───────────────────────
+
+@pytest.mark.asyncio
+async def test_readyz_k8s_uses_namespaced_pod_list(monkeypatch):
+    """探活必须走 list_namespaced_pod，而不是要 cluster-wide RBAC 的 list_namespace。"""
+    import orchestrator.k8s_runner as k8s_mod
+    import orchestrator.store.db as db_mod
+    from orchestrator.main import readyz
+
+    monkeypatch.setattr(db_mod, "get_pool", lambda: _fake_pool(ok=True))
+
+    mock_controller = MagicMock()
+    mock_controller.namespace = "sisyphus-runners"
+    mock_controller.core_v1.list_namespaced_pod = MagicMock(return_value=MagicMock(items=[]))
+    monkeypatch.setattr(k8s_mod, "get_controller", lambda: mock_controller)
+
+    with patch("httpx.AsyncClient", return_value=_fake_httpx_client(200)):
+        result = await readyz()
+
+    assert result == {"status": "ok"}
+    mock_controller.core_v1.list_namespaced_pod.assert_called_once_with(
+        "sisyphus-runners", limit=1, _request_timeout=2,
+    )
+    assert not mock_controller.core_v1.list_namespace.called
 
 
 # ── /readyz — K8s 未初始化不算失败 ──────────────────────────────────────────
@@ -201,7 +228,8 @@ async def test_readyz_multiple_fail(monkeypatch):
     monkeypatch.setattr(db_mod, "get_pool", lambda: _fake_pool(ok=False))
 
     mock_controller = MagicMock()
-    mock_controller.core_v1.list_namespace = MagicMock(side_effect=Exception("k8s error"))
+    mock_controller.namespace = "sisyphus-runners"
+    mock_controller.core_v1.list_namespaced_pod = MagicMock(side_effect=Exception("k8s error"))
     monkeypatch.setattr(k8s_mod, "get_controller", lambda: mock_controller)
 
     with patch("httpx.AsyncClient", return_value=_fake_httpx_client(error=Exception("bkd down"))):

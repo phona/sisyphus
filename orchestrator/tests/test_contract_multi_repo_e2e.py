@@ -668,12 +668,14 @@ def test_mrepo_acc_s3_create_accept_missing_target_skips_repo():
 
 def test_mrepo_acc_s4_create_accept_no_repos_vacuous_pass():
     """MREPO-ACC-S4: no integration dir -> create_accept returns vacuous pass."""
-    # create_accept now uses resolve_integration_dir instead of ctx.cloned_repos
+    # post cross-repo refactor (feat-cross-repo-env-orchestration impl) the
+    # integration_dir lookup lives in the `_run_legacy_single_layer` helper;
+    # scan the whole module source rather than just the entry function.
     import inspect
 
     from orchestrator.actions import create_accept as ca
 
-    src = inspect.getsource(ca.create_accept)
+    src = inspect.getsource(ca)
     assert "resolve_integration_dir" in src or "integration_dir" in src
     assert "ACCEPT_PASS" in src or "accept.pass" in src.lower()
 
@@ -811,7 +813,7 @@ def test_mrepo_state_s1_ctx_supports_cloned_repos():
 
     from orchestrator.actions import create_accept as ca
 
-    src = inspect.getsource(ca.create_accept)
+    src = inspect.getsource(ca)
     assert "resolve_integration_dir" in src or "integration_dir" in src, "create_accept must resolve integration dir"
 
 

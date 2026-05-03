@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import asyncpg
@@ -87,18 +88,24 @@ async def close_latest_stage_run(
     *,
     outcome: str,
     fail_reason: str | None = None,
+    context: dict | None = None,
 ) -> int | None:
     """关闭 (req_id, stage) 最新一条 ended_at IS NULL 的 stage_run。
 
     用于 engine 离开 *_RUNNING state 时自动收尾上一阶段，
     不需要 caller 持有 run_id。返回被关闭的 id；没找到则返 None。
+
+    `context` 是 R10 attribution 的容器（accept stage: failed_layer /
+    failed_field / layers）。整体覆盖既有 context（一次写完整 dict 即可）。
     """
+    context_json = json.dumps(context) if context is not None else None
     row = await pool.fetchrow(
         """
         UPDATE stage_runs SET
             ended_at     = NOW(),
             outcome      = $3,
             fail_reason  = COALESCE($4, fail_reason),
+            context      = COALESCE($5::jsonb, context),
             duration_sec = EXTRACT(EPOCH FROM (NOW() - started_at))::real
         WHERE id = (
             SELECT id FROM stage_runs
@@ -108,7 +115,37 @@ async def close_latest_stage_run(
         )
         RETURNING id
         """,
-        req_id, stage, outcome, fail_reason,
+        req_id, stage, outcome, fail_reason, context_json,
+    )
+    return int(row["id"]) if row else None
+
+
+async def update_latest_stage_run_context(
+    pool: asyncpg.Pool,
+    req_id: str,
+    stage: str,
+    context: dict,
+) -> int | None:
+    """把 attribution context 写到最近开着的 (req_id, stage) stage_run。
+
+    R10：在 emit ACCEPT_ENV_UP_FAIL 之前持久化 failed_layer 等结构化信息。
+    走整体覆盖（一行 accept stage 一次 write 完整 context）。
+
+    返回被写入的 id；目标行不存在 → None。
+    """
+    row = await pool.fetchrow(
+        """
+        UPDATE stage_runs SET
+            context = $3::jsonb
+        WHERE id = (
+            SELECT id FROM stage_runs
+             WHERE req_id = $1 AND stage = $2 AND ended_at IS NULL
+             ORDER BY started_at DESC
+             LIMIT 1
+        )
+        RETURNING id
+        """,
+        req_id, stage, json.dumps(context),
     )
     return int(row["id"]) if row else None
 

@@ -1,0 +1,1 @@
+ALTER TABLE stage_runs DROP COLUMN IF EXISTS context;

@@ -169,11 +169,16 @@ async def readyz():
     except Exception:
         failed.append("bkd")
 
-    # K8s ping (2s timeout; skip if controller not initialized — dev mode)
+    # K8s ping (2s timeout; skip if controller not initialized — dev mode).
+    # 探 namespaced pod list 而不是 list_namespace —— 后者要 cluster-wide
+    # RBAC，chart 只装了 namespace-scoped Role（issue #344）。
     try:
         controller = k8s_runner.get_controller()
         await asyncio.to_thread(
-            controller.core_v1.list_namespace, _request_timeout=2
+            controller.core_v1.list_namespaced_pod,
+            controller.namespace,
+            limit=1,
+            _request_timeout=2,
         )
     except RuntimeError:
         pass  # controller not initialized in dev/test mode

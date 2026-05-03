@@ -36,6 +36,39 @@ class SkillLoadError(Exception):
     """Raised when skill.yaml is missing or fails schema validation."""
 
 
+_SISYPHUS_SCENARIOS_DIR = ".sisyphus/scenarios"
+_THANATOS_DIR = ".thanatos"
+
+
+def resolve_skill_path(repo_root: str | Path, *, filename: str = "skill.yaml") -> Path:
+    """Resolve a repository's skill yaml path with fallback.
+
+    Two-step lookup, in order:
+
+    1. ``<repo_root>/.sisyphus/scenarios/`` if the directory exists and contains
+       at least one entry — return ``<repo_root>/.sisyphus/scenarios/<filename>``.
+    2. Otherwise ``<repo_root>/.thanatos/`` if that directory exists — return
+       ``<repo_root>/.thanatos/<filename>``.
+
+    Raises :class:`SkillLoadError` when neither directory is present.
+
+    Note: this function only resolves the *directory* — the returned file
+    itself is not opened or validated here. ``load_skill`` is responsible for
+    surfacing missing-file / schema errors when the resolved path is read.
+    """
+    root = Path(repo_root)
+    sisyphus_dir = root / _SISYPHUS_SCENARIOS_DIR
+    thanatos_dir = root / _THANATOS_DIR
+
+    if sisyphus_dir.is_dir() and any(sisyphus_dir.iterdir()):
+        return sisyphus_dir / filename
+    if thanatos_dir.is_dir():
+        return thanatos_dir / filename
+    raise SkillLoadError(
+        f"no scenario path found: tried {sisyphus_dir} and {thanatos_dir}"
+    )
+
+
 def load_skill(path: str | Path) -> Skill:
     """Load skill.yaml from a path.
 

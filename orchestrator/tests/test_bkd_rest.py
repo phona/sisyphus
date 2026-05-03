@@ -411,3 +411,106 @@ async def test_get_issue_returns_external_session_id_via_rest():
     client._http = FakeHttp()  # type: ignore[assignment]
     issue = await client.get_issue("p", "i1")
     assert issue.external_session_id == "sess-abc"
+
+
+# ─── REQ-fix-watchdog-liveness-1777809646: last_log_activity_at ─────────────
+
+
+@pytest.mark.asyncio
+async def test_last_log_activity_at_returns_max_created_at():
+    """WLC-S4: 多 entry 取最新 createdAt（不是顺序最后一条）。"""
+    from datetime import UTC, datetime
+    captured_url = {}
+
+    class FakeHttp:
+        async def get(self, url, headers=None):
+            captured_url["url"] = url
+            payload = {
+                "success": True,
+                "data": {
+                    "logs": [
+                        {"entryType": "assistant-message",
+                         "createdAt": "2026-05-03T10:00:00Z"},
+                        {"entryType": "tool-result",
+                         "createdAt": "2026-05-03T10:05:00Z"},
+                        {"entryType": "user-message",
+                         "createdAt": "2026-05-03T10:02:00Z"},
+                    ]
+                },
+            }
+            return httpx.Response(200, text=json.dumps(payload))
+
+        async def aclose(self):
+            pass
+
+    client = BKDRestClient("https://bkd.example/api", "tok")
+    client._http = FakeHttp()  # type: ignore[assignment]
+
+    ts = await client.last_log_activity_at("p", "i1")
+    assert ts == datetime(2026, 5, 3, 10, 5, 0, tzinfo=UTC)
+    assert "/projects/p/issues/i1/logs?limit=10" in captured_url["url"]
+
+
+@pytest.mark.asyncio
+async def test_last_log_activity_at_returns_none_for_empty_logs():
+    """WLC-S5: 空 logs 数组 → None。"""
+
+    class FakeHttp:
+        async def get(self, url, headers=None):
+            return httpx.Response(200, text='{"success":true,"data":{"logs":[]}}')
+
+        async def aclose(self):
+            pass
+
+    client = BKDRestClient("https://bkd.example/api", "tok")
+    client._http = FakeHttp()  # type: ignore[assignment]
+
+    assert await client.last_log_activity_at("p", "i1") is None
+
+
+@pytest.mark.asyncio
+async def test_last_log_activity_at_swallows_http_errors():
+    """WLC-S6: HTTP 抛 → 不抛出，返 None。"""
+
+    class FakeHttp:
+        async def get(self, url, headers=None):
+            raise httpx.ConnectError("boom")
+
+        async def aclose(self):
+            pass
+
+    client = BKDRestClient("https://bkd.example/api", "tok")
+    client._http = FakeHttp()  # type: ignore[assignment]
+
+    assert await client.last_log_activity_at("p", "i1") is None
+
+
+@pytest.mark.asyncio
+async def test_last_log_activity_at_skips_unparseable_timestamps():
+    """malformed createdAt entries are skipped, max of valid ones returned."""
+    from datetime import UTC, datetime
+
+    class FakeHttp:
+        async def get(self, url, headers=None):
+            payload = {
+                "success": True,
+                "data": {
+                    "logs": [
+                        {"entryType": "assistant-message",
+                         "createdAt": "not-a-date"},
+                        {"entryType": "tool-result",
+                         "createdAt": "2026-05-03T10:05:00Z"},
+                        {"entryType": "user-message"},
+                    ]
+                },
+            }
+            return httpx.Response(200, text=json.dumps(payload))
+
+        async def aclose(self):
+            pass
+
+    client = BKDRestClient("https://bkd.example/api", "tok")
+    client._http = FakeHttp()  # type: ignore[assignment]
+    ts = await client.last_log_activity_at("p", "i1")
+    assert ts == datetime(2026, 5, 3, 10, 5, 0, tzinfo=UTC)
+
