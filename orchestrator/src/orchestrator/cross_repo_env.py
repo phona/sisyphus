@@ -33,6 +33,15 @@ _INPUT_REF_RE = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\.([A-Za-z0-9_]+)
 _DEFAULT_BRANCHES: dict[str, str] = {"develop": "develop", "release": "release"}
 _ALLOWED_TOP_KEYS: frozenset[str] = frozenset({"emits", "needs", "inputs", "branches"})
 
+# pattern-form emit (R12): {VAR_NAME} placeholders in emits[].pattern, vars values that are
+# either literal strings or ${SISYPHUS_*} REQ-context references.
+_PLACEHOLDER_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+_PLACEHOLDER_USE_RE = re.compile(r"\{([A-Z_][A-Z0-9_]*)\}")
+# any ${...} sigil in a vars value — used to spot disallowed namespaces at parse time.
+_DOLLAR_REF_RE = re.compile(r"\$\{([^}]*)\}")
+# the sole admissible interpolation target inside vars values.
+_SISYPHUS_REF_RE = re.compile(r"\$\{(SISYPHUS_[A-Z0-9_]+)\}")
+
 
 class ManifestError(ValueError):
     """raised by parse_manifest when schema validation fails."""
@@ -42,10 +51,40 @@ class TopologyError(ValueError):
     """raised by resolve_topology when the dependency graph contains a cycle."""
 
 
+class PreResolveError(Exception):
+    """R12 pre-resolve failure with layer attribution.
+
+    `failed_phase` is the constant sentinel `"pre_resolve"` so the orchestrator can
+    distinguish this from R10's runtime layer-attribution. `failed_layer` is the
+    OWNER/REPO of the manifest whose pattern / fetch failed first (resolution aborts on
+    first failure — fail-loud, no aggregation).
+    """
+
+    def __init__(
+        self, message: str, *, failed_phase: str = "pre_resolve", failed_layer: str,
+    ) -> None:
+        super().__init__(message)
+        self.failed_phase = failed_phase
+        self.failed_layer = failed_layer
+
+
+@dataclass(frozen=True)
+class EmitPattern:
+    """parsed pattern-form `emits` entry (R1 amendment)."""
+
+    field: str
+    pattern: str
+    vars: dict[str, str]
+
+
 @dataclass(frozen=True)
 class Manifest:
     """parsed `.sisyphus/env.yaml` contents.
 
+    `emits` lists every emit field name (bare-string + pattern-form combined) so
+    `inputs` reference validation and the R4 bundle surface stay uniform.
+    `emit_patterns` carries pattern-form entries keyed by field name; `field in
+    emit_patterns` discriminates pattern-form from bare-string.
     `inputs` maps env var name → (upstream repo full name, field name on that repo's emits).
     `branches` is always populated with develop/release defaults merged in.
     """
@@ -54,6 +93,7 @@ class Manifest:
     needs: tuple[str, ...] = ()
     inputs: dict[str, tuple[str, str]] = field(default_factory=dict)
     branches: dict[str, str] = field(default_factory=lambda: dict(_DEFAULT_BRANCHES))
+    emit_patterns: dict[str, EmitPattern] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -86,7 +126,7 @@ def parse_manifest(text: str) -> Manifest:
     if extras:
         raise ManifestError(f"manifest has unknown top-level keys: {sorted(extras)}")
 
-    emits = _coerce_string_list(raw.get("emits"), field_name="emits")
+    emits, emit_patterns = _parse_emits(raw.get("emits"))
     needs_list = _coerce_string_list(raw.get("needs"), field_name="needs")
     for n in needs_list:
         if not _REPO_NAME_RE.match(n):
@@ -136,7 +176,106 @@ def parse_manifest(text: str) -> Manifest:
         needs=tuple(needs_list),
         inputs=inputs,
         branches=branches,
+        emit_patterns=emit_patterns,
     )
+
+
+def _parse_emits(raw: Any) -> tuple[list[str], dict[str, EmitPattern]]:
+    """Accept the dual emits schema (R1 amendment).
+
+    Returns (ordered field-name list, pattern-form record). Field names from both forms
+    appear in the list in declaration order so `inputs` reference validation continues to
+    treat the two forms uniformly.
+    """
+    if raw is None:
+        return [], {}
+    if not isinstance(raw, list):
+        raise ManifestError(f"emits must be a list, got {type(raw).__name__}")
+
+    field_names: list[str] = []
+    seen: set[str] = set()
+    patterns: dict[str, EmitPattern] = {}
+
+    for entry in raw:
+        if isinstance(entry, str):
+            name = entry.strip()
+            if not name:
+                raise ManifestError(f"emits entry {entry!r} must be a non-empty string")
+            if name in seen:
+                raise ManifestError(f"emits entry {name!r} appears more than once")
+            seen.add(name)
+            field_names.append(name)
+            continue
+        if isinstance(entry, dict):
+            if len(entry) != 1:
+                raise ManifestError(
+                    f"pattern-form emits entry must be a single-key mapping, got {sorted(entry.keys())}"
+                )
+            (name, body), = entry.items()
+            if not isinstance(name, str) or not name.strip():
+                raise ManifestError(f"pattern-form emits key {name!r} must be a non-empty string")
+            name = name.strip()
+            if name in seen:
+                raise ManifestError(f"emits entry {name!r} appears more than once")
+            ep = _parse_emit_pattern(name, body)
+            seen.add(name)
+            field_names.append(name)
+            patterns[name] = ep
+            continue
+        raise ManifestError(
+            f"emits entry must be a string or single-key mapping, got {type(entry).__name__}"
+        )
+
+    return field_names, patterns
+
+
+def _parse_emit_pattern(field_name: str, body: Any) -> EmitPattern:
+    if not isinstance(body, dict):
+        raise ManifestError(
+            f"emits[{field_name!r}] body must be a mapping with `pattern` and `vars`"
+        )
+    extras = set(body.keys()) - {"pattern", "vars"}
+    if extras:
+        raise ManifestError(
+            f"emits[{field_name!r}] has unknown sub-keys: {sorted(extras)}"
+        )
+    pattern = body.get("pattern")
+    if not isinstance(pattern, str) or not pattern:
+        raise ManifestError(f"emits[{field_name!r}].pattern must be a non-empty string")
+    vars_raw = body.get("vars")
+    if not isinstance(vars_raw, dict):
+        raise ManifestError(
+            f"emits[{field_name!r}].vars must be a mapping (use `vars: {{}}` for none)"
+        )
+    declared_vars: dict[str, str] = {}
+    for k, v in vars_raw.items():
+        if not isinstance(k, str) or not _PLACEHOLDER_NAME_RE.match(k):
+            raise ManifestError(
+                f"emits[{field_name!r}].vars key {k!r} must match [A-Z_][A-Z0-9_]*"
+            )
+        if not isinstance(v, str):
+            raise ManifestError(
+                f"emits[{field_name!r}].vars[{k!r}] must be a string (literal or ${{SISYPHUS_*}})"
+            )
+        # only the ${SISYPHUS_*} namespace is admissible inside vars values; any other
+        # ${...} sigil (${ENV_X}, ${SECRET_X}, …) is rejected per R12 out-of-scope guard.
+        for ref in _DOLLAR_REF_RE.findall(v):
+            if not ref.startswith("SISYPHUS_") or not _PLACEHOLDER_NAME_RE.match(ref):
+                raise ManifestError(
+                    f"emits[{field_name!r}].vars[{k!r}]={v!r}: only ${{SISYPHUS_*}} "
+                    "references are supported (other ${{...}} namespaces are out-of-scope per R12)"
+                )
+        declared_vars[k] = v
+    used = set(_PLACEHOLDER_USE_RE.findall(pattern))
+    missing = sorted(used - declared_vars.keys())
+    if missing:
+        raise ManifestError(
+            f"emits[{field_name!r}].pattern references undeclared placeholder "
+            f"{missing[0]!r}; declare it under vars (all missing: {missing})"
+        )
+    # Note: declared but unused vars are tolerated — they are harmless and easier to
+    # iterate on than reject.
+    return EmitPattern(field=field_name, pattern=pattern, vars=declared_vars)
 
 
 def _coerce_string_list(raw: Any, *, field_name: str) -> list[str]:
@@ -275,3 +414,96 @@ def resolve_branch(
         reason="branch_resolution_failed",
         failed_class=cls,
     )
+
+
+def pre_resolve_endpoint_bundle(
+    topology: list[str],
+    manifest_loader: Callable[[str], Manifest | None],
+    req_context: dict[str, str],
+) -> dict[str, dict[str, str]]:
+    """Pure R12 pre-resolve: assemble the partial endpoint bundle from manifests + REQ ctx.
+
+    For each repo in `topology` (caller usually passes the topo-sorted leaves-first list),
+    look up its manifest, substitute every pattern-form emit's `{VAR}` placeholders using
+    the entry's `vars` map, expanding `${SISYPHUS_*}` references against `req_context`.
+
+    Bare-string emits are intentionally absent from the returned bundle — they are filled
+    in at layer runtime by R4. Repos without pattern-form emits are omitted (or, if a
+    repo's manifest is `None`, simply skipped).
+
+    Hermetic by construction: no I/O, no asyncio. The caller injects `manifest_loader`
+    (e.g. a runner-pod read shim or a GitHub REST fetch) so unit tests stay infrastructure-free
+    and APK-build dispatch can call this with cached manifests in parallel with
+    `accept-env-up`.
+    """
+    bundle: dict[str, dict[str, str]] = {}
+    for repo in topology:
+        try:
+            manifest = manifest_loader(repo)
+        except Exception as exc:
+            raise PreResolveError(
+                f"manifest fetch failed for {repo}: {exc}",
+                failed_layer=repo,
+            ) from exc
+        if manifest is None or not manifest.emit_patterns:
+            continue
+        repo_bundle: dict[str, str] = {}
+        for fname, ep in manifest.emit_patterns.items():
+            try:
+                repo_bundle[fname] = _substitute_pattern(ep, req_context)
+            except _UnresolvedSisyphusVar as exc:
+                raise PreResolveError(
+                    f"unresolved {exc.var} reference in {repo}.{fname}: not in REQ context",
+                    failed_layer=repo,
+                ) from exc
+            except KeyError as exc:
+                # defence-in-depth: parse_manifest already rejects undeclared placeholders
+                raise PreResolveError(
+                    f"pattern in {repo}.{fname} references undeclared placeholder {exc.args[0]!r}",
+                    failed_layer=repo,
+                ) from exc
+        if repo_bundle:
+            bundle[repo] = repo_bundle
+    return bundle
+
+
+class _UnresolvedSisyphusVar(Exception):
+    def __init__(self, var: str) -> None:
+        super().__init__(var)
+        self.var = var
+
+
+def _substitute_pattern(ep: EmitPattern, req_context: dict[str, str]) -> str:
+    """Resolve EmitPattern.vars then substitute placeholders into the pattern.
+
+    Each `vars` value may interleave literals and ${SISYPHUS_*} references in any order
+    (e.g. `${SISYPHUS_NAMESPACE}.svc`). All such references are expanded against
+    `req_context`; a reference whose name is missing from `req_context` aborts with
+    `_UnresolvedSisyphusVar` so the caller can attribute the failure to the offending repo.
+    """
+    resolved_vars: dict[str, str] = {}
+    for k, v in ep.vars.items():
+        resolved_vars[k] = _expand_sisyphus_refs(v, req_context)
+
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in resolved_vars:
+            raise KeyError(name)
+        return resolved_vars[name]
+
+    return _PLACEHOLDER_USE_RE.sub(_replace, ep.pattern)
+
+
+def _expand_sisyphus_refs(value: str, req_context: dict[str, str]) -> str:
+    """Expand every ${SISYPHUS_X} occurrence in `value` using `req_context`.
+
+    Raises `_UnresolvedSisyphusVar` on the first reference whose name is not registered.
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in req_context:
+            raise _UnresolvedSisyphusVar(name)
+        return req_context[name]
+
+    return _SISYPHUS_REF_RE.sub(_replace, value)

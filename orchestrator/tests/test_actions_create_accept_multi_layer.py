@@ -567,3 +567,152 @@ async def test_teardown_single_layer_falls_back_to_resolver(monkeypatch):
     assert result["env_down_ok"] is True
     cmds = [c for (c, _e) in rc.calls]
     assert any("ttpos-flutter" not in c and "make accept-env-down" in c for c in cmds)
+
+
+# ─── R12: pattern-form emit + pre-resolve wiring (IMPL-S7 / IMPL-S8) ─────
+
+@pytest.mark.asyncio
+async def test_multi_layer_pattern_form_emit_pre_resolved_seeds_bundle(monkeypatch):
+    """IMPL-S8: pattern-form `endpoint` is pre-resolved (R12); flutter's accept-env-up
+    JSON only needs to emit `device` (the bare-string emit). pre-resolved value reaches
+    flutter's BACKEND_ENDPOINT input without touching server-go's accept-env-up output.
+    """
+    rc = FakeRunnerController()
+    # 1. read source (flutter) manifest
+    rc.script(
+        "/workspace/source/ttpos-flutter/.sisyphus/env.yaml",
+        FakeExec(stdout=(
+            "__MANIFEST_FOUND__\n"
+            "emits:\n  - device\n"
+            "needs:\n  - ZonEaseTech/ttpos-server-go\n"
+            "inputs:\n  BACKEND_ENDPOINT: ZonEaseTech/ttpos-server-go.endpoint\n"
+        )),
+    )
+    # 2. branch_exists check for ttpos-server-go same-name
+    rc.script("git ls-remote --heads", FakeExec(stdout="", exit_code=0))
+    # 3. clone server-go on develop bootstrap branch
+    rc.script("sisyphus-clone-repos.sh", FakeExec(stdout="cloned", exit_code=0))
+    # 4. read server-go manifest with pattern-form endpoint
+    rc.script(
+        "/workspace/source/ttpos-server-go/.sisyphus/env.yaml",
+        FakeExec(stdout=(
+            "emits:\n"
+            "  - endpoint:\n"
+            '      pattern: "ttpos-server-go.{NS}.svc.cluster.local:{PORT}"\n'
+            "      vars:\n"
+            '        NS: "${SISYPHUS_NAMESPACE}"\n'
+            '        PORT: "8080"\n'
+        )),
+    )
+    # 5. branch resolution: same-name check (False)
+    rc.script("git ls-remote --heads", FakeExec(stdout="", exit_code=0))
+    # 6. branch resolution: candidate develop check (True)
+    rc.script(
+        "git ls-remote --heads",
+        FakeExec(stdout="abc123\trefs/heads/develop\n", exit_code=0),
+    )
+    # 7. final clone on develop
+    rc.script("sisyphus-clone-repos.sh", FakeExec(stdout="cloned", exit_code=0))
+    # 8. server-go layer-up: stdout JSON intentionally omits the pattern-form `endpoint`
+    #    field — pre-resolved value MUST take precedence (R12).
+    rc.script(
+        "make accept-env-up",
+        FakeExec(stdout='log\n{"unrelated":"x"}', exit_code=0),
+    )
+    # 9. flutter layer-up: emits device + thanatos block
+    rc.script(
+        "make accept-env-up",
+        FakeExec(
+            stdout=(
+                'log\n{"device":"redroid:5554","thanatos":'
+                '{"pod":"th","namespace":"ns","skill_repo":"phona/skill"}}'
+            ),
+            exit_code=0,
+        ),
+    )
+    _patch_runner(monkeypatch, rc)
+    _patch_skip(monkeypatch)
+    _patch_ensure_runner_with_clone(monkeypatch)
+    _patch_db(monkeypatch)
+    bkd = _patch_bkd(monkeypatch)
+    _patch_pr_links(monkeypatch)
+
+    from orchestrator.actions import create_accept as mod
+
+    result = await mod.create_accept(
+        body=FakeBody(),
+        req_id="REQ-test-pattern-1",
+        tags=[],
+        ctx={
+            "cloned_repos": ["ZonEaseTech/ttpos-flutter"],
+            "branch": "feat/REQ-test-pattern-1",
+        },
+    )
+
+    # accept dispatched (no missing emit field for pattern-form endpoint)
+    assert bkd.create_issue.await_count == 1
+    expected_pre = "ttpos-server-go.accept-req-test-pattern-1.svc.cluster.local:8080"
+    # primary endpoint comes from pre-resolved bundle (server-go.endpoint)
+    assert result["endpoint"] == expected_pre
+    # flutter received BACKEND_ENDPOINT from pre-resolved bundle
+    layer_up_calls = [(c, e) for (c, e) in rc.calls if "make accept-env-up" in c]
+    assert len(layer_up_calls) == 2
+    assert layer_up_calls[1][1].get("BACKEND_ENDPOINT") == expected_pre
+
+
+@pytest.mark.asyncio
+async def test_multi_layer_pre_resolve_unresolved_var_aborts_before_layer_up(monkeypatch):
+    """IMPL-S7: PreResolveError before any `make accept-env-up` call."""
+    rc = FakeRunnerController()
+    # source flutter manifest
+    rc.script(
+        "/workspace/source/ttpos-flutter/.sisyphus/env.yaml",
+        FakeExec(stdout=(
+            "__MANIFEST_FOUND__\n"
+            "needs:\n  - ZonEaseTech/ttpos-server-go\n"
+            "inputs:\n  BACKEND_ENDPOINT: ZonEaseTech/ttpos-server-go.endpoint\n"
+        )),
+    )
+    rc.script("git ls-remote --heads", FakeExec(stdout="", exit_code=0))
+    rc.script("sisyphus-clone-repos.sh", FakeExec(stdout="cloned", exit_code=0))
+    # server-go manifest references a SISYPHUS var that won't be in REQ context
+    rc.script(
+        "/workspace/source/ttpos-server-go/.sisyphus/env.yaml",
+        FakeExec(stdout=(
+            "emits:\n"
+            "  - endpoint:\n"
+            '      pattern: "svc.{NS}"\n'
+            "      vars:\n"
+            '        NS: "${SISYPHUS_DOES_NOT_EXIST}"\n'
+        )),
+    )
+    rc.script("git ls-remote --heads", FakeExec(stdout="", exit_code=0))
+    rc.script(
+        "git ls-remote --heads",
+        FakeExec(stdout="abc\trefs/heads/develop\n", exit_code=0),
+    )
+    rc.script("sisyphus-clone-repos.sh", FakeExec(stdout="cloned", exit_code=0))
+    _patch_runner(monkeypatch, rc)
+    _patch_skip(monkeypatch)
+    _patch_ensure_runner_with_clone(monkeypatch)
+    _patch_db(monkeypatch)
+    _patch_bkd(monkeypatch)
+    _patch_pr_links(monkeypatch)
+
+    from orchestrator.actions import create_accept as mod
+
+    result = await mod.create_accept(
+        body=FakeBody(),
+        req_id="REQ-test-pattern-fail",
+        tags=[],
+        ctx={
+            "cloned_repos": ["ZonEaseTech/ttpos-flutter"],
+            "branch": "feat/REQ-test-pattern-fail",
+        },
+    )
+
+    assert result["emit"].endswith("env-up.fail") or "fail" in result["emit"]
+    assert result["failed_phase"] == "pre_resolve"
+    assert result["failed_layer"] == "ZonEaseTech/ttpos-server-go"
+    # critical: NO `make accept-env-up` invocation should have occurred
+    assert not any("make accept-env-up" in c for (c, _e) in rc.calls)

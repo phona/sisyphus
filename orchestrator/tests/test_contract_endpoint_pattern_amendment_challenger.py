@@ -26,7 +26,7 @@ spec_fixer; do not patch around it in code.
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable
+from collections.abc import Callable
 
 import pytest
 
@@ -35,7 +35,6 @@ from orchestrator.cross_repo_env import (
     ManifestError,
     parse_manifest,
 )
-
 
 # ─── canonical entry points the spec mandates ────────────────────────────────
 
