@@ -1,8 +1,9 @@
 """contract regression for REQ-clone-fallback-direct-analyze-1777119520:
 
 multi-layer involved_repos fallback for direct analyze entry。
-- _resolve_repos / resolve_repos 必须按 4-layer 顺序：ctx.intake → ctx.involved
-  → tags.repo → settings.default
+- _resolve_repos / resolve_repos 必须按 5-layer 顺序：tags.source-repo →
+  ctx.intake → ctx.involved → tags.repo → settings.default
+  （L0 = source-repo 由 REQ-fix-orch-source-repo-tag-1777824479 加入）
 - _clone helper 不能从自由文本（intent_title / prompt body）反向推断 repos
   （假阳性风险高，规则强制改用显式 tag 或 settings env）
 - start_analyze + start_analyze_with_finalized_intent 必须把 tags +
@@ -20,7 +21,18 @@ _PRODUCTION_SOURCE = Path(__file__).resolve().parent.parent / "src" / "orchestra
 
 
 def test_resolve_repos_layer_priority():
-    """priority: L1 > L2 > L3 > L4。"""
+    """priority: L0 > L1 > L2 > L3 > L4。
+
+    L0 = `tags.source-repo`（REQ-fix-orch-source-repo-tag-1777824479 引入）。
+    """
+    # L0 winning over L1/L2/L3/L4
+    repos, src = _clone.resolve_repos(
+        {"intake_finalized_intent": {"involved_repos": ["L1/x"]},
+         "involved_repos": ["L2/x"]},
+        tags=["source-repo:L0/x", "repo:L3/x"], default_repos=["L4/x"],
+    )
+    assert (repos, src) == (["L0/x"], "tags.source-repo")
+
     repos, src = _clone.resolve_repos(
         {"intake_finalized_intent": {"involved_repos": ["L1/x"]},
          "involved_repos": ["L2/x"]},

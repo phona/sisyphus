@@ -13,15 +13,26 @@ REQ-clone-fallback-direct-analyze-1777119520：multi-layer fallback for direct
 analyze entry。原版只读 ctx，intake 跳过时 ctx 是空的，sisyphus 把 clone
 完全推给 agent prompt。新版按下列优先级解析：
 
+0. tags 里 `source-repo:<org>/<name>` 形式的 per-REQ 显式 source override
+   （REQ-fix-orch-source-repo-tag-1777824479 / closes #362）—— 跟 `base:` tag
+   同语义，赢过其它一切。给"helm 默认 = repoA、本 REQ 给 repoB"场景兜底，
+   不必为了一个 ad-hoc REQ 改 helm values 或走 intake。多个 `source-repo:` tag
+   会形成列表，跟 `repo:` 一致。
 1. ctx.intake_finalized_intent.involved_repos —— intake 路径产物
 2. ctx.involved_repos —— 直接被 caller 写到 ctx 的 involved
-3. tags 里 `repo:<org>/<name>` 形式的 explicit opt-in
+3. tags 里 `repo:<org>/<name>` 形式的 explicit opt-in（旧加性 fallback）
 4. settings.default_involved_repos —— 单仓部署的 last-resort
 
-L3/L4 都是显式信号：tag 是用户在 BKD intent issue 上挂的，env 是 operator
+L0 跟 L3/L4 都是显式信号：tag 是用户在 BKD intent issue 上挂的，env 是 operator
 在 sisyphus 部署时配的。**故意不**从 issue 标题 / prompt 自由文本解析
 slug —— 假阳性风险高（"src/orchestrator"、"M14b/M14c" 之类路径会误命中），
 不如等用户显式打 tag 或 ops 配 default。
+
+L0 vs L3 的区别：
+- `source-repo:` (L0) = 强 override，赢过 intake 的理解。用于"helm 默认错了，
+  这个 REQ 我 explicitly 要换仓"。
+- `repo:` (L3) = 加性 fallback，仅在 ctx 完全空时使用。用于"intake 没跑、
+  helm 没配，但 BKD tag 上声明一下"。
 """
 from __future__ import annotations
 
@@ -38,9 +49,10 @@ log = structlog.get_logger(__name__)
 _CLONE_HELPER = "/opt/sisyphus/scripts/sisyphus-clone-repos.sh"
 _CLONE_TIMEOUT_SEC = 600
 
-# `repo:<org>/<name>` BKD tag 形式。github org/repo slug 规则：
-# org 字母数字 + 连字符；repo 字母数字 + . _ -。
+# `repo:<org>/<name>` / `source-repo:<org>/<name>` BKD tag 形式。github
+# org/repo slug 规则：org 字母数字 + 连字符；repo 字母数字 + . _ -。
 _REPO_TAG_PREFIX = "repo:"
+_SOURCE_REPO_TAG_PREFIX = "source-repo:"
 _REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -61,22 +73,46 @@ def _normalize_repos(raw: object) -> list[str]:
     return out
 
 
-def _extract_repo_tags(tags: Iterable[str] | None) -> list[str]:
-    """从 BKD issue tags 抽 `repo:<org>/<name>` 并校验 slug 合法。"""
+def _extract_tags_with_prefix(
+    tags: Iterable[str] | None, prefix: str, *, log_event: str,
+) -> list[str]:
+    """从 BKD issue tags 抽 `<prefix><org>/<name>` 并校验 slug 合法。
+
+    `repo:` 跟 `source-repo:` 走同一套 slug 规则，只是 prefix + warning
+    event 名不同；用 prefix 参数化避免两份相同逻辑的并行漂移。
+    """
     if not tags:
         return []
     out: list[str] = []
     for t in tags:
-        if not isinstance(t, str) or not t.startswith(_REPO_TAG_PREFIX):
+        if not isinstance(t, str) or not t.startswith(prefix):
             continue
-        slug = t[len(_REPO_TAG_PREFIX):].strip()
+        slug = t[len(prefix):].strip()
         if _REPO_SLUG_RE.match(slug):
             out.append(slug)
         else:
-            log.warning("clone.invalid_repo_tag", tag=t)
+            log.warning(log_event, tag=t)
     # 去重保留顺序
     seen: set[str] = set()
     return [r for r in out if not (r in seen or seen.add(r))]
+
+
+def _extract_repo_tags(tags: Iterable[str] | None) -> list[str]:
+    """从 BKD issue tags 抽 `repo:<org>/<name>` 并校验 slug 合法。"""
+    return _extract_tags_with_prefix(
+        tags, _REPO_TAG_PREFIX, log_event="clone.invalid_repo_tag",
+    )
+
+
+def _extract_source_repo_tags(tags: Iterable[str] | None) -> list[str]:
+    """从 BKD issue tags 抽 `source-repo:<org>/<name>` 并校验 slug 合法。
+
+    REQ-fix-orch-source-repo-tag-1777824479 (closes #362)：per-REQ source
+    repo override。多个 `source-repo:` tag 形成列表，跟 `repo:` 一致。
+    """
+    return _extract_tags_with_prefix(
+        tags, _SOURCE_REPO_TAG_PREFIX, log_event="clone.invalid_source_repo_tag",
+    )
 
 
 def resolve_repos(
@@ -91,6 +127,9 @@ def resolve_repos(
     """
     finalized = (ctx or {}).get("intake_finalized_intent") or {}
     layers: list[tuple[str, object]] = [
+        # REQ-fix-orch-source-repo-tag-1777824479 (closes #362): `source-repo:`
+        # tag 是 per-REQ 显式 override，赢过 intake / ctx / `repo:` / settings。
+        ("tags.source-repo", _extract_source_repo_tags(tags)),
         ("ctx.intake_finalized_intent.involved_repos", finalized.get("involved_repos")),
         ("ctx.involved_repos", (ctx or {}).get("involved_repos")),
         ("tags.repo", _extract_repo_tags(tags)),
