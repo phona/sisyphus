@@ -180,6 +180,48 @@ class BKDRestClient:
         ]
         return "\n\n---\n\n".join(msgs) if msgs else None
 
+    async def last_log_activity_at(
+        self,
+        project_id: str,
+        issue_id: str,
+    ) -> datetime | None:
+        """最近一条 BKD log entry 的 createdAt（UTC）；watchdog 用作活体探针。
+
+        实现：GET /logs?limit=10 取所有 entry 的 createdAt 最大值。
+        失败 / 空 / 无 createdAt 一律返回 None；调用方按"未知活动"处理。
+        """
+        try:
+            data = await self._get(
+                f"/projects/{project_id}/issues/{issue_id}/logs?limit=10"
+            )
+        except Exception as e:
+            log.warning(
+                "bkd.last_log_activity_at.failed",
+                issue_id=issue_id, error=str(e),
+            )
+            return None
+        if not isinstance(data, dict):
+            return None
+        logs = data.get("logs") or []
+        latest: datetime | None = None
+        for entry in logs:
+            if not isinstance(entry, dict):
+                continue
+            ts_raw = entry.get("createdAt")
+            if not ts_raw:
+                continue
+            try:
+                ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            else:
+                ts = ts.astimezone(UTC)
+            if latest is None or ts > latest:
+                latest = ts
+        return latest
+
     async def fetch_turns(self, project_id: str, issue_id: str) -> list[Turn]:
         """拉 BKD issue logs，折叠成 turn 维度（role × token × duration × tool_calls）。
 

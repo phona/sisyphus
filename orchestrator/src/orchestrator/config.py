@@ -275,6 +275,11 @@ class Settings(BaseSettings):
     # 立即 escalate；session_status == "running" 仍由 in-loop 跳过（不受影响）。
     # 把 "BKD agent 死了但没发 session.failed webhook" 的兜底从 60min 缩到 5min。
     watchdog_session_ended_threshold_sec: int = 300
+    # REQ-fix-watchdog-liveness-1777809646: 活体探针。watchdog 在 escalate 决策前
+    # 拉 BKD /logs 看最新 entry createdAt。距今 < 该值 → 视 agent 仍活，跳过 escalate。
+    # 默认 120s 给单 turn 写大量代码留空间；BKD 仅返回 entry 后才会更新 createdAt，
+    # 所以中间没 tool-result/assistant-message 的"思考期"也算静默——120s 是经验折中。
+    watchdog_liveness_grace_sec: int = 120
 
     # ─── 防 verifier↔fixer 死循环：硬封顶 fixer round 数 ─────────────────
     # 每次 verifier decision=fix 都会 start_fixer 起新一轮 fixer agent，跑完回 verifier
