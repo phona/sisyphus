@@ -31,7 +31,6 @@ import re
 
 import pytest
 
-
 # ─── VDTF-S1: prompt mandate ──────────────────────────────────────────────────
 
 # (stage, trigger) pairs the spec applies to: every verifier prompt the
