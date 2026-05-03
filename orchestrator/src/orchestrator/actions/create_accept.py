@@ -24,7 +24,7 @@ from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
 
-_TIMEOUT_ENV_UP_SEC = 600  # 10 min for helm install + wait ready
+_TIMEOUT_ENV_UP_SEC = 1800  # 30 min: helm install + wait ready + APK GHA build poll (5-10min) + download + adb install
 _TIMEOUT_LITE_SEC = 1800   # 30 min for up × N + sleep + smoke × N + down × N
 
 
