@@ -454,3 +454,25 @@ def resolve_base_branch(
     """
     basename = repo_slug.rsplit("/", 1)[-1] if "/" in repo_slug else repo_slug
     return base_overrides.get(basename) or default_base or None
+
+
+def normalize_base_overrides(overrides: dict[str, str]) -> dict[str, str]:
+    """把 ``base_overrides`` 的 key 统一归一到 repo basename。
+
+    ``settings.default_base_branches`` 在 helm values 里通常写成
+    ``{phona/sisyphus: main}`` —— 用 ``<owner>/<repo>`` 形式，因为这是 ops
+    最自然的写法。但 ``resolve_base_branch`` 跟下游的 ``sisyphus-clone-repos.sh``
+    都按 basename 查找，混用 owner/repo 跟 basename 形式会让 per-repo override
+    永远不命中（GitHub issue #345）。
+
+    本函数把所有 key 归一到 basename，并去掉 ``.git`` 后缀。冲突时（同一 basename
+    有多个 owner/repo 写法）取最后写入者，这跟 dict 自身的覆盖语义一致。
+    """
+    out: dict[str, str] = {}
+    for key, value in overrides.items():
+        basename = key.rsplit("/", 1)[-1] if "/" in key else key
+        if basename.endswith(".git"):
+            basename = basename[:-4]
+        if basename:
+            out[basename] = value
+    return out

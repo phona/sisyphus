@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import structlog
 
@@ -310,6 +311,40 @@ async def _check_and_escalate(row) -> bool:
     if issue_id is None and policy.stuck_sec is None and ctx.get("escalated_reason") != "fixer-round-cap":
         log.warning("watchdog.missing_issue_id", req_id=req_id, state=state.value)
         return False
+
+    # 3b. REQ-fix-watchdog-liveness-1777809646: 活体探针。BKD sessionStatus 是
+    # session 生命周期标，不是 agent 活体；BKD 在 turn 边界 / 等待 sub-issue 时
+    # 短暂离开 "running" 会被误判 ended。改用 BKD /logs 看最新 entry createdAt：
+    # 距今 < watchdog_liveness_grace_sec → agent 实际还在产出，不论 session_status
+    # 都跳过 escalate。fixer-round-cap 路径保持例外（确定性硬封顶不依赖活体）。
+    skip_for_liveness = (
+        issue_id is not None
+        and ctx.get("escalated_reason") != "fixer-round-cap"
+    )
+    if skip_for_liveness:
+        last_activity: datetime | None = None
+        try:
+            async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+                last_activity = await bkd.last_log_activity_at(project_id, issue_id)
+        except Exception as e:
+            # BKD 挂 / transport 不支持 → 静默回到原行为，下面继续按 policy 判
+            log.warning(
+                "watchdog.last_activity_probe_failed",
+                req_id=req_id, issue_id=issue_id, error=str(e),
+            )
+        if isinstance(last_activity, datetime):
+            grace = settings.watchdog_liveness_grace_sec
+            now = datetime.now(UTC)
+            inactive_sec = (now - last_activity).total_seconds()
+            if inactive_sec < grace:
+                log.debug(
+                    "watchdog.live_activity_skip",
+                    req_id=req_id, state=state_str,
+                    issue_id=issue_id,
+                    inactive_sec=int(inactive_sec),
+                    grace_sec=grace,
+                )
+                return False
 
     # 4. 按 policy 决定是否 escalate
     if still_running:

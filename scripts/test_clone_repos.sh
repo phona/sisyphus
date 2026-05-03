@@ -84,6 +84,41 @@ else
 fi
 rm -rf "$TMP_ROOT"
 
+# 6. --base-for accepts <owner>/<repo> form and normalizes to basename
+#    Verifies the bug fix: helm `env.default_base_branches: {phona/sisyphus: main}`
+#    was passed verbatim as --base-for phona/sisyphus main; script stored under
+#    "phona/sisyphus" key but looked up "sisyphus" basename → miss → fell back
+#    to --base develop → fail. After fix the slug key is normalized to basename
+#    on storage so per-repo override hits.
+TMP_ROOT=$(mktemp -d)
+out=$(GH_TOKEN=dummy SISYPHUS_SOURCE_ROOT="$TMP_ROOT" bash "$HELPER" \
+  --base develop --base-for phona/sisyphus main phona/sisyphus 2>&1 >/dev/null) && rc=0 || rc=$?
+# clone will fail (dummy token); we assert the validating diagnostic mentions
+# 'main', not 'develop' — proving --base-for owner/repo overrode --base.
+if [[ "$out" == *"validating base branch 'main' for phona/sisyphus"* ]]; then
+  echo "OK [--base-for owner/repo normalizes to basename]"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL [--base-for owner/repo normalizes to basename]: expected validating 'main', got:"
+  echo "  stderr: $out"
+  FAIL=$((FAIL + 1))
+fi
+rm -rf "$TMP_ROOT"
+
+# 7. --base-for basename form still works (backward compat)
+TMP_ROOT=$(mktemp -d)
+out=$(GH_TOKEN=dummy SISYPHUS_SOURCE_ROOT="$TMP_ROOT" bash "$HELPER" \
+  --base develop --base-for sisyphus main phona/sisyphus 2>&1 >/dev/null) && rc=0 || rc=$?
+if [[ "$out" == *"validating base branch 'main' for phona/sisyphus"* ]]; then
+  echo "OK [--base-for basename form still works]"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL [--base-for basename form still works]: expected validating 'main', got:"
+  echo "  stderr: $out"
+  FAIL=$((FAIL + 1))
+fi
+rm -rf "$TMP_ROOT"
+
 echo "---"
 echo "PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

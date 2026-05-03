@@ -67,7 +67,13 @@ while [[ $# -gt 0 ]]; do
     --base-for)
       shift
       if [[ $# -lt 2 ]]; then usage; fi
-      REPO_BASE_MAP["$1"]="$2"
+      # 接受 <owner>/<repo>、<repo>.git、<repo> 三种 key 形态，统一归一到 basename。
+      # orchestrator helm config (`env.default_base_branches`) 经常写成 `phona/sisyphus`
+      # 这种 owner/repo 形式；脚本内部按 basename 查找（见 _resolve_base），
+      # 不归一会导致 per-repo override 永远不命中，回落到 --base 全局值。
+      key="${1##*/}"
+      key="${key%.git}"
+      REPO_BASE_MAP["$key"]="$2"
       shift 2
       ;;
     --)
