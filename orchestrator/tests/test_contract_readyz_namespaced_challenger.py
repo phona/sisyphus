@@ -155,7 +155,7 @@ def _readyz_harness(
     try:
         yield
     finally:
-        for p in patches:
+        for p in reversed(patches):
             try:
                 p.stop()
             except RuntimeError:
