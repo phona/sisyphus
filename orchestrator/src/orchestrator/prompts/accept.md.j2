@@ -104,7 +104,7 @@ accept-agent 顺手 commit；下次 recall 就能命中，省去重新探索。
 1. 在 BKD Coder workspace（你跑 BKD agent 这边）clone source repo（如果还没）：
    ```bash
    cd /tmp && rm -rf source-{{ thanatos_skill_repo }} && \
-     git clone -b $(echo "{{ ctx.branch }}" || echo "feat/{{ req_id }}") \
+     git clone -b "{{ branch }}" \
        "https://x-access-token:$GITHUB_TOKEN@github.com/<org>/{{ thanatos_skill_repo }}.git" \
        source-{{ thanatos_skill_repo }}
    cd source-{{ thanatos_skill_repo }}

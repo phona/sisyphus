@@ -280,6 +280,7 @@ async def create_accept(*, body, req_id, tags, ctx):
             accept_env=accept_env,
             project_id=proj,
             project_alias=proj,
+            branch=branch_for_links,
             thanatos_pod=thanatos_pod,
             thanatos_namespace=thanatos_namespace,
             thanatos_skill_repo=thanatos_skill_repo,
