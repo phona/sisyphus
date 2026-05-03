@@ -9,6 +9,7 @@ Two paths:
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 
 import structlog
 
@@ -17,7 +18,7 @@ from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
 from ..state import Event
-from ..store import db, req_state
+from ..store import db, req_state, stage_runs
 from . import register, short_title
 from ._clone import ensure_runner_with_clone
 from ._integration_resolver import resolve_integration_dir
@@ -27,6 +28,68 @@ log = structlog.get_logger(__name__)
 
 _TIMEOUT_ENV_UP_SEC = 1800  # 30 min: helm install + wait ready + APK GHA build poll (5-10min) + download + adb install
 _TIMEOUT_LITE_SEC = 1800   # 30 min for up × N + sleep + smoke × N + down × N
+
+_SUB_STEPS_STAGE_PREFIX = "accept-env-up."
+
+
+async def _record_sub_steps(
+    pool, req_id: str, accept_env: dict | None,
+) -> int:
+    """Persist optional `sub_steps` array from accept-env-up JSON as stage_runs rows.
+
+    Contract (REQ-feat-accept-env-substep-timing): `accept_env["sub_steps"]` MAY
+    be a list of {"name": str, "duration_sec": number}. Each well-formed entry
+    becomes one stage_runs row with stage = "accept-env-up.<name>", outcome=pass.
+    Malformed payload → no rows + warning log; never raises.
+
+    Returns count of rows inserted (for tests / log).
+    """
+    if not isinstance(accept_env, dict):
+        return 0
+    raw = accept_env.get("sub_steps")
+    if raw is None:
+        return 0
+    if not isinstance(raw, list):
+        log.warning("create_accept.sub_steps_malformed",
+                    req_id=req_id, reason="not a list", value_type=type(raw).__name__)
+        return 0
+    inserted = 0
+    now = datetime.now(UTC)
+    for idx, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            log.warning("create_accept.sub_steps_malformed",
+                        req_id=req_id, reason="entry not dict", index=idx)
+            continue
+        name = entry.get("name")
+        duration = entry.get("duration_sec")
+        if not isinstance(name, str) or not name:
+            log.warning("create_accept.sub_steps_malformed",
+                        req_id=req_id, reason="missing/invalid name", index=idx)
+            continue
+        if not isinstance(duration, (int, float)) or isinstance(duration, bool):
+            log.warning("create_accept.sub_steps_malformed",
+                        req_id=req_id, reason="missing/invalid duration_sec",
+                        index=idx, name=name)
+            continue
+        try:
+            started = now - timedelta(seconds=float(duration))
+            run_id = await stage_runs.insert_stage_run(
+                pool, req_id,
+                _SUB_STEPS_STAGE_PREFIX + name,
+                started_at=started,
+            )
+            await stage_runs.update_stage_run(
+                pool, run_id, outcome="pass", ended_at=now,
+            )
+            inserted += 1
+        except Exception as e:
+            # never let observability break the parent flow
+            log.warning("create_accept.sub_steps_insert_failed",
+                        req_id=req_id, name=name, error=str(e)[:200])
+    if inserted:
+        log.info("create_accept.sub_steps_recorded",
+                 req_id=req_id, count=inserted)
+    return inserted
 
 # #247 Phase 1: 收 BKD stage agent issue id（人可续 follow-up 触发 PENDING_USER_REVIEW
 # 反向通道的入口）。**机械 checker** issue（spec_lint / dev_cross_check / staging_test
@@ -327,6 +390,11 @@ async def create_accept(*, body, req_id, tags, ctx):
             "emit": Event.ACCEPT_ENV_UP_FAIL.value,
             "reason": "env-up JSON missing endpoint",
         }
+
+    # REQ-feat-accept-env-substep-timing: optional sub-step timing observability.
+    # env-up exited 0; if business Makefile emitted `sub_steps`, persist per-step
+    # rows to stage_runs for Metabase. Best-effort, never raises.
+    await _record_sub_steps(db.get_pool(), req_id, accept_env)
 
     # M1: optional thanatos block
     thanatos_block = accept_env.get("thanatos") or {} if isinstance(accept_env, dict) else {}

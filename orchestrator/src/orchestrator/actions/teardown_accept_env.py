@@ -12,6 +12,7 @@ from __future__ import annotations
 import structlog
 
 from .. import k8s_runner
+from ..config import settings
 from ..state import Event
 from ..store import db, req_state
 from . import register
@@ -55,15 +56,24 @@ async def teardown_accept_env(*, body, req_id, tags, ctx):
         if resolved.dir is None:
             log.warning("teardown.no_integration_dir", req_id=req_id, reason=resolved.reason)
         else:
+            # REQ-feat-accept-env-substep-timing: dogfood retry mode → KEEP_ENV=1
+            # tells business Makefile to short-circuit teardown (helm uninstall +
+            # ns delete skipped) so next accept-env-up can reuse the lab release.
+            # Default off — opt-in via SISYPHUS_ACCEPT_KEEP_ENV=true ConfigMap.
+            env = {
+                "SISYPHUS_REQ_ID": req_id,
+                "SISYPHUS_STAGE": "accept-teardown",
+                "SISYPHUS_NAMESPACE": f"accept-{req_id.lower()}",
+            }
+            if settings.accept_keep_env:
+                env["KEEP_ENV"] = "1"
+                log.info("teardown.keep_env_active", req_id=req_id,
+                         integration_dir=resolved.dir)
             try:
                 result = await rc.exec_in_runner(
                     req_id,
                     command=f"cd {resolved.dir} && make accept-env-down",
-                    env={
-                        "SISYPHUS_REQ_ID": req_id,
-                        "SISYPHUS_STAGE": "accept-teardown",
-                        "SISYPHUS_NAMESPACE": f"accept-{req_id.lower()}",
-                    },
+                    env=env,
                     timeout_sec=300,
                 )
                 env_down_ok = result.exit_code == 0

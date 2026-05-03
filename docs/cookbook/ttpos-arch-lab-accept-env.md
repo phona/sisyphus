@@ -388,6 +388,59 @@ accept-env-down:
 - **`accept-env-down` 全 best-effort**：partial up 失败时（emulator helm 没起来）
   也必须把 backend release + namespace 清掉，每步 `|| true` 保证不因前步失败而短路。
 
+### 6.1 子步耗时（可选 `sub_steps` 字段）
+
+REQ-feat-accept-env-substep-timing 起，`accept-env-up` endpoint JSON 可加 `sub_steps`
+数组让 orchestrator 落 `stage_runs`、Metabase 看子步分布。把上面 6 步用 `date +%s.%N`
+打点，最后一步拼进 JSON：
+
+```makefile
+accept-env-up:
+	@t0=$$(date +%s.%N); \
+	helm upgrade --install lab charts/accept-lab \
+	    --namespace $(SISYPHUS_NAMESPACE) --create-namespace --wait --timeout 5m >&2; \
+	t1=$$(date +%s.%N); \
+	helm upgrade --install emulator charts/emulator \
+	    --namespace $(SISYPHUS_NAMESPACE) --wait --timeout 3m >&2; \
+	t2=$$(date +%s.%N); \
+	./emulator/boot-wait-k8s.sh "$(SISYPHUS_NAMESPACE)" >&2; \
+	t3=$$(date +%s.%N); \
+	./apk/build.sh >&2; \
+	t4=$$(date +%s.%N); \
+	adb_host=$$(kubectl -n $(SISYPHUS_NAMESPACE) get svc emulator-adb -o jsonpath='{.spec.clusterIP}'); \
+	adb connect "$$adb_host:5555" >&2; \
+	adb -s "$$adb_host:5555" install -r ./apk/dist/app.apk >&2; \
+	t5=$$(date +%s.%N); \
+	dur() { python3 -c "import sys; print(round(float(sys.argv[2])-float(sys.argv[1]),2))" "$$1" "$$2"; }; \
+	printf '{"endpoint":"http://lab.%s.svc.cluster.local:8080","adb":"%s:5555","apk_package":"%s","namespace":"%s","sub_steps":[{"name":"lab-helm","duration_sec":%s},{"name":"emulator-helm","duration_sec":%s},{"name":"redroid-boot","duration_sec":%s},{"name":"apk-build","duration_sec":%s},{"name":"apk-install","duration_sec":%s}]}\n' \
+	    "$(SISYPHUS_NAMESPACE)" "$$adb_host" "$(APK_PACKAGE)" "$(SISYPHUS_NAMESPACE)" \
+	    "$$(dur $$t0 $$t1)" "$$(dur $$t1 $$t2)" "$$(dur $$t2 $$t3)" "$$(dur $$t3 $$t4)" "$$(dur $$t4 $$t5)"
+```
+
+字段缺失或不是 list 都被 orchestrator 静默忽略，主流程不受影响。
+
+### 6.2 KEEP_ENV=1 复用契约
+
+REQ-feat-accept-env-substep-timing 起，`accept-env-down` 必须识别 `KEEP_ENV=1`
+跳过卸载，留 namespace 给下一轮 `accept-env-up` 复用（dogfood retry 期间业务仓
+lab/thanatos values 极少变，省 1-3 min/次）。
+
+```makefile
+accept-env-down:
+	@if [ "$$KEEP_ENV" = "1" ]; then \
+	    echo "[arch-lab] KEEP_ENV=1, skipping teardown" >&2; \
+	    exit 0; \
+	fi
+	-helm uninstall emulator --namespace $(SISYPHUS_NAMESPACE) 2>/dev/null || true
+	-helm uninstall lab --namespace $(SISYPHUS_NAMESPACE) 2>/dev/null || true
+	-kubectl delete namespace $(SISYPHUS_NAMESPACE) --ignore-not-found 2>/dev/null || true
+	-rm -f .accept-adb-host 2>/dev/null || true
+```
+
+orchestrator 侧 `settings.accept_keep_env`（env: `SISYPHUS_ACCEPT_KEEP_ENV`）默认
+`false`；dogfood 启用 `kubectl set env deploy/orch SISYPHUS_ACCEPT_KEEP_ENV=true`
++ rollout 即生效。
+
 ## 7. 跟 sisyphus accept-agent 的对接
 
 accept-agent prompt (`orchestrator/src/orchestrator/prompts/accept.md.j2`) 已经会

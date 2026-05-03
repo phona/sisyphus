@@ -136,6 +136,11 @@ class Settings(BaseSettings):
     skip_pr_ci: bool = False          # pr-ci.pass（PR CI 全套等绿）
     skip_accept: bool = False         # accept.pass (ttpos-arch-lab 接好前默认 true)
     accept_smoke_delay_sec: int = 30  # env-up 后等服务起齐的 sleep（秒）
+    # REQ-feat-accept-env-substep-timing: dogfood retry 期间 set true → teardown
+    # 注 KEEP_ENV=1 给 make accept-env-down，business Makefile 跳过 helm uninstall
+    # / kubectl delete，留 lab + thanatos release 给下一轮 accept-env-up 复用。
+    # 默认 false 不破坏现有 integration repo（没接 KEEP_ENV 分支时 env 多个无害变量）。
+    accept_keep_env: bool = False
     skip_archive: bool = False        # archive.done (跳过真 PR 创建)
 
     # 全部 skip = 状态机几秒走完，验 transition + cleanup，不动 BKD agent

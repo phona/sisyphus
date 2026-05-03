@@ -162,9 +162,31 @@ shell 不展开 flag，等价全量。
 | target | 谁调 | 在哪跑 | 期望 |
 |---|---|---|---|
 | `make accept-env-up` | sisyphus pre-accept（`actions/create_accept.py`） | runner pod，`cd /workspace/integration/<repo-name> && make accept-env-up` | 1) 退码 0 = lab 起来；2) **stdout 最后一行**是 endpoint JSON（见 §3） |
-| `make accept-env-down` | `actions/teardown_accept_env.py` | 同上 | best-effort，幂等；失败只 warning 不阻塞状态机 |
+| `make accept-env-down` | `actions/teardown_accept_env.py` | 同上 | best-effort，幂等；失败只 warning 不阻塞状态机；**SHALL 识别 `KEEP_ENV=1` 跳过卸载**（见下） |
 
 **幂等性硬要求**：accept-env-up / accept-env-down 必须可重复调（重试或 watchdog 路径会再 cleanup 一次）。
+
+**`KEEP_ENV` 复用契约**（REQ-feat-accept-env-substep-timing）：`accept-env-down`
+**SHALL** 识别 `KEEP_ENV` 环境变量。`KEEP_ENV=1` 时 target 必须立即 `exit 0`，
+不做任何 `helm uninstall` / `kubectl delete namespace`，留 lab 给下一轮 `accept-env-up`
+复用（业务仓 lab/thanatos values 不常变时省 1-3 min/次重试）。其他值（包括未设置、
+空串、`KEEP_ENV=0`）都按原拆装行为走。
+
+orchestrator 侧：`settings.accept_keep_env`（env: `SISYPHUS_ACCEPT_KEEP_ENV`）
+默认 `false`；为 `true` 时 `teardown_accept_env.py` 注入 `KEEP_ENV=1`。dogfood
+retry 期间手开，攒数据后再决定要不要由状态机自动判定。
+
+最小可行 Makefile 实现：
+
+```makefile
+accept-env-down:
+	@if [ "$$KEEP_ENV" = "1" ]; then \
+	    echo "[accept-env-down] KEEP_ENV=1, skipping teardown" >&2; \
+	    exit 0; \
+	fi
+	-helm uninstall lab --namespace $(SISYPHUS_NAMESPACE) || true
+	-kubectl delete namespace $(SISYPHUS_NAMESPACE) --ignore-not-found
+```
 
 ### 2.4 analyze-agent 推 PR 前 guard
 
@@ -221,7 +243,27 @@ staging-test checker 只跑 `make ci-unit-test && make ci-integration-test`，
 |---|---|---|
 | `endpoint` | ✅ | accept-agent 跑 FEATURE-A* scenarios 时打这个 URL |
 | `namespace` | （可选） | sisyphus 已通过 `SISYPHUS_NAMESPACE` env 传，重复声明也无碍 |
+| `sub_steps` | （可选） | 子步耗时数组，每条 `{"name": str, "duration_sec": number}`；orchestrator 落 `stage_runs`（`stage = "accept-env-up.<name>"`），Metabase 直接聚合做子步分布看板。Malformed / 缺失自动忽略，不破坏主流程（REQ-feat-accept-env-substep-timing） |
 | 其他 | （可选） | 任意附加元数据，accept-agent prompt 透传 |
+
+`sub_steps` 例子：
+
+```json
+{
+  "endpoint": "http://lab.accept-req-29.svc.cluster.local:8080",
+  "namespace": "accept-req-29",
+  "sub_steps": [
+    {"name": "lab-helm",      "duration_sec": 45.2},
+    {"name": "thanatos-helm", "duration_sec": 78.5},
+    {"name": "redroid-boot",  "duration_sec": 92.1},
+    {"name": "apk-install",   "duration_sec": 31.7}
+  ]
+}
+```
+
+业务仓 Makefile 计时建议：每子步前后 `date +%s.%N` 取差，最后用 `printf` 拼 JSON
+进 endpoint payload。子步 `name` 用稳定的 kebab-case 标识（`lab-helm` / `thanatos-helm`
+等），方便 SQL `WHERE stage = 'accept-env-up.lab-helm'` 查时长趋势。
 
 实现建议（让 Makefile 容易满足）：
 
