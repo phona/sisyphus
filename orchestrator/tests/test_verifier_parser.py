@@ -230,6 +230,164 @@ def test_empty_description_and_tags():
     assert result.retry_worthy is False
 
 
+# ─── 8a. VDTF-S1: 渲染后的 verifier prompt 包含 mandate 段 ─────────────────
+
+
+def _verifier_stage_trigger_pairs() -> list[tuple[str, str]]:
+    """枚举所有 verifier/{stage}_{trigger}.md.j2 模板。"""
+    from pathlib import Path
+    here = Path(__file__).resolve().parent.parent / "src" / "orchestrator" / "prompts" / "verifier"
+    out: list[tuple[str, str]] = []
+    for p in sorted(here.glob("*_*.md.j2")):
+        if p.name.startswith("_"):
+            continue
+        # 文件名形如 staging_test_fail.md.j2 / accept_success.md.j2
+        stem = p.name.removesuffix(".md.j2")
+        # 找最后一个 _success/_fail 切分
+        for suffix in ("_success", "_fail"):
+            if stem.endswith(suffix):
+                out.append((stem.removesuffix(suffix), suffix.lstrip("_")))
+                break
+    return out
+
+
+def test_vdtf_s1_every_verifier_prompt_mandates_decision_tag():
+    """VDTF-S1: 任何 stage/trigger 渲染后都必须含 decision:<action> tag mandate 段。"""
+    from orchestrator.prompts import render
+
+    pairs = _verifier_stage_trigger_pairs()
+    assert pairs, "no verifier prompts discovered"
+
+    for stage, trigger in pairs:
+        rendered = render(
+            f"verifier/{stage}_{trigger}.md.j2",
+            req_id="REQ-test-1",
+            stage=stage,
+            trigger=trigger,
+            artifact_paths=[],
+            stderr_tail="",
+            history=[],
+            project_id="proj-x",
+            project_alias="proj-x",
+            checker_stdout="",
+            checker_stderr="",
+            checker_exit_code=None,
+        )
+        # 必须含至少一个 `decision:<action>` 字面 example
+        examples = [
+            "decision:pass", "decision:fix-dev", "decision:fix-spec",
+            "decision:escalate", "decision:retry",
+        ]
+        assert any(ex in rendered for ex in examples), (
+            f"{stage}/{trigger}: rendered prompt lacks any decision:<action> tag example"
+        )
+        # 必须含 curl PATCH 例子
+        assert "curl" in rendered and "PATCH" in rendered, (
+            f"{stage}/{trigger}: rendered prompt lacks curl PATCH tag-merge example"
+        )
+        # 必须含 hard constraint 提示词（区分于纯 UX 旧文本）
+        assert "HARD CONSTRAINT" in rendered, (
+            f"{stage}/{trigger}: rendered prompt lacks HARD CONSTRAINT marker for decision tag"
+        )
+
+
+# ─── 8b. plain `decision:<action>[-<fixer>]` 兜底 tag ────────────────────
+# REQ-fix-verifier-decision-tag-1777812498：spec VDTF-S2 / VDTF-S3。
+
+def test_plain_decision_tag_pass_synthesizes_low_confidence():
+    """VDTF-S2: plain `decision:pass` tag + 无 JSON → 兜底合成 low-confidence pass。"""
+    from orchestrator.router import validate_decision
+
+    result = extract_decision_robust(
+        description="some chatter without any JSON block",
+        tags=["verifier", "verify:staging_test", "decision:pass"],
+    )
+    assert result.decision is not None
+    assert result.decision["action"] == "pass"
+    assert result.decision["fixer"] is None
+    assert result.decision["confidence"] == "low"
+    assert result.decision["reason"].startswith("orch-fallback")
+    ok, _ = validate_decision(result.decision)
+    assert ok is True
+
+
+def test_plain_decision_tag_fix_dev_sets_fixer():
+    from orchestrator.router import validate_decision
+
+    result = extract_decision_robust(
+        description=None,
+        tags=["verifier", "decision:fix-dev"],
+    )
+    assert result.decision == {
+        "action": "fix",
+        "fixer": "dev",
+        "scope": None,
+        "reason": "orch-fallback: inferred from decision:fix-dev tag",
+        "confidence": "low",
+    }
+    ok, _ = validate_decision(result.decision)
+    assert ok is True
+
+
+def test_plain_decision_tag_fix_spec_sets_fixer():
+    from orchestrator.router import validate_decision
+
+    result = extract_decision_robust(
+        description=None,
+        tags=["decision:fix-spec"],
+    )
+    assert result.decision["action"] == "fix"
+    assert result.decision["fixer"] == "spec"
+    ok, _ = validate_decision(result.decision)
+    assert ok is True
+
+
+def test_plain_decision_tag_escalate_and_retry():
+    for tag, expected in (("decision:escalate", "escalate"), ("decision:retry", "retry")):
+        result = extract_decision_robust(None, [tag])
+        assert result.decision is not None, tag
+        assert result.decision["action"] == expected
+        assert result.decision["fixer"] is None
+        assert result.decision["confidence"] == "low"
+
+
+def test_plain_decision_fix_without_fixer_suffix_is_not_synthesized():
+    """VDTF-S3: bare `decision:fix` 不带 -dev/-spec → 不合成（不胡猜 fixer）。"""
+    from orchestrator.router import validate_decision
+
+    result = extract_decision_robust(
+        description=None,
+        tags=["verifier", "decision:fix"],
+    )
+    assert result.decision is None
+    ok, _ = validate_decision(result.decision)
+    assert ok is False
+
+
+def test_json_block_takes_precedence_over_plain_tag():
+    """JSON 主路径仍优先；plain tag 只在 JSON 失败时兜底。"""
+    d = {"action": "fix", "fixer": "dev", "scope": "src/", "reason": "real",
+         "confidence": "high"}
+    result = extract_decision_robust(
+        description=f"```json\n{json.dumps(d)}\n```",
+        tags=["decision:escalate"],   # 故意冲突：tag 想 escalate，JSON 想 fix
+    )
+    assert result.decision["action"] == "fix"
+    assert result.decision["confidence"] == "high"
+    assert "orch-fallback" not in result.decision["reason"]
+
+
+def test_base64_tag_takes_precedence_over_plain_tag():
+    """tag base64 仍优先于 plain tag（同一字段位置不破坏老 agent）。"""
+    d = {"action": "pass", "fixer": None, "reason": "ok", "confidence": "high"}
+    b64 = base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
+    result = extract_decision_robust(
+        description=None,
+        tags=[f"decision:{b64}", "decision:escalate"],
+    )
+    assert result.decision == d
+
+
 # ─── 9. strip markdown ───────────────────────────────────────────────────
 
 def test_strip_markdown_bold():
