@@ -109,8 +109,10 @@ class Settings(BaseSettings):
     snapshot_interval_sec: int = 300
 
     # 已知死项目排除清单（snapshot loop 跳过 BKD list_issues 调用，避免 5min 一次
-    # 的 snapshot.list_failed warning）。env 用逗号分隔或 JSON 数组：
-    #   SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS=77k9z58j,old-proj
+    # 的 snapshot.list_failed warning）。env **必须是 JSON 数组**——pydantic-settings v2
+    # 解析 list[str] 用 JSON decoder，csv `77k9z58j,old-proj` 会 SettingsError 启动崩
+    # （issue #343 的实证 bug）。例：
+    #   SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS='["77k9z58j","old-proj"]'
     snapshot_exclude_project_ids: list[str] = Field(default_factory=list)
 
     # 不存任何 repo / project_id：
