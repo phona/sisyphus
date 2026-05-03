@@ -296,6 +296,15 @@ class Settings(BaseSettings):
     checker_infra_flake_retry_max: int = 1            # 0 = no retry, 1 = 1 retry (2 attempts)
     checker_infra_flake_retry_backoff_sec: int = 15
 
+    # ─── REQ-fix-pr-queue-health-monitoring-1777789759：PR drift cron ────────
+    # 每 interval 秒扫 repos 列表的 OPEN PR，把落后 > threshold commit 的记入
+    # pr_drift_log 供 Metabase Q19/Q20 看板。False = 不跑（默认；无 github_token 时
+    # 自动跳过）。repos 格式：["phona/sisyphus"]（owner/name）。
+    pr_health_enabled: bool = False
+    pr_health_interval_sec: int = 1800          # 30min
+    pr_health_repos: list[str] = Field(default_factory=list)
+    pr_health_behind_threshold: int = 5         # <= 此数视为 fresh，跳过不记录
+
     # ─── 周期 TTL 清理（增长表防膨胀） ───────────────────────────────────
     # event_seen / dispatch_slugs / verifier_decisions / stage_runs(closed) 只增不减；
     # 后台任务按 interval 周期删过期行。False = 关闭（dev / 单测可不跑）。

@@ -280,6 +280,32 @@ Q12/Q13 是"此刻在出事吗"，放最上；Q6/Q8 是周度趋势；Q9/Q11 是
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## PR queue health 看板（Q19–Q20，REQ-fix-pr-queue-health-monitoring-1777789759）
+
+pr_health cron（30min 周期）把 behind > 5 commit 的 OPEN PR 写入 `pr_drift_log`，供以下两条 Question 查询。
+
+### Q19. PR base drift 最新快照
+
+- **SQL**：[queries/sisyphus/19-pr-drift.sql](queries/sisyphus/19-pr-drift.sql)
+- **Visualization**：Table（列：`repo, pr_number, behind_count, drift_kind, conflict_predicted, checked_at`）
+- **条件格式**：`conflict_predicted = true` 行标红
+- **人工介入阈值**：`drift_kind = 'semantic-drift'` 行 > 0 应检查受影响 PR 是否需要人工 rebase
+
+### Q20. PR queue 年龄 + dirty rate 分桶
+
+- **SQL**：[queries/sisyphus/20-pr-aging.sql](queries/sisyphus/20-pr-aging.sql)
+- **Visualization**：Bar chart（X = `age_bucket`，Y = `pr_count`，颜色表示 `dirty_rate_pct`）
+- **注意**：仅含 behind > threshold 的 PR（fresh PR 不写 pr_drift_log）；完整 PR 生命周期统计需 pr_links 扩展（TODO followup）
+
+**PR queue health 看板布局（建议挂 M7 看板底部）**：
+
+```
+┌──────────────────────────────┬──────────────────────────────┐
+│  Q19. PR drift 最新快照       │  Q20. PR 年龄 + dirty rate   │
+│  (table，冲突行标红)          │  (bar chart，按年龄分桶)      │
+└──────────────────────────────┴──────────────────────────────┘
+```
+
 ## 刷新频率
 
 M7 看板：
@@ -297,6 +323,9 @@ M14e 质量看板：
 
 Webhook dedup 看板：
 - Q17：每 5 分钟（pending_or_crashed > 0 通常意味 webhook handler 崩了，越早发现越好）
+
+PR queue health 看板：
+- Q19 / Q20：每 30 分钟（和 pr_health cron 同步，数据不比 cron 更新）
 
 Metabase Question 设置 `Results cache TTL`：Q5/Q1 设 30s，Q2/Q3/Q4/Q12/Q13/Q17/Q18 设 120s，其余设 1800s。
 
