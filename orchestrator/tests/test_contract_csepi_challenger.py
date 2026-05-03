@@ -9,7 +9,6 @@ double coverage; if they diverge the spec is ambiguous and needs spec_fixer.
 """
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 
 import yaml
@@ -84,29 +83,25 @@ def test_csepi_s3_settings_parses_json_env_into_string_list(monkeypatch) -> None
     array MUST resolve `settings.snapshot_exclude_project_ids` to the
     matching list[str], for both multi-element and single-element shapes.
     """
-    from orchestrator import config as config_mod
+    from orchestrator.config import Settings
 
     # Multi-element JSON
     monkeypatch.setenv(
         "SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS", '["proj-a","proj-b"]'
     )
-    reloaded = importlib.reload(config_mod)
-    assert reloaded.settings.snapshot_exclude_project_ids == ["proj-a", "proj-b"], (
+    s = Settings()
+    assert s.snapshot_exclude_project_ids == ["proj-a", "proj-b"], (
         f'JSON \'["proj-a","proj-b"]\' must resolve to '
         f"['proj-a','proj-b']; got "
-        f"{reloaded.settings.snapshot_exclude_project_ids!r}"
+        f"{s.snapshot_exclude_project_ids!r}"
     )
 
     # Single element
     monkeypatch.setenv(
         "SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS", '["only-one"]'
     )
-    reloaded = importlib.reload(config_mod)
-    assert reloaded.settings.snapshot_exclude_project_ids == ["only-one"], (
+    s = Settings()
+    assert s.snapshot_exclude_project_ids == ["only-one"], (
         f'JSON \'["only-one"]\' must resolve to ["only-one"]; '
-        f"got {reloaded.settings.snapshot_exclude_project_ids!r}"
+        f"got {s.snapshot_exclude_project_ids!r}"
     )
-
-    # Cleanup: restore Settings to conftest defaults so other tests see [].
-    monkeypatch.delenv("SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS", raising=False)
-    importlib.reload(config_mod)

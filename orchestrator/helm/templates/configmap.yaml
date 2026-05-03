@@ -21,7 +21,7 @@ data:
   {{- with .Values.env.snapshot_exclude_project_ids }}
   # JSON-encoded list[str]，跟 default_involved_repos / gh_incident_labels 同；
   # csv `proj-a,proj-b` 在 pydantic-settings v2 下解析 list[str] 会 SettingsError
-  # 启动崩（issue #343 的实证 bug）。empty list 由外层 {{- with }} 跳过整个 key。
+  # 启动崩（issue #343 的实证 bug）。empty list 由外层 with 块跳过整个 key。
   SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS: {{ toJson . | quote }}
   {{- end }}
   {{- with .Values.env.default_involved_repos }}
