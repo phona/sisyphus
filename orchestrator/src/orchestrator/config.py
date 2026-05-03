@@ -296,6 +296,14 @@ class Settings(BaseSettings):
     checker_infra_flake_retry_max: int = 1            # 0 = no retry, 1 = 1 retry (2 attempts)
     checker_infra_flake_retry_backoff_sec: int = 15
 
+    # ─── REQ-feat-agent-turns-collector-1777796671：BKD turn-level collector ──
+    # 每 interval 秒扫 stage_runs 最近 24h 内关闭且有 bkd_issue_id 的行，
+    # 拉 BKD /logs 折叠成 turn，upsert agent_turns 表。
+    # False（默认）= 不跑（migration 跑完、collector 可用后再打开）。
+    # best-effort：单 issue 失败只 log，不阻断整轮。
+    agent_turns_collector_enabled: bool = False
+    agent_turns_collector_interval_sec: int = 300         # 5min
+
     # ─── REQ-fix-pr-queue-health-monitoring-1777789759：PR drift cron ────────
     # 每 interval 秒扫 repos 列表的 OPEN PR，把落后 > threshold commit 的记入
     # pr_drift_log 供 Metabase Q19/Q20 看板。False = 不跑（默认；无 github_token 时

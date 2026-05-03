@@ -113,6 +113,39 @@ async def close_latest_stage_run(
     return int(row["id"]) if row else None
 
 
+async def stamp_bkd_issue_id(
+    pool: asyncpg.Pool,
+    req_id: str,
+    stage: str,
+    bkd_issue_id: str,
+) -> int | None:
+    """把 BKD issue_id 写进最近开着的 (req_id, stage) stage_run。
+
+    agent_turns_collector 用它定位要拉 /logs 的 BKD issue。
+    幂等：仅当 bkd_issue_id IS NULL 时写入；已写过则不覆盖。
+    返回被写入的 id；目标行不存在 / 已写过 → None。
+    """
+    if not bkd_issue_id:
+        return None
+    row = await pool.fetchrow(
+        """
+        UPDATE stage_runs SET
+            bkd_issue_id = $3
+        WHERE id = (
+            SELECT id FROM stage_runs
+             WHERE req_id = $1 AND stage = $2
+               AND ended_at IS NULL
+               AND bkd_issue_id IS NULL
+             ORDER BY started_at DESC
+             LIMIT 1
+        )
+        RETURNING id
+        """,
+        req_id, stage, bkd_issue_id,
+    )
+    return int(row["id"]) if row else None
+
+
 async def stamp_bkd_session_id(
     pool: asyncpg.Pool,
     req_id: str,
