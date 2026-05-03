@@ -60,11 +60,18 @@ class BKDRestClient:
         engine_type: str | None = None,
         model: str | None = None,
     ) -> Issue:
+        # BKD 限制 title ≤ 50 char (#306) — REQ-id 43 char + `[stage-name]` prefix
+        # 直接撑爆。dispatch 层 callers 只关心可读性，不该全部去算字节。在 client
+        # 这层一刀切截断给 BKD：超 50 留 49 char + `…`，BKD UI 上仍能辨识 REQ。
+        # 同样防御 tags（虽然单个 tag 一般 < 50，但 PR-link tag 历史撞过）。
+        if len(title) > 50:
+            title = title[:49] + "…"
+        sanitized_tags = [t if len(t) <= 50 else (t[:49] + "…") for t in tags]
         body: dict = {
             "title": title,
             "statusId": status_id,
             "useWorktree": use_worktree,
-            "tags": _ensure_sisyphus_tag(tags),
+            "tags": _ensure_sisyphus_tag(sanitized_tags),
         }
         if engine_type:
             body["engineType"] = engine_type
