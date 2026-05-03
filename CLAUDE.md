@@ -98,7 +98,7 @@ sisyphus/
 | [docs/architecture.md](docs/architecture.md) | 架构权威：哲学、角色分工、流程图、stage 契约（含 mermaid） |
 | [docs/playbook.md](docs/playbook.md) | **开发节奏 / phase / cap / 反 pattern**（一个人+AI 搭平台的执行手册，产品 owner 自用） |
 | [docs/state-machine.md](docs/state-machine.md) | 状态机权威：state / event / transition 表 + stateDiagram |
-| [docs/integration-contracts.md](docs/integration-contracts.md) | sisyphus ↔ 业务 repo 契约（Makefile target、env、JSON 输出） |
+| [docs/integration-contracts.md](docs/integration-contracts.md) | sisyphus ↔ 业务 repo 契约（Makefile target、env、JSON 输出）；§10 接入必配 token / secret / vars 清单 |
 | [docs/observability.md](docs/observability.md) | 观测设计哲学（Postgres + Metabase） |
 | [observability/sisyphus-dashboard.md](observability/sisyphus-dashboard.md) | 18 条 Metabase SQL + 看板布局（Q1–Q18：M7 + M14e + fixer-audit + silent-pass） |
 | [docs/prompts.md](docs/prompts.md) | 各阶段 agent prompt 总览（按 role） |
