@@ -57,13 +57,13 @@ can fall back to existing behaviour.
 
 ### Requirement: Auto-resume path leaves parent intent issue tags untouched
 
-When `escalate` action runs the auto-resume branch (transient signal +
-`auto_retry_count < _MAX_AUTO_RETRY`), it MUST NOT add the `escalated` or any
-`reason:*` tag to the BKD intent issue. The action SHALL only invoke
-`bkd.follow_up_issue` on the failed issue and update `req_state.context` with
-the new `auto_retry_count` and `last_retry_reason`. This invariant lets long
-analyze sessions that are auto-resumed remain visually clean in BKD UI and
-keeps `verifier_decisions.actual_outcome` backfill from incorrectly classifying
+The `escalate` action SHALL keep the BKD intent issue tag set unchanged when
+it takes the auto-resume branch (transient signal plus `auto_retry_count <
+_MAX_AUTO_RETRY`). The action MUST only invoke `bkd.follow_up_issue` on the
+failed issue and update `req_state.context` with the new `auto_retry_count`
+and `last_retry_reason`. This invariant lets long analyze sessions that are
+auto-resumed remain visually clean in BKD UI and keeps
+`verifier_decisions.actual_outcome` backfill from incorrectly classifying
 recovered REQs as escalated.
 
 #### Scenario: WLC-S7 transient escalate with retry slack does not tag intent issue
