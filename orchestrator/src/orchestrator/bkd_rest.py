@@ -8,10 +8,12 @@
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import httpx
 import structlog
 
-from .bkd import Issue, _to_issue
+from .bkd import Issue, Turn, _to_issue
 
 log = structlog.get_logger(__name__)
 
@@ -177,6 +179,96 @@ class BKDRestClient:
             and isinstance(e.get("content"), str)
         ]
         return "\n\n---\n\n".join(msgs) if msgs else None
+
+    async def fetch_turns(self, project_id: str, issue_id: str) -> list[Turn]:
+        """拉 BKD issue logs，折叠成 turn 维度（role × token × duration × tool_calls）。
+
+        每条 BKD log entry 对应一行 Turn（assistant-message / user-message /
+        tool-result）；未知 entryType 跳过。字段防御式读，BKD 没下发则 None。
+        """
+        try:
+            data = await self._get(
+                f"/projects/{project_id}/issues/{issue_id}/logs?limit=500"
+            )
+        except Exception as e:
+            log.warning("bkd.fetch_turns.failed", issue_id=issue_id, error=str(e))
+            return []
+        if not isinstance(data, dict):
+            return []
+        logs = data.get("logs") or []
+
+        _ROLE_MAP = {
+            "assistant-message": "assistant",
+            "user-message": "user",
+            "tool-result": "tool_result",
+        }
+
+        def _int(v: object) -> int | None:
+            return int(v) if v is not None else None
+
+        turns: list[Turn] = []
+        for idx, entry in enumerate(logs):
+            if not isinstance(entry, dict):
+                continue
+            role = _ROLE_MAP.get(entry.get("entryType", ""))
+            if not role:
+                continue
+
+            # Timestamp — try createdAt first, fall back to now()
+            started_at: datetime
+            ts_raw = entry.get("createdAt")
+            if ts_raw:
+                try:
+                    started_at = datetime.fromisoformat(
+                        str(ts_raw).replace("Z", "+00:00")
+                    )
+                except Exception:
+                    started_at = datetime.now(UTC)
+            else:
+                started_at = datetime.now(UTC)
+
+            # Token counts — BKD uses camelCase; try both naming conventions
+            token_in = _int(entry.get("tokenIn") or entry.get("inputTokens"))
+            token_out = _int(entry.get("tokenOut") or entry.get("outputTokens"))
+            token_cache_read = _int(
+                entry.get("tokenCacheRead") or entry.get("cacheReadInputTokens")
+            )
+            token_cache_create = _int(
+                entry.get("tokenCacheCreate") or entry.get("cacheCreationInputTokens")
+            )
+            duration_ms = _int(entry.get("durationMs"))
+
+            # Tool calls — only present on assistant turns
+            tool_calls: list[dict] | None = None
+            if role == "assistant":
+                raw = entry.get("toolCalls") or entry.get("tool_calls") or []
+                if isinstance(raw, list) and raw:
+                    tool_calls = [
+                        {
+                            "name": t.get("name") or t.get("toolName", ""),
+                            "input_summary": str(
+                                t.get("inputSummary") or t.get("input") or ""
+                            )[:200],
+                            "duration_ms": t.get("durationMs"),
+                            "error": t.get("error"),
+                        }
+                        for t in raw
+                        if isinstance(t, dict)
+                    ]
+
+            turns.append(Turn(
+                turn_idx=idx,
+                role=role,
+                tool_calls=tool_calls,
+                token_in=token_in,
+                token_out=token_out,
+                token_cache_read=token_cache_read,
+                token_cache_create=token_cache_create,
+                duration_ms=duration_ms,
+                started_at=started_at,
+            ))
+
+        return turns
 
     async def merge_tags_and_update(
         self,

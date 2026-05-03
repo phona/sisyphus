@@ -589,6 +589,13 @@ async def webhook(request: Request) -> JSONResponse:
             except Exception as e:
                 log.warning("webhook.stamp_bkd_session_id_failed",
                             req_id=req_id, stage=cur_stage, error=str(e))
+            try:
+                await stage_runs.stamp_bkd_issue_id(
+                    pool, req_id, cur_stage, body.issueId,
+                )
+            except Exception as e:
+                log.warning("webhook.stamp_bkd_issue_id_failed",
+                            req_id=req_id, stage=cur_stage, error=str(e))
 
     # ─── 6. 推进状态机（engine 内部循环 emit）─────────────────────────────
     result = await engine.step(

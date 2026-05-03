@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -32,6 +33,20 @@ class Issue:
     # session 起来后才被 BKD 填，create_issue 返回时常为 None，需要在
     # session.completed/failed 时再 get_issue 拿到真值（写进 stage_runs）。
     external_session_id: str | None = None
+
+
+@dataclass
+class Turn:
+    """BKD log entry folded into turn dimension（agent_turns 表一行）。"""
+    turn_idx: int
+    role: str                          # user / assistant / tool_result
+    tool_calls: list[dict] | None
+    token_in: int | None
+    token_out: int | None
+    token_cache_read: int | None
+    token_cache_create: int | None
+    duration_ms: int | None
+    started_at: datetime
 
 
 def _to_issue(d: dict) -> Issue:

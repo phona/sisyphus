@@ -9,7 +9,15 @@ import structlog
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from . import accept_env_gc, k8s_runner, pr_health, runner_gc, snapshot, watchdog
+from . import (
+    accept_env_gc,
+    agent_turns_collector,
+    k8s_runner,
+    pr_health,
+    runner_gc,
+    snapshot,
+    watchdog,
+)
 from .admin import admin as admin_api
 from .config import settings
 from .config_version import maybe_record_config_change
@@ -100,6 +108,11 @@ async def startup() -> None:
     # 8. 起 PR drift cron（REQ-fix-pr-queue-health-monitoring-1777789759）
     if settings.pr_health_enabled and settings.pr_health_interval_sec > 0:
         _bg_tasks.append(asyncio.create_task(pr_health.run_loop(), name="pr_health"))
+    # 9. 起 agent turns collector（REQ-feat-agent-turns-collector-1777796671）
+    if settings.agent_turns_collector_enabled and settings.agent_turns_collector_interval_sec > 0:
+        _bg_tasks.append(
+            asyncio.create_task(agent_turns_collector.run_loop(), name="agent_turns_collector")
+        )
     log.info(
         "startup.ok",
         port=settings.port,
