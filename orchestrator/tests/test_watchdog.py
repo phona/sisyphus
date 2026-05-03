@@ -981,11 +981,14 @@ async def test_fixer_round_cap_escalates_regardless_of_recent_activity(monkeypat
     ])
     _patch_pool(monkeypatch, pool)
     fresh = datetime.now(UTC) - timedelta(seconds=5)  # very fresh
+    # session_status="failed" matches the real fixer-cap incident: fixer agent
+    # died but stuck > ended_sec; round count alone determines escalate.
     _patch_bkd(
         monkeypatch,
-        FakeIssue(session_status="running", id="fx-wlc-3"),
+        FakeIssue(session_status="failed", id="fx-wlc-3"),
         last_activity_at=fresh,
     )
+    monkeypatch.setattr("orchestrator.watchdog.settings.fixer_round_cap", 5)
     step_calls = _patch_engine(monkeypatch)
     _patch_artifact(monkeypatch)
 
