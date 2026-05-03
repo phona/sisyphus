@@ -57,9 +57,11 @@ def test_csepi_s2_configmap_emits_snapshot_exclude_as_json_inside_with_block() -
     block_start = text.find("SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS")
     assert block_start != -1
     # Spec mandates a ~400-char window around the key contains all the
-    # required template pieces.
-    window_start = max(0, block_start - 200)
-    window = text[window_start : block_start + 200]
+    # required template pieces. The `{{- with }}` line precedes the env
+    # key (often with intervening comment lines), so weight the window
+    # toward preceding text.
+    window_start = max(0, block_start - 400)
+    window = text[window_start : block_start + 400]
 
     assert "with .Values.env.snapshot_exclude_project_ids" in window, (
         "SISYPHUS_SNAPSHOT_EXCLUDE_PROJECT_IDS must sit inside "
