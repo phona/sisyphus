@@ -45,8 +45,8 @@ escalate.py auto_resume 救回；连续两次 stuck → retry 用尽 → 真 esc
 ### 3. 新配置 `watchdog_liveness_grace_sec`
 
 `config.py` 加 `watchdog_liveness_grace_sec: int = 120`。120s 给单 turn 写大量
-代码留出节奏空间；用户可调。SQL 预过滤阈值 `_sql_prefilter_threshold()` 同步
-把它纳入 min 取值，避免活体检查根本拦不到（grace > ended/stuck 的极端配置）。
+代码留出节奏空间；用户可调。SQL 预过滤阈值不动——row 仍按现有 ended_sec /
+stuck_sec min 入选，活体检查只是在选中的 row 上多加一道豁免门。
 
 ### 4. 测试钉牢 auto_resume 路径不污染 tag
 

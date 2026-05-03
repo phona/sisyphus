@@ -10,7 +10,6 @@
 - [ ] add `BKDRestClient.last_log_activity_at(project_id, issue_id)` returning latest log entry `createdAt` or `None`
 - [ ] add `watchdog_liveness_grace_sec: int = 120` to `config.Settings`
 - [ ] in `watchdog._check_and_escalate`, after BKD `get_issue`, call `last_log_activity_at`; if recent activity within grace window → log skip + return False
-- [ ] include `watchdog_liveness_grace_sec` in `_sql_prefilter_threshold()` candidates so the SQL filter window admits rows the activity check needs to evaluate
 
 ## Stage: tests
 
