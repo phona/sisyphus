@@ -421,15 +421,17 @@ async def test_ert_s9_full_transition_sweep(
     )
 
 
-def test_ert_s9_sweep_covers_exactly_76():
-    """Sanity: TRANSITIONS 必须正好 76 条 —— 加 / 减 transition 时这条 fail 提醒
+def test_ert_s9_sweep_covers_exactly_83():
+    """Sanity: TRANSITIONS 必须正好 83 条 —— 加 / 减 transition 时这条 fail 提醒
     review 是否同步加 spec scenario / 文档（state-machine.md / dump_transitions）。
 
     历史：47 → 49（PENDING_USER_REVIEW 入/出）→ 51（再 +1）→ 70（REQ-escalated-stage-resume：
     + 19 条 ESCALATED 主链反激活）→ 76（REQ-refactor-verify-pass-transition-1777727230：
-    apply_verify_pass 自循环拆 8 条显式 transition，drop 2 条 VERIFY_PASS）="""
-    assert len(state_mod.TRANSITIONS) == 76, (
-        f"expected 76 transitions, got {len(state_mod.TRANSITIONS)}; "
+    apply_verify_pass 自循环拆 8 条显式 transition，drop 2 条 VERIFY_PASS）→ 83
+    (#247 Phase 1: + 7 条 PENDING_USER_REVIEW 主链反激活，PASS-only 让用户在
+    accept 后调整 happy-path)。"""
+    assert len(state_mod.TRANSITIONS) == 83, (
+        f"expected 83 transitions, got {len(state_mod.TRANSITIONS)}; "
         "if you intentionally added/removed a transition, update this assertion "
         "AND add granular ERT/MCT/APT/VLT scenario coverage for it."
     )

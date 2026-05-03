@@ -12,7 +12,7 @@ import json
 
 import structlog
 
-from .. import k8s_runner, pr_links
+from .. import k8s_runner, links, pr_links
 from ..bkd import BKDClient
 from ..config import settings
 from ..prompts import render
@@ -27,6 +27,54 @@ log = structlog.get_logger(__name__)
 
 _TIMEOUT_ENV_UP_SEC = 1800  # 30 min: helm install + wait ready + APK GHA build poll (5-10min) + download + adb install
 _TIMEOUT_LITE_SEC = 1800   # 30 min for up × N + sleep + smoke × N + down × N
+
+# #247 Phase 1: 收 BKD stage agent issue id（人可续 follow-up 触发 PENDING_USER_REVIEW
+# 反向通道的入口）。**机械 checker** issue（spec_lint / dev_cross_check / staging_test
+# / pr_ci_watch）故意不列 —— 用户在那些 issue 续聊不会有 BKD agent 响应，给入口
+# 反而误导。fixer 列出来：fixer 跑过且产生 dev/spec 改动后用户也可能想再 follow-up。
+_RESUMABLE_STAGE_ISSUE_KEYS: tuple[tuple[str, str], ...] = (
+    ("intake", "intake_issue_id"),
+    ("analyze", "analyze_issue_id"),
+    ("challenger", "challenger_issue_id"),
+    ("fixer", "fixer_issue_id"),
+)
+
+
+def _build_bkd_entry_links(*, project_id: str, ctx: dict | None,
+                           accept_issue_id: str) -> list[dict]:
+    """收当前 ctx 里能让用户 follow-up 触发 PENDING_USER_REVIEW resume 的 BKD issue。
+
+    返回 [{"label": "analyze", "url": "https://..."}]，accept agent 渲染进 PR
+    管理 comment，告诉用户"想调整就在这些 issue 续聊"。
+
+    缺 ctx 字段 / 渲不出 url 的条目静默跳过（None 不出现在用户视野里）。
+    accept_issue_id 总是放最后，作为本轮 accept agent 自身的入口。intent issue 单独
+    放最前 —— 它是整条 REQ 的总览卡片，PENDING_USER_REVIEW resume 的最自然入口
+    （statusId 表态 + chat 续聊都从这）。
+    """
+    ctx = ctx or {}
+    entries: list[dict] = []
+
+    intent_id = ctx.get("intent_issue_id")
+    if intent_id:
+        url = links.bkd_issue_url(project_id, intent_id)
+        if url:
+            entries.append({"label": "intent", "url": url})
+
+    for label, key in _RESUMABLE_STAGE_ISSUE_KEYS:
+        iid = ctx.get(key)
+        if not iid:
+            continue
+        url = links.bkd_issue_url(project_id, iid)
+        if url:
+            entries.append({"label": label, "url": url})
+
+    if accept_issue_id:
+        url = links.bkd_issue_url(project_id, accept_issue_id)
+        if url:
+            entries.append({"label": "accept", "url": url})
+
+    return entries
 
 
 def _build_lite_script(req_id: str, delay_sec: int) -> str:
@@ -307,6 +355,10 @@ async def create_accept(*, body, req_id, tags, ctx):
             status_id="todo",
             model=settings.agent_model,
         )
+        bkd_entry_links = _build_bkd_entry_links(
+            project_id=proj, ctx=ctx, accept_issue_id=issue.id,
+        )
+        pr_urls_dict = (ctx or {}).get("pr_urls") or {}
         prompt = render(
             "accept.md.j2",
             req_id=req_id,
@@ -320,6 +372,8 @@ async def create_accept(*, body, req_id, tags, ctx):
             thanatos_pod=thanatos_pod,
             thanatos_namespace=thanatos_namespace,
             thanatos_skill_repo=thanatos_skill_repo,
+            bkd_entry_links=bkd_entry_links,
+            pr_urls=pr_urls_dict,
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")

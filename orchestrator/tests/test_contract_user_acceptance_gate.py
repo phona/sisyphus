@@ -120,13 +120,26 @@ def test_USER_S3_pending_fix_to_escalated():
     [
         Event.SESSION_FAILED,
         Event.VERIFY_PASS,
-        Event.STAGING_TEST_PASS,
-        Event.ACCEPT_PASS,
+        # NOTE: STAGING_TEST_PASS / ACCEPT_PASS / ANALYZE_DONE / CHALLENGER_PASS
+        # / DEV_CROSS_CHECK_PASS / SPEC_LINT_PASS / PR_CI_PASS were moved out of
+        # this illegal list by #247 Phase 1 — they are now legal main-chain resume
+        # events from PENDING_USER_REVIEW (user follows up a stage-issue → agent
+        # re-runs → result:pass tag → router emits *_PASS → reuse main-chain
+        # transition). See test_pending_user_review_resume_via_stage_issue.py.
         Event.INTAKE_PASS,
+        Event.SPEC_LINT_FAIL,
+        Event.STAGING_TEST_FAIL,
+        Event.VERIFY_ESCALATE,
     ],
 )
 def test_USER_S4_pending_illegal_events_return_none(illegal_event):
-    """Scenario USER-S4: any event other than USER_REVIEW_PASS/FIX returns None from PENDING_USER_REVIEW."""
+    """Scenario USER-S4: events that are not exits or resume signals return None.
+
+    Resume signals (#247): *_PASS for ANALYZE/SPEC_LINT/CHALLENGER/DEV_CROSS_CHECK/
+    STAGING_TEST/PR_CI/ACCEPT — these reuse main-chain transitions.
+    Exits: USER_REVIEW_PASS / USER_REVIEW_FIX / PR_MERGED.
+    Everything else (including *_FAIL, INTAKE_PASS, VERIFY_*, SESSION_FAILED) is illegal.
+    """
     assert decide(ReqState.PENDING_USER_REVIEW, illegal_event) is None
 
 

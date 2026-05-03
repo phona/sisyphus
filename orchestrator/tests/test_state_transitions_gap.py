@@ -238,8 +238,18 @@ def test_accept_tearing_down_illegal_events():
 
 
 def test_pending_user_review_illegal_events():
-    """PENDING_USER_REVIEW 接受 user-review pass/fix/merged。无 SESSION_FAILED。"""
-    legal = {Event.USER_REVIEW_PASS, Event.USER_REVIEW_FIX, Event.PR_MERGED}
+    """PENDING_USER_REVIEW 接受 user-review pass/fix/merged + #247 PASS resume。
+
+    #247 Phase 1：用户在 stage agent issue 续 follow-up 触发主链事件复用。
+    PASS-only：失败信号走 USER_REVIEW_FIX → ESCALATED → ESCALATED resume。
+    """
+    legal = {
+        Event.USER_REVIEW_PASS, Event.USER_REVIEW_FIX, Event.PR_MERGED,
+        # #247 Phase 1 main-chain PASS resume from PENDING_USER_REVIEW
+        Event.ANALYZE_DONE, Event.SPEC_LINT_PASS, Event.CHALLENGER_PASS,
+        Event.DEV_CROSS_CHECK_PASS, Event.STAGING_TEST_PASS,
+        Event.PR_CI_PASS, Event.ACCEPT_PASS,
+    }
     for ev in Event:
         if ev in legal:
             continue
@@ -302,24 +312,24 @@ def test_transition_count_sanity():
     """transition 总数 sanity check：防止未来重构误删/误增。
 
     当前总数 = 45 显式 + 12 SESSION_FAILED self-loop + 19 ESCALATED stage-resume 反激活
-    （REQ-escalated-stage-resume）= 76。
+    （REQ-escalated-stage-resume）+ 7 PENDING_USER_REVIEW resume（#247 Phase 1）= 83。
     如果数字变了，说明有人增删 transition，本测试会 fail 提醒同步测试。
     """
-    assert len(TRANSITIONS) == 76, (
-        f"Expected 76 transitions, got {len(TRANSITIONS)}. "
+    assert len(TRANSITIONS) == 83, (
+        f"Expected 83 transitions, got {len(TRANSITIONS)}. "
         "If this is intentional, update this assertion and add corresponding tests."
     )
 
 
 def test_explicit_transition_count():
-    """非 SESSION_FAILED 的显式 + ESCALATED 反激活 transition 数量 sanity check。
+    """非 SESSION_FAILED 的显式 + 反激活 transition 数量 sanity check。
 
-    包含 45 主链显式 + 19 ESCALATED 主链反激活（复用主链 transition 对象，但 key 是
-    (ESCALATED, ev) 独立计数）= 64 条非 SESSION_FAILED transition。
+    45 主链显式 + 19 ESCALATED 反激活 + 7 PENDING_USER_REVIEW 反激活（#247 Phase 1）
+    = 71 条非 SESSION_FAILED transition。复用主链 Transition 对象但 key 独立计数。
     """
     explicit = [k for k in TRANSITIONS if k[1] != Event.SESSION_FAILED]
-    assert len(explicit) == 64, (
-        f"Expected 64 explicit transitions, got {len(explicit)}"
+    assert len(explicit) == 71, (
+        f"Expected 71 explicit transitions, got {len(explicit)}"
     )
 
 

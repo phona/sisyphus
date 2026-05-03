@@ -239,8 +239,20 @@ def test_user_review_pending_has_no_session_failed_self_loop():
 
 
 def test_user_review_pending_illegal_events_return_none():
-    """USR-T4 续：除 USER_REVIEW_PASS / USER_REVIEW_FIX 外其他事件全非法。"""
-    legal = {Event.USER_REVIEW_PASS, Event.USER_REVIEW_FIX, Event.PR_MERGED}
+    """USR-T4 续：PENDING_USER_REVIEW 4 类合法事件 = exits + #247 PASS resume。
+
+    - 出口：USER_REVIEW_PASS / USER_REVIEW_FIX / PR_MERGED
+    - resume（#247 Phase 1）：ANALYZE_DONE / SPEC_LINT_PASS / CHALLENGER_PASS /
+      DEV_CROSS_CHECK_PASS / STAGING_TEST_PASS / PR_CI_PASS / ACCEPT_PASS
+    其他全非法。
+    """
+    legal = {
+        Event.USER_REVIEW_PASS, Event.USER_REVIEW_FIX, Event.PR_MERGED,
+        # #247 Phase 1 stage-issue follow-up resume (PASS-only)
+        Event.ANALYZE_DONE, Event.SPEC_LINT_PASS, Event.CHALLENGER_PASS,
+        Event.DEV_CROSS_CHECK_PASS, Event.STAGING_TEST_PASS,
+        Event.PR_CI_PASS, Event.ACCEPT_PASS,
+    }
     for ev in Event:
         if ev in legal:
             continue
