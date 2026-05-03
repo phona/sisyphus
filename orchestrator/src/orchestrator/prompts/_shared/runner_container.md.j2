@@ -32,6 +32,35 @@ POD=runner-{{ req_id | lower }}
 NS=sisyphus-runners
 ```
 
+### ⚠️ exec_run 输出大小约束（**防 stream stall，必读**）
+
+`mcp__{{ mcp_capability_providers['ssh_exec'] }}__exec_run` 的单次输出**不得超过 50 KB（约 1 万行）**。
+超限时 BKD 会把 output 截断落盘并给你一个 stub 错误——agent 无法读到完整内容，且极易触发 3 min+ stream stall。
+
+**危险写法 → 安全写法对照表：**
+
+| 危险写法（输出无上限） | 安全替代 |
+|---|---|
+| `kubectl logs <pod>` | `kubectl logs --tail=200 <pod>` |
+| `git log -p` | `git log --oneline -20` 或 `git log -p -1 -- <path>` |
+| `find /` 或 `ls -R` | `find . -name '*.py' \| head -50` |
+| `cat <bigfile>` | `head -200 <bigfile>` 或 `sed -n '100,200p' <bigfile>` |
+| `ps aux`（全量） | `ps aux \| grep <name>` |
+
+**不确定 output 多大时，先探后拉：**
+
+```bash
+# 先量再决定
+wc -l /some/file
+du -h /some/dir
+kubectl logs --tail=1 <pod> | wc -c   # 估每行大小
+
+# 真需要看长 output：先落盘，再取关键段
+kubectl logs <pod> > /tmp/pod.log
+tail -n 200 /tmp/pod.log
+grep -n 'ERROR\|FATAL' /tmp/pod.log | head -50
+```
+
 ### workspace 约定结构（**sisyphus 强约定**）
 
 每个 source repo **必须** clone 到 `/workspace/source/<repo-basename>/`——
