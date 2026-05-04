@@ -306,6 +306,20 @@ class Settings(BaseSettings):
     # 所以中间没 tool-result/assistant-message 的"思考期"也算静默——120s 是经验折中。
     watchdog_liveness_grace_sec: int = 120
 
+    # ─── REQ-feat-stuck-notify-378-v2-1777866642：ESCALATED stale 主动通知 ──
+    # 把"REQ 进 ESCALATED 没人 resume 永久卡"的检测延迟从 7 天（abandoned-by-user
+    # sweep）压到分钟级。watchdog 每 5min 扫一次 state='escalated' AND
+    # updated_at < NOW - escalated_stale_threshold_sec 的 row，每个 stale window
+    # 通知一次（context.stuck_notified_at watermark 防重）。
+    escalated_stale_notify_enabled: bool = True
+    escalated_stale_threshold_sec: int = 1800        # 30min — issue #378 提议值
+    # 可选 webhook，POST JSON `{"text": "..."}` 到该 URL。空 = 不外推（默认安全，
+    # 仅靠 obs.record_event + log.warning 在内部 channel 暴露）。Telegram bot 用例：
+    # `https://api.telegram.org/bot<TOKEN>/sendMessage`，payload 里附 chat_id
+    # 由 nginx redirect / 反代 sidecar 注入；通用 webhook（飞书 / Slack 自定义
+    # bot）也用同形 POST。失败不阻塞 tick，只 log warn。
+    escalated_stale_telegram_url: str = ""
+
     # ─── 防 verifier↔fixer 死循环：硬封顶 fixer round 数 ─────────────────
     # 每次 verifier decision=fix 都会 start_fixer 起新一轮 fixer agent，跑完回 verifier
     # 复查；verifier 再判 fix 又起一轮。某些场景（spec 自相矛盾 / fixer 改不动根因）
