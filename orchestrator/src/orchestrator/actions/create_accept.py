@@ -559,7 +559,31 @@ async def _ensure_runner_pod_ready(req_id: str, ctx: dict | None, tags) -> tuple
     if status is None or status.pod_phase == "NotFound":
         log.info("create_accept.runner_pod_missing", req_id=req_id,
                  pod_phase=status.pod_phase if status else "NotFound")
-        branch = (ctx or {}).get("branch") or f"feat/{req_id}"
+        # intent:accept entry-point: REQ-id 不是真分支名（PR head 在 pr: tag）
+        # 解析 pr:owner/repo#N → gh API 拿 PR headRefName 用做 clone branch
+        branch = (ctx or {}).get("branch")
+        if branch is None and "intent:accept" in (tags or []):
+            pr_tag = extract_pr_tag(tags)
+            if pr_tag is not None:
+                pr_repo, pr_num = pr_tag
+                try:
+                    import asyncio
+                    proc = await asyncio.create_subprocess_exec(
+                        "gh", "pr", "view", str(pr_num),
+                        "--repo", pr_repo, "--json", "headRefName", "-q", ".headRefName",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+                    if proc.returncode == 0:
+                        branch = stdout.decode().strip()
+                        log.info("create_accept.intent_accept.pr_head_resolved",
+                                 req_id=req_id, pr_repo=pr_repo, pr_num=pr_num, branch=branch)
+                except Exception as e:
+                    log.warning("create_accept.intent_accept.pr_head_resolve_failed",
+                                req_id=req_id, error=str(e))
+        if branch is None:
+            branch = f"feat/{req_id}"
         _cloned, clone_exit = await ensure_runner_with_clone(
             req_id, ctx,
             tags=tags,
