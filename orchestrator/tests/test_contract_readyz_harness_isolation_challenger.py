@@ -30,7 +30,6 @@ from test_contract_readyz_namespaced_challenger import _client, _readyz_harness
 
 from orchestrator import k8s_runner
 
-
 # Snapshot the source's real get_controller at module import time, BEFORE any
 # harness has run in this session. Used by TIRH-S3 to assert identity restoration.
 _ORIGINAL_GET_CONTROLLER = k8s_runner.get_controller
