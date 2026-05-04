@@ -286,7 +286,7 @@ async def test_VWR_S3_dedup_observability_event_emitted_for_processed(
     monkeypatch.setattr(dedup, "check_and_record", AsyncMock(return_value=dedup_status))
 
     # 任何 state 都行；skip 路径会早 return 不进 engine.step
-    row = _Row(state=ReqState.ANALYZING, context={})
+    row = _Row(state=ReqState.EXECUTING, context={})
     monkeypatch.setattr(rs_mod, "get", AsyncMock(return_value=row))
 
     req = _make_request(

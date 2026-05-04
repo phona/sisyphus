@@ -21,7 +21,7 @@ _SELF_HEAL_PATCH_TARGETS = (
     "orchestrator.checkers.spec_lint.ensure_runner_alive",
     "orchestrator.checkers.dev_cross_check.ensure_runner_alive",
     "orchestrator.checkers.staging_test.ensure_runner_alive",
-    "orchestrator.checkers.analyze_artifact_check.ensure_runner_alive",
+    "orchestrator.checkers.execute_artifact_check.ensure_runner_alive",
     "orchestrator.actions.create_pr_ci_watch.ensure_runner_alive",
     "orchestrator.actions.teardown_accept_env.ensure_runner_alive",
 )

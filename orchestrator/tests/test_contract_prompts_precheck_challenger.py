@@ -37,7 +37,7 @@ import pytest
 # 6 stage prompts whose agents work inside the runner pod (per spec Requirement
 # body: "analyze / challenger / accept / staging_test / pr_ci_watch / bugfix").
 _SSH_POD_STAGES: list[tuple[str, str]] = [
-    ("analyze", "analyze.md.j2"),
+    ("execute", "execute.md.j2"),
     ("challenger", "challenger.md.j2"),
     ("accept", "accept.md.j2"),
     ("staging_test", "staging_test.md.j2"),
@@ -52,7 +52,7 @@ _SSH_POD_STAGES: list[tuple[str, str]] = [
 # string, which is enough to assert section-level presence/absence.
 _KITCHEN_SINK_CTX: dict[str, Any] = {
     "req_id": "REQ-feat-precheck-373-1777864856",
-    "stage": "analyze",
+    "stage": "execute",
     "trigger": "success",
     "aissh_server_id": "test-server-id",
     "project_id": "nnvxh8wj",
@@ -64,7 +64,7 @@ _KITCHEN_SINK_CTX: dict[str, Any] = {
     "accept_issue_id": "iss-acc",
     "cloned_repos": ["phona/sisyphus"],
     "bkd_intent_issue_url": "http://example.test/projects/nnvxh8wj/issues/intent",
-    "status_block": {"stage": "analyze", "req_id": "REQ-X"},
+    "status_block": {"stage": "execute", "req_id": "REQ-X"},
     "branch": "feat/REQ-feat-precheck-373-1777864856",
     "pr_url": "http://example.test/pr/1",
     "pr_number": 1,
@@ -221,32 +221,32 @@ def test_precheck_s2_intake_does_not_render_section() -> None:
 
 def test_precheck_s3_disabled_via_enabled_prompt_hooks() -> None:
     """PRECHECK-S3: if an operator removes `precheck` from
-    `enabled_prompt_hooks`, the analyze.md.j2 prompt MUST NOT contain the
+    `enabled_prompt_hooks`, the execute.md.j2 prompt MUST NOT contain the
     `Stage Precheck` substring; the other two sibling hook sections
     (`MCP 依赖预检` from mcp_preflight, `只改本 issue` from
     self_issue_constraint) MUST still be present — proving the for-loop honours
     `enabled_prompt_hooks` (pluggable hook invariant from REQ #270)."""
     out = _isolated_env_render(
-        "analyze.md.j2",
+        "execute.md.j2",
         enabled_prompt_hooks=["mcp_preflight", "self_issue_constraint"],
     )
 
     assert "Stage Precheck" not in out, (
-        "PRECHECK-S3 FAILED: analyze.md.j2 rendered the precheck section even\n"
+        "PRECHECK-S3 FAILED: execute.md.j2 rendered the precheck section even\n"
         "though `precheck` was removed from `enabled_prompt_hooks`. The hook\n"
         "loop must gate inclusion strictly on the configured list — no\n"
         "unconditional `{% include %}` of the precheck partial may exist."
     )
 
     assert "MCP 依赖预检" in out, (
-        "PRECHECK-S3 FAILED: analyze.md.j2 stopped rendering the `MCP 依赖预检`\n"
+        "PRECHECK-S3 FAILED: execute.md.j2 stopped rendering the `MCP 依赖预检`\n"
         "section when only precheck was removed. The mcp_preflight hook must\n"
         "still render — confirming the for-loop is selective per hook name,\n"
         "not all-or-nothing."
     )
 
     assert "只改本 issue" in out, (
-        "PRECHECK-S3 FAILED: analyze.md.j2 stopped rendering the\n"
+        "PRECHECK-S3 FAILED: execute.md.j2 stopped rendering the\n"
         "`只改本 issue` section when only precheck was removed. The\n"
         "self_issue_constraint hook must still render — confirming the\n"
         "for-loop is selective per hook name, not all-or-nothing."
@@ -259,19 +259,19 @@ def test_precheck_s3_disabled_via_enabled_prompt_hooks() -> None:
 
 def test_precheck_s4_documents_fail_tag_scheme() -> None:
     """PRECHECK-S4: when the precheck section is emitted (default config), the
-    rendered analyze.md.j2 text MUST contain the canonical fail-tag literals
+    rendered execute.md.j2 text MUST contain the canonical fail-tag literals
     `result:fail` and `fail-reason:precheck:` so the agent emits the correct
     tags on hard fail (verifier escalates without retry)."""
-    out = _prod_render("analyze.md.j2", stage="analyze")
+    out = _prod_render("execute.md.j2", stage="execute")
 
     assert "result:fail" in out, (
-        "PRECHECK-S4 FAILED: analyze.md.j2 precheck section does not document\n"
+        "PRECHECK-S4 FAILED: execute.md.j2 precheck section does not document\n"
         "the literal tag `result:fail`. Agents need to see this exact tag\n"
         "string to write the canonical fail tag on hard precheck failure."
     )
 
     assert "fail-reason:precheck:" in out, (
-        "PRECHECK-S4 FAILED: analyze.md.j2 precheck section does not document\n"
+        "PRECHECK-S4 FAILED: execute.md.j2 precheck section does not document\n"
         "the literal tag prefix `fail-reason:precheck:`. Agents need this\n"
         "exact prefix to encode the failing item (e.g.\n"
         "`fail-reason:precheck:env:GH_TOKEN`,\n"
@@ -292,7 +292,7 @@ def test_precheck_s5_uses_provider_indirection_not_hardcoded_aissh_tao() -> None
     `mcp__aissh-tao__exec_run` — proving the hook does not hard-code the
     aissh-tao literal."""
     out = _isolated_env_render(
-        "analyze.md.j2",
+        "execute.md.j2",
         enabled_prompt_hooks=["mcp_preflight", "precheck", "self_issue_constraint"],
         mcp_capability_providers={"ssh_exec": "fake-ssh-provider"},
     )

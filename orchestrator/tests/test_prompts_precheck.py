@@ -46,7 +46,7 @@ def test_stage_precheck_enabled_default_covers_runner_pod_stages() -> None:
     都不该被 precheck 框约束。
     """
     enabled = settings.stage_precheck_enabled
-    for stage in ("analyze", "challenger", "accept", "staging_test", "pr_ci_watch", "bugfix"):
+    for stage in ("execute", "challenger", "accept", "staging_test", "pr_ci_watch", "bugfix"):
         assert enabled[stage] is True, (stage, enabled)
     for stage in ("intake", "done_archive"):
         assert enabled[stage] is False, (stage, enabled)
@@ -78,7 +78,7 @@ def _render_kwargs(stage: str) -> dict:
 @pytest.mark.parametrize(
     "template,stage",
     [
-        ("analyze.md.j2", "analyze"),
+        ("execute.md.j2", "execute"),
         ("challenger.md.j2", "challenger"),
         ("accept.md.j2", "accept"),
         ("staging_test.md.j2", "staging_test"),
@@ -150,7 +150,7 @@ def test_disabling_precheck_via_enabled_prompt_hooks_drops_section(
         "enabled_prompt_hooks",
         ["mcp_preflight", "self_issue_constraint"],
     )
-    out = render("analyze.md.j2", **_render_kwargs("analyze"))
+    out = render("execute.md.j2", **_render_kwargs("execute"))
     assert "Stage Precheck" not in out, (
         "关掉 precheck 后段还在 → for-loop 没读 enabled_prompt_hooks，pluggable invariant 破了"
     )
@@ -168,12 +168,12 @@ def test_disabling_stage_precheck_enabled_drops_section_for_that_stage(
     monkeypatch.setitem(
         _env.globals,
         "stage_precheck_enabled",
-        {**settings.stage_precheck_enabled, "analyze": False},
+        {**settings.stage_precheck_enabled, "execute": False},
     )
-    out_off = render("analyze.md.j2", **_render_kwargs("analyze"))
+    out_off = render("execute.md.j2", **_render_kwargs("execute"))
     out_on = render("challenger.md.j2", **_render_kwargs("challenger"))
-    assert "Stage Precheck" not in out_off, "analyze 关掉了 precheck，但段还在"
-    assert "Stage Precheck" in out_on, "关 analyze 误连坐 challenger"
+    assert "Stage Precheck" not in out_off, "execute 关掉了 precheck，但段还在"
+    assert "Stage Precheck" in out_on, "关 execute 误连坐 challenger"
 
 
 # ── PRECHECK-S5 / provider 不硬编 ─────────────────────────────────────────
@@ -193,7 +193,7 @@ def test_precheck_hook_does_not_hardcode_aissh_tao_provider(
         "mcp_capability_providers",
         {**settings.mcp_capability_providers, "ssh_exec": "test-provider"},
     )
-    out = render("analyze.md.j2", **_render_kwargs("analyze"))
+    out = render("execute.md.j2", **_render_kwargs("execute"))
     # 段头到 step 内的命令都得切到新 provider
     assert "mcp__test-provider__exec_run" in out, (
         "precheck 段没用 mcp_capability_providers['ssh_exec'] 渲 exec_run 调用"

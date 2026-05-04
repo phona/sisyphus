@@ -77,7 +77,7 @@ def test_stpl_s2_known_self_loops_have_expected_annotation() -> None:
     ].progress == "explicit-noop"
     # SESSION_FAILED dict comprehension entries
     for st in (
-        ReqState.INTAKING, ReqState.ANALYZING, ReqState.SPEC_LINT_RUNNING,
+        ReqState.INTAKING, ReqState.EXECUTING, ReqState.SPEC_LINT_RUNNING,
         ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
         ReqState.REVIEW_RUNNING, ReqState.FIXER_RUNNING,
     ):
@@ -120,7 +120,7 @@ def test_stpl_s4_unannotated_self_loop_violates() -> None:
 def test_stpl_s5_progress_yes_self_loop_violates() -> None:
     mod = _load_lint_module()
     fake = {
-        (ReqState.INIT, Event.INTENT_ANALYZE): Transition(
+        (ReqState.INIT, Event.INTENT_EXECUTE): Transition(
             next_state=ReqState.INIT, progress="yes"
         ),
     }
@@ -133,8 +133,8 @@ def test_stpl_s5_progress_yes_self_loop_violates() -> None:
 def test_stpl_s6_unknown_progress_value_violates() -> None:
     mod = _load_lint_module()
     fake = {
-        (ReqState.INIT, Event.INTENT_ANALYZE): Transition(
-            next_state=ReqState.ANALYZING, progress="maybe"
+        (ReqState.INIT, Event.INTENT_EXECUTE): Transition(
+            next_state=ReqState.EXECUTING, progress="maybe"
         ),
     }
     violations = mod.validate(fake)
@@ -148,8 +148,8 @@ def test_stpl_s6_unknown_progress_value_violates() -> None:
 def test_progress_no_on_advancing_transition_violates(value: str) -> None:
     mod = _load_lint_module()
     fake = {
-        (ReqState.INIT, Event.INTENT_ANALYZE): Transition(
-            next_state=ReqState.ANALYZING, progress=value
+        (ReqState.INIT, Event.INTENT_EXECUTE): Transition(
+            next_state=ReqState.EXECUTING, progress=value
         ),
     }
     violations = mod.validate(fake)
@@ -161,8 +161,8 @@ def test_progress_no_on_advancing_transition_violates(value: str) -> None:
 def test_validate_returns_empty_for_clean_advancing_transitions() -> None:
     mod = _load_lint_module()
     fake = {
-        (ReqState.INIT, Event.INTENT_ANALYZE): Transition(next_state=ReqState.ANALYZING),
-        (ReqState.ANALYZING, Event.ANALYZE_DONE): Transition(
+        (ReqState.INIT, Event.INTENT_EXECUTE): Transition(next_state=ReqState.EXECUTING),
+        (ReqState.EXECUTING, Event.EXECUTE_DONE): Transition(
             next_state=ReqState.SPEC_LINT_RUNNING, progress="yes"
         ),
         (ReqState.ESCALATED, Event.VERIFY_ESCALATE): Transition(

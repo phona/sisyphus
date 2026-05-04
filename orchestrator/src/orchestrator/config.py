@@ -249,7 +249,7 @@ class Settings(BaseSettings):
     stage_precheck_enabled: dict[str, bool] = Field(
         default_factory=lambda: {
             "intake": False,
-            "analyze": True,
+            "execute": True,
             "challenger": True,
             "accept": True,
             "staging_test": True,

@@ -211,7 +211,7 @@ def test_stpl_s5_lint_flags_contradictory_progress_yes_self_loop():
     module = _load_lint_module()
     validate = _get_validate_fn(module)
     fake = {
-        (ReqState.INIT, Event.INTENT_ANALYZE): Transition(
+        (ReqState.INIT, Event.INTENT_EXECUTE): Transition(
             next_state=ReqState.INIT, progress="yes"
         ),
     }
@@ -235,8 +235,8 @@ def test_stpl_s6_lint_flags_unknown_progress_value():
     # Use an advancing pair (INIT → ANALYZING) so we isolate the "unknown progress
     # value" rule from the self-loop rules.
     fake = {
-        (ReqState.INIT, Event.INTENT_ANALYZE): Transition(
-            next_state=ReqState.ANALYZING, progress="maybe"
+        (ReqState.INIT, Event.INTENT_EXECUTE): Transition(
+            next_state=ReqState.EXECUTING, progress="maybe"
         ),
     }
     violations = validate(fake)
