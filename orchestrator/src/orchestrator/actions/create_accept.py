@@ -562,32 +562,47 @@ async def _ensure_runner_pod_ready(req_id: str, ctx: dict | None, tags) -> tuple
         # intent:accept entry-point: REQ-id 不是真分支名（PR head 在 pr: tag）
         # 解析 pr:owner/repo#N → gh API 拿 PR headRefName 用做 clone branch
         branch = (ctx or {}).get("branch")
-        if branch is None and "intent:accept" in (tags or []):
+        # intent:accept 路径：显式从 pr: tag 解析 PR head + source-repo tag override default_repos
+        intent_accept_repos = None
+        if "intent:accept" in (tags or []):
             pr_tag = extract_pr_tag(tags)
             if pr_tag is not None:
                 pr_repo, pr_num = pr_tag
+                # 用 pr_repo 直接做 source repo (saves a tag parse)
+                intent_accept_repos = [pr_repo]
                 try:
-                    import asyncio
-                    proc = await asyncio.create_subprocess_exec(
-                        "gh", "pr", "view", str(pr_num),
-                        "--repo", pr_repo, "--json", "headRefName", "-q", ".headRefName",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
-                    if proc.returncode == 0:
-                        branch = stdout.decode().strip()
-                        log.info("create_accept.intent_accept.pr_head_resolved",
-                                 req_id=req_id, pr_repo=pr_repo, pr_num=pr_num, branch=branch)
+                    import httpx
+                    headers = {"Accept": "application/vnd.github+json"}
+                    if settings.github_token:
+                        headers["Authorization"] = f"Bearer {settings.github_token}"
+                    async with httpx.AsyncClient(timeout=15) as client:
+                        resp = await client.get(
+                            f"https://api.github.com/repos/{pr_repo}/pulls/{pr_num}",
+                            headers=headers,
+                        )
+                        if resp.status_code == 200 and branch is None:
+                            branch = resp.json().get("head", {}).get("ref")
+                            log.info("create_accept.intent_accept.pr_head_resolved",
+                                     req_id=req_id, pr_repo=pr_repo, pr_num=pr_num, branch=branch)
+                        elif resp.status_code != 200:
+                            log.warning("create_accept.intent_accept.pr_head_api_fail",
+                                        req_id=req_id, status=resp.status_code, body=resp.text[:200])
                 except Exception as e:
                     log.warning("create_accept.intent_accept.pr_head_resolve_failed",
                                 req_id=req_id, error=str(e))
         if branch is None:
             branch = f"feat/{req_id}"
+        # intent:accept: 用 pr: tag 解出的 repo 做 default_repos override
+        # （不依赖 source-repo tag 是否被 webhook 层正确传下来）
+        _default_repos_for_clone = (
+            intent_accept_repos
+            if intent_accept_repos is not None
+            else (settings.default_involved_repos or [])
+        )
         _cloned, clone_exit = await ensure_runner_with_clone(
             req_id, ctx,
             tags=tags,
-            default_repos=settings.default_involved_repos or [],
+            default_repos=_default_repos_for_clone,
             branch=branch,
         )
         if clone_exit is not None:
