@@ -20,7 +20,6 @@ Scenarios covered:
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any
 
 
@@ -314,8 +313,8 @@ async def test_rdft_s3_warning_log_with_structured_fields(monkeypatch):
     reason, raw_tags. The warning MUST fire BEFORE any best-effort downstream
     emit so a hard exception in those paths still leaves the line in the stream.
     """
-    from orchestrator import webhook
     import orchestrator.store.stage_runs as sr_mod
+    from orchestrator import webhook
 
     captured: list[dict[str, Any]] = []
 
