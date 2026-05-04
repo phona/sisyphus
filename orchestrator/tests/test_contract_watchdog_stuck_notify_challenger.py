@@ -144,6 +144,7 @@ def _make_stale_row(req_id="REQ-stuck-1", stale_for_sec=2400, *,
     """
     return {
         "req_id": req_id,
+        "project_id": "proj-test",
         "state": "escalated",
         "updated_at": datetime.now(timezone.utc) - timedelta(seconds=stale_for_sec),
         "stuck_sec": stale_for_sec,
