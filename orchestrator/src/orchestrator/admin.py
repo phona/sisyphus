@@ -41,7 +41,7 @@ from . import router as router_lib
 from .bkd import BKDClient
 from .config import settings
 from .state import Event, ReqState
-from .store import db, req_state, stage_runs
+from .store import db, req_state, stage_runs, verifier_decisions
 from .webhook import _verify_token
 
 log = structlog.get_logger(__name__)
@@ -404,6 +404,127 @@ async def resume_req(
         "action": "resumed",
         "from_state": ReqState.ESCALATED.value,
         "event": event.value,
+        "chained": chained,
+    }
+
+
+class RetriggerVerifierBody(BaseModel):
+    """retrigger-verifier 入参：哪个 BKD verifier issue 要重新解析决策。"""
+    issue_id: str
+
+
+@admin.post("/req/{req_id}/retrigger-verifier")
+async def retrigger_verifier(
+    req_id: str,
+    body: RetriggerVerifierBody,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """从 BKD verifier issue 重新读决策喂 engine —— webhook 漏消费时的人工兜底。
+
+    流程：
+      1) 抓 BKD issue 的 last assistant message + tags
+      2) router.derive_verifier_event_with_retry_info 解 decision JSON
+      3) 解出 verifier 路由 event → engine.step；解不出 → 422
+
+    跟 /admin/req/{req_id}/resume 区分：那个是 state-level 强推 event（不读 BKD chat），
+    本 endpoint 是 webhook 消费层人工 retry —— 真正解析 BKD 上 verifier 的决策内容。
+    """
+    _verify_token(authorization)
+
+    if not body.issue_id or not body.issue_id.strip():
+        raise HTTPException(status_code=400, detail="issue_id required")
+
+    pool = db.get_pool()
+    row = await req_state.get(pool, req_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"req {req_id} not found")
+
+    # 1) BKD chat 拉决策来源
+    decision_source: str | None = None
+    issue_tags: list[str] = []
+    try:
+        async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+            issue = await bkd.get_issue(row.project_id, body.issue_id)
+            issue_tags = issue.tags or []
+            if hasattr(bkd, "get_last_assistant_message"):
+                decision_source = await bkd.get_last_assistant_message(
+                    row.project_id, body.issue_id,
+                )
+            else:
+                decision_source = getattr(issue, "description", None)
+    except Exception as e:
+        raise HTTPException(
+            status_code=502, detail=f"failed to fetch BKD issue: {e}",
+        ) from e
+
+    # 2) parse
+    event, decision_payload, why, retry_worthy = (
+        router_lib.derive_verifier_event_with_retry_info(decision_source, issue_tags)
+    )
+
+    # 3) 没解出有效 event（router 在 fail 时返 VERIFY_ESCALATE + decision=None）
+    #    → 让人能区分"BKD chat 真的没决策"和"决策合法但路由 escalate"。
+    #    decision_payload is None 表示根本没找到 / 解析失败 → 422，不动 state。
+    if decision_payload is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"cannot parse verifier decision from BKD issue {body.issue_id}: {why}"
+            ),
+        )
+
+    # 4) 决策落 verifier_decisions（best-effort，跟 webhook 路径同模式）
+    try:
+        audit_raw = (
+            decision_payload.get("audit")
+            if isinstance(decision_payload.get("audit"), dict)
+            else None
+        )
+        audit_warn = router_lib.validate_audit_soft(audit_raw)
+        if audit_warn:
+            log.warning("admin.retrigger_verifier.audit_invalid",
+                        req_id=req_id, reason=audit_warn)
+            audit_raw = None
+        await verifier_decisions.insert_decision(
+            pool, req_id,
+            stage=(row.context or {}).get("verifier_stage") or "unknown",
+            trigger=(row.context or {}).get("verifier_trigger") or "unknown",
+            action=decision_payload.get("action"),
+            fixer=decision_payload.get("fixer"),
+            scope=decision_payload.get("scope"),
+            reason=decision_payload.get("reason"),
+            confidence=decision_payload.get("confidence"),
+            audit=audit_raw,
+        )
+    except Exception as e:
+        log.warning("admin.retrigger_verifier.write_failed",
+                    req_id=req_id, error=str(e))
+
+    log.warning(
+        "admin.retrigger_verifier",
+        req_id=req_id, issue_id=body.issue_id,
+        derived_event=event.value, action=decision_payload.get("action"),
+        retry_worthy=retry_worthy, reason=why,
+    )
+
+    # 5) engine.step 推 transition（fake body，跟 /admin/req/{req_id}/emit 同模式）
+    fake = _FakeBody(req_id, row.project_id)
+    chained = await engine.step(
+        pool,
+        body=fake,
+        req_id=req_id,
+        project_id=row.project_id,
+        tags=issue_tags,
+        cur_state=row.state,
+        ctx=row.context,
+        event=event,
+    )
+
+    return {
+        "action": "retriggered",
+        "from_state": row.state.value,
+        "event": event.value,
+        "decision": decision_payload,
         "chained": chained,
     }
 
