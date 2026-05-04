@@ -59,6 +59,25 @@ class _FakeBody:
         self.issueId = f"admin-{req_id}"
         self.projectId = project_id
         self.event = "admin.inject"
+
+
+async def _fetch_intent_tags(
+    req_id: str, project_id: str, ctx: dict | None,
+) -> list[str]:
+    """从 BKD 拉 intent issue 的 tags（admin endpoints 用，不丢 tag context）。
+
+    closes #420: 之前 admin/emit/resume 等都传 tags=[]，导致 action 里依赖 tags
+    的逻辑（如 intent:accept 检测 + pr: tag 解析）全失效。
+    """
+    intent_issue_id = (ctx or {}).get("intent_issue_id") or req_id
+    try:
+        async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+            issue = await bkd.get_issue(project_id, intent_issue_id)
+            return list(issue.tags or [])
+    except Exception as e:
+        log.warning("admin.fetch_intent_tags_failed",
+                    req_id=req_id, intent_issue_id=intent_issue_id, error=str(e))
+        return []
         self.title = ""
         self.tags = []
         self.issueNumber = None
@@ -88,12 +107,13 @@ async def emit_event(
 
     log.warning("admin.emit", req_id=req_id, event=body.event, from_state=row.state.value)
     fake = _FakeBody(req_id, row.project_id)
+    tags = await _fetch_intent_tags(req_id, row.project_id, row.context)
     return await engine.step(
         pool,
         body=fake,
         req_id=req_id,
         project_id=row.project_id,
-        tags=[],
+        tags=tags,
         cur_state=row.state,
         ctx=row.context,
         event=ev,
@@ -390,12 +410,13 @@ async def resume_req(
         req_id=req_id, action=body.action, stage=effective_stage,
         fixer=body.fixer, reason=body.reason,
     )
+    tags = await _fetch_intent_tags(req_id, row.project_id, row.context)
     chained = await engine.step(
         pool,
         body=fake,
         req_id=req_id,
         project_id=row.project_id,
-        tags=[],
+        tags=tags,
         cur_state=row.state,
         ctx=row.context,
         event=event,
