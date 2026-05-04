@@ -19,6 +19,10 @@
 
 ─────────
 
+{% include "_shared/precheck.md.j2" %}
+
+─────────
+
 ## RESUME GUARD（防重复执行）
 
 你被 wake 后，**第一件事**是先通过客观事实自检 analyze 阶段是否已经完成。在 runner pod 或本地 workspace 执行：

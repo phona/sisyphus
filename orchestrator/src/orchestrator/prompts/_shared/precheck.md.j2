@@ -1,0 +1,92 @@
+## Precheck Phase（第 0 步，必须先跑）
+
+在做任何正式工作之前，验证运行环境是否就绪。任一项失败立即 emit `result:fail` 并停止，不继续后续步骤。
+
+```bash
+POD=runner-{{ req_id | lower }}
+NS=sisyphus-runners
+PROJECT={{ project_alias }}
+MY={{ issue_id or '$(basename $PWD)' }}
+```
+
+### Precheck 1: GH_TOKEN 有效
+
+在 runner pod 内验证 `$GH_TOKEN` 能通过 GitHub API 认证：
+
+```bash
+mcp__{{ mcp_capability_providers['ssh_exec'] }}__exec_run(
+  server_id="{{ aissh_server_id or '5b25f0cd-4fef-4a1f-a4c0-14ecf1395d84' }}",
+  command="kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
+    'curl -fsS -o /dev/null -H \"Authorization: token $GH_TOKEN\" \
+     https://api.github.com/user && echo GH_TOKEN_OK || echo GH_TOKEN_FAIL'"
+)
+```
+
+输出 `GH_TOKEN_FAIL` 或命令非 0 退码 → 立即执行：
+
+```bash
+curl -sS -X PATCH http://localhost:3000/api/projects/$PROJECT/issues/$MY \
+  -H 'content-type: application/json' \
+  -d '{"tags":["{{ stage }}","{{ req_id }}","result:fail","fail-reason:precheck:gh_token"],"statusId":"review"}'
+```
+
+然后**停止，不继续**。
+
+### Precheck 2: KUBECONFIG 可用
+
+```bash
+mcp__{{ mcp_capability_providers['ssh_exec'] }}__exec_run(
+  server_id="{{ aissh_server_id or '5b25f0cd-4fef-4a1f-a4c0-14ecf1395d84' }}",
+  command="kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
+    'kubectl cluster-info --request-timeout=5s >/dev/null 2>&1 && echo KUBECONFIG_OK || echo KUBECONFIG_FAIL'"
+)
+```
+
+输出 `KUBECONFIG_FAIL` → 立即执行：
+
+```bash
+curl -sS -X PATCH http://localhost:3000/api/projects/$PROJECT/issues/$MY \
+  -H 'content-type: application/json' \
+  -d '{"tags":["{{ stage }}","{{ req_id }}","result:fail","fail-reason:precheck:kubeconfig"],"statusId":"review"}'
+```
+
+然后**停止，不继续**。
+
+### Precheck 3: ci-precheck target（可选，target 缺失 = skip）
+
+对 `/workspace/source/` 下每个 source repo 运行 `make ci-precheck`。
+**target 不存在（"No rule to make target"）= skip**，不 fail。
+target 存在但退码非 0 才视为 fail。
+
+```bash
+mcp__{{ mcp_capability_providers['ssh_exec'] }}__exec_run(
+  server_id="{{ aissh_server_id or '5b25f0cd-4fef-4a1f-a4c0-14ecf1395d84' }}",
+  command="kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c '
+    FAIL=0
+    for repo_dir in /workspace/source/*/; do
+      [ -d \"$repo_dir\" ] || continue
+      cd \"$repo_dir\"
+      if make -n ci-precheck >/dev/null 2>&1; then
+        make ci-precheck || { echo \"CI_PRECHECK_FAIL: $repo_dir\"; FAIL=1; }
+      else
+        echo \"CI_PRECHECK_SKIP: $repo_dir (no target)\"
+      fi
+    done
+    [ \"$FAIL\" -eq 0 ] && echo CI_PRECHECK_OK || echo CI_PRECHECK_FAIL
+  '"
+)
+```
+
+输出含 `CI_PRECHECK_FAIL` → 立即执行：
+
+```bash
+curl -sS -X PATCH http://localhost:3000/api/projects/$PROJECT/issues/$MY \
+  -H 'content-type: application/json' \
+  -d '{"tags":["{{ stage }}","{{ req_id }}","result:fail","fail-reason:precheck:ci_precheck"],"statusId":"review"}'
+```
+
+然后**停止，不继续**。
+
+---
+
+Precheck 全部通过（或 skip）后继续下面的正式步骤。

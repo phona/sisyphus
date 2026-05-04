@@ -1,6 +1,6 @@
 # Task Index
 
-Last updated: 2026-04-27
+Last updated: 2026-05-04
 
 ## Active
 
@@ -11,5 +11,9 @@ Last updated: 2026-04-27
 | [-] | [TASK-router-session-completed-audit](TASK-router-session-completed-audit.md) | in_progress | claude | REQ-router-session-completed-audit |
 
 ## Completed
+
+| ID | Title | Status | Owner | REQ |
+|---|---|---|---|---|
+| [-] | stage precheck phase | completed | claude | REQ-feat-precheck-373 |
 
 ## Closed

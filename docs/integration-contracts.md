@@ -118,6 +118,39 @@ unset TOKEN
 
 ## 2. Makefile target 契约（硬约束）
 
+### 2.0 ci-precheck（可选，推荐实现）
+
+sisyphus 在每个 stage agent 起来的**第 0 步**会对每个 source repo 尝试运行 `make ci-precheck`。
+
+**语义**：
+
+| 情况 | sisyphus 行为 |
+|---|---|
+| target **不存在**（`make: No rule to make target 'ci-precheck'`） | **skip**，不 fail，继续推进 |
+| target **存在且退码 0** | pass，继续推进 |
+| target **存在且退码非 0** | **emit `result:fail` + `fail-reason:precheck:ci_precheck`**，agent 立即停止 |
+
+这样老业务仓无需修改即可接入；新仓可以按需实现，让环境问题在 7 min watchdog 之前暴露。
+
+**推荐实现内容**（轻量，整体 <10 s）：
+
+```makefile
+.PHONY: ci-precheck
+
+ci-precheck:
+	@echo "=== ci-precheck: tool versions ==="
+	@go version
+	@docker version --format 'docker {{.Server.Version}}' 2>/dev/null || echo "docker unavailable"
+	@echo "=== ci-precheck: required env vars ==="
+	@[ -n "$(GH_TOKEN)" ]       || { echo "GH_TOKEN missing"; exit 1; }
+	@[ -n "$(SISYPHUS_REQ_ID)" ] || { echo "SISYPHUS_REQ_ID missing"; exit 1; }
+	@echo "=== ci-precheck: external dependencies ==="
+	@# 可选：探活数据库 / 外部 API，视业务而定
+	@echo "ci-precheck OK"
+```
+
+> **注意**：`ci-precheck` 不应启动 docker compose 或跑编译——那是 `ci-unit-test` / `ci-integration-test` 的活。只做「能拿到工具、env 变量存在、外部依赖可到达」的快速自检。
+
 ### 2.1 source repo 必须有
 
 > 这套契约对齐 **`ttpos-ci`** 标准（`ci-env` / `ci-setup` / `ci-lint` / `ci-unit-test` / `ci-integration-test` / `ci-build`），
