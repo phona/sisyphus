@@ -48,6 +48,13 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: python3 scripts/lint-state-transitions.py
 
+      - name: lint verifier prompts (REQ #395)
+        # static check that _decision.md.j2 keeps the 4 valid action literals,
+        # the mandate phrases, and that every per-stage prompt includes it.
+        # stdlib python3 only — no extra deps needed.
+        working-directory: ${{ github.workspace }}
+        run: python3 scripts/lint-verifier-prompts.py
+
       - name: pytest
         run: uv run pytest -v --tb=short -m "not integration"
 

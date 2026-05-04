@@ -72,9 +72,25 @@ _USER_REVIEW_STATUS_TO_EVENT: dict[str, Event] = {
 }
 
 _VERIFIER_RETRY_PROMPT = """\
-Your previous decision output could not be parsed as valid JSON.
+HARD CONSTRAINT: your previous decision output could not be parsed as valid JSON.
 
-Please output ONLY a valid JSON object in exactly this format (use double quotes, no trailing commas):
+Please re-emit your decision following ALL three rules below. sisyphus has
+already retried this parse, so missing any rule wastes the next chance.
+
+1. Put the JSON block in your **last assistant message** (not in the middle of
+   a longer reply, not in a tool call). sisyphus reads only the last message
+   via the BKD `/logs` API.
+2. **Before** writing the JSON, PATCH your own BKD issue to add a redundant
+   `decision:<action>[-<fixer>]` tag (e.g. `decision:pass`, `decision:fix-dev`,
+   `decision:fix-spec`, `decision:escalate`, `decision:retry`). The plain tag
+   is the second leg of the parser; without it the orch fallback cannot
+   recover from a truncated message.
+3. The `action` field MUST be exactly one of the four literals
+   `"pass"`, `"fix"`, `"escalate"`, `"retry"`. Any other value (including
+   typos like `"passes"` / `"escalated"`) is rejected by the schema validator.
+
+Output ONLY a JSON object matching exactly this shape (double quotes, no
+trailing commas, no comments):
 
 ```json
 {
@@ -86,6 +102,11 @@ Please output ONLY a valid JSON object in exactly this format (use double quotes
 }
 ```
 """
+
+# Max number of webhook-side follow-up retries when a verifier session.completed
+# yields a parseable-but-schema-invalid decision (retry_worthy=True).
+# REQ-fix-verifier-schema-395-1777869659: bumped 2 → 3 after #802 stuck.
+_VERIFIER_PARSE_RETRY_CAP = 3
 
 
 async def _maybe_derive_user_review_event(
@@ -476,7 +497,8 @@ async def webhook(request: Request) -> JSONResponse:
 
     # M14b：verifier-agent session.completed → 解 decision JSON（tag 或 description）
     # router.derive_event 对 `verifier` tag 主动返 None，交给这里 full parse。
-    # REQ-fix-verifier-json-parse-1777420690：schema invalid 时自动 retry（最多 2 次）。
+    # REQ-fix-verifier-json-parse-1777420690：schema invalid 时自动 retry。
+    # REQ-fix-verifier-schema-395-1777869659：cap 提到 3（_VERIFIER_PARSE_RETRY_CAP）。
     decision_payload: dict | None = None
     retry_worthy = False
     if (
@@ -509,7 +531,7 @@ async def webhook(request: Request) -> JSONResponse:
                  decision=decision_payload, reason=why, retry_worthy=retry_worthy,
                  executionId=body.executionId, dedup_status=_dedup_status)
 
-        # ─── 解析失败自动 retry（最多 2 次）───────────────────────────────────
+        # ─── 解析失败自动 retry（cap _VERIFIER_PARSE_RETRY_CAP，默认 3）───────
         if event == Event.VERIFY_ESCALATE and retry_worthy:
             retry_req_id = router_lib.extract_req_id(tags, body.issueNumber)
             if retry_req_id:
@@ -517,7 +539,7 @@ async def webhook(request: Request) -> JSONResponse:
                     retry_row = await req_state.get(pool, retry_req_id)
                     retry_ctx = retry_row.context or {} if retry_row else {}
                     retry_count = int(retry_ctx.get("verifier_parse_retry_count", 0))
-                    if retry_count < 2:
+                    if retry_count < _VERIFIER_PARSE_RETRY_CAP:
                         # follow-up 要求 verifier 重新输出标准格式
                         try:
                             async with BKDClient(

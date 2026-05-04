@@ -1,6 +1,7 @@
 """webhook verifier decision parse retry 逻辑单测。
 
-REQ-fix-verifier-json-parse-1777420690：schema invalid 时自动 retry（最多 2 次）。
+REQ-fix-verifier-json-parse-1777420690：schema invalid 时自动 retry。
+REQ-fix-verifier-schema-395-1777869659：cap 提到 3 + prompt 强制提示 3 条规则。
 """
 from __future__ import annotations
 
@@ -150,7 +151,7 @@ async def _call_webhook(body, monkeypatch):
                     retry_row = await webhook.req_state.get(None, retry_req_id)
                     retry_ctx = retry_row.context or {} if retry_row else {}
                     retry_count = int(retry_ctx.get("verifier_parse_retry_count", 0))
-                    if retry_count < 2:
+                    if retry_count < webhook._VERIFIER_PARSE_RETRY_CAP:
                         async with webhook.BKDClient("", "") as bkd:
                             await bkd.follow_up_issue(
                                 project_id=body.projectId,
@@ -212,10 +213,29 @@ async def test_retry_on_schema_invalid_second_time(fake_bkd, fake_req_state, fak
 
 
 @pytest.mark.asyncio
-async def test_escalate_when_retry_exhausted(fake_bkd, fake_req_state, fake_obs, fake_dedup, monkeypatch):
-    """第三次 schema invalid（retry_count=2）→ escalate，不再 retry。"""
+async def test_third_attempt_still_retries(fake_bkd, fake_req_state, fake_obs, fake_dedup, monkeypatch):
+    """REQ-fix-verifier-schema-395：第三次 schema invalid（retry_count=2）→
+    仍 follow-up retry（cap=3），返回 skip。"""
     rows, _ctx_updates = fake_req_state
     rows["REQ-1"] = _FakeReqStateRow(context={"verifier_parse_retry_count": 2})
+    fake_bkd.set_last_msg("```json\n{\"action\": \"nope\"}\n```")
+
+    body = FakeBody(
+        event="session.completed", issueId="vfy-1", issueNumber=1,
+        projectId="proj-1", tags=["verifier", "REQ-1", "verify:staging_test"],
+    )
+    result = await _call_webhook(body, monkeypatch)
+
+    assert result["action"] == "skip"
+    assert result["reason"] == "verifier_parse_retry_3"
+    assert len(fake_bkd.captured_follow_up) == 1
+
+
+@pytest.mark.asyncio
+async def test_escalate_when_retry_exhausted(fake_bkd, fake_req_state, fake_obs, fake_dedup, monkeypatch):
+    """第四次 schema invalid（retry_count=3，已达 cap）→ escalate，不再 retry。"""
+    rows, _ctx_updates = fake_req_state
+    rows["REQ-1"] = _FakeReqStateRow(context={"verifier_parse_retry_count": 3})
     fake_bkd.set_last_msg("```json\n{\"action\": \"nope\"}\n```")
 
     body = FakeBody(
@@ -228,6 +248,21 @@ async def test_escalate_when_retry_exhausted(fake_bkd, fake_req_state, fake_obs,
     assert result["retry_worthy"] is True
     # 没有 follow-up
     assert len(fake_bkd.captured_follow_up) == 0
+
+
+def test_retry_prompt_includes_three_mandate_rules():
+    """REQ-fix-verifier-schema-395 VDRC-S3：retry follow-up prompt 必须明确
+    点出 3 条规则（最后一条 message / decision tag / 4 字面量 action）。"""
+    text = webhook._VERIFIER_RETRY_PROMPT
+    assert "last assistant message" in text.lower()
+    assert "decision:" in text  # 平凡 BKD tag mandate
+    for action in ('"pass"', '"fix"', '"escalate"', '"retry"'):
+        assert action in text
+
+
+def test_retry_cap_constant_is_three():
+    """REQ-fix-verifier-schema-395：cap 必须 = 3。"""
+    assert webhook._VERIFIER_PARSE_RETRY_CAP == 3
 
 
 @pytest.mark.asyncio
