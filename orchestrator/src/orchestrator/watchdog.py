@@ -35,9 +35,10 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+import httpx
 import structlog
 
-from . import engine
+from . import engine, observability
 from .bkd import BKDClient
 from .checkers._types import CheckResult
 from .config import settings
@@ -558,6 +559,109 @@ async def _mark_abandoned_escalated_reqs() -> int:
     return count
 
 
+def _format_stuck_notify_text(req_id: str, stuck_sec: int, state: str) -> str:
+    """REQ-feat-stuck-notify-378: 通知文本固定 prefix `⏰ ` 让 dashboard 能 string-match。"""
+    minutes = stuck_sec // 60
+    return (
+        f"⏰ {req_id} stuck in {state} for {minutes}min "
+        f"({stuck_sec}s) with no stage progress. "
+        f"Check the verifier issue to decide: resume or hard escalate."
+    )
+
+
+async def _post_telegram_notify(url: str, text: str) -> bool:
+    """Best-effort POST. Never raises; returns True on 2xx, False on any failure."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(url, json={"text": text})
+        return 200 <= resp.status_code < 300
+    except Exception as e:
+        log.warning("watchdog.stuck_notify.telegram_failed", error=str(e))
+        return False
+
+
+async def _notify_stale_escalated_tick() -> dict:
+    """REQ-feat-stuck-notify-378-v2-1777866642: ESCALATED stale 主动通知。
+
+    每段 ESCALATED 期内最多通知一次：context.stuck_notified_at watermark 跟
+    req_state.updated_at 比较。REQ 被 resume → 推进 → 再 escalate 时 updated_at
+    会跳到新时刻，watermark 自动失效，新一轮 stale 期再触发一次通知。
+
+    通知三件事（全 best-effort）：
+    - obs.record_event(kind="watchdog_stuck_notify"): 内部 channel 真相源
+    - log.warning("watchdog.stuck_notify"): Loki / kubectl logs 一眼看
+    - 可选 POST settings.escalated_stale_telegram_url：外推 webhook
+    """
+    if not settings.escalated_stale_notify_enabled:
+        return {"checked": 0, "notified": 0}
+
+    pool = db.get_pool()
+    threshold = settings.escalated_stale_threshold_sec
+    rows = await pool.fetch(
+        """
+        SELECT req_id, project_id, context, updated_at,
+               EXTRACT(EPOCH FROM (NOW() - updated_at))::BIGINT AS stuck_sec
+          FROM req_state
+         WHERE state = 'escalated'
+           AND updated_at < NOW() - INTERVAL '1 second' * $1
+        """,
+        threshold,
+    )
+
+    notified = 0
+    telegram_url = settings.escalated_stale_telegram_url
+    for row in rows:
+        req_id = row["req_id"]
+        ctx_raw = row["context"] or {}
+        ctx = json.loads(ctx_raw) if isinstance(ctx_raw, str) else ctx_raw
+        updated_at: datetime = row["updated_at"]
+
+        notified_at_raw = ctx.get("stuck_notified_at")
+        if notified_at_raw:
+            try:
+                notified_at = datetime.fromisoformat(notified_at_raw)
+            except ValueError:
+                notified_at = None
+            if notified_at is not None and notified_at >= updated_at:
+                # 已在本 ESCALATED 期通知过，跳过
+                continue
+
+        stuck_sec = int(row["stuck_sec"])
+        text = _format_stuck_notify_text(req_id, stuck_sec, "ESCALATED")
+        log.warning(
+            "watchdog.stuck_notify",
+            req_id=req_id, stuck_sec=stuck_sec,
+            project_id=row["project_id"], text=text,
+        )
+
+        try:
+            await observability.record_event(
+                kind="watchdog_stuck_notify",
+                req_id=req_id,
+                stage="escalated",
+                error_msg=text,
+                extras={"stuck_sec": stuck_sec},
+            )
+        except Exception as e:
+            log.warning("watchdog.stuck_notify.obs_failed", req_id=req_id, error=str(e))
+
+        if telegram_url:
+            await _post_telegram_notify(telegram_url, text)
+
+        try:
+            await req_state.update_context(pool, req_id, {
+                "stuck_notified_at": datetime.now(UTC).isoformat(),
+            })
+        except Exception as e:
+            log.warning(
+                "watchdog.stuck_notify.persist_failed",
+                req_id=req_id, error=str(e),
+            )
+        notified += 1
+
+    return {"checked": len(rows), "notified": notified}
+
+
 async def run_loop() -> None:
     """orchestrator 启动起的后台任务。"""
     if not settings.watchdog_enabled:
@@ -589,6 +693,17 @@ async def run_loop() -> None:
                         log.debug("watchdog.bkd_sync", **sync_result)
                 except Exception as e:
                     log.exception("watchdog.bkd_sync.error", error=str(e))
+
+                # REQ-feat-stuck-notify-378-v2: 同周期跑 ESCALATED stale 通知。
+                # 跟 bkd_sync 共用 5-tick 周期，避免单独搞一个 settings interval。
+                try:
+                    notify_result = await _notify_stale_escalated_tick()
+                    if notify_result.get("notified"):
+                        log.info("watchdog.stuck_notify.swept", **notify_result)
+                    else:
+                        log.debug("watchdog.stuck_notify.tick", **notify_result)
+                except Exception as e:
+                    log.exception("watchdog.stuck_notify.error", error=str(e))
 
             # 每 50 个 tick（默认 ~50min）扫一次长期 ESCALATED → abandoned-by-user
             if tick_count % 50 == 0:

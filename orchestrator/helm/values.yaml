@@ -150,6 +150,18 @@ env:
   gh_incident_labels:
     - sisyphus:incident
 
+  # ─── REQ-feat-stuck-notify-378-v2-1777866642：ESCALATED stale 主动通知 ────
+  # watchdog 每 5min 扫一次 state='escalated' 且 updated_at 距今超过
+  # `escalated_stale_threshold_sec` 的 REQ，每段 ESCALATED 期通知一次（去重靠
+  # context.stuck_notified_at）。obs.record_event + log.warning 永远写；外推
+  # webhook 仅在 url 非空时 POST。enabled=False = 整套关闭（dev 调试用）。
+  escalated_stale_notify_enabled: true
+  escalated_stale_threshold_sec: 1800
+  # 可选 webhook URL。空 = 不外推。POST `{"text": "..."}`，5s timeout。
+  # Telegram bot 用例：`https://api.telegram.org/bot<TOKEN>/sendMessage`，
+  # 由前置 nginx / sidecar 把 chat_id 注入 payload。
+  escalated_stale_telegram_url: ""
+
 # ─── v0.2 runner（调试环境 Pod + PVC）─────────────────────────────────────
 # 每个 REQ 一个 Pod（runner-<req>）+ 一个 PVC（workspace-<req>），住在独立
 # namespace。Pod 是 privileged + DinD + fuse-overlayfs；PVC 挂 /workspace 做

@@ -42,6 +42,18 @@ data:
   # JSON-encoded list[str]，跟 default_involved_repos 同。
   SISYPHUS_GH_INCIDENT_LABELS: {{ toJson . | quote }}
   {{- end }}
+  # ─── REQ-feat-stuck-notify-378-v2-1777866642：ESCALATED stale 主动通知 ────
+  # 三元组：enabled (bool) / threshold_sec (int) / telegram_url (str)。
+  # url 用 `if` 守门，空字符串不渲染 env 走 config.py default ""。
+  {{- if hasKey .Values.env "escalated_stale_notify_enabled" }}
+  SISYPHUS_ESCALATED_STALE_NOTIFY_ENABLED: {{ .Values.env.escalated_stale_notify_enabled | quote }}
+  {{- end }}
+  {{- if .Values.env.escalated_stale_threshold_sec }}
+  SISYPHUS_ESCALATED_STALE_THRESHOLD_SEC: {{ .Values.env.escalated_stale_threshold_sec | quote }}
+  {{- end }}
+  {{- if .Values.env.escalated_stale_telegram_url }}
+  SISYPHUS_ESCALATED_STALE_TELEGRAM_URL: {{ .Values.env.escalated_stale_telegram_url | quote }}
+  {{- end }}
   # ─── REQ-feat-mcp-preflight-1777727213：pluggable prompt hook + MCP capability ─
   # 4 个字段都用 JSON-encoded（pydantic-settings v2 的 list/dict 复合字段默认走
   # JSON 解析）。values 留空时不渲染 env，走 orchestrator config.py 的 default_factory。
