@@ -72,16 +72,11 @@ class _FakePool:
 def _patch_pool(monkeypatch, pool):
     """Stub the pool reachable from watchdog.
 
-    Cover both common import styles for the db helper without peeking at
-    watchdog's source: patch the canonical accessor on the db module and,
-    if watchdog re-exports it locally, patch that too.
+    Mirrors the existing test convention (test_watchdog_bkd_sync.py),
+    which patches `orchestrator.watchdog.db.get_pool` — i.e. the `db`
+    sub-module imported into the watchdog module namespace.
     """
-    from orchestrator import db as orch_db
-
-    monkeypatch.setattr(orch_db, "get_pool", lambda: pool, raising=False)
-    # Also patch the watchdog-local alias if dev imported db as a name.
-    if hasattr(watchdog, "db"):
-        monkeypatch.setattr(watchdog.db, "get_pool", lambda: pool, raising=False)
+    monkeypatch.setattr("orchestrator.watchdog.db.get_pool", lambda: pool)
 
 
 def _patch_settings(monkeypatch, *, enabled=True, threshold_sec=1800,
