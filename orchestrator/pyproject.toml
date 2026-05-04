@@ -26,6 +26,7 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-httpx>=0.32",
+    "pytest-randomly>=3.15",
     "ruff>=0.7",
     "mypy>=1.13",
 ]
@@ -40,6 +41,10 @@ packages = ["src/orchestrator"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# 默认禁掉 pytest-randomly：还有几处 latent isolation bug（独立 issue 跟踪），
+# 强行打开会让 CI 红，与本 REQ 的 #364 deterministic-order 修复无关。
+# 本地排查 leak 仍可 `uv run pytest --randomly-seed=N -p randomly` 临时开。
+addopts = "-p no:randomly"
 markers = [
     "integration: integration tests (selected by `make ci-integration-test`; excluded by `make ci-unit-test`)",
 ]
@@ -61,5 +66,6 @@ dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "pytest-httpx>=0.32",
+    "pytest-randomly>=3.15",
     "ruff>=0.15.11",
 ]
