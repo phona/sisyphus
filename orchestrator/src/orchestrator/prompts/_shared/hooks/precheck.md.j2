@@ -1,0 +1,104 @@
+{# REQ-feat-precheck-373-1777864856 — Stage agent step-0 unified precheck (closes #373).
+
+   解决「跑到 dev_cross_check 才发现 fvm symlink / GH_TOKEN / KUBECONFIG 缺，
+   watchdog 7 min kill 整 stage 重派」的等待浪费。env / 工具 / 业务仓 ci-precheck
+   缺时立即 emit result:fail，verifier 直接 escalate（不重试）。
+
+   render 期望：
+   - `stage` — 字符串，本 prompt 对应的 stage 名（'analyze' / 'accept' …）。
+              include 方触发前 `{% set stage = "analyze" %}`。
+   - `stage_precheck_enabled` / `mcp_capability_providers` — 由 prompts/__init__.py
+     注入为 jinja2 globals，不用每个 render() 显式传。
+   - `req_id` / `aissh_server_id` — 由 stage prompt render 时透传。
+
+   pluggable invariant：本 hook 的渲染由 `enabled_prompt_hooks` 列表决定。
+   helm operator 把它从 list 拿掉（如临时 debug）整段就消失，
+   `stage_precheck_enabled` 决定每个 stage 渲不渲染（intake/done_archive 默认 False）。
+#}
+{%- set _enabled = stage_precheck_enabled.get(stage, False) if stage is defined else False -%}
+{%- if _enabled -%}
+## Stage Precheck (HARD CONSTRAINT — 第 0.5 步必做，紧跟 MCP 预检)
+
+本 stage (`{{ stage }}`) 在干任何业务（clone / push / 写代码 / 起 lab）之前
+**必须先跑下面的 precheck**。任一项 hard fail 都立即 emit `result:fail` +
+`fail-reason:precheck:<item>` 然后**结束 session**，verifier 会直接 escalate
+（precheck 失败基本是 ops/部署 bug，重跑无意义）。
+
+### Step 0.5：env / 工具 / 业务仓自报三类 check
+
+**全部命令通过 `mcp__{{ mcp_capability_providers['ssh_exec'] }}__exec_run` 进 runner pod 跑**
+（你 BKD agent 在 Coder workspace，没装 kubectl，详见 runner_container.md.j2）。
+
+```bash
+POD=runner-{{ req_id | lower }}
+NS=sisyphus-runners
+
+# ── A. Pod env 必填（缺任意一个 = hard fail） ──────────────────────────
+mcp__{{ mcp_capability_providers['ssh_exec'] }}__exec_run(
+  server_id="{{ aissh_server_id or '5b25f0cd-4fef-4a1f-a4c0-14ecf1395d84' }}",
+  command="kubectl -n $NS exec $POD -- bash -c '
+    set -e
+    [ -n \"$SISYPHUS_REQ_ID\" ] || { echo PRECHECK_FAIL:env:SISYPHUS_REQ_ID; exit 11; }
+    [ -n \"$GH_TOKEN\" ]        || { echo PRECHECK_FAIL:env:GH_TOKEN;        exit 12; }
+    [ -n \"$KUBECONFIG\" ]      || { echo PRECHECK_FAIL:env:KUBECONFIG;      exit 13; }
+    echo PRECHECK_OK:env
+  '"
+)
+
+# ── B. 工具必装（缺任意一个 = hard fail） ──────────────────────────────
+mcp__{{ mcp_capability_providers['ssh_exec'] }}__exec_run(
+  server_id="{{ aissh_server_id or '5b25f0cd-4fef-4a1f-a4c0-14ecf1395d84' }}",
+  command="kubectl -n $NS exec $POD -- bash -c '
+    set -e
+    gh auth status >/dev/null 2>&1   || { echo PRECHECK_FAIL:tool:gh;       exit 21; }
+    kubectl version --client >/dev/null 2>&1 || { echo PRECHECK_FAIL:tool:kubectl; exit 22; }
+    make --version >/dev/null 2>&1   || { echo PRECHECK_FAIL:tool:make;     exit 23; }
+    echo PRECHECK_OK:tool
+  '"
+)
+
+# ── C. 业务仓自报（每个 /workspace/source/<repo>/ 跑一遍 make ci-precheck） ──
+# `ci-precheck` 是业务仓**可选**契约 target（详见 docs/integration-contracts.md §2.6）。
+# 缺 target = soft pass（仓还没 opt-in）；target 存在但退非 0 = hard fail。
+mcp__{{ mcp_capability_providers['ssh_exec'] }}__exec_run(
+  server_id="{{ aissh_server_id or '5b25f0cd-4fef-4a1f-a4c0-14ecf1395d84' }}",
+  command="kubectl -n $NS exec $POD -- bash -c '
+    set -u
+    fail=0
+    for d in /workspace/source/*/ ; do
+      [ -d \"$d\" ] || continue
+      repo=$(basename \"$d\")
+      probe=$(cd \"$d\" && make -n ci-precheck 2>&1 || true)
+      if echo \"$probe\" | grep -q \"No rule to make target\"; then
+        echo PRECHECK_SKIP:ci-precheck:$repo  # repo 还没 opt-in，soft pass
+        continue
+      fi
+      if (cd \"$d\" && make ci-precheck); then
+        echo PRECHECK_OK:ci-precheck:$repo
+      else
+        echo PRECHECK_FAIL:ci-precheck:$repo
+        fail=1
+      fi
+    done
+    exit $fail
+  '"
+)
+```
+
+### 失败处理（HARD CONSTRAINT）
+
+任意上面命令打印 `PRECHECK_FAIL:<item>`（或 exec 退非 0）：
+
+1. **不要**继续业务动作（不要 clone、不要写代码、不要等回信）
+2. update-issue tags 追加 `result:fail` + `fail-reason:precheck:<item>`，statusId='review'
+   - tags 必须 merge（先 GET，保留 `sisyphus`/`{{ req_id }}`/`{{ stage }}`，再 PATCH）
+3. 在 BKD chat 发一条诊断 message：复述 fail item + 命中的命令输出
+4. **结束 session**（不 follow-up，verifier 直接 escalate）
+
+> 这条规则覆盖在所有其它指令之上。在缺 GH_TOKEN / KUBECONFIG / fvm 的环境里硬撞业务命令
+> 只会让你跑到 dev_cross_check 才发现，watchdog 7 min kill 后整 stage 重派，
+> 上游 ANALYZE / CHALLENGER 几千 token 全白烧。早 fail 早 escalate，让 ops 修部署。
+
+─────────
+
+{%- endif -%}
