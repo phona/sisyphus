@@ -301,3 +301,49 @@ kubectl patch <kind> <name> -n sisyphus \
 - **禁止** 用 `kubectl patch` / `kubectl edit` 修改 chart 管的资源字段。
 - 要改配置 → 改 `values/` 下的 yaml + `helm upgrade --reuse-values -f new-values.yaml`。
 - 紧急临时改用 `helm upgrade --set key=value` 而非直接 kubectl 写字段。
+
+## 14. Issue triage discipline（2026-05-04 dogfood 加固）
+
+**触发场景**：跑真链路 dogfood 时，每条 REQ 串过 7 个 surface（业务仓 / runner / orch / BKD / lab / accept-env / GH CI），第一次跑必撞洞。本能反应是"撞一条立 issue 立 PR 修"——这是 §11 死亡螺旋。
+
+### 14.1 撞墙优先进 BACKLOG.md，不立 issue
+
+- 1-2 次 hit → [BACKLOG.md](../BACKLOG.md) 一行 log（"# REQ-x 撞墙记录"区）
+- ≥3 次同类 hit → 才立 issue（playbook §8 hard cap）
+- 立 issue = 隐性承诺修；BACKLOG.md = 只观察
+
+跑完一批（5 条 REQ）回头看 BACKLOG.md，找 ≥3 次同类的 pattern 才动手改 sisyphus。
+
+### 14.2 优先级 label 体系
+
+| label | 含义 | 0.x 处理 |
+|---|---|---|
+| **P0** | 阻塞 80% ttpos 命中率 / Phase A prerequisite | 立刻做 |
+| **P1** | 服务 sisyphus 改进，间接提升命中率（接入面真痛点） | 跟 P0 串行做 |
+| **P3** | meta / self-monitoring | 1.x 之后 |
+| **defer-1.x** | sisyphus 自身 polish / 1-shot fix / devx 加速 / 工程美化 | 0.x 不开 issue 详情，1.x 阶段重审 |
+
+### 14.3 defer-1.x 触发条件（立 issue 时强制自查）
+
+任一即应打 `defer-1.x`：
+
+1. 是 sisyphus 自身 fix/refactor，不是接入面（业务仓 / lab / runner Pod / GH CI）问题
+2. <3 次同类 hit 证据（看 BACKLOG.md，找不到 3 条就 defer）
+3. 是工程美化（重命名、entrypoint 扩展、devx 加速、observability 加深）
+4. 是 1.x 阶段架构重构（preset 化、契约 v2、跨仓抽象）
+
+### 14.4 defer-1.x 解封条件
+
+跑完一个 batch（5 条 REQ）后 review 一次：
+
+- 期间在 BACKLOG.md 撞 ≥3 次同类 → 移除 `defer-1.x`，标 P1
+- 没撞过 → 保持 defer
+- 撞了 1-2 次 → 留 defer，BACKLOG.md log 继续累积
+
+### 14.5 例外
+
+下列即使是 sisyphus 自身 fix 也不 defer：
+
+- 真生产事故（pod 起不来 / runner 全死 / orch crash loop）
+- 影响多 user 的 root cause issue（如 #333 三方契约）
+- P0 / P1 接入面已识别痛点
