@@ -2,15 +2,16 @@
 
 ## ADDED Requirements
 
-### Requirement: _readyz_harness SHALL restore get_controller cleanly so it does not leak a mock to subsequent tests
+### Requirement: _readyz_harness SHALL restore get_controller cleanly
 
-`tests/test_contract_readyz_namespaced_challenger.py` 里的 `_readyz_harness`
-contextmanager 在 `raise_runtime_on_get_controller=True` 路径下 SHALL 只对
-`orchestrator.k8s_runner.get_controller` 这一个 attribute 应用一个 patch；
-当 contextmanager 退出时 `orchestrator.k8s_runner.get_controller` MUST 恢复
-为原始未被 patch 的实现，使后续 test 调用 `k8s_runner.set_controller(fake)`
-+ `k8s_runner.get_controller()` 时 MUST 拿到 fake controller 本身、而不是
-被 leak 的 MagicMock。
+The `_readyz_harness` contextmanager in
+`tests/test_contract_readyz_namespaced_challenger.py` SHALL apply at most one
+patch on the `orchestrator.k8s_runner.get_controller` attribute when
+`raise_runtime_on_get_controller=True`, and on contextmanager exit it MUST
+restore that attribute to the original implementation so subsequent tests in
+the same pytest session that call `k8s_runner.set_controller(fake)` and then
+`k8s_runner.get_controller()` MUST receive the fake controller instance —
+never a leaked MagicMock.
 
 实现 MUST NOT 在同一个 attribute 上叠多个 patch（例如同时 patch
 `k8s_runner.get_controller` 和 `orchestrator.main.k8s_runner.get_controller`），
