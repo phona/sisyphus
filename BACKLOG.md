@@ -71,6 +71,10 @@
 - ❌ 不周末加班
 - ❌ 不让 AI 写 REQ description
 - ❌ **不撞墙立刻立 issue**（默认走 BACKLOG，[playbook §14](docs/playbook.md)）
+- ❌ **撞洞不修先**——挂 issue 跳过这条 REQ 派下一条（[playbook §15](docs/playbook.md)）
+- ❌ 不开 PR / 不派 fixer / 不改 sisyphus 主链（dogfood 期间）
+- ⚠️ 同一洞撞 ≥2 次 = 阻塞类 → 最 dirty 30s hack 让它过（不修对）
+- ⚠️ AI 拐你修 bug 时打断它 → 念 [CLAUDE.md "Dogfood AI 协作红线"](CLAUDE.md)
 
 ## 死亡螺旋自检（playbook §11）
 
