@@ -39,8 +39,12 @@ log = structlog.get_logger(__name__)
 # rows that haven't dispatched yet from being counted as work-in-progress;
 # excluding `gh-incident-open` keeps escalated-but-waiting-for-human REQs out
 # of the cap (they consume no runner Pod). Done / escalated are terminal.
+# `pending-user-review` is in the same bucket as `escalated`/`gh-incident-open`:
+# the runner Pod is already torn down and the REQ is parked waiting for a
+# human follow-up. Counting PUR REQs against the cap caused a stuck-cap
+# incident (#384) where 8 long-parked PUR rows starved fresh REQs.
 _INFLIGHT_EXCLUDE_STATES: tuple[str, ...] = (
-    "init", "done", "escalated", "gh-incident-open",
+    "init", "done", "escalated", "gh-incident-open", "pending-user-review",
 )
 
 
