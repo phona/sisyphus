@@ -70,30 +70,50 @@ class _FakePool:
 
 # ─── Common patch helpers ───────────────────────────────────────────────────
 def _patch_pool(monkeypatch, pool):
-    monkeypatch.setattr("orchestrator.watchdog.db.get_pool", lambda: pool)
+    """Stub the pool reachable from watchdog.
+
+    Cover both common import styles for the db helper without peeking at
+    watchdog's source: patch the canonical accessor on the db module and,
+    if watchdog re-exports it locally, patch that too.
+    """
+    from orchestrator import db as orch_db
+
+    monkeypatch.setattr(orch_db, "get_pool", lambda: pool, raising=False)
+    # Also patch the watchdog-local alias if dev imported db as a name.
+    if hasattr(watchdog, "db"):
+        monkeypatch.setattr(watchdog.db, "get_pool", lambda: pool, raising=False)
 
 
 def _patch_settings(monkeypatch, *, enabled=True, threshold_sec=1800,
                     telegram_url=""):
-    monkeypatch.setattr(
-        watchdog.settings, "escalated_stale_notify_enabled", enabled, raising=False
-    )
-    monkeypatch.setattr(
-        watchdog.settings, "escalated_stale_threshold_sec", threshold_sec, raising=False
-    )
-    monkeypatch.setattr(
-        watchdog.settings, "escalated_stale_telegram_url", telegram_url, raising=False
-    )
+    """Patch the singleton settings attributes — works regardless of import path."""
+    from orchestrator import config as orch_config
+
+    s = orch_config.settings
+    monkeypatch.setattr(s, "escalated_stale_notify_enabled", enabled, raising=False)
+    monkeypatch.setattr(s, "escalated_stale_threshold_sec", threshold_sec, raising=False)
+    monkeypatch.setattr(s, "escalated_stale_telegram_url", telegram_url, raising=False)
 
 
 def _patch_obs_record_event(monkeypatch):
-    """Replace obs.record_event so we can count and inspect calls."""
+    """Replace obs.record_event so we can count and inspect calls.
+
+    Patches every import style permitted by Python without peeking at the
+    watchdog source:
+      * `from orchestrator import observability [as obs]` → patched at source
+      * `from orchestrator.observability import record_event` → patched as a
+        local binding on the watchdog module (only added if it exists there)
+    """
     calls: list[tuple[tuple, dict]] = []
 
     async def _fake(*args, **kwargs):
         calls.append((args, kwargs))
 
-    monkeypatch.setattr("orchestrator.watchdog.obs.record_event", _fake)
+    from orchestrator import observability as orch_obs
+
+    monkeypatch.setattr(orch_obs, "record_event", _fake, raising=False)
+    if hasattr(watchdog, "record_event"):
+        monkeypatch.setattr(watchdog, "record_event", _fake, raising=False)
     return calls
 
 
@@ -114,7 +134,7 @@ class _RaisingAsyncClient:
 
 
 def _patch_httpx_to_raise(monkeypatch):
-    monkeypatch.setattr("orchestrator.watchdog.httpx.AsyncClient", _RaisingAsyncClient)
+    monkeypatch.setattr(httpx, "AsyncClient", _RaisingAsyncClient)
 
 
 # ─── Test row factory ───────────────────────────────────────────────────────
@@ -309,7 +329,7 @@ async def test_wsn_s2_second_tick_in_same_window_is_suppressed(monkeypatch):
                     return None
             return _R()
 
-    monkeypatch.setattr("orchestrator.watchdog.httpx.AsyncClient", _SpyClient)
+    monkeypatch.setattr(httpx, "AsyncClient", _SpyClient)
 
     result = await watchdog._notify_stale_escalated_tick()
 
