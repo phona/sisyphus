@@ -9,7 +9,7 @@ Dev MUST NOT modify these tests to make them pass — fix the implementation ins
 If a test is wrong, escalate to spec_fixer to correct the spec, not the test.
 
 Scenarios covered:
-  FESC-S1  ANALYZING state closes analyze stage_run before escalate
+  FESC-S1  EXECUTING state closes analyze stage_run before escalate
   FESC-S2  INIT state skips stage_run close
 """
 from __future__ import annotations
@@ -50,14 +50,14 @@ class _OrderTrackingPool:
         return None
 
 
-# ─── FESC-S1: ANALYZING state closes analyze stage_run BEFORE raw SQL UPDATE ──
+# ─── FESC-S1: EXECUTING state closes analyze stage_run BEFORE raw SQL UPDATE ──
 
 
-async def test_fesc_s1_analyzing_closes_analyze_stage_run_before_sql_update(monkeypatch):
+async def test_fesc_s1_executing_closes_execute_stage_run_before_sql_update(monkeypatch):
     """
-    FESC-S1: When POST /admin/req/{req_id}/escalate is called on a REQ in ANALYZING state,
+    FESC-S1: When POST /admin/req/{req_id}/escalate is called on a REQ in EXECUTING state,
     the implementation MUST:
-    1. call close_latest_stage_run(req_id, "analyze", outcome="escalated",
+    1. call close_latest_stage_run(req_id, "execute", outcome="escalated",
        fail_reason="admin-force-escalate")
     2. call it BEFORE the raw SQL UPDATE that sets state='escalated' in req_state
 
@@ -69,7 +69,7 @@ async def test_fesc_s1_analyzing_closes_analyze_stage_run_before_sql_update(monk
 
     monkeypatch.setattr(admin_mod, "_verify_token", lambda _: None)
 
-    row = _FakeRow(req_id="REQ-fesc-s1-test", project_id="proj-test", state=ReqState.ANALYZING)
+    row = _FakeRow(req_id="REQ-fesc-s1-test", project_id="proj-test", state=ReqState.EXECUTING)
 
     async def _fake_get(pool, req_id):
         return row
@@ -110,16 +110,16 @@ async def test_fesc_s1_analyzing_closes_analyze_stage_run_before_sql_update(monk
 
     await asyncio.sleep(0)  # drain any fire-and-forget tasks
 
-    # Contract 1: escalate MUST succeed for ANALYZING state
+    # Contract 1: escalate MUST succeed for EXECUTING state
     assert result.get("action") == "force_escalated", (
-        f"FESC-S1: force_escalate on ANALYZING state MUST return action='force_escalated'; "
+        f"FESC-S1: force_escalate on EXECUTING state MUST return action='force_escalated'; "
         f"got {result!r}"
     )
 
-    # Contract 2: close_latest_stage_run MUST be called with stage='analyze'
-    analyze_closes = [c for c in close_calls if c["stage"] == "analyze"]
+    # Contract 2: close_latest_stage_run MUST be called with stage='execute'
+    analyze_closes = [c for c in close_calls if c["stage"] == "execute"]
     assert len(analyze_closes) >= 1, (
-        f"FESC-S1: close_latest_stage_run MUST be called with stage='analyze' for ANALYZING state; "
+        f"FESC-S1: close_latest_stage_run MUST be called with stage='execute' for EXECUTING state; "
         f"all close_calls: {close_calls}"
     )
 
@@ -132,7 +132,7 @@ async def test_fesc_s1_analyzing_closes_analyze_stage_run_before_sql_update(monk
     # Contract 4: outcome MUST be 'escalated'
     assert analyze_closes[0]["outcome"] == "escalated", (
         f"FESC-S1: outcome MUST be 'escalated'; got {analyze_closes[0]['outcome']!r}. "
-        f"Contract: close_latest_stage_run(pool, req_id, 'analyze', outcome='escalated', ...)"
+        f"Contract: close_latest_stage_run(pool, req_id, 'execute', outcome='escalated', ...)"
     )
 
     # Contract 5: fail_reason MUST be 'admin-force-escalate'

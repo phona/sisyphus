@@ -2,8 +2,8 @@
 
 Black-box contracts derived from issue #247 + 2026-05-01 clarification comments:
 
-  PUR-S1  (PENDING_USER_REVIEW, ANALYZE_DONE) → ANALYZE_ARTIFACT_CHECKING
-                                              + create_analyze_artifact_check
+  PUR-S1  (PENDING_USER_REVIEW, EXECUTE_DONE) → EXECUTE_ARTIFACT_CHECKING
+                                              + create_execute_artifact_check
   PUR-S2  (PENDING_USER_REVIEW, CHALLENGER_PASS) → DEV_CROSS_CHECK_RUNNING
                                                 + create_dev_cross_check
   PUR-S3  (PENDING_USER_REVIEW, STAGING_TEST_PASS) → PR_CI_RUNNING
@@ -75,7 +75,7 @@ async def _step(**overrides):
         tags=[_REQ_ID],
         cur_state=ReqState.PENDING_USER_REVIEW,
         ctx={},
-        event=Event.ANALYZE_DONE,
+        event=Event.EXECUTE_DONE,
         depth=0,
     )
     defaults.update(overrides)
@@ -84,8 +84,8 @@ async def _step(**overrides):
 
 _RESUME_CASES = [
     pytest.param(
-        "ANALYZE_DONE", "create_analyze_artifact_check",
-        "ANALYZE_ARTIFACT_CHECKING",
+        "EXECUTE_DONE", "create_execute_artifact_check",
+        "EXECUTE_ARTIFACT_CHECKING",
         id="PUR-S1-analyze_done",
     ),
     pytest.param(
@@ -209,7 +209,7 @@ def test_pur_s7_fail_events_have_no_pending_user_review_resume() -> None:
         Event.SPEC_LINT_FAIL, Event.CHALLENGER_FAIL,
         Event.DEV_CROSS_CHECK_FAIL, Event.STAGING_TEST_FAIL,
         Event.PR_CI_FAIL, Event.ACCEPT_FAIL,
-        Event.ANALYZE_ARTIFACT_CHECK_FAIL, Event.TEARDOWN_DONE_FAIL,
+        Event.EXECUTE_ARTIFACT_CHECK_FAIL, Event.TEARDOWN_DONE_FAIL,
         Event.SESSION_FAILED, Event.PR_CI_TIMEOUT, Event.ACCEPT_ENV_UP_FAIL,
         Event.VERIFY_ESCALATE, Event.INTAKE_FAIL,
     ]

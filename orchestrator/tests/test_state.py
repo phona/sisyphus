@@ -8,18 +8,18 @@ from orchestrator.state import TRANSITIONS, Event, ReqState, decide, dump_transi
 # 反向声明：列出 happy path 全链 + 关键分支，验 next_state 和 action。
 EXPECTED = [
     # state, event, next_state, action
-    # INTAKING 路径：intent:intake → INTAKING → ANALYZING（新建 analyze issue）
+    # INTAKING 路径：intent:intake → INTAKING → EXECUTING（新建 analyze issue）
     (ReqState.INIT,                 Event.INTENT_INTAKE,       ReqState.INTAKING,            "start_intake"),
-    (ReqState.INTAKING,             Event.INTAKE_PASS,         ReqState.ANALYZING,           "start_analyze_with_finalized_intent"),
+    (ReqState.INTAKING,             Event.INTAKE_PASS,         ReqState.EXECUTING,           "start_execute_with_finalized_intent"),
     (ReqState.INTAKING,             Event.INTAKE_FAIL,         ReqState.ESCALATED,           "escalate"),
-    (ReqState.INIT,                 Event.INTENT_ANALYZE,      ReqState.ANALYZING,           "start_analyze"),
+    (ReqState.INIT,                 Event.INTENT_EXECUTE,      ReqState.EXECUTING,           "start_execute"),
     # 内部 emit verify.escalate 路径（clone_involved_repos 失败等）
-    (ReqState.ANALYZING,            Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
+    (ReqState.EXECUTING,            Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
     (ReqState.INTAKING,             Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
     # REQ-analyze-artifact-check-1777254586：analyze done 走 artifact check 再到 spec_lint
-    (ReqState.ANALYZING,            Event.ANALYZE_DONE,                 ReqState.ANALYZE_ARTIFACT_CHECKING, "create_analyze_artifact_check"),
-    (ReqState.ANALYZE_ARTIFACT_CHECKING, Event.ANALYZE_ARTIFACT_CHECK_PASS, ReqState.SPEC_LINT_RUNNING, "create_spec_lint"),
-    (ReqState.ANALYZE_ARTIFACT_CHECKING, Event.ANALYZE_ARTIFACT_CHECK_FAIL, ReqState.REVIEW_RUNNING,    "invoke_verifier_for_analyze_artifact_check_fail"),
+    (ReqState.EXECUTING,            Event.EXECUTE_DONE,                 ReqState.EXECUTE_ARTIFACT_CHECKING, "create_execute_artifact_check"),
+    (ReqState.EXECUTE_ARTIFACT_CHECKING, Event.EXECUTE_ARTIFACT_CHECK_PASS, ReqState.SPEC_LINT_RUNNING, "create_spec_lint"),
+    (ReqState.EXECUTE_ARTIFACT_CHECKING, Event.EXECUTE_ARTIFACT_CHECK_FAIL, ReqState.REVIEW_RUNNING,    "invoke_verifier_for_execute_artifact_check_fail"),
     (ReqState.SPEC_LINT_RUNNING,    Event.SPEC_LINT_PASS,      ReqState.CHALLENGER_RUNNING,  "start_challenger"),
     (ReqState.SPEC_LINT_RUNNING,    Event.SPEC_LINT_FAIL,      ReqState.REVIEW_RUNNING,      "invoke_verifier_for_spec_lint_fail"),
     # M18: challenger between spec_lint and dev_cross_check
@@ -43,8 +43,8 @@ EXPECTED = [
     (ReqState.PENDING_USER_REVIEW,  Event.USER_REVIEW_FIX,     ReqState.ESCALATED,           "escalate"),
     (ReqState.ACCEPT_TEARING_DOWN,  Event.TEARDOWN_DONE_FAIL,  ReqState.REVIEW_RUNNING,      "invoke_verifier_for_accept_fail"),
     # verifier 子链（pass 拆成 N 条显式 transition，REQ-refactor-verify-pass-transition-1777727230）
-    (ReqState.REVIEW_RUNNING,       Event.ANALYZE_DONE,                 ReqState.ANALYZE_ARTIFACT_CHECKING, "create_analyze_artifact_check"),
-    (ReqState.REVIEW_RUNNING,       Event.ANALYZE_ARTIFACT_CHECK_PASS,  ReqState.SPEC_LINT_RUNNING,         "create_spec_lint"),
+    (ReqState.REVIEW_RUNNING,       Event.EXECUTE_DONE,                 ReqState.EXECUTE_ARTIFACT_CHECKING, "create_execute_artifact_check"),
+    (ReqState.REVIEW_RUNNING,       Event.EXECUTE_ARTIFACT_CHECK_PASS,  ReqState.SPEC_LINT_RUNNING,         "create_spec_lint"),
     (ReqState.REVIEW_RUNNING,       Event.SPEC_LINT_PASS,               ReqState.CHALLENGER_RUNNING,        "start_challenger"),
     (ReqState.REVIEW_RUNNING,       Event.CHALLENGER_PASS,              ReqState.DEV_CROSS_CHECK_RUNNING,   "create_dev_cross_check"),
     (ReqState.REVIEW_RUNNING,       Event.DEV_CROSS_CHECK_PASS,         ReqState.STAGING_TEST_RUNNING,      "create_staging_test"),
@@ -81,8 +81,8 @@ def test_session_failed_routes_to_escalate_action_all_running_states():
     所以这里只验 action 名 + transition 存在，不再要求 next_state == ESCALATED。
     """
     running = [
-        ReqState.INTAKING, ReqState.ANALYZING,
-        ReqState.ANALYZE_ARTIFACT_CHECKING,
+        ReqState.INTAKING, ReqState.EXECUTING,
+        ReqState.EXECUTE_ARTIFACT_CHECKING,
         ReqState.SPEC_LINT_RUNNING, ReqState.DEV_CROSS_CHECK_RUNNING,
         ReqState.STAGING_TEST_RUNNING, ReqState.PR_CI_RUNNING,
         ReqState.ACCEPT_RUNNING, ReqState.ACCEPT_TEARING_DOWN,
@@ -167,10 +167,10 @@ def test_escalated_resumable_via_stage_issue_followup():
     """
     expected = [
         # event,                                next_state,                          action
-        (Event.INTAKE_PASS,                     ReqState.ANALYZING,                  "start_analyze_with_finalized_intent"),
-        (Event.ANALYZE_DONE,                    ReqState.ANALYZE_ARTIFACT_CHECKING,  "create_analyze_artifact_check"),
-        (Event.ANALYZE_ARTIFACT_CHECK_PASS,     ReqState.SPEC_LINT_RUNNING,          "create_spec_lint"),
-        (Event.ANALYZE_ARTIFACT_CHECK_FAIL,     ReqState.REVIEW_RUNNING,             "invoke_verifier_for_analyze_artifact_check_fail"),
+        (Event.INTAKE_PASS,                     ReqState.EXECUTING,                  "start_execute_with_finalized_intent"),
+        (Event.EXECUTE_DONE,                    ReqState.EXECUTE_ARTIFACT_CHECKING,  "create_execute_artifact_check"),
+        (Event.EXECUTE_ARTIFACT_CHECK_PASS,     ReqState.SPEC_LINT_RUNNING,          "create_spec_lint"),
+        (Event.EXECUTE_ARTIFACT_CHECK_FAIL,     ReqState.REVIEW_RUNNING,             "invoke_verifier_for_execute_artifact_check_fail"),
         (Event.SPEC_LINT_PASS,                  ReqState.CHALLENGER_RUNNING,         "start_challenger"),
         (Event.SPEC_LINT_FAIL,                  ReqState.REVIEW_RUNNING,             "invoke_verifier_for_spec_lint_fail"),
         (Event.CHALLENGER_PASS,                 ReqState.DEV_CROSS_CHECK_RUNNING,    "create_dev_cross_check"),
@@ -208,7 +208,7 @@ def test_escalated_non_resume_events_still_blocked():
         Event.USER_REVIEW_PASS,
         Event.PR_MERGED,             # escalate.py 入口的 PR-merged shortcut 处理
         Event.INTENT_INTAKE,         # 入口事件，REQ 已经存在不该重新入口
-        Event.INTENT_ANALYZE,
+        Event.INTENT_EXECUTE,
     }
     for ev in blocked:
         assert decide(ReqState.ESCALATED, ev) is None, f"{ev.value} should NOT move ESCALATED"
@@ -242,14 +242,14 @@ def test_user_review_pending_illegal_events_return_none():
     """USR-T4 续：PENDING_USER_REVIEW 4 类合法事件 = exits + #247 PASS resume。
 
     - 出口：USER_REVIEW_PASS / USER_REVIEW_FIX / PR_MERGED
-    - resume（#247 Phase 1）：ANALYZE_DONE / SPEC_LINT_PASS / CHALLENGER_PASS /
+    - resume（#247 Phase 1）：EXECUTE_DONE / SPEC_LINT_PASS / CHALLENGER_PASS /
       DEV_CROSS_CHECK_PASS / STAGING_TEST_PASS / PR_CI_PASS / ACCEPT_PASS
     其他全非法。
     """
     legal = {
         Event.USER_REVIEW_PASS, Event.USER_REVIEW_FIX, Event.PR_MERGED,
         # #247 Phase 1 stage-issue follow-up resume (PASS-only)
-        Event.ANALYZE_DONE, Event.SPEC_LINT_PASS, Event.CHALLENGER_PASS,
+        Event.EXECUTE_DONE, Event.SPEC_LINT_PASS, Event.CHALLENGER_PASS,
         Event.DEV_CROSS_CHECK_PASS, Event.STAGING_TEST_PASS,
         Event.PR_CI_PASS, Event.ACCEPT_PASS,
     }
@@ -295,7 +295,7 @@ def test_m12_dropped_pending_human_state_and_event():
     sisyphus 不再卡 analyze 阶段歧义；agent 自己在 BKD chat 里跟 user 谈。
     """
     state_values = {s.value for s in ReqState}
-    assert "analyzing-pending-human" not in state_values
+    assert "executing-pending-human" not in state_values
 
     event_values = {e.value for e in Event}
     assert "analyze.pending-human" not in event_values

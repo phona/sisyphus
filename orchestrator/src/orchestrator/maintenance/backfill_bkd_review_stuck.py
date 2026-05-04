@@ -27,7 +27,8 @@ import httpx
 # 业务能识别的 sub-agent role tag（intake 不在此列：intake 跑在 user 创的 intent
 # issue 上，那条 issue 的 statusId 反映用户意图，不该被本脚本动）
 _ROLE_TAGS = frozenset(
-    {"verifier", "fixer", "analyze", "challenger", "accept-agent"}
+    # 保留 `analyze` 让历史 BKD issue 仍被识别（REQ-refactor-analyze-execute-392 read-compat）
+    {"verifier", "fixer", "execute", "analyze", "challenger", "accept-agent"}
 )
 
 

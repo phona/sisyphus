@@ -244,7 +244,7 @@ def test_docs_s6_tag_spec_contains_router_tags():
     tag_spec = (REPO_ROOT / "docs" / "api-tag-management-spec.md").read_text()
     required = [
         "intent:intake",
-        "intent:analyze",
+        "intent:execute",
         "result:pass",
         "result:fail",
         "decision:",
@@ -271,12 +271,13 @@ def test_docs_s6_tag_spec_not_apifox_content():
 # ──────────────────────────────────────────────────────────────────────────
 
 def test_docs_s7_forward_migration_count_is_13():
-    """DOCS-S7: orchestrator/migrations/ has exactly 15 forward migration files
-    (0001..0016 with 0012 missing: 0011 = baseline_results, 0013 = pr_drift_log,
-    0014 = req_terminal_outcome, 0015 = agent_turns, 0016 = stage_runs_context)."""
+    """DOCS-S7: orchestrator/migrations/ has exactly 16 forward migration files
+    (0001..0017 with 0012 missing: 0011 = baseline_results, 0013 = pr_drift_log,
+    0014 = req_terminal_outcome, 0015 = agent_turns, 0016 = stage_runs_context,
+    0017 = rename_analyze_to_execute)."""
     forward = [f for f in MIGRATIONS_DIR.glob("*.sql") if ".rollback." not in f.name]
-    assert len(forward) == 15, (
-        f"orchestrator/migrations/ has {len(forward)} forward migration(s), expected 15: "
+    assert len(forward) == 16, (
+        f"orchestrator/migrations/ has {len(forward)} forward migration(s), expected 16: "
         f"{sorted(f.name for f in forward)}"
     )
 

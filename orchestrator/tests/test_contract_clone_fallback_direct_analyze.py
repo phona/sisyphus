@@ -6,7 +6,7 @@ multi-layer involved_repos fallback for direct analyze entry。
   （L0 = source-repo 由 REQ-fix-orch-source-repo-tag-1777824479 加入）
 - _clone helper 不能从自由文本（intent_title / prompt body）反向推断 repos
   （假阳性风险高，规则强制改用显式 tag 或 settings env）
-- start_analyze + start_analyze_with_finalized_intent 必须把 tags +
+- start_execute + start_execute_with_finalized_intent 必须把 tags +
   settings.default_involved_repos 透传给 clone helper
 - settings.default_involved_repos field 必须存在，env=SISYPHUS_DEFAULT_INVOLVED_REPOS
 """
@@ -98,9 +98,9 @@ def test_clone_helper_does_not_parse_intent_title_or_body():
 
 
 def test_start_analyze_actions_pass_tags_and_default_to_clone():
-    """start_analyze + start_analyze_with_finalized_intent 必须透传 tags +
+    """start_execute + start_execute_with_finalized_intent 必须透传 tags +
     settings.default_involved_repos 给 _clone helper。"""
-    for action_filename in ("start_analyze.py", "start_analyze_with_finalized_intent.py"):
+    for action_filename in ("start_execute.py", "start_execute_with_finalized_intent.py"):
         path = _PRODUCTION_SOURCE / "actions" / action_filename
         text = path.read_text(encoding="utf-8")
         assert "tags=tags" in text, (

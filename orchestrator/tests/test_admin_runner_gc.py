@@ -58,7 +58,7 @@ async def test_trigger_runner_gc_returns_split_result_with_ran_at(
     monkeypatch, mock_controller, _skip_token
 ):
     """RGA-S1: POST /admin/runner-gc 返回 cleaned_pods + cleaned_pvcs + ran_at。"""
-    pool = _FakePool([{"req_id": "REQ-1", "state": "analyzing",
+    pool = _FakePool([{"req_id": "REQ-1", "state": "executing",
                        "updated_at": None, "context": {}}])
     monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
     mock_controller.gc_orphan_pods = AsyncMock(return_value=["runner-req-x"])
@@ -113,7 +113,7 @@ async def test_runner_gc_status_after_gc_contains_ran_at(
     monkeypatch, mock_controller, _skip_token
 ):
     """RGA-S5: GC 触发后 /admin/runner-gc/status 返含 ran_at 的 last 字段。"""
-    pool = _FakePool([{"req_id": "REQ-1", "state": "analyzing",
+    pool = _FakePool([{"req_id": "REQ-1", "state": "executing",
                        "updated_at": None, "context": {}}])
     monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
 

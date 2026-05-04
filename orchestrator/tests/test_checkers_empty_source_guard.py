@@ -142,7 +142,7 @@ def test_guard_b_source_dir_with_only_files_not_subdirs_is_empty(builder, name, 
 #     repos eligible") because spec changes may legitimately live only in the
 #     spec_home repo. CESG-S3 retains its original semantics.
 #   - dev_cross_check / staging_test: missing feat branch on a cloned repo is
-#     a structural failure of the analyze-agent and now fail loud immediately
+#     a structural failure of the execute-agent and now fail loud immediately
 #     with "has no feat/<REQ> branch on origin". CESG-S6/S9 still fire Guard C
 #     for the *Makefile-target-missing* sub-case (covered by the new REQ's
 #     spec; tests for that scenario live in

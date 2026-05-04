@@ -1,19 +1,19 @@
-"""start_analyze_with_finalized_intent：intake 完成后起独立 analyze-agent issue。
+"""start_execute_with_finalized_intent：intake 完成后起独立 execute-agent issue。
 
 intake-agent 写完 finalized intent JSON（落 ctx.intake_finalized_intent）后，
-这里创建新 BKD issue（不复用 intake issue），把 finalized intent 嵌入 analyze prompt。
+这里创建新 BKD issue（不复用 intake issue），把 finalized intent 嵌入 execute prompt。
 
 REQ-clone-and-pr-ci-fallback-1777115925：在 ensure_runner 之后、create
-analyze issue 之前，按 ctx.intake_finalized_intent.involved_repos
+execute issue 之前，按 ctx.intake_finalized_intent.involved_repos
 server-side clone 业务仓到 /workspace/source/<basename>/。clone 失败 →
 emit VERIFY_ESCALATE，不打 agent 进空 PVC。
 
 行为：
 1. 检查 ctx.intake_finalized_intent 是否存在（缺失 → emit VERIFY_ESCALATE 不阻断）
-2. ensure_runner（analyze-agent 要 clone 仓写代码）
+2. ensure_runner（execute-agent 要 clone 仓写代码）
 3. server-side clone involved_repos（失败 → emit VERIFY_ESCALATE）
-4. create 新 BKD issue（title=[REQ-xxx] [ANALYZE]）
-5. follow-up 发 analyze prompt（带 intake_summary）
+4. create 新 BKD issue（title=[REQ-xxx] [EXECUTE]）
+5. follow-up 发 execute prompt（带 intake_summary）
 6. update statusId=working 触发 agent
 """
 from __future__ import annotations
@@ -35,11 +35,11 @@ from ._clone import clone_involved_repos_into_runner
 log = structlog.get_logger(__name__)
 
 
-@register("start_analyze_with_finalized_intent", idempotent=False)
-async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
+@register("start_execute_with_finalized_intent", idempotent=False)
+async def start_execute_with_finalized_intent(*, body, req_id, tags, ctx):
     finalized = (ctx or {}).get("intake_finalized_intent")
     if not finalized:
-        log.warning("start_analyze_with_finalized_intent.missing_finalized_intent", req_id=req_id)
+        log.warning("start_execute_with_finalized_intent.missing_finalized_intent", req_id=req_id)
         return {
             "emit": Event.VERIFY_ESCALATE.value,
             "reason": "intake_finalized_intent missing in ctx",
@@ -51,11 +51,11 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
     try:
         rc = k8s_runner.get_controller()
     except RuntimeError as e:
-        log.warning("start_analyze_with_finalized_intent.no_runner_controller",
+        log.warning("start_execute_with_finalized_intent.no_runner_controller",
                     req_id=req_id, error=str(e))
     else:
         pod_name = await rc.ensure_runner(req_id, wait_ready=True)
-        log.info("start_analyze_with_finalized_intent.runner_ready", req_id=req_id, pod=pod_name)
+        log.info("start_execute_with_finalized_intent.runner_ready", req_id=req_id, pod=pod_name)
 
     # 1.5 解析 base:* tag 并注入 ctx（REQ-base-branch-override-1777480690）。
     # 四层 fallback：tag > finalized_intent > settings 配置 > origin/HEAD
@@ -91,33 +91,33 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
             "reason": f"clone failed (rc={clone_rc}) for repos={cloned_repos}"[:200],
         }
 
-    # 3-5. 创建新 BKD analyze issue（不复用 intake issue）
+    # 3-5. 创建新 BKD execute issue（不复用 intake issue）
     # REQ-ux-tags-injection-1777257283: forward user hint tags from the intake
-    # issue so analyze + downstream stages (challenger / verifier / accept) keep
+    # issue so execute + downstream stages (challenger / verifier / accept) keep
     # the same context. `sisyphus` is auto-prepended by BKDRestClient.create_issue.
     forwarded = filter_propagatable_intent_tags(tags)
     pool = db.get_pool()
-    slug = f"analyze|{req_id}|{getattr(body, 'executionId', None) or ''}"
+    slug = f"execute|{req_id}|{getattr(body, 'executionId', None) or ''}"
     if hit := await dispatch_slugs.get(pool, slug):
-        log.info("start_analyze_with_finalized_intent.slug_hit", req_id=req_id, issue_id=hit)
-        await req_state.update_context(pool, req_id, {"analyze_issue_id": hit})
-        return {"analyze_issue_id": hit, "cloned_repos": cloned_repos}
+        log.info("start_execute_with_finalized_intent.slug_hit", req_id=req_id, issue_id=hit)
+        await req_state.update_context(pool, req_id, {"execute_issue_id": hit})
+        return {"execute_issue_id": hit, "cloned_repos": cloned_repos}
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
             project_id=proj,
-            title=f"[{req_id}] [ANALYZE]{short_title(ctx)}",
-            tags=["analyze", req_id, *forwarded],
+            title=f"[{req_id}] [EXECUTE]{short_title(ctx)}",
+            tags=["execute", req_id, *forwarded],
             status_id="todo",
             use_worktree=True,
             model=settings.agent_model,
         )
-        # REQ-ux-status-block-1777257283: parity with start_analyze direct path —
-        # the cross-link footer block (analyze.md.j2 §B.7) and the new status
+        # REQ-ux-status-block-1777257283: parity with start_execute direct path —
+        # the cross-link footer block (execute.md.j2 §B.7) and the new status
         # block both want the BKD intent issue URL, so resolve it once after
         # create_issue gives us the new issue id.
         bkd_intent_issue_url = links.bkd_issue_url(proj, issue.id) or ""
         prompt = render(
-            "analyze.md.j2",
+            "execute.md.j2",
             req_id=req_id,
             aissh_server_id=settings.aissh_server_id,
             project_id=proj,
@@ -131,7 +131,7 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
             base_branches=base_overrides,
             status_block=build_status_block_ctx(
                 req_id=req_id,
-                stage="analyze",
+                stage="execute",
                 bkd_intent_issue_url=bkd_intent_issue_url,
                 cloned_repos=cloned_repos,
                 pr_urls=(ctx or {}).get("pr_urls"),
@@ -140,14 +140,14 @@ async def start_analyze_with_finalized_intent(*, body, req_id, tags, ctx):
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")
 
-    # stash analyze_issue_id 进 ctx：让 pr_links.ensure_pr_links_in_ctx 第一次
-    # discover 成功时能 backfill 这条 analyze issue 的 pr:* tag
+    # stash execute_issue_id 进 ctx：让 pr_links.ensure_pr_links_in_ctx 第一次
+    # discover 成功时能 backfill 这条 execute issue 的 pr:* tag
     # （REQ-issue-link-pr-quality-base-1777218242）
     await dispatch_slugs.put(pool, slug, issue.id)
     await req_state.update_context(pool, req_id, {
-        "analyze_issue_id": issue.id,
+        "execute_issue_id": issue.id,
     })
 
-    log.info("start_analyze_with_finalized_intent.done", req_id=req_id,
-             analyze_issue_id=issue.id, cloned_repos=cloned_repos)
-    return {"analyze_issue_id": issue.id, "cloned_repos": cloned_repos}
+    log.info("start_execute_with_finalized_intent.done", req_id=req_id,
+             execute_issue_id=issue.id, cloned_repos=cloned_repos)
+    return {"execute_issue_id": issue.id, "cloned_repos": cloned_repos}

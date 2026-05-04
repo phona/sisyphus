@@ -6,7 +6,7 @@
 > 状态机当前形态：M14c + INTAKING + M16 多仓 + M17 全责交付 + M18 challenger ——
 > verifier-agent 接管所有 stage fail 路径（旧 BUGFIX/DIAGNOSE 子链已砍）；
 > INTAKING 为物理隔离 brainstorm 阶段（intake-agent 只读代码 + 问问题，不能写实现）；
-> M17 起 sisyphus 不再起 spec / dev BKD 子 agent，由 analyze-agent 全责交付 spec + 业务码 + PR；
+> M17 起 sisyphus 不再起 spec / dev BKD 子 agent，由 execute-agent 全责交付 spec + 业务码 + PR；
 > M18 在 spec-lint 后插入 challenger-agent 黑盒读 spec 写 contract test。
 
 ## 1. 设计要点
@@ -24,10 +24,10 @@
 
 | state | 含义 | 类型 |
 |---|---|---|
-| `init` | 还没 analyze（intent_analyze 之前） | start |
+| `init` | 还没 execute（intent_execute 之前） | start |
 | `intaking` | **INTAKING** intake-agent 在跑（多轮 BKD chat 澄清 + 写 finalized intent） | in-flight |
-| `analyzing` | analyze-agent 在跑（M17 起全责交付：spec + 业务码 + push + 开 PR 都在 analyze 一段里完成） | in-flight |
-| `analyze-artifact-checking` | **REQ-analyze-artifact-check-1777254586** 机械 post-artifact-check：遍历 `/workspace/source/*` 校 `openspec/changes/<REQ>/` 下 proposal.md / tasks.md / spec.md 存在 + 非空（防 agent 自报 pass 但无产物） | in-flight |
+| `executing` | execute-agent 在跑（M17 起全责交付：spec + 业务码 + push + 开 PR 都在 execute 一段里完成） | in-flight |
+| `execute-artifact-checking` | **REQ-analyze-artifact-check-1777254586** 机械 post-artifact-check：遍历 `/workspace/source/*` 校 `openspec/changes/<REQ>/` 下 proposal.md / tasks.md / spec.md 存在 + 非空（防 agent 自报 pass 但无产物） | in-flight |
 | `spec-lint-running` | **M15** 客观检查：**for-each-repo** openspec validate + check-scenario-refs.sh（遍历 `/workspace/source/*`） | in-flight |
 | `challenger-running` | **M18** challenger-agent 跑：黑盒读 spec 写 contract test + push feat 分支（不看 dev 代码，避免 prompt 泄露实现） | in-flight |
 | `dev-cross-check-running` | **M15** 客观检查：**for-each-repo** `BASE_REV=$(git merge-base HEAD origin/<default_branch>) make ci-lint`（default_branch 先 resolve `origin/HEAD` 符号引用，再退 main/master/develop/dev；ttpos-ci 标准，仅 lint 变更文件） | in-flight |
@@ -47,12 +47,12 @@
 | event | 来源 | 触发什么 |
 |---|---|---|
 | **`intent.intake`** | 人在 BKD 打 `intent:intake` tag | start_intake（物理隔离 brainstorm） |
-| **`intake.pass`** | intake-agent PATCH `result:pass` + finalized intent JSON 解析成功 | start_analyze_with_finalized_intent |
+| **`intake.pass`** | intake-agent PATCH `result:pass` + finalized intent JSON 解析成功 | start_execute_with_finalized_intent |
 | **`intake.fail`** | intake-agent PATCH `result:fail` / 或 finalized intent JSON 解析失败 | escalate |
-| `intent.analyze` | 人在 BKD 打 `intent:analyze` tag（跳过 intake 直接进 analyze） | start_analyze |
-| `analyze.done` | analyze-agent session.completed | create_analyze_artifact_check |
-| **`analyze-artifact-check.pass`** | **REQ-analyze-artifact-check-1777254586** 产物校验退码 0 | create_spec_lint |
-| **`analyze-artifact-check.fail`** | **REQ-analyze-artifact-check-1777254586** 产物校验退码非 0 / timeout | invoke_verifier_for_analyze_artifact_check_fail |
+| `intent.execute` | 人在 BKD 打 `intent:execute` tag（跳过 intake 直接进 execute） | start_execute |
+| `execute.done` | execute-agent session.completed | create_execute_artifact_check |
+| **`execute-artifact-check.pass`** | **REQ-analyze-artifact-check-1777254586** 产物校验退码 0 | create_spec_lint |
+| **`execute-artifact-check.fail`** | **REQ-analyze-artifact-check-1777254586** 产物校验退码非 0 / timeout | invoke_verifier_for_execute_artifact_check_fail |
 | **`spec-lint.pass`** | **M15** spec-lint checker 退码 0 | start_challenger（M18：先起 challenger 写 contract test） |
 | **`spec-lint.fail`** | **M15** spec-lint checker 退码非 0 | invoke_verifier_for_spec_lint_fail |
 | **`challenger.pass`** | **M18** challenger-agent 写完 contract test 推 feat 分支 | create_dev_cross_check |
@@ -74,7 +74,7 @@
 | `session.failed` | 任意 stage agent session 崩 / watchdog 超时 | escalate |
 | **`verify.pass`** | M14b verifier decision=pass | apply_verify_pass（手工 CAS 推进下一 stage） |
 | **`verify.fix-needed`** | M14b verifier decision=fix | start_fixer |
-| **`verify.escalate`** | M14b decision=escalate / schema invalid；start_analyze* 内部 emit (clone 失败等) | escalate |
+| **`verify.escalate`** | M14b decision=escalate / schema invalid；start_execute* 内部 emit (clone 失败等) | escalate |
 | **`verify.infra-retry`** | **REQ-428** verifier decision=retry（确认 infra-flake，有界重跑）| apply_verify_infra_retry（CAS 回 stage_running，重调 create_*；ctx.infra_retry_count >= verifier_infra_retry_cap → emit verify.escalate） |
 | **`fixer.done`** | fixer agent session.completed | invoke_verifier_after_fix |
 
@@ -85,14 +85,14 @@ stateDiagram-v2
     [*] --> init
 
     init --> intaking: intent.intake（物理隔离 brainstorm）
-    init --> analyzing: intent.analyze（跳过 intake）
-    intaking --> analyzing: intake.pass（新建 analyze issue）
+    init --> executing: intent.execute（跳过 intake）
+    intaking --> executing: intake.pass（新建 execute issue）
     intaking --> escalated: intake.fail
-    intaking --> escalated: verify.escalate\n(start_analyze_with_finalized_intent 内部判 escalate)
-    analyzing --> escalated: verify.escalate\n(start_analyze 内部判 escalate, 如 clone failed)
-    analyzing --> analyze_artifact_checking: analyze.done
-    analyze_artifact_checking --> spec_lint_running: analyze-artifact-check.pass
-    analyze_artifact_checking --> review_running: analyze-artifact-check.fail
+    intaking --> escalated: verify.escalate\n(start_execute_with_finalized_intent 内部判 escalate)
+    executing --> escalated: verify.escalate\n(start_execute 内部判 escalate, 如 clone failed)
+    executing --> execute_artifact_checking: execute.done
+    execute_artifact_checking --> spec_lint_running: execute-artifact-check.pass
+    execute_artifact_checking --> review_running: execute-artifact-check.fail
     spec_lint_running --> challenger_running: spec-lint.pass
     spec_lint_running --> review_running: spec-lint.fail
 
@@ -129,7 +129,7 @@ stateDiagram-v2
     escalated --> escalated: verify.escalate\n(verifier 又判 escalate, 留原地)
 
     %% REQ-escalated-stage-resume: 续 stage agent issue 走主链事件，复用主链 transition
-    escalated --> analyze_artifact_checking: analyze.done\n(stage-issue 续: 用户在 analyze issue follow-up,\nagent 重跑出 result:pass)
+    escalated --> execute_artifact_checking: execute.done\n(stage-issue 续: 用户在 execute issue follow-up,\nagent 重跑出 result:pass)
     escalated --> dev_cross_check_running: challenger.pass
     escalated --> staging_test_running: dev-cross-check.pass
     escalated --> pr_ci_running: staging-test.pass
@@ -156,7 +156,7 @@ stateDiagram-v2
 - `retry`（REQ-428 新增）：verifier 高度确信是纯 infra-flake（网络/docker/kubectl 抖动）时
   输出 `action=retry`；sisyphus 自动重跑该 stage 的机械 checker（staging_test /
   dev_cross_check / spec_lint / pr_ci），有界（`verifier_infra_retry_cap`，默认 2 次），
-  超 cap → 真 escalate 让人介入。仅覆盖机械 checker stage，analyze/accept/challenger
+  超 cap → 真 escalate 让人介入。仅覆盖机械 checker stage，execute/accept/challenger
   输出 retry 会退回 escalate（这些非机械 checker，无法简单重跑）。
 - `escalate`：不确定是否 flaky / infra 问题持续 / retry cap 到顶 / 所有非 retry 场景。
 
@@ -167,8 +167,8 @@ stateDiagram-v2
    verifier session.completed 同一套链路，命中 `(ESCALATED, VERIFY_*)` transition。
 
 2. **续 stage agent issue**（REQ-escalated-stage-resume）：用户 follow-up 任意 stage
-   agent issue（intake / analyze / challenger / accept / fixer 等）→ BKD wake agent
-   → 重跑并贴 result tag → router 派出对应主链事件（ANALYZE_DONE / CHALLENGER_PASS
+   agent issue（intake / execute / challenger / accept / fixer 等）→ BKD wake agent
+   → 重跑并贴 result tag → router 派出对应主链事件（EXECUTE_DONE / CHALLENGER_PASS
    等）→ ESCALATED 复用主链 transition（next_state / action 跟主链同一份）。19 条
    `(ESCALATED, <main-chain-event>)` 在 state.py `_ESCALATED_RESUME_EVENT_SOURCES`
    声明，复用 `TRANSITIONS[(src, ev)]`，主链改了 ESCALATED 复活路径自动跟，零漂移。
@@ -235,18 +235,18 @@ start_fixer:
 
 ## 7. INTAKING 设计动机：两 agent 物理隔离
 
-**问题**：analyze-agent 在一个 session 内完成 brainstorm + spec + 代码 + PR。对不熟悉的仓，
+**问题**：execute-agent 在一个 session 内完成 brainstorm + spec + 代码 + PR。对不熟悉的仓，
 LLM 有强烈的行动 bias，即使 prompt 要求"先 brainstorm"也会绕过用户意见直接开干。
 
 **方案**：把 brainstorm 拆成独立 agent stage（INTAKING），物理上限制它**只能读代码 + 问问题**，
-不能写实现 / 开 PR / push。用户在 BKD chat 多轮对话直到满意，intake-agent 输出 finalized intent JSON 后 PATCH `result:pass`，sisyphus 才在新 BKD issue 起 analyze-agent 接力。
+不能写实现 / 开 PR / push。用户在 BKD chat 多轮对话直到满意，intake-agent 输出 finalized intent JSON 后 PATCH `result:pass`，sisyphus 才在新 BKD issue 起 execute-agent 接力。
 
 **物理隔离的含义**：
-- intake issue 只有 `intake` tag → analyze 的 prompt 不会出现（agent 没有 "出口"）
-- analyze-agent 是在全新 issue 里起来的，不知道也不能访问 intake issue 的 session 工具
-- finalized intent JSON 经 sisyphus 解析验证（6 必填字段）后注入 analyze prompt
+- intake issue 只有 `intake` tag → execute 的 prompt 不会出现（agent 没有 "出口"）
+- execute-agent 是在全新 issue 里起来的，不知道也不能访问 intake issue 的 session 工具
+- finalized intent JSON 经 sisyphus 解析验证（6 必填字段）后注入 execute prompt
 
-**跳过 intake**：用 `intent:analyze` tag 而非 `intent:intake` → 直接进 ANALYZING（trivial REQ 不需要澄清）。两条路在状态机里是独立 transition，互不干扰。
+**跳过 intake**：用 `intent:execute` tag 而非 `intent:intake` → 直接进 EXECUTING（trivial REQ 不需要澄清）。两条路在状态机里是独立 transition，互不干扰。
 
 ## 8. session.failed 兜底
 

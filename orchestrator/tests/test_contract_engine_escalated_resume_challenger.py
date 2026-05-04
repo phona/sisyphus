@@ -8,10 +8,10 @@ If a test is truly wrong, escalate to spec_fixer to correct the spec, not the te
 
 Scenarios covered:
   ERT-S1  (INIT, INTENT_INTAKE) → INTAKING + start_intake dispatched exactly once
-  ERT-S2  (INTAKING, INTAKE_PASS) → ANALYZING + start_analyze_with_finalized_intent dispatched
+  ERT-S2  (INTAKING, INTAKE_PASS) → EXECUTING + start_execute_with_finalized_intent dispatched
   ERT-S3  (INTAKING, INTAKE_FAIL) → ESCALATED + escalate + cleanup_runner(retain_pvc=True)
   ERT-S4  (INTAKING, VERIFY_ESCALATE) → ESCALATED + escalate + cleanup_runner(retain_pvc=True)
-  ERT-S5  (ANALYZING, VERIFY_ESCALATE) → ESCALATED + escalate + cleanup_runner(retain_pvc=True)
+  ERT-S5  (EXECUTING, VERIFY_ESCALATE) → ESCALATED + escalate + cleanup_runner(retain_pvc=True)
   ERT-S6  (PR_CI_RUNNING, PR_CI_TIMEOUT) → ESCALATED + escalate + cleanup_runner(retain_pvc=True)
   ERT-S7  ESCALATED + PR_CI_PASS → ACCEPT_RUNNING + create_accept (explicit transition, no chaining)
   ERT-S8  ESCALATED + VERIFY_FIX_NEEDED → FIXER_RUNNING, start_fixer receives verify:staging_test tag + ctx
@@ -140,11 +140,11 @@ async def test_ert_s1_init_intent_intake_enters_intaking(monkeypatch) -> None:
     )
 
 
-# ─── ERT-S2: (INTAKING, INTAKE_PASS) → ANALYZING + start_analyze_with_finalized_intent ──
+# ─── ERT-S2: (INTAKING, INTAKE_PASS) → EXECUTING + start_execute_with_finalized_intent ──
 
 
 async def test_ert_s2_intaking_intake_pass_enters_analyzing(monkeypatch) -> None:
-    """ERT-S2: (INTAKING, INTAKE_PASS) → ANALYZING via start_analyze_with_finalized_intent.
+    """ERT-S2: (INTAKING, INTAKE_PASS) → EXECUTING via start_execute_with_finalized_intent.
     Intake clarification succeeded; finalized intent is forwarded to the analyze phase."""
     from orchestrator.actions import REGISTRY
     from orchestrator.state import Event, ReqState
@@ -153,25 +153,25 @@ async def test_ert_s2_intaking_intake_pass_enters_analyzing(monkeypatch) -> None
     calls: list[str] = []
 
     async def _stub(**_kw):
-        calls.append("start_analyze_with_finalized_intent")
+        calls.append("start_execute_with_finalized_intent")
         return {}
 
-    REGISTRY["start_analyze_with_finalized_intent"] = _stub
+    REGISTRY["start_execute_with_finalized_intent"] = _stub
 
     result = await _step(cur_state=ReqState.INTAKING, event=Event.INTAKE_PASS)
 
-    assert result.get("action") == "start_analyze_with_finalized_intent", (
-        f"ERT-S2: action MUST be 'start_analyze_with_finalized_intent'; got {result!r}"
+    assert result.get("action") == "start_execute_with_finalized_intent", (
+        f"ERT-S2: action MUST be 'start_execute_with_finalized_intent'; got {result!r}"
     )
-    assert result.get("next_state") == ReqState.ANALYZING.value, (
-        f"ERT-S2: next_state MUST be {ReqState.ANALYZING.value!r}; got {result!r}"
+    assert result.get("next_state") == ReqState.EXECUTING.value, (
+        f"ERT-S2: next_state MUST be {ReqState.EXECUTING.value!r}; got {result!r}"
     )
     assert len(calls) == 1, (
         f"ERT-S2: stub MUST be awaited exactly once; called {len(calls)} time(s)"
     )
     cas_next = cas.call_args.args[3]
-    assert cas_next == ReqState.ANALYZING, (
-        f"ERT-S2: CAS MUST advance to ANALYZING; got {cas_next!r}"
+    assert cas_next == ReqState.EXECUTING, (
+        f"ERT-S2: CAS MUST advance to EXECUTING; got {cas_next!r}"
     )
 
 
@@ -188,7 +188,7 @@ _ESCALATE_CASES = [
         id="ERT-S4-intaking_verify_escalate",
     ),
     pytest.param(
-        "ANALYZING", "VERIFY_ESCALATE",
+        "EXECUTING", "VERIFY_ESCALATE",
         id="ERT-S5-analyzing_verify_escalate",
     ),
     pytest.param(
@@ -202,7 +202,7 @@ _ESCALATE_CASES = [
 async def test_ert_s3_to_s6_non_terminal_escalate_triggers_cleanup(
     monkeypatch, state_name, event_name,
 ) -> None:
-    """ERT-S3..S6: (INTAKING|ANALYZING|PR_CI_RUNNING, *) → ESCALATED via escalate.
+    """ERT-S3..S6: (INTAKING|EXECUTING|PR_CI_RUNNING, *) → ESCALATED via escalate.
     Non-terminal → terminal transition MUST fire-and-forget cleanup_runner(retain_pvc=True)
     because the runner PVC must be preserved for post-mortem inspection."""
     from orchestrator import engine

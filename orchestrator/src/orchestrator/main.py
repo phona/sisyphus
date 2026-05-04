@@ -69,7 +69,7 @@ async def startup() -> None:
         except Exception as e:
             log.warning("startup.config_version.failed", error=str(e))
     # 3. 起 snapshot 后台同步 task（interval 0 不起）。
-    # 这个 loop 现在两件事：obs UPSERT（依赖 obs pool） + intent:analyze orphan 恢复
+    # 这个 loop 现在两件事：obs UPSERT（依赖 obs pool） + intent:execute orphan 恢复
     # （只依赖 main pool）。后者跟 obs DSN 无关，所以 startup gate 不再 require obs_pg_dsn。
     if settings.snapshot_interval_sec > 0:
         _bg_tasks.append(asyncio.create_task(snapshot.run_loop(), name="snapshot"))

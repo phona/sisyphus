@@ -239,7 +239,7 @@ def test_bbr_s5_apply_patches_each_candidate_with_statusid_only_body() -> None:
     issues = [
         _issue(id="a", tags=["verifier", "REQ-x-1"], session="completed"),
         _issue(id="b", tags=["fixer", "REQ-y-2"], session="failed"),
-        _issue(id="c", tags=["analyze", "REQ-z-3"], session="failed"),
+        _issue(id="c", tags=["execute", "REQ-z-3"], session="failed"),
     ]
     with _mock_bkd(issues) as (server, url):
         rc, lines, _ = _run_cli(url, apply=True)
@@ -286,7 +286,7 @@ def test_bbr_s6_partial_patch_failure_continues_and_exits_zero() -> None:
     issues = [
         _issue(id="a", tags=["verifier", "REQ-x-1"], session="completed"),
         _issue(id="b", tags=["fixer", "REQ-y-2"], session="failed"),   # will 503
-        _issue(id="c", tags=["analyze", "REQ-z-3"], session="failed"),
+        _issue(id="c", tags=["execute", "REQ-z-3"], session="failed"),
     ]
     with _mock_bkd(issues, patch_outcomes={"b": 503}) as (server, url):
         rc, lines, _ = _run_cli(url, apply=True)

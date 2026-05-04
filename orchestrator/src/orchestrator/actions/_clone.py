@@ -1,4 +1,4 @@
-"""server-side clone helper：start_analyze 系列 action 用，把 involved_repos 落到
+"""server-side clone helper：start_execute 系列 action 用，把 involved_repos 落到
 runner pod 的 /workspace/source/<basename>/。
 
 入口：`clone_involved_repos_into_runner(req_id, ctx, *, tags, default_repos)`，

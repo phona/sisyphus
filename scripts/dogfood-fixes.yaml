@@ -31,7 +31,7 @@ issues:
 
       修复方向：
       1. 检查 BKD webhook 配置和投递日志
-      2. 给 orchestrator 加 orphan intent issue 扫描增强（snapshot loop 已扫 intent:analyze，但 intent:intake 可能漏了）
+      2. 给 orchestrator 加 orphan intent issue 扫描增强（snapshot loop 已扫 intent:execute，但 intent:intake 可能漏了）
       3. 考虑在 bkd-cli.py 派单后主动 poll 确认 webhook 被处理，或加一个 admin trigger 接口
     priority: p0
     tags: ["dogfood", "webhook", "intent-intake", "pipeline-blocker"]

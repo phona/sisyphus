@@ -51,8 +51,8 @@ log = structlog.get_logger(__name__)
 # state → ctx 里追踪该 stage 当前 agent issue 的 key
 # None 表示没 issue 可查（直接 escalate）
 _STATE_ISSUE_KEY: dict[ReqState, str | None] = {
-    ReqState.ANALYZING: "intent_issue_id",
-    ReqState.ANALYZE_ARTIFACT_CHECKING: None,    # 客观 checker，由 orchestrator 下发不绑 issue
+    ReqState.EXECUTING: "intent_issue_id",
+    ReqState.EXECUTE_ARTIFACT_CHECKING: None,    # 客观 checker，由 orchestrator 下发不绑 issue
     ReqState.SPEC_LINT_RUNNING: None,            # M15: 客观 checker，由 orchestrator 下发不绑 issue
     ReqState.DEV_CROSS_CHECK_RUNNING: None,      # M15: 客观 checker，由 orchestrator 下发不绑 issue
     ReqState.CHALLENGER_RUNNING: "challenger_issue_id",
@@ -76,7 +76,7 @@ _STATE_FAILURE_EVENT: dict[ReqState, str] = {}
 # verifier 也排除：verifier 判 escalate 时 issue 应保持 review，BKD 侧无法区分 pass/fix/escalate。
 # REQ-fix-bkd-sub-issue-status-sync-1777426309
 _SUB_AGENT_ROLE_TAGS: frozenset[str] = frozenset({
-    "analyze", "challenger", "fixer", "accept",
+    "execute", "challenger", "fixer", "accept",
 })
 
 # REQ-feat-watchdog-self-heal-1777723955：这些 stage 的 session.completed 必须带 result tag
@@ -131,7 +131,7 @@ class _StagePolicy:
 # - deterministic-checker   → ended=300, stuck=300（除 STAGING_TEST 见下）
 # - autonomous-bounded      → ended=300, stuck=None（保留不杀长尾，30min hard
 #                             cap 留给运维数据驱动决策；config.py:186 写过
-#                             30min 实测 false-escalate 长尾 sonnet ANALYZING）
+#                             30min 实测 false-escalate 长尾 sonnet EXECUTING）
 # - external-poll           → ended=300, stuck=14400（4h CI hard cap）
 #
 # STAGING_TEST_RUNNING 名义是 deterministic-checker（kubectl exec），但单/集成
@@ -147,11 +147,11 @@ _STAGE_POLICY: dict[ReqState, _StagePolicy | None] = {
     # deterministic-checker（紧 5min ended + 5min stuck 双线）
     ReqState.SPEC_LINT_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=300),
     ReqState.DEV_CROSS_CHECK_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=300),
-    ReqState.ANALYZE_ARTIFACT_CHECKING: _StagePolicy(ended_sec=300, stuck_sec=300),
+    ReqState.EXECUTE_ARTIFACT_CHECKING: _StagePolicy(ended_sec=300, stuck_sec=300),
     # deterministic-checker（宽松：测试套件常跑长）
     ReqState.STAGING_TEST_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
     # autonomous-bounded
-    ReqState.ANALYZING: _StagePolicy(ended_sec=300, stuck_sec=None),
+    ReqState.EXECUTING: _StagePolicy(ended_sec=300, stuck_sec=None),
     ReqState.CHALLENGER_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
     ReqState.ACCEPT_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
     ReqState.ACCEPT_TEARING_DOWN: _StagePolicy(ended_sec=300, stuck_sec=None),
@@ -459,7 +459,7 @@ async def _check_and_escalate(row) -> bool:
 async def _sync_stuck_sub_agent_statuses_tick() -> dict:
     """补偿清理：把 BKD 中 sessionStatus=completed 但 statusId=review 的 sub-agent issue 推 done。
 
-    只动非 verifier 的 sub-agent issue（analyze / challenger / fixer / accept）。
+    只动非 verifier 的 sub-agent issue（execute / challenger / fixer / accept）。
     verifier issue 在 escalate 时应保持 review，BKD 侧无法区分 verdict，保守排除。
     REQ-fix-bkd-sub-issue-status-sync-1777426309
     """

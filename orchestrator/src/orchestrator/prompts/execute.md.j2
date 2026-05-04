@@ -1,4 +1,4 @@
-{% set stage = "analyze" %}
+{% set stage = "execute" %}
 {% if status_block -%}
 {% include "_shared/status_block.md.j2" %}
 
@@ -21,7 +21,7 @@
 
 ## RESUME GUARD（防重复执行）
 
-你被 wake 后，**第一件事**是先通过客观事实自检 analyze 阶段是否已经完成。在 runner pod 或本地 workspace 执行：
+你被 wake 后，**第一件事**是先通过客观事实自检 execute 阶段是否已经完成。在 runner pod 或本地 workspace 执行：
 
 ```bash
 # 检查 1：feat 分支是否已 push 到 origin
@@ -43,14 +43,14 @@ kubectl -n sisyphus-runners exec runner-{{ req_id | lower }} -- bash -c \
 
 **立即停止工作**，在 BKD chat 中输出以下提示后不再执行任何操作：
 
-> RESUME GUARD triggered: analyze for {{ req_id }} appears already completed (branch/PR/openspec artifact found). Skipping duplicate execution.
+> RESUME GUARD triggered: execute for {{ req_id }} appears already completed (branch/PR/openspec artifact found). Skipping duplicate execution.
 
 不要重复 clone、不要重复写代码、不要重复 push、不要重复开 PR。等待 sisyphus 状态机自然推进或人工介入即可。
 
 ---
 
 ## 全责交付 (M17)
-AGENT_ROLE=analyze-agent
+AGENT_ROLE=execute-agent
 REQ={{ req_id }}
 
 {% if intake_summary is defined %}
@@ -66,14 +66,14 @@ REQ={{ req_id }}
 
 > **关键**：spec.md 里的 scenario 不是装饰，是之后 `accept-env-up` 阶段 thanatos MCP 会直接读取并执行的验收用例。每个 scenario 必须有清晰的 GIVEN/WHEN/THEN step，否则 check-scenario-refs.sh 会报空壳 scenario 直接 fail。
 {% else %}
-### 直接 analyze 入口（无 intake 阶段）
+### 直接 execute 入口（无 intake 阶段）
 
-本次是**直接 analyze 入口**（无 intake 阶段）。请自行分析 BKD intent issue
+本次是**直接 execute 入口**（无 intake 阶段）。请自行分析 BKD intent issue
 title/description/chat history，推导业务需求，确定验收标准，并写完整 spec。
 
 > **关键**：spec.md 里的 scenario 不是装饰，是之后 `accept-env-up` 阶段 thanatos MCP 会直接读取并执行的验收用例。每个 scenario 必须有清晰的 GIVEN/WHEN/THEN step，否则 check-scenario-refs.sh 会报空壳 scenario 直接 fail。
 
-**注意：直跳 analyze 没走 intake，下面"派 REQ 之前先看相关 PR / issue"段你要自己跑一遍**，命中相关 REQ（反向 / 重复 / 重蹈覆辙）时在 BKD intent issue chat 里给用户一条 follow-up message 提示，再继续执行。命中不到正常推进。
+**注意：直跳 execute 没走 intake，下面"派 REQ 之前先看相关 PR / issue"段你要自己跑一遍**，命中相关 REQ（反向 / 重复 / 重蹈覆辙）时在 BKD intent issue chat 里给用户一条 follow-up message 提示，再继续执行。命中不到正常推进。
 
 {% include "_shared/check_related_reqs.md.j2" %}
 
@@ -151,7 +151,7 @@ session 结束 + move review 时，每个被改的 source repo 的 `feat/{{ req_
 
 ### A.3 clone 到约定结构（多数情况 **sisyphus 已替你跑**）
 
-REQ-clone-and-pr-ci-fallback-1777115925 起，`start_analyze` 在 dispatch
+REQ-clone-and-pr-ci-fallback-1777115925 起，`start_execute` 在 dispatch
 你之前会 server-side 调 `/opt/sisyphus/scripts/sisyphus-clone-repos.sh`，
 把 ctx 里 `intake_finalized_intent.involved_repos` / `involved_repos`
 列的所有仓 clone 进 `/workspace/source/<basename>/`。
@@ -159,7 +159,7 @@ REQ-clone-and-pr-ci-fallback-1777115925 起，`start_analyze` 在 dispatch
 本次 sisyphus 已经预 clone 过：{{ cloned_repos | join(", ") }}。
 你直接进 spec / dev 即可，不用再跑 helper。
 {% else %}
-本次 ctx 没声明 involved_repos（直接 analyze 路径，无 intake），
+本次 ctx 没声明 involved_repos（直接 execute 路径，无 intake），
 sisyphus 没替你 clone。**你必须自己跑 helper**：
 
 ```bash
@@ -324,7 +324,7 @@ curl -sS -X POST http://localhost:3000/api/projects/$PROJECT/issues \
        "statusId":"todo","useWorktree":true,"engineType":"claude-code"}'
 ```
 
-orchestrator 程序自身开的 BKD issue（analyze / staging-test / pr-ci-watch / accept /
+orchestrator 程序自身开的 BKD issue（execute / staging-test / pr-ci-watch / accept /
 verifier / fixer / challenger）由 BKDRestClient.create_issue 自动注入
 `sisyphus` tag，**你只用管自己 fan out 的那批**。
 
@@ -352,7 +352,7 @@ verifier / fixer / challenger）由 BKDRestClient.create_issue 自动注入
 
 - 所有 source repo 的 feat/{{ req_id }} 分支 ✅ 顶部清单全过
 - 所有 PR 已开（一仓一 PR，title body 完整）
-- 本 issue tags 保留 `analyze` + `{{ req_id }}`
+- 本 issue tags 保留 `execute` + `{{ req_id }}`
 - move review
 
 ### ⚠️ 完成前强制验证（必须先做，再报完成）
@@ -421,4 +421,4 @@ sisyphus 之后做（**纯机械，不再起 agent**）：
 - ❌ 不要在 BKD issue description 末尾贴 ` ```json {"leader_repo_path": ...} ``` ` —— sisyphus 不再读
 - ❌ 不要等 sisyphus 起 spec / dev BKD 子 agent —— 砍了，等不到
 - ❌ tasks.md 里 `owner: spec-agent / dev-agent` 是 M14 遗留，新 REQ 别写这种 owner，
-  改成 `owner: analyze-agent or sub-agent of analyze`（或干脆不写 owner）
+  改成 `owner: execute-agent or sub-agent of execute`（或干脆不写 owner）

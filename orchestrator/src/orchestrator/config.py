@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     accept_env_gc_interval_sec: int = 900    # 15min
 
     # ─── Admission gate（fresh REQ entry rate-limit）────────────────────────
-    # 同时跑的 REQ 上限：start_intake / start_analyze 进门时数 req_state 里非
+    # 同时跑的 REQ 上限：start_intake / start_execute 进门时数 req_state 里非
     # 终态行（exclude init/done/escalated/gh-incident-open + 自身），>= cap 直接
     # escalate。0 = 关闭。默认 10：vm-node04 6 GiB RAM、runner request 512Mi，
     # 10 个并发是调度器开始挤兑前的舒适上限。
@@ -130,7 +130,7 @@ class Settings(BaseSettings):
     # 临时跳过某 stage：对应 create_* action 不调 BKD agent，直接 emit *.done/.pass
     # 用于：ttpos-arch-lab 没接 → skip_accept；调试状态机 → skip 全部
     # 生产环境全设 false
-    skip_analyze: bool = False        # analyze.done
+    skip_execute: bool = False        # execute.done
     skip_spec: bool = False           # spec.all-passed (跳整 spec stage)
     skip_dev: bool = False            # dev.done
     # v0.2：新 stage 替换 ci-unit/ci-int
@@ -176,7 +176,7 @@ class Settings(BaseSettings):
     # staging_test）。None = 用 BKD per-engine 默认（opus）。
     # 默认 claude-sonnet-4-6（成本低于 opus；测试 helm values 可覆盖成 'claude-haiku-4-5'）。
     # 注意：analyze agent 的 model 是 user 创 intent issue 时定的，sisyphus 不控；
-    # analyze fan out 的 sub-issue model 由 analyze prompt 自己控（见 analyze.md.j2）。
+    # analyze fan out 的 sub-issue model 由 analyze prompt 自己控（见 execute.md.j2）。
     agent_model: str | None = "claude-opus-4-7[1m]"  # 实证：sonnet 在 code scope (single-file Dockerfile / new module) 跑 60-100min 反复 escalate，retry-token 总成本反而高于 opus 一次过；docs scope 仍可手动指定 sonnet (per-REQ model param)
 
     # ─── aissh-tao MCP server id (vm-node04) ─────────────────────────────
@@ -195,7 +195,7 @@ class Settings(BaseSettings):
     stage_mcp_requirements: dict[str, list[str]] = Field(
         default_factory=lambda: {
             "intake": [],
-            "analyze": ["ssh_exec"],
+            "execute": ["ssh_exec"],
             "challenger": ["ssh_exec"],
             "accept": ["ssh_exec"],
             "staging_test": [],

@@ -268,11 +268,11 @@ class TestWebhookInsertInitContext:
             patch.object(wh.obs, "record_event", new=AsyncMock()),
             patch.object(wh.engine, "step", new=AsyncMock()),
             patch.object(wh, "_push_upstream_status", new=AsyncMock()),
-            patch.object(router_mod, "derive_event", return_value=Event.INTENT_ANALYZE),
+            patch.object(router_mod, "derive_event", return_value=Event.INTENT_EXECUTE),
             patch.object(router_mod, "extract_req_id", return_value="REQ-xlink-s7-test"),
             patch.object(wh, "BKDClient") as mock_bkd_cls,
         ):
-            _setup_bkd_mock(mock_bkd_cls, tags=["intent:analyze"])
+            _setup_bkd_mock(mock_bkd_cls, tags=["intent:execute"])
 
             from fastapi import FastAPI
             from starlette.testclient import TestClient
@@ -288,7 +288,7 @@ class TestWebhookInsertInitContext:
                         "event": "issue.updated",
                         "projectId": "P",
                         "issueId": "I",
-                        "tags": ["intent:analyze"],
+                        "tags": ["intent:execute"],
                         "title": "Test REQ for XLINK-S7",
                         "timestamp": "2026-01-01T00:00:00Z",
                     },
@@ -341,11 +341,11 @@ class TestWebhookInsertInitContext:
             patch.object(wh.obs, "record_event", new=AsyncMock()),
             patch.object(wh.engine, "step", new=AsyncMock()),
             patch.object(wh, "_push_upstream_status", new=AsyncMock()),
-            patch.object(router_mod, "derive_event", return_value=Event.INTENT_ANALYZE),
+            patch.object(router_mod, "derive_event", return_value=Event.INTENT_EXECUTE),
             patch.object(router_mod, "extract_req_id", return_value="REQ-xlink-s8-test"),
             patch.object(wh, "BKDClient") as mock_bkd_cls,
         ):
-            _setup_bkd_mock(mock_bkd_cls, tags=["intent:analyze"])
+            _setup_bkd_mock(mock_bkd_cls, tags=["intent:execute"])
 
             from fastapi import FastAPI
             from starlette.testclient import TestClient
@@ -361,7 +361,7 @@ class TestWebhookInsertInitContext:
                         "event": "issue.updated",
                         "projectId": "P",
                         "issueId": "I",
-                        "tags": ["intent:analyze"],
+                        "tags": ["intent:execute"],
                         "title": "Test REQ for XLINK-S8",
                         "timestamp": "2026-01-01T00:00:01Z",
                     },
@@ -787,7 +787,7 @@ class TestEscalateCtxForwarding:
 
 
 class TestAnalyzePromptCrossLink:
-    """Spec: analyze.md.j2 renders sisyphus:cross-link block conditionally."""
+    """Spec: execute.md.j2 renders sisyphus:cross-link block conditionally."""
 
     _BASE_VARS: ClassVar[dict] = dict(
         req_id="REQ-x",
@@ -805,7 +805,7 @@ class TestAnalyzePromptCrossLink:
         '[BKD intent issue](https://bkd.example/projects/P/issues/I)'.
         """
         result = _render_jinja2(
-            "analyze.md.j2",
+            "execute.md.j2",
             **self._BASE_VARS,
             bkd_intent_issue_url="https://bkd.example/projects/P/issues/I",
         )
@@ -824,7 +824,7 @@ class TestAnalyzePromptCrossLink:
         but MUST NOT contain '[BKD intent issue]('.
         """
         result = _render_jinja2(
-            "analyze.md.j2",
+            "execute.md.j2",
             **self._BASE_VARS,
             bkd_intent_issue_url="",
         )
@@ -888,9 +888,9 @@ class TestActiveReqOverviewSqlColumns:
                 await conn.execute(
                     """
                     INSERT INTO req_state (req_id, project_id, state, context, updated_at)
-                    VALUES ($1, 'P', 'analyzing', $2::jsonb, now())
+                    VALUES ($1, 'P', 'executing', $2::jsonb, now())
                     ON CONFLICT (req_id) DO UPDATE
-                      SET state='analyzing', context=EXCLUDED.context, updated_at=now()
+                      SET state='executing', context=EXCLUDED.context, updated_at=now()
                     """,
                     test_req_id, test_context,
                 )
@@ -933,9 +933,9 @@ class TestActiveReqOverviewSqlColumns:
                 await conn.execute(
                     """
                     INSERT INTO req_state (req_id, project_id, state, context, updated_at)
-                    VALUES ($1, 'P', 'analyzing', '{}'::jsonb, now())
+                    VALUES ($1, 'P', 'executing', '{}'::jsonb, now())
                     ON CONFLICT (req_id) DO UPDATE
-                      SET state='analyzing', context=EXCLUDED.context, updated_at=now()
+                      SET state='executing', context=EXCLUDED.context, updated_at=now()
                     """,
                     test_req_id,
                 )

@@ -40,7 +40,7 @@ _REMOTE_RE = re.compile(r"github\.com[:/]([^/]+/[^/.]+?)(?:\.git)?$")
 
 # ctx 里 sisyphus 已创/记的 issue id key 集合 —— first-time discovery 时回填这些
 _KNOWN_ISSUE_ID_KEYS = (
-    "analyze_issue_id",
+    "execute_issue_id",
     "staging_test_issue_id",
     "pr_ci_watch_issue_id",
     "accept_issue_id",

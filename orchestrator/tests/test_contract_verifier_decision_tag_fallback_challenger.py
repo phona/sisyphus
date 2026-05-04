@@ -37,8 +37,8 @@ import pytest
 # orchestrator can render, mirroring the prompts/verifier/*_*.md.j2 set.
 _VERIFIER_STAGES = (
     "accept",
-    "analyze",
-    "analyze_artifact_check",
+    "execute",
+    "execute_artifact_check",
     "challenger",
     "dev_cross_check",
     "pr_ci",

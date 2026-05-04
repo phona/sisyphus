@@ -1,13 +1,13 @@
-"""start_analyze (v0.3)：intent:analyze 入口。
+"""start_execute (v0.3)：intent:execute 入口。
 
-v0.3 变化（REQ-fix-intent-issue-hijacking-1777427339）：analyze-agent 跑在独立
+v0.3 变化（REQ-fix-intent-issue-hijacking-1777427339）：execute-agent 跑在独立
 sub-issue 上，不再改名/改 tags/改 status 劫持用户的原始 intent issue。
 
-v0.2 变化：agent 跑前先 ensure_runner 拉起 K8s Pod + PVC，保证 analyze-agent
+v0.2 变化：agent 跑前先 ensure_runner 拉起 K8s Pod + PVC，保证 execute-agent
 kubectl exec 进去能立刻用。Pod 生命周期绑本 REQ 直到 done/escalate。
 
 REQ-clone-and-pr-ci-fallback-1777115925：在 ensure_runner 之后、create
-analyze issue 之前，把 ctx 里的 involved_repos 替 agent server-side clone 进
+execute issue 之前，把 ctx 里的 involved_repos 替 agent server-side clone 进
 /workspace/source/<basename>/。clone 失败 → 直接 emit VERIFY_ESCALATE，不
 让 agent 进空 PVC 干活。
 
@@ -20,9 +20,9 @@ ctx 没 involved_repos）也试 multi-layer fallback —— 把 BKD intent issue
 1. ensure_runner（K8s：建 PVC + Pod，等 Ready）
 2. server-side clone involved_repos（如果 ctx 有；失败 → VERIFY_ESCALATE）
 3. merge_tags_and_update 给 intent issue 加 req_id + hint tags（不碰 title/status）
-4. create_issue 新建 analyze sub-issue（title=[REQ-xxx] [ANALYZE]...，tags=[analyze, REQ-xxx]）
-5. follow-up-issue 对 analyze sub-issue 发 analyze prompt
-6. update-issue 把 analyze sub-issue statusId=working 触发 agent
+4. create_issue 新建 execute sub-issue（title=[REQ-xxx] [EXECUTE]...，tags=[execute, REQ-xxx]）
+5. follow-up-issue 对 execute sub-issue 发 execute prompt
+6. update-issue 把 execute sub-issue statusId=working 触发 agent
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ async def _supersede_stale_openspec_changes(req_id: str, repos: list[str]) -> No
         rc = k8s_runner.get_controller()
     except RuntimeError as e:
         log.warning(
-            "start_analyze.supersede_openspec.no_runner", req_id=req_id, error=str(e)
+            "start_execute.supersede_openspec.no_runner", req_id=req_id, error=str(e)
         )
         return
     for repo in repos:
@@ -90,22 +90,22 @@ async def _supersede_stale_openspec_changes(req_id: str, repos: list[str]) -> No
             )
             if result.exit_code != 0:
                 log.warning(
-                    "start_analyze.supersede_openspec.failed",
+                    "start_execute.supersede_openspec.failed",
                     req_id=req_id, repo=repo, exit_code=result.exit_code,
                     stderr=(result.stderr or "")[-256:],
                 )
             else:
-                log.info("start_analyze.supersede_openspec.done", req_id=req_id, repo=repo)
+                log.info("start_execute.supersede_openspec.done", req_id=req_id, repo=repo)
         except Exception as e:
             log.warning(
-                "start_analyze.supersede_openspec.exec_error",
+                "start_execute.supersede_openspec.exec_error",
                 req_id=req_id, repo=repo, error=str(e),
             )
 
 
-@register("start_analyze", idempotent=True)
-async def start_analyze(*, body, req_id, tags, ctx):
-    if rv := skip_if_enabled("analyze", Event.ANALYZE_DONE, req_id=req_id):
+@register("start_execute", idempotent=True)
+async def start_execute(*, body, req_id, tags, ctx):
+    if rv := skip_if_enabled("execute", Event.EXECUTE_DONE, req_id=req_id):
         return rv
     proj = body.projectId
     issue_id = body.issueId
@@ -131,7 +131,7 @@ async def start_analyze(*, body, req_id, tags, ctx):
                     prompt=f"当前并发 REQ 已满（{decision.reason}），请稍后重试或联系管理员扩容。",
                 )
         except Exception as e:
-            log.warning("start_analyze.admission_bkd_sync_failed", req_id=req_id, error=str(e))
+            log.warning("start_execute.admission_bkd_sync_failed", req_id=req_id, error=str(e))
         return {
             "emit": Event.VERIFY_ESCALATE.value,
             "reason": f"admission denied: {decision.reason}",
@@ -142,10 +142,10 @@ async def start_analyze(*, body, req_id, tags, ctx):
         rc = k8s_runner.get_controller()
     except RuntimeError as e:
         # dev 环境可能没 K8s；降级警告，后续 agent kubectl exec 会自己报错
-        log.warning("start_analyze.no_runner_controller", req_id=req_id, error=str(e))
+        log.warning("start_execute.no_runner_controller", req_id=req_id, error=str(e))
     else:
         pod_name = await rc.ensure_runner(req_id, wait_ready=True)
-        log.info("start_analyze.runner_ready", req_id=req_id, pod=pod_name)
+        log.info("start_execute.runner_ready", req_id=req_id, pod=pod_name)
 
     # 1.5 解析 base:* tag 并注入 ctx（REQ-base-branch-override-1777480690）
     # 三层 fallback：tag > finalized_intent > settings 配置 > origin/HEAD
@@ -184,16 +184,16 @@ async def start_analyze(*, body, req_id, tags, ctx):
     # REQ-XXX-v2 重派时，把遗留的 REQ-XXX/ 挪走，避免 openspec apply 混淆。
     await _supersede_stale_openspec_changes(req_id, cloned_repos or [])
 
-    # 3-5. BKD 调度 analyze-agent
-    # REQ-fix-intent-issue-hijacking-1777427339: analyze-agent 跑在独立的 sub-issue
+    # 3-5. BKD 调度 execute-agent
+    # REQ-fix-intent-issue-hijacking-1777427339: execute-agent 跑在独立的 sub-issue
     # 上，不再改名/改 tags/改 status 劫持用户的原始 intent issue。
     forwarded = filter_propagatable_intent_tags(tags)
     bkd_intent_issue_url = links.bkd_issue_url(proj, issue_id) or ""
     pool = db.get_pool()
-    slug = f"analyze|{req_id}|{getattr(body, 'executionId', None) or ''}"
+    slug = f"execute|{req_id}|{getattr(body, 'executionId', None) or ''}"
     if hit := await dispatch_slugs.get(pool, slug):
-        log.info("start_analyze.slug_hit", req_id=req_id, analyze_issue_id=hit)
-        await req_state.update_context(pool, req_id, {"analyze_issue_id": hit})
+        log.info("start_execute.slug_hit", req_id=req_id, execute_issue_id=hit)
+        await req_state.update_context(pool, req_id, {"execute_issue_id": hit})
         return {"issue_id": hit, "req_id": req_id, "cloned_repos": cloned_repos}
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         # 3a. 给 intent issue 轻量打 req_id tag（不碰 title/status），让用户原始 issue
@@ -203,57 +203,57 @@ async def start_analyze(*, body, req_id, tags, ctx):
             issue_id=issue_id,
             add=[req_id, *forwarded],
         )
-        # 3b. 创建独立 analyze sub-issue（跟 intake 路径的
-        # start_analyze_with_finalized_intent 同模式）。
-        analyze_issue = await bkd.create_issue(
+        # 3b. 创建独立 execute sub-issue（跟 intake 路径的
+        # start_execute_with_finalized_intent 同模式）。
+        execute_issue = await bkd.create_issue(
             project_id=proj,
-            title=f"[{req_id}] [ANALYZE]{short_title(ctx)}",
-            tags=["analyze", req_id, *forwarded],
+            title=f"[{req_id}] [EXECUTE]{short_title(ctx)}",
+            tags=["execute", req_id, *forwarded],
             status_id="todo",
             use_worktree=True,
             model=settings.agent_model,
         )
         prompt = render(
-            "analyze.md.j2",
+            "execute.md.j2",
             req_id=req_id,
             aissh_server_id=settings.aissh_server_id,
             project_id=proj,
             project_alias=proj,   # BKD REST 接 id 也接 alias，二者等价
-            issue_id=analyze_issue.id,
+            issue_id=execute_issue.id,
             cloned_repos=cloned_repos,
             bkd_intent_issue_url=bkd_intent_issue_url,
             # REQ-base-branch-override-1777480690: forward base branch info to
-            # analyze-agent so gh pr create uses the right --base.
+            # execute-agent so gh pr create uses the right --base.
             base_branch=default_base,
             base_branches=base_overrides,
             # REQ-ux-status-block-1777257283: canonical at-a-glance REQ status
-            # block at the top of the analyze prompt. ctx.pr_urls is populated
-            # by later stages (pr_ci_watch.discover_pr_urls); on first analyze
+            # block at the top of the execute prompt. ctx.pr_urls is populated
+            # by later stages (pr_ci_watch.discover_pr_urls); on first execute
             # it is absent so format_pr_links_inline returns "" and the row
             # is omitted by the partial.
             status_block=build_status_block_ctx(
                 req_id=req_id,
-                stage="analyze",
+                stage="execute",
                 bkd_intent_issue_url=bkd_intent_issue_url,
                 cloned_repos=cloned_repos,
                 pr_urls=(ctx or {}).get("pr_urls"),
             ),
         )
         await bkd.follow_up_issue(
-            project_id=proj, issue_id=analyze_issue.id, prompt=prompt,
+            project_id=proj, issue_id=execute_issue.id, prompt=prompt,
         )
         await bkd.update_issue(
-            project_id=proj, issue_id=analyze_issue.id, status_id="working",
+            project_id=proj, issue_id=execute_issue.id, status_id="working",
         )
 
-    # stash analyze_issue_id 进 ctx：让后续 pr_links.ensure_pr_links_in_ctx 第一次
-    # discover 成功时能 backfill 这条 analyze issue 的 pr:* tag
+    # stash execute_issue_id 进 ctx：让后续 pr_links.ensure_pr_links_in_ctx 第一次
+    # discover 成功时能 backfill 这条 execute issue 的 pr:* tag
     # （REQ-issue-link-pr-quality-base-1777218242）
-    await dispatch_slugs.put(pool, slug, analyze_issue.id)
+    await dispatch_slugs.put(pool, slug, execute_issue.id)
     await req_state.update_context(pool, req_id, {
-        "analyze_issue_id": analyze_issue.id,
+        "execute_issue_id": execute_issue.id,
     })
 
-    log.info("start_analyze.done", req_id=req_id, issue_id=analyze_issue.id,
+    log.info("start_execute.done", req_id=req_id, issue_id=execute_issue.id,
              cloned_repos=cloned_repos)
-    return {"issue_id": analyze_issue.id, "req_id": req_id, "cloned_repos": cloned_repos}
+    return {"issue_id": execute_issue.id, "req_id": req_id, "cloned_repos": cloned_repos}

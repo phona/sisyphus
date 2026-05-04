@@ -8,7 +8,7 @@ Scenarios:
   PMH-S3  state=pr-ci-running       → update_context + engine.step(PR_MERGED) called
   PMH-S4  state=done                → 200 noop, no DB write, no engine.step
   PMH-S5  state=escalated           → 200 noop, no DB write, no engine.step
-  PMH-S6  state=analyzing           → 409 with valid-states hint
+  PMH-S6  state=executing           → 409 with valid-states hint
   PMH-S7  no/bad Bearer token       → 401
   PMH-S8  REQ not found             → 404
   PMH-S9  ctx written: merged_pr_url / merged_sha / merged_at / pr_merged_trigger
@@ -151,14 +151,14 @@ async def test_pmh_noop_for_terminal_states(monkeypatch, noop_state):
 
 @pytest.mark.asyncio
 async def test_pmh_409_for_unexpected_state(monkeypatch):
-    """PMH-S6: state=analyzing → 409 with valid-states hint."""
-    _pool, update_calls, step_calls = _setup(monkeypatch, state=ReqState.ANALYZING)
+    """PMH-S6: state=executing → 409 with valid-states hint."""
+    _pool, update_calls, step_calls = _setup(monkeypatch, state=ReqState.EXECUTING)
 
     with pytest.raises(HTTPException) as ei:
         await pr_merged("REQ-X", body=_GOOD_BODY, authorization="Bearer tok")
 
     assert ei.value.status_code == 409
-    assert "analyzing" in ei.value.detail
+    assert "executing" in ei.value.detail
     assert step_calls == []
     assert update_calls == []
 

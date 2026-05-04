@@ -6,7 +6,7 @@ feature flag checker_pr_ci_watch_enabled:
   True: sisyphus 自己调 GitHub REST API 轮询 check-runs，emit PR_CI_PASS/FAIL/TIMEOUT
 
 repo 列表来源（M15 哲学：runner 是真理，不维护额外 metadata）：
-  1. runner pod `/workspace/source/*/` discovery（start_analyze 已 server-side
+  1. runner pod `/workspace/source/*/` discovery（start_execute 已 server-side
      clone 好，跟其它 checker 走同一条契约 —— staging_test / dev_cross_check
      都遍历这个目录）
   2. ctx.intake_finalized_intent.involved_repos / ctx.involved_repos

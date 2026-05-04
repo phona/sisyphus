@@ -148,7 +148,7 @@ async def test_agent_stage_fail_prompt_without_db_record(fake_bkd, monkeypatch):
     monkeypatch.setattr("orchestrator.actions._verifier.db.get_pool", lambda: pool)
 
     await v.invoke_verifier(
-        stage="analyze", trigger="fail",
+        stage="execute", trigger="fail",
         req_id="REQ-273", project_id="proj",
     )
 

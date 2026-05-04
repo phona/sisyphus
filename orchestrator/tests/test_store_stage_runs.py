@@ -49,7 +49,7 @@ async def test_insert_stage_run_returns_id_and_binds_all_fields():
 async def test_insert_stage_run_defaults_started_at_to_now():
     pool = CapturePool(ret={"id": 1})
     before = datetime.now(UTC)
-    await sr.insert_stage_run(pool, "REQ-1", "analyze")
+    await sr.insert_stage_run(pool, "REQ-1", "execute")
     after = datetime.now(UTC)
 
     _, args = pool.fetchrow_calls[0]
@@ -118,7 +118,7 @@ async def test_stamp_bkd_session_id_writes_token_to_latest_open_row():
     pool = CapturePool(ret={"id": 99})
 
     row_id = await sr.stamp_bkd_session_id(
-        pool, "REQ-7", "analyze", "sess-abc-123",
+        pool, "REQ-7", "execute", "sess-abc-123",
     )
 
     assert row_id == 99
@@ -131,7 +131,7 @@ async def test_stamp_bkd_session_id_writes_token_to_latest_open_row():
     assert "ended_at IS NULL" in sql
     assert "bkd_session_id IS NULL" in sql
     assert "RETURNING id" in sql
-    assert args == ("REQ-7", "analyze", "sess-abc-123")
+    assert args == ("REQ-7", "execute", "sess-abc-123")
 
 
 @pytest.mark.asyncio
@@ -153,8 +153,8 @@ async def test_stamp_bkd_session_id_skips_empty_token():
     没必要往 DB 打无意义 UPDATE。"""
     pool = CapturePool(ret={"id": 1})
 
-    assert await sr.stamp_bkd_session_id(pool, "REQ-1", "analyze", "") is None
-    assert await sr.stamp_bkd_session_id(pool, "REQ-1", "analyze", None) is None  # type: ignore[arg-type]
+    assert await sr.stamp_bkd_session_id(pool, "REQ-1", "execute", "") is None
+    assert await sr.stamp_bkd_session_id(pool, "REQ-1", "execute", None) is None  # type: ignore[arg-type]
     assert pool.fetchrow_calls == []
 
 
@@ -163,7 +163,7 @@ async def test_insert_stage_run_does_not_write_bkd_session_id_inline():
     """insert 路径不带 bkd_session_id —— action handler 起 BKD issue 时
     externalSessionId 通常还没分配，留 NULL 由后续 stamp 兜。"""
     pool = CapturePool(ret={"id": 1})
-    await sr.insert_stage_run(pool, "REQ-1", "analyze", agent_type="analyze")
+    await sr.insert_stage_run(pool, "REQ-1", "execute", agent_type="execute")
 
     sql, _args = pool.fetchrow_calls[0]
     # INSERT 列表不应带 bkd_session_id；migration 给该列默认 NULL

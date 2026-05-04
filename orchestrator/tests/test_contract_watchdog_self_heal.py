@@ -175,13 +175,13 @@ async def test_s2_has_result_tag_escalates(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_s3_analyze_no_result_tag_escalates(monkeypatch):
-    """SH-S3: ANALYZING 不在 _STAGES_NEEDING_RESULT_TAG 中，session=completed → escalate。"""
+    """SH-S3: EXECUTING 不在 _STAGES_NEEDING_RESULT_TAG 中，session=completed → escalate。"""
     from orchestrator import watchdog
     from orchestrator.state import Event, ReqState
 
     pool = _FakePool(rows=[
         _make_row(
-            ReqState.ANALYZING.value,
+            ReqState.EXECUTING.value,
             req_id="REQ-sh3",
             ctx={"intent_issue_id": "intent-sh3"},
             stuck_sec=400,
@@ -190,7 +190,7 @@ async def test_s3_analyze_no_result_tag_escalates(monkeypatch):
     _patch_pool(monkeypatch, pool)
     fake_bkd = _patch_bkd(
         monkeypatch,
-        _FakeIssue(session_status="completed", id="intent-sh3", tags=["analyze"]),
+        _FakeIssue(session_status="completed", id="intent-sh3", tags=["execute"]),
     )
     step_calls = _patch_engine(monkeypatch)
     _patch_artifact(monkeypatch)

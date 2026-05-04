@@ -204,7 +204,7 @@ Metabase 看板直接读这张表就能看"改进成绩单"。
 
 | Alert | 触发 | 起步动作 | 升级动作 |
 |---|---|---|---|
-| Layers drift | analyze-done issue 没 layer:* tag | 飞书 | （已废，layers 概念在 v0.2 不再硬编码） |
+| Layers drift | execute-done issue 没 layer:* tag | 飞书 | （已废，layers 概念在 v0.2 不再硬编码） |
 | Duplicate stage | 同 REQ 同 stage > 1 个活跃 issue | 飞书 | cancel 较新的 |
 | Bugfix runaway | fixer 同 stage 连续 ≥ 3 轮 | 飞书 | escalate |
 | Stuck session | working 超过 stage SLA | 飞书 | watchdog 已内建（M8）—— 此 alert 是双保险 |

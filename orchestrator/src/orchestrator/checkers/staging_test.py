@@ -9,10 +9,10 @@ target 的仓并行起（per-repo 30min × N 串行会超 timeout）。
 
 feat/<REQ> 缺失语义（REQ-checker-no-feat-branch-fail-loud-1777123726）：
 sisyphus-clone-repos.sh 把 involved_repos 列的每个仓 clone 进 /workspace/source/，
-所以 /workspace/source/<repo>/ 存在 ⇒ analyze-agent 声明该仓 involved，**必须**
+所以 /workspace/source/<repo>/ 存在 ⇒ execute-agent 声明该仓 involved，**必须**
 推到 feat/<REQ> 分支。fetch + checkout feat/<REQ> 失败 → fail loud（fail=1 + 拒绝
 silent-pass 信息），不再 [skip] 噤声。Makefile 缺 ci-unit-test/ci-integration-test
-target 仍 [skip]（仓本身不可测，与 analyze-agent 无关）。
+target 仍 [skip]（仓本身不可测，与 execute-agent 无关）。
 
 为何单 repo 内 unit/integration **串行**而非并行：
 - ci-unit-test 内部已经 main + bmp 双并发跑 go test
@@ -68,7 +68,7 @@ def _build_cmd(req_id: str) -> str:
     - /workspace/source 不存在或没任何子目录 → 直接 exit 1
     - 任一 cloned repo 缺 feat/<REQ> 分支 → fail=1 + 拒绝 silent-pass stderr
       （REQ-checker-no-feat-branch-fail-loud-1777123726：clone helper 已克隆该仓 ⇒
-      该仓 involved；analyze-agent 没推 feat 分支是结构性失败，不再 [skip] 噤声）
+      该仓 involved；execute-agent 没推 feat 分支是结构性失败，不再 [skip] 噤声）
     - 遍历后 ran=0（所有仓都缺 ci-unit-test/ci-integration-test target）→ exit 1
       checker 不能在零信号情况下报 pass。
 

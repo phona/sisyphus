@@ -7,7 +7,7 @@ Scenarios covered:
   RNF-S1  issue.updated 无 REQ tag 无 intent tag → skip (noise filter)
   RNF-S2  issue.updated 含 REQ tag → 走下游 (engine.step 被调用)
   RNF-S3  issue.updated 仅含 intent:intake tag → 走下游 (engine.step 被调用)
-  RNF-S4  issue.updated 仅含 intent:analyze tag → 走下游 (engine.step 被调用)
+  RNF-S4  issue.updated 仅含 intent:execute tag → 走下游 (engine.step 被调用)
   RNF-S5  session.completed 无 REQ tag → 旧 filter 仍生效 (skip)
 """
 from __future__ import annotations
@@ -160,7 +160,7 @@ def _setup_for_passthrough(monkeypatch, *, req_id: str | None, derive_event_val)
 async def test_rnf_s1_issue_updated_no_req_no_intent_is_skipped(monkeypatch):
     """
     RNF-S1: webhook 收到 issue.updated，tags 不含 REQ-* 也不含 intent:intake /
-    intent:analyze 时，必须命中 noise filter，返回 action=skip + 含 issue.updated 的
+    intent:execute 时，必须命中 noise filter，返回 action=skip + 含 issue.updated 的
     reason；dedup.mark_processed **不被调用**（让 processed_at 保持 NULL，
     BKD 重发时走 retry 路径，避免合法事件因 tag 竞争丢失）；obs.record_event /
     derive_event / engine.step 均不被调用。
@@ -229,7 +229,7 @@ async def test_rnf_s2_issue_updated_with_req_tag_proceeds(monkeypatch):
         derive_event_val=Event.SESSION_FAILED,
     )
 
-    req = _make_request("issue.updated", ["REQ-rnf-s2-test", "analyze"])
+    req = _make_request("issue.updated", ["REQ-rnf-s2-test", "execute"])
     await tracking["webhook"].webhook(req)
 
     assert len(tracking["step_calls"]) >= 1, (
@@ -264,12 +264,12 @@ async def test_rnf_s3_issue_updated_intent_intake_proceeds(monkeypatch):
     )
 
 
-# ─── RNF-S4: issue.updated 仅含 intent:analyze tag → 走下游 ─────────────────
+# ─── RNF-S4: issue.updated 仅含 intent:execute tag → 走下游 ─────────────────
 
 
 async def test_rnf_s4_issue_updated_intent_analyze_proceeds(monkeypatch):
     """
-    RNF-S4: webhook 收到 issue.updated，tags 含 intent:analyze（无 REQ-* tag）时，
+    RNF-S4: webhook 收到 issue.updated，tags 含 intent:execute（无 REQ-* tag）时，
     noise filter 不命中，handler 继续走下游，engine.step 至少被调用一次。
     """
     from orchestrator.state import Event
@@ -277,14 +277,14 @@ async def test_rnf_s4_issue_updated_intent_analyze_proceeds(monkeypatch):
     tracking = _setup_for_passthrough(
         monkeypatch,
         req_id=None,
-        derive_event_val=Event.INTENT_ANALYZE,
+        derive_event_val=Event.INTENT_EXECUTE,
     )
     # No REQ-* tag; issueNumber fallback provides req_id (real BKD always sends issueNumber)
-    req = _make_request("issue.updated", ["intent:analyze"], issue_id="issue-rnf-s4", issue_number=4)
+    req = _make_request("issue.updated", ["intent:execute"], issue_id="issue-rnf-s4", issue_number=4)
     await tracking["webhook"].webhook(req)
 
     assert len(tracking["step_calls"]) >= 1, (
-        f"RNF-S4: engine.step must be called for issue.updated with intent:analyze; "
+        f"RNF-S4: engine.step must be called for issue.updated with intent:execute; "
         f"called {len(tracking['step_calls'])} times"
     )
 
@@ -302,7 +302,7 @@ async def test_rnf_s5_session_completed_no_req_still_skipped(monkeypatch):
     from orchestrator import engine, webhook
 
     tracking = _setup_for_skip(monkeypatch)
-    _mock_bkd(monkeypatch, webhook, ["analyze"])
+    _mock_bkd(monkeypatch, webhook, ["execute"])
 
     step_calls: list = []
     monkeypatch.setattr(
@@ -311,7 +311,7 @@ async def test_rnf_s5_session_completed_no_req_still_skipped(monkeypatch):
         AsyncMock(side_effect=lambda *a, **kw: step_calls.append(kw) or {"action": "noop"}),
     )
 
-    req = _make_request("session.completed", ["analyze"])
+    req = _make_request("session.completed", ["execute"])
     result = await webhook.webhook(req)
 
     assert isinstance(result, dict), f"Expected dict response, got {type(result)}"

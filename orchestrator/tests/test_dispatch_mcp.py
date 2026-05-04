@@ -50,13 +50,13 @@ async def test_s1_get_req_state_returns_expected_shape():
     updated = datetime(2026, 4, 26, 10, 0, 0, tzinfo=UTC)
     history = [
         {"to": "init", "ts": "2026-04-26T09:00:00Z"},
-        {"to": "analyzing", "ts": "2026-04-26T10:00:00Z"},
+        {"to": "executing", "ts": "2026-04-26T10:00:00Z"},
     ]
     context = {"a": 1, "b": 2}
     pool = _FakePool(single_row={
         "req_id": "REQ-x",
         "project_id": "p1",
-        "state": "analyzing",
+        "state": "executing",
         "history": history,
         "context": context,
         "created_at": created,
@@ -68,10 +68,10 @@ async def test_s1_get_req_state_returns_expected_shape():
     assert result is not None
     assert result["req_id"] == "REQ-x"
     assert result["project_id"] == "p1"
-    assert result["state"] == "analyzing"
+    assert result["state"] == "executing"
     assert result["created_at"] == created.isoformat()
     assert result["updated_at"] == updated.isoformat()
-    assert result["last_event"] == {"to": "analyzing", "ts": "2026-04-26T10:00:00Z"}
+    assert result["last_event"] == {"to": "executing", "ts": "2026-04-26T10:00:00Z"}
     assert sorted(result["context_keys"]) == ["a", "b"]
     # The query MUST bind req_id as $1
     assert pool.last_args == ("REQ-x",)
@@ -140,17 +140,17 @@ async def test_s3_list_reqs_in_range_limit_passes_through():
 @pytest.mark.asyncio
 async def test_s4_list_reqs_with_state_binds_state_and_limit():
     pool = _FakePool(many_rows=[
-        {"req_id": "REQ-a", "project_id": "p1", "state": "analyzing",
+        {"req_id": "REQ-a", "project_id": "p1", "state": "executing",
          "updated_at": datetime(2026, 4, 26, 10, 0, 0, tzinfo=UTC)},
     ])
 
-    result = await queries.fetch_reqs(pool, state="analyzing", limit=50)
+    result = await queries.fetch_reqs(pool, state="executing", limit=50)
 
-    assert pool.last_args == ("analyzing", 50)
+    assert pool.last_args == ("executing", 50)
     assert "WHERE state = $1" in (pool.last_sql or "")
     assert len(result) == 1
     assert result[0]["req_id"] == "REQ-a"
-    assert result[0]["state"] == "analyzing"
+    assert result[0]["state"] == "executing"
     assert result[0]["updated_at"] == "2026-04-26T10:00:00+00:00"
 
 
@@ -166,7 +166,7 @@ async def test_s5_list_reqs_unknown_state_raises():
     assert "unknown state" in msg
     # Some valid value must appear in the message so the IDE agent can
     # immediately see the expected enum.
-    assert "analyzing" in msg
+    assert "executing" in msg
     # And the pool was never touched.
     assert pool.last_sql is None
 

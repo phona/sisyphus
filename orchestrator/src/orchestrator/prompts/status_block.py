@@ -1,7 +1,7 @@
 """Builder for the ``status_block`` context dict (REQ-ux-status-block-1777257283).
 
-Shared by ``start_intake`` / ``start_analyze`` /
-``start_analyze_with_finalized_intent``: each callsite hands over whatever
+Shared by ``start_intake`` / ``start_execute`` /
+``start_execute_with_finalized_intent``: each callsite hands over whatever
 identity / location facts it has at dispatch time, the helper normalises
 empty values to ``None`` so the partial's row guards drop optional rows
 cleanly, and ``pr_urls`` is pre-rendered through ``links.format_pr_links_inline``

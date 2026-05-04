@@ -231,8 +231,8 @@ async def test_eat_s4_row_vanishes_mid_chain(monkeypatch) -> None:
     REGISTRY["create_spec_lint"] = _handler
 
     result = await _step(
-        cur_state=ReqState.ANALYZE_ARTIFACT_CHECKING,
-        event=Event.ANALYZE_ARTIFACT_CHECK_PASS,
+        cur_state=ReqState.EXECUTE_ARTIFACT_CHECKING,
+        event=Event.EXECUTE_ARTIFACT_CHECK_PASS,
     )
 
     assert result.get("action") == "create_spec_lint", (
@@ -522,10 +522,10 @@ async def test_eat_s12_done_skips_every_event() -> None:
     for name in list(REGISTRY.keys()):
         REGISTRY[name] = _any_handler
     for name in [
-        "start_intake", "start_analyze", "start_challenger", "escalate",
+        "start_intake", "start_execute", "start_challenger", "escalate",
         "create_spec_lint", "create_staging_test", "create_pr_ci_watch",
         "create_accept",
-        "invoke_verifier_for_analyze_artifact_check_fail",
+        "invoke_verifier_for_execute_artifact_check_fail",
     ]:
         REGISTRY[name] = _any_handler
 

@@ -1,4 +1,4 @@
-"""actions/create_analyze_artifact_check.py 单测：mock checker + artifact_checks
+"""actions/create_execute_artifact_check.py 单测：mock checker + artifact_checks
 (REQ-analyze-artifact-check-1777254586)。
 
 跟 test_actions_smoke.py 里 create_staging_test 同结构。
@@ -31,7 +31,7 @@ def make_body(issue_id="src-1", project_id="p", event="session.completed", title
 
 @pytest.mark.asyncio
 async def test_pass_emits_pass_and_writes_artifact(monkeypatch):
-    from orchestrator.actions import create_analyze_artifact_check as mod
+    from orchestrator.actions import create_execute_artifact_check as mod
     from orchestrator.checkers._types import CheckResult
 
     fake_result = CheckResult(
@@ -44,7 +44,7 @@ async def test_pass_emits_pass_and_writes_artifact(monkeypatch):
     async def fake_run(req_id, *, timeout_sec=120):
         return fake_result
 
-    monkeypatch.setattr(mod.checker, "run_analyze_artifact_check", fake_run)
+    monkeypatch.setattr(mod.checker, "run_execute_artifact_check", fake_run)
 
     insert_calls: list = []
 
@@ -52,26 +52,26 @@ async def test_pass_emits_pass_and_writes_artifact(monkeypatch):
         insert_calls.append((req_id, stage, result))
 
     monkeypatch.setattr(mod.artifact_checks, "insert_check", fake_insert)
-    patch_db(monkeypatch, "create_analyze_artifact_check")
+    patch_db(monkeypatch, "create_execute_artifact_check")
 
-    out = await mod.create_analyze_artifact_check(
+    out = await mod.create_execute_artifact_check(
         body=make_body(), req_id="REQ-9", tags=[], ctx={},
     )
-    assert out["emit"] == "analyze-artifact-check.pass"
+    assert out["emit"] == "execute-artifact-check.pass"
     assert out["passed"] is True
     assert out["exit_code"] == 0
     assert len(insert_calls) == 1
-    assert insert_calls[0] == ("REQ-9", "analyze-artifact-check", fake_result)
+    assert insert_calls[0] == ("REQ-9", "execute-artifact-check", fake_result)
 
 
 @pytest.mark.asyncio
 async def test_fail_emits_fail_with_exit_code(monkeypatch):
-    from orchestrator.actions import create_analyze_artifact_check as mod
+    from orchestrator.actions import create_execute_artifact_check as mod
     from orchestrator.checkers._types import CheckResult
 
     fake_result = CheckResult(
         passed=False, exit_code=1,
-        stdout_tail="", stderr_tail="=== FAIL analyze-artifact-check: tasks.md ...\n",
+        stdout_tail="", stderr_tail="=== FAIL execute-artifact-check: tasks.md ...\n",
         duration_sec=0.7,
         cmd="set -o pipefail; ...",
     )
@@ -79,7 +79,7 @@ async def test_fail_emits_fail_with_exit_code(monkeypatch):
     async def fake_run(req_id, *, timeout_sec=120):
         return fake_result
 
-    monkeypatch.setattr(mod.checker, "run_analyze_artifact_check", fake_run)
+    monkeypatch.setattr(mod.checker, "run_execute_artifact_check", fake_run)
 
     insert_calls: list = []
 
@@ -87,12 +87,12 @@ async def test_fail_emits_fail_with_exit_code(monkeypatch):
         insert_calls.append((req_id, stage, result))
 
     monkeypatch.setattr(mod.artifact_checks, "insert_check", fake_insert)
-    patch_db(monkeypatch, "create_analyze_artifact_check")
+    patch_db(monkeypatch, "create_execute_artifact_check")
 
-    out = await mod.create_analyze_artifact_check(
+    out = await mod.create_execute_artifact_check(
         body=make_body(), req_id="REQ-9", tags=[], ctx={},
     )
-    assert out["emit"] == "analyze-artifact-check.fail"
+    assert out["emit"] == "execute-artifact-check.fail"
     assert out["passed"] is False
     assert out["exit_code"] == 1
     assert len(insert_calls) == 1
@@ -100,12 +100,12 @@ async def test_fail_emits_fail_with_exit_code(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_timeout_emits_fail_and_inserts_timeout_row(monkeypatch):
-    from orchestrator.actions import create_analyze_artifact_check as mod
+    from orchestrator.actions import create_execute_artifact_check as mod
 
     async def fake_run(req_id, *, timeout_sec=120):
         raise TimeoutError()
 
-    monkeypatch.setattr(mod.checker, "run_analyze_artifact_check", fake_run)
+    monkeypatch.setattr(mod.checker, "run_execute_artifact_check", fake_run)
 
     insert_calls: list = []
 
@@ -113,28 +113,28 @@ async def test_timeout_emits_fail_and_inserts_timeout_row(monkeypatch):
         insert_calls.append((req_id, stage, result))
 
     monkeypatch.setattr(mod.artifact_checks, "insert_check", fake_insert)
-    patch_db(monkeypatch, "create_analyze_artifact_check")
+    patch_db(monkeypatch, "create_execute_artifact_check")
 
-    out = await mod.create_analyze_artifact_check(
+    out = await mod.create_execute_artifact_check(
         body=make_body(), req_id="REQ-9", tags=[], ctx={},
     )
-    assert out["emit"] == "analyze-artifact-check.fail"
+    assert out["emit"] == "execute-artifact-check.fail"
     assert out["passed"] is False
     assert out["reason"] == "timeout"
     assert out["exit_code"] == -1
     assert len(insert_calls) == 1
-    assert insert_calls[0][1] == "analyze-artifact-check"
+    assert insert_calls[0][1] == "execute-artifact-check"
     assert insert_calls[0][2].reason == "timeout"
 
 
 @pytest.mark.asyncio
 async def test_unhandled_exception_emits_fail(monkeypatch):
-    from orchestrator.actions import create_analyze_artifact_check as mod
+    from orchestrator.actions import create_execute_artifact_check as mod
 
     async def fake_run(req_id, *, timeout_sec=120):
         raise RuntimeError("kubectl exec channel busted")
 
-    monkeypatch.setattr(mod.checker, "run_analyze_artifact_check", fake_run)
+    monkeypatch.setattr(mod.checker, "run_execute_artifact_check", fake_run)
 
     insert_calls: list = []
 
@@ -142,12 +142,12 @@ async def test_unhandled_exception_emits_fail(monkeypatch):
         insert_calls.append((req_id, stage, result))
 
     monkeypatch.setattr(mod.artifact_checks, "insert_check", fake_insert)
-    patch_db(monkeypatch, "create_analyze_artifact_check")
+    patch_db(monkeypatch, "create_execute_artifact_check")
 
-    out = await mod.create_analyze_artifact_check(
+    out = await mod.create_execute_artifact_check(
         body=make_body(), req_id="REQ-9", tags=[], ctx={},
     )
-    assert out["emit"] == "analyze-artifact-check.fail"
+    assert out["emit"] == "execute-artifact-check.fail"
     assert out["passed"] is False
     assert "kubectl" in out["reason"]
     # 异常分支不写 artifact_checks（与 spec_lint 同语义）

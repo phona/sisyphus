@@ -294,7 +294,7 @@ ci-build:
 
 ### 4.2 Flutter 源仓如何为 accept 阶段贡献代码
 
-sisyphus orchestrator 在 dispatch analyze-agent 之前，会把 BKD intent issue 里
+sisyphus orchestrator 在 dispatch execute-agent 之前，会把 BKD intent issue 里
 `involved_repos` 列出的所有仓 clone 到 runner pod：
 
 ```

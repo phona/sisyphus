@@ -21,7 +21,7 @@
 
 | | 干啥 |
 |---|---|
-| sisyphus | **研发组织层**：编排 analyze → spec → dev → staging-test → pr-ci → accept → archive |
+| sisyphus | **研发组织层**：编排 execute → spec → dev → staging-test → pr-ci → accept → archive |
 | GitHub Actions | **脚本 CI 层**：lint / unit / integration / sonar / image-publish。**互补不替代** —— pr-ci-watch 直接轮它的 check-runs |
 | Pure prompt skill | **IDE 内 turbo dev tool**：Claude Code 单 turn 内的高级 prompt。不同层；sisyphus 在它之上做组织 |
 
@@ -31,22 +31,22 @@
 |---|---|---|
 | **orchestrator** | Python（K8s Deployment） | 状态机 + 路由 + watchdog + GC + 指标采集 |
 | **机械 checker** | Python（runner pod 内 exec / GitHub REST） | 客观事实：openspec validate / lint 退码 / 测试退码 / CI 绿不绿 |
-| **stage agent** | BKD agent + Jinja2 prompt | intake / analyze / challenger / accept / done-archive（M17 起 sisyphus 不再起 spec / dev BKD 子 agent，由 analyze-agent 自决拆 sub-issue） |
-| **verifier-agent** | BKD agent + 14 对 verifier/{stage}\_{trigger}.md.j2（analyze / accept / challenger / dev_cross_check / pr_ci / spec_lint / staging_test 各 success+fail）+ `_audit` / `_decision` / `_header` 共享 partial | 主观决策：pass / fix / escalate（输出 decision JSON，3 路） |
+| **stage agent** | BKD agent + Jinja2 prompt | intake / execute / challenger / accept / done-archive（M17 起 sisyphus 不再起 spec / dev BKD 子 agent，由 execute-agent 自决拆 sub-issue） |
+| **verifier-agent** | BKD agent + 14 对 verifier/{stage}\_{trigger}.md.j2（execute / accept / challenger / dev_cross_check / pr_ci / spec_lint / staging_test 各 success+fail）+ `_audit` / `_decision` / `_header` 共享 partial | 主观决策：pass / fix / escalate（输出 decision JSON，3 路） |
 | **fixer-agent** | BKD agent + bugfix.md.j2（过渡） | 改一类东西：dev fixer 改业务码 / spec fixer 改 spec |
 
 ## Stage 流（happy path 九段，含可选 INTAKING）
 
 ```
 [intent:intake → intake(多轮 BKD chat 澄清 + finalized intent JSON)]  ← 可选，物理隔离 brainstorm
-  ↓ intake.pass（新建 analyze issue）
-intent:analyze → analyze(全责交付：写 spec + 业务码 + push feat/REQ-x + 开 PR；自决拆 sub-issue)
+  ↓ intake.pass（新建 execute issue）
+intent:execute → execute(全责交付：写 spec + 业务码 + push feat/REQ-x + 开 PR；自决拆 sub-issue)
   → spec-lint(机械: openspec validate + check-scenario-refs.sh) → challenger(M18: 黑盒读 spec 写 contract test)
   → dev-cross-check(机械: BASE_REV make ci-lint) → staging-test(机械: kubectl exec runner make ci-unit-test && make ci-integration-test)
   → pr-ci-watch(机械: GitHub REST 轮 check-runs) → accept(make accept-env-up + agent 跑 FEATURE-A* + make accept-env-down 必跑) → archive → DONE
 ```
 
-**入口选择**：`intent:intake` → INTAKING（推荐：不熟悉的仓）；`intent:analyze` → ANALYZING（跳过澄清）。
+**入口选择**：`intent:intake` → INTAKING（推荐：不熟悉的仓）；`intent:execute` → EXECUTING（跳过澄清）。
 
 任何 stage（含 staging-test / pr-ci / accept）失败入 `REVIEW_RUNNING`，verifier-agent 3 路决策：
 - `pass` → 推下一 stage
@@ -77,7 +77,7 @@ sisyphus/
 │   │   ├── state.py / router.py / engine.py / webhook.py
 │   │   ├── actions/          # 12 个 stage 推进动作（create_*/start_*/done_archive/escalate/teardown_accept_env） + helper (_clone/_skip/_verifier/_integration_resolver)
 │   │   ├── checkers/         # 4 个机械 checker：spec_lint / dev_cross_check / staging_test / pr_ci_watch
-│   │   ├── prompts/          # stage agent (intake/analyze/challenger/accept/done_archive/staging_test/pr_ci_watch/bugfix) + verifier/* + _shared/
+│   │   ├── prompts/          # stage agent (intake/execute/challenger/accept/done_archive/staging_test/pr_ci_watch/bugfix) + verifier/* + _shared/
 │   │   ├── k8s_runner.py / bkd.py / watchdog.py / runner_gc.py
 │   │   └── store/            # req_state CAS / db pool / 各表写入
 │   └── migrations/           # 0001_init / 0002_observability_views / 0003_artifact_checks / 0004_stage_runs / 0005_verifier_decisions / 0006_add_verifier_audit / 0007_add_event_seen_processed_at / 0009_artifact_checks_flake
@@ -98,8 +98,8 @@ sisyphus/
 单条/批量派单、列 issues、给现有 issue 补 intent tag、取 agent 日志。
 
 ```bash
-# 单条派单并触发 orchestrator（--intent analyze / intake）
-python3 scripts/bkd-cli.py inline --slug my-feature --title "REQ 标题" --prompt-file prompt.md --intent analyze
+# 单条派单并触发 orchestrator（--intent execute / intake）
+python3 scripts/bkd-cli.py inline --slug my-feature --title "REQ 标题" --prompt-file prompt.md --intent execute
 
 # 批量 YAML 派单
 python3 scripts/bkd-cli.py yaml reqs.yaml
@@ -111,7 +111,7 @@ python3 scripts/bkd-cli.py list --status working
 python3 scripts/bkd-cli.py logs <issue_id>
 
 # 给现有 issue 补 intent tag 重新触发
-python3 scripts/bkd-cli.py trigger-existing <issue_id> --intent analyze
+python3 scripts/bkd-cli.py trigger-existing <issue_id> --intent execute
 ```
 
 `--base-url` 默认 `http://localhost:3000/api`；`--project` 默认 `nnvxh8wj`。完整子命令：`python3 scripts/bkd-cli.py --help`。

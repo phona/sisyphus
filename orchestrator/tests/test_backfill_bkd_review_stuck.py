@@ -202,7 +202,7 @@ async def test_bbr_s5_apply_patches_each_with_statusid_only(monkeypatch):
     issues = [
         _issue(id="a", tags=["verifier", "REQ-x-1"], session="completed"),
         _issue(id="b", tags=["fixer", "REQ-y-2"], session="failed"),
-        _issue(id="c", tags=["analyze", "REQ-z-3"], session="failed"),
+        _issue(id="c", tags=["execute", "REQ-z-3"], session="failed"),
     ]
     t = _FakeTransport(list_issues=issues)
 
@@ -231,7 +231,7 @@ async def test_bbr_s6_partial_failure_continues_exit_zero(monkeypatch):
     issues = [
         _issue(id="a", tags=["verifier", "REQ-x-1"], session="completed"),
         _issue(id="b", tags=["fixer", "REQ-y-2"], session="failed"),  # 故障
-        _issue(id="c", tags=["analyze", "REQ-z-3"], session="failed"),
+        _issue(id="c", tags=["execute", "REQ-z-3"], session="failed"),
     ]
     t = _FakeTransport(
         list_issues=issues,
@@ -277,7 +277,7 @@ async def test_intent_and_running_filtered_in_full_pipeline(monkeypatch):
     issues = [
         _issue(id="intent", tags=["REQ-x-1"], session="completed"),  # no role
         _issue(id="live",
-               tags=["analyze", "REQ-x-1"], session="running"),  # session running
+               tags=["execute", "REQ-x-1"], session="running"),  # session running
         _issue(id="ok",
                tags=["verifier", "REQ-x-1"], session="completed"),  # 候选
         _issue(id="orphan", tags=["verifier"], session="completed"),  # no REQ

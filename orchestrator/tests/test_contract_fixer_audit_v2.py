@@ -22,7 +22,7 @@ LEGAL_VERDICTS = ["legitimate", "test-hack", "code-lobotomy", "spec-drift", "unc
 
 SUCCESS_TEMPLATES = [
     "accept_success.md.j2",
-    "analyze_success.md.j2",
+    "execute_success.md.j2",
     "challenger_success.md.j2",
     "dev_cross_check_success.md.j2",
     "pr_ci_success.md.j2",
@@ -175,9 +175,9 @@ class TestAuditTemplateContract:
         from orchestrator.prompts import render
 
         rendered = render(
-            "verifier/analyze_success.md.j2",
+            "verifier/execute_success.md.j2",
             req_id="REQ-test-contract",
-            stage="analyze",
+            stage="execute",
             history=[],
             result="",
             stage_output="",
@@ -194,9 +194,9 @@ class TestAuditTemplateContract:
         from orchestrator.prompts import render
 
         rendered = render(
-            "verifier/analyze_success.md.j2",
+            "verifier/execute_success.md.j2",
             req_id="REQ-test-contract",
-            stage="analyze",
+            stage="execute",
             history=["prior fix attempt"],
             result="",
             stage_output="",

@@ -239,7 +239,7 @@ async def test_bss_s3_completed_analyze_patched_to_done(monkeypatch):
 
     issues = {
         "proj-1": [
-            _make_issue("iss-1", "review", "completed", ["analyze", "REQ-1"]),
+            _make_issue("iss-1", "review", "completed", ["execute", "REQ-1"]),
         ]
     }
     captured = _patch_bkd_for_sync(monkeypatch, issues)
@@ -295,7 +295,7 @@ async def test_bss_s5_running_session_skipped(monkeypatch):
 
     issues = {
         "proj-1": [
-            _make_issue("iss-run", "review", "running", ["analyze", "REQ-1"]),
+            _make_issue("iss-run", "review", "running", ["execute", "REQ-1"]),
         ]
     }
     captured = _patch_bkd_for_sync(monkeypatch, issues)
@@ -323,7 +323,7 @@ async def test_bss_s6_non_review_status_skipped(monkeypatch):
 
     issues = {
         "proj-1": [
-            _make_issue("iss-done", "done", "completed", ["analyze", "REQ-1"]),
+            _make_issue("iss-done", "done", "completed", ["execute", "REQ-1"]),
         ]
     }
     captured = _patch_bkd_for_sync(monkeypatch, issues)
@@ -351,7 +351,7 @@ async def test_bss_s7_no_req_tag_skipped(monkeypatch):
 
     issues = {
         "proj-1": [
-            _make_issue("iss-no-req", "review", "completed", ["analyze"]),
+            _make_issue("iss-no-req", "review", "completed", ["execute"]),
         ]
     }
     captured = _patch_bkd_for_sync(monkeypatch, issues)
@@ -379,8 +379,8 @@ async def test_bss_s8_individual_patch_failure_continues(monkeypatch):
 
     issues = {
         "proj-1": [
-            _make_issue("iss-fail", "review", "completed", ["analyze", "REQ-1"]),
-            _make_issue("iss-ok", "review", "completed", ["analyze", "REQ-1"]),
+            _make_issue("iss-fail", "review", "completed", ["execute", "REQ-1"]),
+            _make_issue("iss-ok", "review", "completed", ["execute", "REQ-1"]),
         ]
     }
     captured = _patch_bkd_for_sync(monkeypatch, issues, patch_raises={"proj-1:iss-fail"})
@@ -414,7 +414,7 @@ async def test_bss_s9_multiple_projects_scanned(monkeypatch):
 
     issues = {
         "proj-a": [
-            _make_issue("iss-a", "review", "completed", ["analyze", "REQ-a"], project_id="proj-a"),
+            _make_issue("iss-a", "review", "completed", ["execute", "REQ-a"], project_id="proj-a"),
         ],
         "proj-b": [
             _make_issue("iss-b", "review", "completed", ["fixer", "REQ-b"], project_id="proj-b"),

@@ -156,7 +156,7 @@ async def test_rgs_s3_inflight_in_both_keep_sets_done_in_neither(
 ):
     """RGS-S3: in-flight REQs → both keep sets; done REQ → neither keep set."""
     pool = _FakePool([
-        _row("REQ-A", "analyzing"),
+        _row("REQ-A", "executing"),
         _row("REQ-B", "staging-test-running"),
         _row("REQ-C", "done", updated_at=datetime.now(UTC)),
     ])
@@ -276,9 +276,9 @@ async def test_rgs_s6_disk_check_403_sets_flag_emits_info_log_both_sweeps_run(
     """RGS-S6: ApiException(status=403) from node_disk_usage_ratio → _DISK_CHECK_DISABLED
     set to True, exactly one INFO log 'runner_gc.disk_check_rbac_denied' emitted,
     disk_pressure=False, and both gc_orphan_pods/gc_orphan_pvcs still invoked with
-    the analyzing REQ in their keep sets.
+    the executing REQ in their keep sets.
     """
-    pool = _FakePool([_row("REQ-Z", "analyzing")])
+    pool = _FakePool([_row("REQ-Z", "executing")])
     monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
     mock_controller.node_disk_usage_ratio = AsyncMock(
         side_effect=ApiException(status=403, reason="Forbidden")
@@ -310,8 +310,8 @@ async def test_rgs_s6_disk_check_403_sets_flag_emits_info_log_both_sweeps_run(
     pvc_keep = mock_controller.gc_orphan_pvcs.await_args.args[0]
 
     assert "REQ-Z" in pod_keep, (
-        "analyzing REQ MUST be in Pod keep set even after disk-check 403"
+        "executing REQ MUST be in Pod keep set even after disk-check 403"
     )
     assert "REQ-Z" in pvc_keep, (
-        "analyzing REQ MUST be in PVC keep set even after disk-check 403"
+        "executing REQ MUST be in PVC keep set even after disk-check 403"
     )

@@ -1,8 +1,8 @@
 {% include "verifier/_header.md.j2" %}
 
-## 职责（analyze_artifact_check / fail）
+## 职责（execute_artifact_check / fail）
 
-sisyphus 的机械 **post-artifact-check** 红了。它在 ANALYZING → SPEC_LINT_RUNNING
+sisyphus 的机械 **post-artifact-check** 红了。它在 EXECUTING → SPEC_LINT_RUNNING
 之间 mechanically 校 analyze BKD agent 真的写出了 ✅ 清单产物：
 
 - 每个 eligible 仓必须有 `openspec/changes/{{ req_id }}/specs/<capability>/spec.md`（至少一个非空）

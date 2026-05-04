@@ -34,7 +34,7 @@ ORDER BY total_invocations DESC;
 -- ═══ bugfix_diagnosis: bugfix-agent 的诊断分布 ═════════════════════════
 -- 看 dev-fix-agent 把 bug 归到哪类（code / test / spec / env）
 -- 频繁 env-bug → sisyphus runner 环境问题，运维要改
--- 频繁 spec-bug → analyze/spec 阶段可能交付质量不够
+-- 频繁 spec-bug → execute/spec 阶段可能交付质量不够
 CREATE OR REPLACE VIEW bugfix_diagnosis AS
 SELECT
     CASE
@@ -63,7 +63,7 @@ WHERE stage IS NOT NULL
   AND status = 'review'  -- agent 说 done 但没完整 result tag
   AND NOT ('ci:pass' = ANY(tags) OR 'ci:fail' = ANY(tags)
            OR 'result:pass' = ANY(tags) OR 'result:fail' = ANY(tags)
-           OR stage IN ('analyze', 'contract-spec', 'acceptance-spec', 'dev',
+           OR stage IN ('execute', 'analyze', 'contract-spec', 'acceptance-spec', 'dev',
                         'done-archive', 'github-incident'))
 ORDER BY bkd_updated_at DESC
 LIMIT 50;

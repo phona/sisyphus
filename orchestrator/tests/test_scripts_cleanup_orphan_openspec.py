@@ -81,9 +81,9 @@ async def test_s2_escalated_state_is_delete():
 
 @pytest.mark.asyncio
 async def test_s3_inflight_state_is_keep():
-    """COP-S3: A REQ with an in-flight state (e.g. analyzing) MUST be kept."""
+    """COP-S3: A REQ with an in-flight state (e.g. executing) MUST be kept."""
     global _FAKE_STATES
-    _FAKE_STATES = {"REQ-live-5555": "analyzing"}
+    _FAKE_STATES = {"REQ-live-5555": "executing"}
 
     statuses = await _classify(["REQ-live-5555"], pg_url="pg://fake")
     assert len(statuses) == 1
@@ -132,7 +132,7 @@ async def test_mixed_batch():
     _FAKE_STATES = {
         "REQ-done-1": "done",
         "REQ-esc-2": "escalated",
-        "REQ-live-3": "analyzing",
+        "REQ-live-3": "executing",
     }
 
     req_dirs = ["REQ-done-1", "REQ-esc-2", "REQ-live-3", "REQ-orphan-4"]

@@ -42,11 +42,26 @@ log = structlog.get_logger(__name__)
 
 
 # 支持的 stage 名（对应 prompts/verifier/{stage}_{trigger}.md.j2）
-# 包括 agent stage（analyze）和 checker stage（spec_lint / dev_cross_check / staging_test / pr_ci）
+# 包括 agent stage（execute）和 checker stage（spec_lint / dev_cross_check / staging_test / pr_ci）
+# REQ-refactor-analyze-execute-392：保留 "analyze" 别名，让历史 in-flight verifier
+# issue 仍能命中 _STAGES 校验；运行时 _resolve_template_stage 把 "analyze" 改成 "execute"。
 _STAGES = {
-    "analyze", "analyze_artifact_check", "spec_lint", "challenger",
+    "execute", "analyze",
+    "execute_artifact_check", "analyze_artifact_check",
+    "spec_lint", "challenger",
     "dev_cross_check", "staging_test", "pr_ci", "accept",
 }
+
+# 旧名 → 新名映射（read-compat）：verifier issue 的 stage 字段如果是历史 `analyze`
+# / `analyze_artifact_check`，按新 prompt 文件路径解析。新代码只写新名。
+_LEGACY_STAGE_ALIAS: dict[str, str] = {
+    "analyze": "execute",
+    "analyze_artifact_check": "execute_artifact_check",
+}
+
+
+def _resolve_template_stage(stage: str) -> str:
+    return _LEGACY_STAGE_ALIAS.get(stage, stage)
 
 # Trigger 类型
 Trigger = Literal["success", "fail"]
@@ -66,7 +81,7 @@ _STAGE_TO_DB: dict[str, str] = {
     "dev_cross_check":        "dev-cross-check",
     "staging_test":           "staging-test",
     "pr_ci":                  "pr-ci-watch",
-    "analyze_artifact_check": "analyze-artifact-check",
+    "execute_artifact_check": "execute-artifact-check",
 }
 
 # stdout/stderr 各保留最后多少行，避免 prompt 过长
@@ -144,7 +159,7 @@ async def invoke_verifier(
                 checker_stderr = _tail_lines(row.get("stderr_tail") or "")
                 checker_exit_code = row.get("exit_code")
 
-    template_name = f"verifier/{stage}_{trigger}.md.j2"
+    template_name = f"verifier/{_resolve_template_stage(stage)}_{trigger}.md.j2"
     prompt = render(
         template_name,
         req_id=req_id,
@@ -162,7 +177,7 @@ async def invoke_verifier(
 
     # PR-link tag 注入（REQ-issue-link-pr-quality-base-1777218242）：
     # verifier issue 在 dev 之后才创建，PR 已存在 → 第一次成功 discover 时
-    # 同时回填 ctx 里 analyze_issue_id 等已有 sisyphus issue 的 tag。
+    # 同时回填 ctx 里 execute_issue_id 等已有 sisyphus issue 的 tag。
     branch = (ctx or {}).get("branch") or f"feat/{req_id}"
     links = await pr_links.ensure_pr_links_in_ctx(
         req_id=req_id, branch=branch, ctx=ctx, project_id=project_id,
@@ -451,16 +466,16 @@ async def invoke_verifier_for_dev_cross_check_fail(*, body, req_id, tags, ctx):
     )
 
 
-@register("invoke_verifier_for_analyze_artifact_check_fail", idempotent=False)
-async def invoke_verifier_for_analyze_artifact_check_fail(*, body, req_id, tags, ctx):
-    """ANALYZE_ARTIFACT_CHECK_FAIL → 起 verifier-agent(stage=analyze_artifact_check, trigger=fail)。
+@register("invoke_verifier_for_execute_artifact_check_fail", idempotent=False)
+async def invoke_verifier_for_execute_artifact_check_fail(*, body, req_id, tags, ctx):
+    """EXECUTE_ARTIFACT_CHECK_FAIL → 起 verifier-agent(stage=execute_artifact_check, trigger=fail)。
 
     REQ-analyze-artifact-check-1777254586：analyze 产物结构性校验失败。verifier
     通常应判 escalate（agent 自报 pass 但产物缺失，是 LLM 抽风类失败），少数
     情况是 agent 写了 spec 漏了 proposal/tasks → 可判 fix + fixer=spec。
     """
     return await _invoke_verifier_fail(
-        stage="analyze_artifact_check", body=body, req_id=req_id, ctx=ctx,
+        stage="execute_artifact_check", body=body, req_id=req_id, ctx=ctx,
     )
 
 

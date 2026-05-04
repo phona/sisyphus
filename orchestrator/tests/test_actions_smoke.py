@@ -58,7 +58,7 @@ def patch_db(monkeypatch, target_module: str):
 
 
 def patch_dispatch_slugs(monkeypatch, target_module: str):
-    """patch dispatch_slugs.get/put 为 no-op，避免 start_analyze 等 action 因 slug
+    """patch dispatch_slugs.get/put 为 no-op，避免 start_execute 等 action 因 slug
     命中而跳过 create_issue。"""
     monkeypatch.setattr(
         f"orchestrator.actions.{target_module}.dispatch_slugs.get",
@@ -77,16 +77,16 @@ def make_body(issue_id="src-1", project_id="p", event="session.completed", title
     })()
 
 
-# ─── start_analyze ────────────────────────────────────────────────────────
+# ─── start_execute ────────────────────────────────────────────────────────
 @pytest.mark.asyncio
-async def test_start_analyze(monkeypatch):
-    from orchestrator.actions import start_analyze as mod
+async def test_start_execute(monkeypatch):
+    from orchestrator.actions import start_execute as mod
     fake = make_fake_bkd()
-    patch_bkd(monkeypatch, "start_analyze", fake)
-    patch_db(monkeypatch, "start_analyze")  # admission gate reads pool
-    patch_dispatch_slugs(monkeypatch, "start_analyze")
+    patch_bkd(monkeypatch, "start_execute", fake)
+    patch_db(monkeypatch, "start_execute")  # admission gate reads pool
+    patch_dispatch_slugs(monkeypatch, "start_execute")
     body = make_body(issue_id="intent-1", title="加个登录")
-    out = await mod.start_analyze(body=body, req_id="REQ-9", tags=["intent:analyze"], ctx={})
+    out = await mod.start_execute(body=body, req_id="REQ-9", tags=["intent:execute"], ctx={})
     # cloned_repos=None: 直接 analyze 路径无 involved_repos，跳过 server-side clone
     # （REQ-clone-and-pr-ci-fallback-1777115925）
     # REQ-fix-intent-issue-hijacking-1777427339: issue_id 现在指向新建的 analyze sub-issue
@@ -101,35 +101,35 @@ async def test_start_analyze(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_start_analyze_title_format(monkeypatch):
-    """验证 start_analyze 新建 analyze sub-issue 的标题使用 short_title 格式（ — 分隔 + 截断）。"""
-    from orchestrator.actions import start_analyze as mod
+    """验证 start_execute 新建 analyze sub-issue 的标题使用 short_title 格式（ — 分隔 + 截断）。"""
+    from orchestrator.actions import start_execute as mod
     fake = make_fake_bkd()
-    patch_bkd(monkeypatch, "start_analyze", fake)
-    patch_db(monkeypatch, "start_analyze")  # admission gate reads pool
-    patch_dispatch_slugs(monkeypatch, "start_analyze")
+    patch_bkd(monkeypatch, "start_execute", fake)
+    patch_db(monkeypatch, "start_execute")  # admission gate reads pool
+    patch_dispatch_slugs(monkeypatch, "start_execute")
 
     # 场景1：有 intent_title，长度正常
     body = make_body(issue_id="intent-1", title="加个登录端点")
     ctx = {"intent_title": "加个登录端点"}
-    await mod.start_analyze(body=body, req_id="REQ-9", tags=["intent:analyze"], ctx=ctx)
+    await mod.start_execute(body=body, req_id="REQ-9", tags=["intent:execute"], ctx=ctx)
     _, kwargs = fake.create_issue.call_args_list[0]
-    assert kwargs["title"] == "[REQ-9] [ANALYZE] — 加个登录端点"
+    assert kwargs["title"] == "[REQ-9] [EXECUTE] — 加个登录端点"
 
     # 场景2：intent_title 超过 50 字符，需要截断 + 省略号
     long_title = "a" * 60
     ctx = {"intent_title": long_title}
-    await mod.start_analyze(body=body, req_id="REQ-10", tags=["intent:analyze"], ctx=ctx)
+    await mod.start_execute(body=body, req_id="REQ-10", tags=["intent:execute"], ctx=ctx)
     _, kwargs = fake.create_issue.call_args_list[1]
     title = kwargs["title"]
-    assert title.startswith("[REQ-10] [ANALYZE] — ")
+    assert title.startswith("[REQ-10] [EXECUTE] — ")
     assert "…" in title
     assert len(title) < 100  # 合理长度
 
-    # 场景3：ctx 为空，标题应该只有 [REQ-xx] [ANALYZE] 部分
+    # 场景3：ctx 为空，标题应该只有 [REQ-xx] [EXECUTE] 部分
     ctx = {}
-    await mod.start_analyze(body=body, req_id="REQ-11", tags=["intent:analyze"], ctx=ctx)
+    await mod.start_execute(body=body, req_id="REQ-11", tags=["intent:execute"], ctx=ctx)
     _, kwargs = fake.create_issue.call_args_list[2]
-    assert kwargs["title"] == "[REQ-11] [ANALYZE]"
+    assert kwargs["title"] == "[REQ-11] [EXECUTE]"
 
 
 def test_short_title_helper():
@@ -711,7 +711,7 @@ async def test_escalate_auto_resume_never_tags_intent_issue(monkeypatch):
     patch_db(monkeypatch, "escalate")
     body = make_body(issue_id="src-1", event="watchdog.stuck")
     out = await mod.escalate(
-        body=body, req_id="REQ-WLC-S7", tags=["analyze"],
+        body=body, req_id="REQ-WLC-S7", tags=["execute"],
         ctx={"intent_issue_id": "intent-1", "auto_retry_count": 0},
     )
     assert out["auto_resumed"] is True

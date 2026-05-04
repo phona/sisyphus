@@ -9,7 +9,7 @@ Scenarios covered:
   FIX-S3  intent issue gets req_id tag; user hint tags forwarded to both issues
   FIX-S4  idempotency via dispatch_slugs: redispatch returns cached issue id
   FIX-S5  backward compatibility: existing analyze tag on intent issue preserved
-  FIX-S6  analyze.md.j2 renders without UndefinedError when intake_summary absent
+  FIX-S6  execute.md.j2 renders without UndefinedError when intake_summary absent
 
 Dev MUST NOT modify these tests to make them pass — fix the implementation instead.
 If a test is wrong, escalate to spec_fixer to correct the spec, not the test.
@@ -141,11 +141,11 @@ def _patch_bkd_client(monkeypatch, target_module: Any, *,
 async def test_FIX_S1_intent_issue_keeps_title_and_status(monkeypatch):
     """
     GIVEN a BKD intent issue exists with title "Add login endpoint" and status "todo"
-    WHEN start_analyze is dispatched for REQ-X
+    WHEN start_execute is dispatched for REQ-X
     THEN the intent issue title remains unchanged and status remains unchanged
-    AND a new analyze sub-issue is created with title containing [REQ-X] [ANALYZE]
+    AND a new analyze sub-issue is created with title containing [REQ-X] [EXECUTE]
     """
-    import orchestrator.actions.start_analyze as sa
+    import orchestrator.actions.start_execute as sa
 
     _patch_admission(monkeypatch, sa)
     _patch_k8s_runner(monkeypatch, sa)
@@ -153,8 +153,8 @@ async def test_FIX_S1_intent_issue_keeps_title_and_status(monkeypatch):
     _merge_tags, create_issue, _follow_up, update_issue = _patch_bkd_client(monkeypatch, sa)
 
     body = _make_body(title="Add login endpoint")
-    result = await sa.start_analyze(
-        body=body, req_id="REQ-X", tags=["intent:analyze"], ctx={},
+    result = await sa.start_execute(
+        body=body, req_id="REQ-X", tags=["intent:execute"], ctx={},
     )
 
     # Intent issue must NOT be renamed or have status changed
@@ -171,8 +171,8 @@ async def test_FIX_S1_intent_issue_keeps_title_and_status(monkeypatch):
     # A new analyze sub-issue must be created
     create_issue.assert_awaited_once()
     _, c_kwargs = create_issue.call_args
-    assert "[REQ-X] [ANALYZE]" in c_kwargs["title"], (
-        f"FIX-S1: analyze sub-issue title must contain '[REQ-X] [ANALYZE]', got {c_kwargs['title']!r}"
+    assert "[REQ-X] [EXECUTE]" in c_kwargs["title"], (
+        f"FIX-S1: analyze sub-issue title must contain '[REQ-X] [EXECUTE]', got {c_kwargs['title']!r}"
     )
     assert result["issue_id"] == "analyze-sub-issue-xyz", (
         "FIX-S1: result must contain the new analyze sub-issue id"
@@ -185,14 +185,14 @@ async def test_FIX_S1_intent_issue_keeps_title_and_status(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_FIX_S2_analyze_sub_issue_tags_and_status(monkeypatch):
+async def test_FIX_S2_execute_sub_issue_tags_and_status(monkeypatch):
     """
-    GIVEN start_analyze is dispatched for REQ-X
+    GIVEN start_execute is dispatched for REQ-X
     WHEN the BKD sub-issue is created
-    THEN the sub-issue tags include "analyze" and "REQ-X"
+    THEN the sub-issue tags include "execute" and "REQ-X"
     AND the sub-issue status is set to "working" to trigger the agent
     """
-    import orchestrator.actions.start_analyze as sa
+    import orchestrator.actions.start_execute as sa
 
     _patch_admission(monkeypatch, sa)
     _patch_k8s_runner(monkeypatch, sa)
@@ -200,16 +200,16 @@ async def test_FIX_S2_analyze_sub_issue_tags_and_status(monkeypatch):
     _merge_tags, create_issue, _follow_up, update_issue = _patch_bkd_client(monkeypatch, sa)
 
     body = _make_body()
-    await sa.start_analyze(
-        body=body, req_id="REQ-X", tags=["intent:analyze"], ctx={},
+    await sa.start_execute(
+        body=body, req_id="REQ-X", tags=["intent:execute"], ctx={},
     )
 
     # Sub-issue creation tags must include analyze and REQ-X
     create_issue.assert_awaited_once()
     _, c_kwargs = create_issue.call_args
     tags = c_kwargs.get("tags", [])
-    assert "analyze" in tags, (
-        f"FIX-S2: analyze sub-issue tags must include 'analyze', got {tags!r}"
+    assert "execute" in tags, (
+        f"FIX-S2: analyze sub-issue tags must include 'execute', got {tags!r}"
     )
     assert "REQ-X" in tags, (
         f"FIX-S2: analyze sub-issue tags must include 'REQ-X', got {tags!r}"
@@ -234,12 +234,12 @@ async def test_FIX_S2_analyze_sub_issue_tags_and_status(monkeypatch):
 async def test_FIX_S3_intent_issue_gets_req_id_and_hint_tags_forwarded(monkeypatch):
     """
     GIVEN a BKD intent issue exists without REQ-X tag
-    WHEN start_analyze is dispatched for REQ-X
+    WHEN start_execute is dispatched for REQ-X
     THEN the intent issue gets "REQ-X" tag added
     AND user hint tags (e.g., "repo:phona/foo", "ux:fast-track") are forwarded
        to both intent issue and analyze sub-issue
     """
-    import orchestrator.actions.start_analyze as sa
+    import orchestrator.actions.start_execute as sa
 
     _patch_admission(monkeypatch, sa)
     _patch_k8s_runner(monkeypatch, sa)
@@ -247,9 +247,9 @@ async def test_FIX_S3_intent_issue_gets_req_id_and_hint_tags_forwarded(monkeypat
     _merge_tags, create_issue, _follow_up, update_issue = _patch_bkd_client(monkeypatch, sa)
 
     body = _make_body()
-    await sa.start_analyze(
+    await sa.start_execute(
         body=body, req_id="REQ-X",
-        tags=["intent:analyze", "repo:phona/foo", "ux:fast-track"],
+        tags=["intent:execute", "repo:phona/foo", "ux:fast-track"],
         ctx={},
     )
 
@@ -291,12 +291,12 @@ async def test_FIX_S3_intent_issue_gets_req_id_and_hint_tags_forwarded(monkeypat
 @pytest.mark.asyncio
 async def test_FIX_S4_redispatch_is_idempotent(monkeypatch):
     """
-    GIVEN start_analyze has already created an analyze sub-issue for REQ-X
-    WHEN start_analyze is dispatched again for the same REQ-X
+    GIVEN start_execute has already created an analyze sub-issue for REQ-X
+    WHEN start_execute is dispatched again for the same REQ-X
     THEN no new analyze sub-issue is created
     AND the existing analyze issue ID is returned from the slug cache
     """
-    import orchestrator.actions.start_analyze as sa
+    import orchestrator.actions.start_execute as sa
 
     _patch_admission(monkeypatch, sa)
     _patch_k8s_runner(monkeypatch, sa)
@@ -306,8 +306,8 @@ async def test_FIX_S4_redispatch_is_idempotent(monkeypatch):
     _merge_tags, create_issue, follow_up, update_issue = _patch_bkd_client(monkeypatch, sa)
 
     body = _make_body()
-    result = await sa.start_analyze(
-        body=body, req_id="REQ-X", tags=["intent:analyze"], ctx={},
+    result = await sa.start_execute(
+        body=body, req_id="REQ-X", tags=["intent:execute"], ctx={},
     )
 
     # No new issue should be created
@@ -329,31 +329,31 @@ async def test_FIX_S4_redispatch_is_idempotent(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_FIX_S5_backward_compat_preserves_existing_analyze_tag(monkeypatch):
+async def test_FIX_S5_backward_compat_preserves_existing_execute_tag(monkeypatch):
     """
-    GIVEN an intent issue already has "analyze" tag from a prior run
-    WHEN start_analyze is dispatched
-    THEN the existing "analyze" tag on the intent issue is preserved
-    AND the new analyze sub-issue still gets its own "analyze" tag
+    GIVEN an intent issue already has "execute" tag from a prior run
+    WHEN start_execute is dispatched
+    THEN the existing "execute" tag on the intent issue is preserved
+    AND the new analyze sub-issue still gets its own "execute" tag
     """
-    import orchestrator.actions.start_analyze as sa
+    import orchestrator.actions.start_execute as sa
 
     _patch_admission(monkeypatch, sa)
     _patch_k8s_runner(monkeypatch, sa)
     _patch_db_and_dispatch(monkeypatch, sa)
-    # Intent issue already has "analyze" from a prior (old-version) run
+    # Intent issue already has "execute" from a prior (old-version) run
     _merge_tags, create_issue, _follow_up, update_issue = _patch_bkd_client(
-        monkeypatch, sa, intent_issue_tags=["analyze"],
+        monkeypatch, sa, intent_issue_tags=["execute"],
     )
 
     body = _make_body()
-    await sa.start_analyze(
+    await sa.start_execute(
         body=body, req_id="REQ-X",
-        tags=["analyze", "repo:phona/foo"],
+        tags=["execute", "repo:phona/foo"],
         ctx={},
     )
 
-    # Intent issue update must still contain the existing "analyze" tag
+    # Intent issue update must still contain the existing "execute" tag
     intent_update_calls = [
         call for call in update_issue.call_args_list
         if call.kwargs.get("issue_id") == body.issueId
@@ -362,20 +362,20 @@ async def test_FIX_S5_backward_compat_preserves_existing_analyze_tag(monkeypatch
         "FIX-S5: intent issue must be updated"
     )
     intent_tags = intent_update_calls[0].kwargs.get("tags", [])
-    assert "analyze" in intent_tags, (
+    assert "execute" in intent_tags, (
         f"FIX-S5: existing analyze tag on intent issue must be preserved, got {intent_tags!r}"
     )
 
     # New analyze sub-issue must still get analyze tag
     _, c_kwargs = create_issue.call_args
     sub_tags = c_kwargs.get("tags", [])
-    assert "analyze" in sub_tags, (
+    assert "execute" in sub_tags, (
         f"FIX-S5: new analyze sub-issue must get analyze tag, got {sub_tags!r}"
     )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIX-S6: analyze.md.j2 handles direct analyze path without intake summary
+# FIX-S6: execute.md.j2 handles direct analyze path without intake summary
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -395,7 +395,7 @@ def test_FIX_S6_analyze_prompt_renders_without_undefined_error():
         loader=jinja2.FileSystemLoader(prompts_dir),
         undefined=jinja2.Undefined,
     )
-    template = env.get_template("analyze.md.j2")
+    template = env.get_template("execute.md.j2")
 
     # Render without intake_summary — must not raise
     try:
@@ -407,15 +407,15 @@ def test_FIX_S6_analyze_prompt_renders_without_undefined_error():
             issue_id="analyze-issue-xyz",
             cloned_repos=None,
             bkd_intent_issue_url="https://bkd.example.test/projects/nnvxh8wj/issues/intent-issue-abc",
-            status_block={"stage": "analyze", "req_id": "REQ-X"},
+            status_block={"stage": "execute", "req_id": "REQ-X"},
             mcp_capability_providers={"ssh_exec": "aissh-tao"},
         )
     except jinja2.UndefinedError as e:
-        pytest.fail(f"FIX-S6: analyze.md.j2 raised UndefinedError without intake_summary: {e}")
+        pytest.fail(f"FIX-S6: execute.md.j2 raised UndefinedError without intake_summary: {e}")
 
-    # Must contain guidance for direct analyze path
-    assert "直接 analyze 入口" in result or "direct analyze" in result.lower(), (
-        "FIX-S6: prompt must include guidance for direct analyze path (no intake summary)"
+    # Must contain guidance for direct execute path
+    assert "直接 execute 入口" in result or "direct execute" in result.lower(), (
+        "FIX-S6: prompt must include guidance for direct execute path (no intake summary)"
     )
 
     # Must not contain raw template variables

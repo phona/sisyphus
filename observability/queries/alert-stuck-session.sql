@@ -8,7 +8,7 @@
 -- 覆盖缺陷：原设计无阶段超时熔断。如果 vm-node04 SSH 挂、agent 死循环、
 --   BKD webhook 丢失，整条链路永远不 session.completed，n8n 侧没兜底。
 --
--- SLA 取值拍脑袋：analyze 15 min / dev 30 min / ci 10 min / 其它 20 min。
+-- SLA 取值拍脑袋：execute 15 min / dev 30 min / ci 10 min / 其它 20 min。
 --   跑一段时间后看 P95 数据再调。
 
 SELECT
@@ -19,6 +19,7 @@ SELECT
   s.bkd_updated_at,
   ROUND(EXTRACT(EPOCH FROM (now() - s.bkd_updated_at)) / 60)::INT AS stuck_min,
   CASE s.stage
+    WHEN 'execute' THEN 15
     WHEN 'analyze' THEN 15
     WHEN 'dev'     THEN 30
     WHEN 'ci'      THEN 10
@@ -27,6 +28,7 @@ SELECT
 FROM bkd_snapshot s
 WHERE s.status = 'working'
   AND now() - s.bkd_updated_at > CASE s.stage
+    WHEN 'execute' THEN interval '15 minutes'
     WHEN 'analyze' THEN interval '15 minutes'
     WHEN 'dev'     THEN interval '30 minutes'
     WHEN 'ci'      THEN interval '10 minutes'

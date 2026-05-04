@@ -53,8 +53,8 @@ class _FakePool:
 
 
 async def test_fre_s1_schedules_cleanup_task_on_active_req(monkeypatch):
-    """FRE-S1: POST /admin/req/REQ-X/escalate with state='analyzing'
-    MUST return 200 {action='force_escalated', from_state='analyzing'} and schedule
+    """FRE-S1: POST /admin/req/REQ-X/escalate with state='executing'
+    MUST return 200 {action='force_escalated', from_state='executing'} and schedule
     a fire-and-forget asyncio.Task calling engine._cleanup_runner_on_terminal with
     ReqState.ESCALATED before the endpoint returns.
     """
@@ -65,7 +65,7 @@ async def test_fre_s1_schedules_cleanup_task_on_active_req(monkeypatch):
     from orchestrator.state import ReqState
     from orchestrator.store import db
 
-    pool = _FakePool(fetchrow_return=_row("analyzing"))
+    pool = _FakePool(fetchrow_return=_row("executing"))
     cleanup_calls: list[dict] = []
 
     async def _fake_cleanup(req_id, terminal_state):
@@ -80,7 +80,7 @@ async def test_fre_s1_schedules_cleanup_task_on_active_req(monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("action") == "force_escalated", f"expected action=force_escalated, got {body}"
-    assert body.get("from_state") == "analyzing", f"expected from_state=analyzing, got {body}"
+    assert body.get("from_state") == "executing", f"expected from_state=executing, got {body}"
 
     # Allow fire-and-forget asyncio.Task one event-loop tick to execute
     await asyncio.sleep(0)
@@ -195,7 +195,7 @@ async def test_fre_s4_cleanup_arg_is_escalated_not_done(monkeypatch):
     from orchestrator.state import ReqState
     from orchestrator.store import db
 
-    pool = _FakePool(fetchrow_return=_row("analyzing"))
+    pool = _FakePool(fetchrow_return=_row("executing"))
     terminal_state_args: list[ReqState] = []
 
     async def _fake_cleanup(req_id, terminal_state):

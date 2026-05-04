@@ -23,7 +23,7 @@ SELECT
 FROM bkd_snapshot
 WHERE status IN ('working', 'review')
   AND stage IN (
-    'analyze', 'dev-spec', 'contract-spec', 'accept-spec',
+    'execute', 'analyze', 'dev-spec', 'contract-spec', 'accept-spec',
     'ui-spec', 'migration-spec', 'dev', 'accept', 'done-archive'
   )
 GROUP BY req_id, stage

@@ -100,7 +100,7 @@ async def test_ert_s1_init_intent_intake_enters_intaking(stub_actions):
 
 
 # ───────────────────────────────────────────────────────────────────────
-# ERT-S2: (INTAKING, INTAKE_PASS) → ANALYZING + start_analyze_with_finalized_intent
+# ERT-S2: (INTAKING, INTAKE_PASS) → EXECUTING + start_execute_with_finalized_intent
 # ───────────────────────────────────────────────────────────────────────
 
 
@@ -108,8 +108,8 @@ async def test_ert_s1_init_intent_intake_enters_intaking(stub_actions):
 async def test_ert_s2_intaking_intake_pass_enters_analyzing(stub_actions):
     """Spec ERT-S2: intake 完成 + finalized intent → 接力到 analyze。"""
     calls: list = []
-    stub_actions["start_analyze_with_finalized_intent"] = _make_recorder(
-        "start_analyze_with_finalized_intent", calls,
+    stub_actions["start_execute_with_finalized_intent"] = _make_recorder(
+        "start_execute_with_finalized_intent", calls,
     )
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.INTAKING.value)})
@@ -121,9 +121,9 @@ async def test_ert_s2_intaking_intake_pass_enters_analyzing(stub_actions):
         cur_state=ReqState.INTAKING, ctx={}, event=Event.INTAKE_PASS,
     )
 
-    assert result["action"] == "start_analyze_with_finalized_intent"
-    assert result["next_state"] == ReqState.ANALYZING.value
-    assert pool.rows["REQ-1"].state == ReqState.ANALYZING.value
+    assert result["action"] == "start_execute_with_finalized_intent"
+    assert result["next_state"] == ReqState.EXECUTING.value
+    assert pool.rows["REQ-1"].state == ReqState.EXECUTING.value
     assert len(calls) == 1
 
 
@@ -168,7 +168,7 @@ async def test_ert_s3_intaking_intake_fail_escalates_with_cleanup(
 async def test_ert_s4_intaking_verify_escalate_escalates_with_cleanup(
     stub_actions, mock_runner_controller,
 ):
-    """Spec ERT-S4: start_analyze_with_finalized_intent 内部判 escalate（intent 缺字段
+    """Spec ERT-S4: start_execute_with_finalized_intent 内部判 escalate（intent 缺字段
     / clone failed 等）→ ESCALATED + cleanup。"""
     calls: list = []
     stub_actions["escalate"] = _make_recorder("escalate", calls)
@@ -193,27 +193,27 @@ async def test_ert_s4_intaking_verify_escalate_escalates_with_cleanup(
 
 
 # ───────────────────────────────────────────────────────────────────────
-# ERT-S5: (ANALYZING, VERIFY_ESCALATE) → ESCALATED + escalate (with cleanup)
+# ERT-S5: (EXECUTING, VERIFY_ESCALATE) → ESCALATED + escalate (with cleanup)
 # ───────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_ert_s5_analyzing_verify_escalate_escalates_with_cleanup(
+async def test_ert_s5_executing_verify_escalate_escalates_with_cleanup(
     stub_actions, mock_runner_controller,
 ):
-    """Spec ERT-S5: start_analyze 内部判 escalate（clone_involved_repos 失败等）→
+    """Spec ERT-S5: start_execute 内部判 escalate（clone_involved_repos 失败等）→
     ESCALATED + cleanup。实证背景：REQ-ttpos-pat-validate (2026-04-26) 漏挂这条
-    transition 时 REQ 卡 ANALYZING 60min，靠 watchdog auto_resume 才推进。"""
+    transition 时 REQ 卡 EXECUTING 60min，靠 watchdog auto_resume 才推进。"""
     calls: list = []
     stub_actions["escalate"] = _make_recorder("escalate", calls)
 
-    pool = FakePool({"REQ-1": FakeReq(state=ReqState.ANALYZING.value)})
+    pool = FakePool({"REQ-1": FakeReq(state=ReqState.EXECUTING.value)})
     body = _body(issueId="analyze-1", projectId="p", event="session.completed")
 
     result = await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p",
-        tags=["analyze", "REQ-1"],
-        cur_state=ReqState.ANALYZING, ctx={}, event=Event.VERIFY_ESCALATE,
+        tags=["execute", "REQ-1"],
+        cur_state=ReqState.EXECUTING, ctx={}, event=Event.VERIFY_ESCALATE,
     )
     await _drain_tasks()
 
@@ -438,7 +438,7 @@ def test_ert_s9_sweep_covers_exactly_83():
 
 
 # ───────────────────────────────────────────────────────────────────────
-# ERT-S10: ESCALATED + ANALYZE_DONE — stage-issue follow-up 端到端复活
+# ERT-S10: ESCALATED + EXECUTE_DONE — stage-issue follow-up 端到端复活
 # ───────────────────────────────────────────────────────────────────────
 
 
@@ -447,14 +447,14 @@ async def test_ert_s10_escalated_analyze_done_resumes_to_artifact_check(
     stub_actions, mock_runner_controller,
 ):
     """REQ-escalated-stage-resume：用户在 analyze BKD issue 续 follow-up，
-    agent 重跑出 result:pass → router 派 ANALYZE_DONE → ESCALATED 复用主链
-    transition (next=ANALYZE_ARTIFACT_CHECKING, action=create_analyze_artifact_check)。
+    agent 重跑出 result:pass → router 派 EXECUTE_DONE → ESCALATED 复用主链
+    transition (next=EXECUTE_ARTIFACT_CHECKING, action=create_execute_artifact_check)。
 
-    端到端：pool row 真被推到 ANALYZE_ARTIFACT_CHECKING；不需要新 action / RESUMING
+    端到端：pool row 真被推到 EXECUTE_ARTIFACT_CHECKING；不需要新 action / RESUMING
     中间态 / active_stage_* ctx 字段。"""
     calls: list = []
-    stub_actions["create_analyze_artifact_check"] = _make_recorder(
-        "create_analyze_artifact_check", calls,
+    stub_actions["create_execute_artifact_check"] = _make_recorder(
+        "create_execute_artifact_check", calls,
     )
 
     pool = FakePool({"REQ-1": FakeReq(state=ReqState.ESCALATED.value)})
@@ -462,15 +462,15 @@ async def test_ert_s10_escalated_analyze_done_resumes_to_artifact_check(
 
     result = await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p",
-        tags=["analyze", "REQ-1", "result:pass"],
+        tags=["execute", "REQ-1", "result:pass"],
         cur_state=ReqState.ESCALATED, ctx={"intent_issue_id": "analyze-1"},
-        event=Event.ANALYZE_DONE,
+        event=Event.EXECUTE_DONE,
     )
     await _drain_tasks()
 
-    assert result["action"] == "create_analyze_artifact_check"
-    assert result["next_state"] == ReqState.ANALYZE_ARTIFACT_CHECKING.value
-    assert pool.rows["REQ-1"].state == ReqState.ANALYZE_ARTIFACT_CHECKING.value
+    assert result["action"] == "create_execute_artifact_check"
+    assert result["next_state"] == ReqState.EXECUTE_ARTIFACT_CHECKING.value
+    assert pool.rows["REQ-1"].state == ReqState.EXECUTE_ARTIFACT_CHECKING.value
     assert len(calls) == 1
     # cur 是 terminal (ESCALATED) → engine 跳过 cleanup（防误删 resume 路径已拉的 pod）
     mock_runner_controller.cleanup_runner.assert_not_awaited()
@@ -530,7 +530,7 @@ async def test_ert_s12_escalated_session_failed_remains_no_op(
 
     result = await engine.step(
         pool, body=body, req_id="REQ-1", project_id="p",
-        tags=["analyze", "REQ-1"],
+        tags=["execute", "REQ-1"],
         cur_state=ReqState.ESCALATED, ctx={}, event=Event.SESSION_FAILED,
     )
     await _drain_tasks()

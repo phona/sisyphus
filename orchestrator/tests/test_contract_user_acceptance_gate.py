@@ -120,7 +120,7 @@ def test_USER_S3_pending_fix_to_escalated():
     [
         Event.SESSION_FAILED,
         Event.VERIFY_PASS,
-        # NOTE: STAGING_TEST_PASS / ACCEPT_PASS / ANALYZE_DONE / CHALLENGER_PASS
+        # NOTE: STAGING_TEST_PASS / ACCEPT_PASS / EXECUTE_DONE / CHALLENGER_PASS
         # / DEV_CROSS_CHECK_PASS / SPEC_LINT_PASS / PR_CI_PASS were moved out of
         # this illegal list by #247 Phase 1 — they are now legal main-chain resume
         # events from PENDING_USER_REVIEW (user follows up a stage-issue → agent

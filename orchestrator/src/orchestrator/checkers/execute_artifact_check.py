@@ -1,6 +1,6 @@
-"""analyze 阶段 post-artifact-check（REQ-analyze-artifact-check-1777254586）。
+"""execute 阶段 post-artifact-check（REQ-analyze-artifact-check-1777254586）。
 
-夹在 ANALYZING → SPEC_LINT_RUNNING 之间，机械校 analyze BKD agent 的产物：
+夹在 EXECUTING → SPEC_LINT_RUNNING 之间，机械校 analyze BKD agent 的产物：
 prevent agent self-reporting pass with no artifacts.
 
 校验规则（分两层）：
@@ -37,7 +37,7 @@ from ._types import CheckResult
 log = structlog.get_logger(__name__)
 
 _TAIL = 2048
-_STAGE = "analyze_artifact_check"
+_STAGE = "execute_artifact_check"
 
 
 def _build_cmd(req_id: str) -> str:
@@ -58,12 +58,12 @@ def _build_cmd(req_id: str) -> str:
     return (
         "set -o pipefail; "
         "if [ ! -d /workspace/source ]; then "
-        '  echo "=== FAIL analyze-artifact-check: /workspace/source missing — refusing to silent-pass ===" >&2; '
+        '  echo "=== FAIL execute-artifact-check: /workspace/source missing — refusing to silent-pass ===" >&2; '
         "  exit 1; "
         "fi; "
         "repo_count=$(find /workspace/source -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l); "
         'if [ "$repo_count" -eq 0 ]; then '
-        '  echo "=== FAIL analyze-artifact-check: /workspace/source empty (0 cloned repos) — refusing to silent-pass ===" >&2; '
+        '  echo "=== FAIL execute-artifact-check: /workspace/source empty (0 cloned repos) — refusing to silent-pass ===" >&2; '
         "  exit 1; "
         "fi; "
         "fail=0; "
@@ -82,7 +82,7 @@ def _build_cmd(req_id: str) -> str:
         "    continue; "
         "  fi; "
         "  ran=$((ran+1)); "
-        '  echo "=== analyze-artifact-check: $name ==="; '
+        '  echo "=== execute-artifact-check: $name ==="; '
         # spec.md per-repo（必须）
         '  spec_count=$(find "$ch/specs" -name spec.md -type f -size +0 2>/dev/null | wc -l); '
         '  if [ "$spec_count" -eq 0 ]; then '
@@ -99,22 +99,22 @@ def _build_cmd(req_id: str) -> str:
         "  fi; "
         "done; "
         'if [ "$ran" -eq 0 ]; then '
-        f'  echo "=== FAIL analyze-artifact-check: 0 source repos eligible (no feat/{req_id} branch with openspec/changes/{req_id}/) — refusing to silent-pass ===" >&2; '
+        f'  echo "=== FAIL execute-artifact-check: 0 source repos eligible (no feat/{req_id} branch with openspec/changes/{req_id}/) — refusing to silent-pass ===" >&2; '
         "  exit 1; "
         "fi; "
         'if [ "$has_proposal" -eq 0 ]; then '
-        f'  echo "=== FAIL analyze-artifact-check: no eligible repo has a non-empty openspec/changes/{req_id}/proposal.md ===" >&2; '
+        f'  echo "=== FAIL execute-artifact-check: no eligible repo has a non-empty openspec/changes/{req_id}/proposal.md ===" >&2; '
         "  fail=1; "
         "fi; "
         'if [ "$has_tasks" -eq 0 ]; then '
-        f'  echo "=== FAIL analyze-artifact-check: no eligible repo has openspec/changes/{req_id}/tasks.md with at least one Markdown checkbox ===" >&2; '
+        f'  echo "=== FAIL execute-artifact-check: no eligible repo has openspec/changes/{req_id}/tasks.md with at least one Markdown checkbox ===" >&2; '
         "  fail=1; "
         "fi; "
         "[ $fail -eq 0 ]"
     )
 
 
-async def run_analyze_artifact_check(
+async def run_execute_artifact_check(
     req_id: str,
     *,
     timeout_sec: int = 120,
@@ -128,7 +128,7 @@ async def run_analyze_artifact_check(
     await ensure_runner_alive(req_id)
     cmd = _build_cmd(req_id)
     log.info(
-        "checker.analyze_artifact_check.start",
+        "checker.execute_artifact_check.start",
         req_id=req_id, timeout=timeout_sec,
     )
     started = time.monotonic()
@@ -155,7 +155,7 @@ async def run_analyze_artifact_check(
         )
     except TimeoutError:
         log.error(
-            "checker.analyze_artifact_check.timeout", req_id=req_id,
+            "checker.execute_artifact_check.timeout", req_id=req_id,
         )
         return CheckResult(
             passed=False, exit_code=-1,
@@ -166,7 +166,7 @@ async def run_analyze_artifact_check(
 
     passed = exec_result.exit_code == 0
     log.info(
-        "checker.analyze_artifact_check.done",
+        "checker.execute_artifact_check.done",
         req_id=req_id,
         passed=passed, exit_code=exec_result.exit_code,
         duration_sec=round(exec_result.duration_sec, 2),

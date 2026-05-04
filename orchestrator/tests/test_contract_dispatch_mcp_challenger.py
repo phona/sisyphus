@@ -8,7 +8,7 @@ Scenarios covered:
   DISPATCH-MCP-S1  fetch_req_state returns dict with required keys, correct state, correct context_keys
   DISPATCH-MCP-S2  fetch_req_state returns None for missing REQ
   DISPATCH-MCP-S3  fetch_reqs limit clamped to [1, 200] — SQL param verified
-  DISPATCH-MCP-S4  fetch_reqs state filter binds 'analyzing' as $N SQL param
+  DISPATCH-MCP-S4  fetch_reqs state filter binds 'executing' as $N SQL param
   DISPATCH-MCP-S5  fetch_reqs raises ValueError on unknown state with message listing valid values
   DISPATCH-MCP-S6  fetch_req_state redacts context body: only keys returned, no raw body exposed
 """
@@ -78,12 +78,12 @@ def _s1_row() -> dict:
     return {
         "req_id": "REQ-x",
         "project_id": "p1",
-        "state": "analyzing",
+        "state": "executing",
         "created_at": "2026-04-26T10:00:00Z",
         "updated_at": "2026-04-26T10:00:00Z",
-        "last_event": "analyzing",
+        "last_event": "executing",
         "context": {"a": 1, "b": 2},
-        "history": [{"to": "analyzing", "ts": "2026-04-26T10:00:00Z"}],
+        "history": [{"to": "executing", "ts": "2026-04-26T10:00:00Z"}],
     }
 
 
@@ -117,15 +117,15 @@ async def test_DISPATCH_MCP_S1_all_required_keys_present() -> None:
 
 @pytest.mark.asyncio
 async def test_DISPATCH_MCP_S1_state_is_analyzing() -> None:
-    """fetch_req_state result must have state == 'analyzing'."""
+    """fetch_req_state result must have state == 'executing'."""
     from orchestrator.dispatch_mcp.queries import fetch_req_state
 
     pool = _FakePool(row=_s1_row())
     result = await fetch_req_state(pool, "REQ-x")
 
     assert result is not None
-    assert result["state"] == "analyzing", (
-        f"Expected state='analyzing', got {result['state']!r}"
+    assert result["state"] == "executing", (
+        f"Expected state='executing', got {result['state']!r}"
     )
 
 
@@ -191,14 +191,14 @@ async def test_DISPATCH_MCP_S3_limit_0_clamped_to_1() -> None:
 
 @pytest.mark.asyncio
 async def test_DISPATCH_MCP_S4_state_value_bound_as_sql_param() -> None:
-    """fetch_reqs(state='analyzing') must bind 'analyzing' as a $N SQL parameter."""
+    """fetch_reqs(state='executing') must bind 'executing' as a $N SQL parameter."""
     from orchestrator.dispatch_mcp.queries import fetch_reqs
 
     pool = _FakePool()
-    await fetch_reqs(pool, state="analyzing", limit=50)
+    await fetch_reqs(pool, state="executing", limit=50)
 
-    assert "analyzing" in pool.last_args, (
-        f"Expected bound param 'analyzing' in SQL args, got {pool.last_args}"
+    assert "executing" in pool.last_args, (
+        f"Expected bound param 'executing' in SQL args, got {pool.last_args}"
     )
 
 
@@ -208,7 +208,7 @@ async def test_DISPATCH_MCP_S4_sql_uses_dollar_placeholder() -> None:
     from orchestrator.dispatch_mcp.queries import fetch_reqs
 
     pool = _FakePool()
-    await fetch_reqs(pool, state="analyzing", limit=50)
+    await fetch_reqs(pool, state="executing", limit=50)
 
     assert pool.last_sql is not None
     assert "$" in pool.last_sql, (
@@ -254,10 +254,10 @@ async def test_DISPATCH_MCP_S5_error_lists_valid_state_values() -> None:
         await fetch_reqs(pool, state="banana", limit=50)
 
     msg = str(exc_info.value)
-    known_valid = ["analyzing", "done", "escalated"]
+    known_valid = ["executing", "done", "escalated"]
     found = any(v in msg for v in known_valid)
     assert found, (
-        f"ValueError must list valid state values (e.g. 'analyzing', 'done', 'escalated'), "
+        f"ValueError must list valid state values (e.g. 'executing', 'done', 'escalated'), "
         f"got: {msg!r}"
     )
 
@@ -269,10 +269,10 @@ def _s6_row() -> dict:
     return {
         "req_id": "REQ-redact",
         "project_id": "p1",
-        "state": "analyzing",
+        "state": "executing",
         "created_at": "2026-04-26T10:00:00Z",
         "updated_at": "2026-04-26T10:00:00Z",
-        "last_event": "analyzing",
+        "last_event": "executing",
         "context": {"prompt": "<long secret text>", "intent": {"k": "v"}},
         "history": [],
     }

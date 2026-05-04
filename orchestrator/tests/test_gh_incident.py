@@ -367,7 +367,7 @@ async def test_escalate_auto_resume_does_not_open_incident(monkeypatch):
 
     body = _make_body(issue_id="src-1", event="session.failed")
     out = await mod.escalate(
-        body=body, req_id="REQ-9", tags=["intent:analyze"],
+        body=body, req_id="REQ-9", tags=["intent:execute"],
         ctx={"intent_issue_id": "intent-1", "auto_retry_count": 0},
     )
     assert out["auto_resumed"] is True

@@ -60,7 +60,7 @@ _TIMEOUT_BRANCH_CHECK_SEC = 60   # git ls-remote per needs repo
 # 反而误导。fixer 列出来：fixer 跑过且产生 dev/spec 改动后用户也可能想再 follow-up。
 _RESUMABLE_STAGE_ISSUE_KEYS: tuple[tuple[str, str], ...] = (
     ("intake", "intake_issue_id"),
-    ("analyze", "analyze_issue_id"),
+    ("execute", "execute_issue_id"),
     ("challenger", "challenger_issue_id"),
     ("fixer", "fixer_issue_id"),
 )
@@ -70,7 +70,7 @@ def _build_bkd_entry_links(*, project_id: str, ctx: dict | None,
                            accept_issue_id: str) -> list[dict]:
     """收当前 ctx 里能让用户 follow-up 触发 PENDING_USER_REVIEW resume 的 BKD issue。
 
-    返回 [{"label": "analyze", "url": "https://..."}]，accept agent 渲染进 PR
+    返回 [{"label": "execute", "url": "https://..."}]，accept agent 渲染进 PR
     管理 comment，告诉用户"想调整就在这些 issue 续聊"。
 
     缺 ctx 字段 / 渲不出 url 的条目静默跳过（None 不出现在用户视野里）。

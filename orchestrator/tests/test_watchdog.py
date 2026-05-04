@@ -290,7 +290,7 @@ async def test_tick_passes_skip_states_and_threshold_to_sql(monkeypatch):
     # REQ-watchdog-stage-policy-1777269909: human-in-loop INTAKING 进 SQL skip
     assert "intaking" in skip_arr
     # M12：pending-human state 已删，不应出现在 skip 列表
-    assert "analyzing-pending-human" not in skip_arr
+    assert "executing-pending-human" not in skip_arr
 
 
 # ─── Case 8：watchdog_enabled=False → run_loop 立即 return 不跑循环 ─────────
@@ -560,7 +560,7 @@ async def test_ended_session_at_fast_threshold_escalates(monkeypatch):
     """WFD-S3：BKD 报 session=failed + stuck_sec=305（刚过 fast 300） → 立即 escalate。
     这是本 REQ 的核心 fix —— 旧行为要等 stuck_sec >= 3600 才 escalate。"""
     pool = FakePool(rows=[
-        _row("REQ-fast", ReqState.ANALYZING.value,
+        _row("REQ-fast", ReqState.EXECUTING.value,
              ctx={"intent_issue_id": "intent-fast"},
              stuck_sec=305),
     ])
@@ -581,9 +581,9 @@ async def test_ended_session_at_fast_threshold_escalates(monkeypatch):
     assert len(step_calls) == 1
     assert step_calls[0]["event"] == Event.SESSION_FAILED
     assert step_calls[0]["body_event"] == "watchdog.stuck"
-    assert step_calls[0]["cur_state"] == ReqState.ANALYZING
+    assert step_calls[0]["cur_state"] == ReqState.EXECUTING
     assert len(art_calls) == 1
-    assert art_calls[0]["stage"] == "watchdog:analyzing"
+    assert art_calls[0]["stage"] == "watchdog:executing"
 
 
 @pytest.mark.asyncio
@@ -591,7 +591,7 @@ async def test_running_session_above_fast_threshold_still_skips(monkeypatch):
     """WFD-S6：BKD 报 session=running + stuck_sec=305 → skip（不受 fast lane 影响）。
     fast lane 仅对 ended session 生效；in-loop still_running 检查继续保护长尾真分析。"""
     pool = FakePool(rows=[
-        _row("REQ-run-fast", ReqState.ANALYZING.value,
+        _row("REQ-run-fast", ReqState.EXECUTING.value,
              ctx={"intent_issue_id": "intent-run"},
              stuck_sec=305),
     ])
@@ -618,7 +618,7 @@ async def test_running_session_above_slow_threshold_still_skips(monkeypatch):
     """WFD-S5：BKD 报 session=running + stuck_sec=5000（远超 slow=3600） → 仍 skip。
     保留现有行为 —— BKD 报 running 时无条件信任，不主动 kill 长尾分析。"""
     pool = FakePool(rows=[
-        _row("REQ-long-run", ReqState.ANALYZING.value,
+        _row("REQ-long-run", ReqState.EXECUTING.value,
              ctx={"intent_issue_id": "intent-long"},
              stuck_sec=5000),
     ])
@@ -782,16 +782,16 @@ async def test_self_heal_skips_when_result_tag_present(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_self_heal_skips_for_analyze_stage(monkeypatch):
-    """SH-S3: ANALYZING 不需要 result tag，session=completed → 正常 escalate。"""
+    """SH-S3: EXECUTING 不需要 result tag，session=completed → 正常 escalate。"""
     pool = FakePool(rows=[
-        _row("REQ-SH3", ReqState.ANALYZING.value,
+        _row("REQ-SH3", ReqState.EXECUTING.value,
              ctx={"intent_issue_id": "intent-sh3"},
              stuck_sec=400),
     ])
     _patch_pool(monkeypatch, pool)
     _fake, follow_up_mock = _patch_bkd_with_follow_up(
         monkeypatch,
-        FakeIssue(session_status="completed", id="intent-sh3", tags=["analyze"]),
+        FakeIssue(session_status="completed", id="intent-sh3", tags=["execute"]),
     )
     step_calls = _patch_engine(monkeypatch)
     _patch_artifact(monkeypatch)
@@ -912,7 +912,7 @@ async def test_recent_log_activity_skips_escalate_even_if_session_not_running(mo
     from datetime import UTC, datetime, timedelta
 
     pool = FakePool(rows=[
-        _row("REQ-WLC-1", ReqState.ANALYZING.value,
+        _row("REQ-WLC-1", ReqState.EXECUTING.value,
              ctx={"intent_issue_id": "intent-wlc-1"}, stuck_sec=400),
     ])
     _patch_pool(monkeypatch, pool)
@@ -938,11 +938,11 @@ async def test_recent_log_activity_skips_escalate_even_if_session_not_running(mo
 @pytest.mark.asyncio
 async def test_stale_log_activity_falls_through_to_escalate(monkeypatch):
     """WLC-S2: 最新 log entry 在 grace 窗口外 → 落回原 escalate 路径。
-    使用 ANALYZING + intent_issue_id（有 issue_key 映射，活体探针会 fire）。"""
+    使用 EXECUTING + intent_issue_id（有 issue_key 映射，活体探针会 fire）。"""
     from datetime import UTC, datetime, timedelta
 
     pool = FakePool(rows=[
-        _row("REQ-WLC-2", ReqState.ANALYZING.value,
+        _row("REQ-WLC-2", ReqState.EXECUTING.value,
              ctx={"intent_issue_id": "intent-wlc-2"}, stuck_sec=400),
     ])
     _patch_pool(monkeypatch, pool)

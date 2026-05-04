@@ -147,13 +147,13 @@ async def test_s5_mark_processed_not_called_on_crash(monkeypatch):
         async def __aexit__(self, *a): return False
         async def get_issue(self, *a, **kw):
             class R:
-                tags: ClassVar = ["REQ-s5", "analyze"]
+                tags: ClassVar = ["REQ-s5", "execute"]
             return R()
         async def update_issue(self, *a, **kw): pass
 
     monkeypatch.setattr(webhook, "BKDClient", _BKD)
     monkeypatch.setattr(router_lib, "extract_req_id", lambda tags, num=None: "REQ-s5")
-    monkeypatch.setattr(router_lib, "derive_event", lambda evt, tags: Event.INTENT_ANALYZE)
+    monkeypatch.setattr(router_lib, "derive_event", lambda evt, tags: Event.INTENT_EXECUTE)
 
     class _Row:
         state = ReqState.INIT
@@ -172,7 +172,7 @@ async def test_s5_mark_processed_not_called_on_crash(monkeypatch):
                 "issueId": "issue-s5",
                 "projectId": "proj-s5",
                 "executionId": "exec-s5",
-                "tags": ["REQ-s5", "analyze"],
+                "tags": ["REQ-s5", "execute"],
             }
 
     # exception must propagate — caller sees the crash
@@ -214,16 +214,16 @@ async def test_s6_retry_path_cas_idempotent(monkeypatch):
         async def __aexit__(self, *a): return False
         async def get_issue(self, *a, **kw):
             class R:
-                tags: ClassVar = ["REQ-s6", "analyze"]
+                tags: ClassVar = ["REQ-s6", "execute"]
             return R()
         async def update_issue(self, *a, **kw): pass
 
     monkeypatch.setattr(webhook, "BKDClient", _BKD)
     monkeypatch.setattr(router_lib, "extract_req_id", lambda tags, num=None: "REQ-s6")
-    monkeypatch.setattr(router_lib, "derive_event", lambda evt, tags: Event.INTENT_ANALYZE)
+    monkeypatch.setattr(router_lib, "derive_event", lambda evt, tags: Event.INTENT_EXECUTE)
 
     class _Row:
-        state = ReqState.ANALYZING  # 状态已推进（不是 INIT）
+        state = ReqState.EXECUTING  # 状态已推进（不是 INIT）
         context: ClassVar = {}
 
     monkeypatch.setattr(rs_mod, "get", AsyncMock(return_value=_Row()))
@@ -244,7 +244,7 @@ async def test_s6_retry_path_cas_idempotent(monkeypatch):
                 "issueId": "issue-s6",
                 "projectId": "proj-s6",
                 "executionId": "exec-s6",
-                "tags": ["REQ-s6", "analyze"],
+                "tags": ["REQ-s6", "execute"],
             }
 
     # 不应抛异常（CAS skip 是正常路径）

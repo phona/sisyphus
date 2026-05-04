@@ -1,6 +1,6 @@
 """Admission gate for fresh REQ entry.
 
-Two checks at the door of `start_intake` / `start_analyze` (the two actions
+Two checks at the door of `start_intake` / `start_execute` (the two actions
 that turn an incoming `intent:*` webhook into a runner Pod + PVC):
 
 1. **In-flight cap** — refuse new work when the count of non-terminal REQs

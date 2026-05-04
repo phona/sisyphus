@@ -87,7 +87,7 @@
 ### 3.1 状态机全景
 
 ```
-[INIT] --intent:intake--> [INTAKING] --intake.pass--> [ANALYZING] --analyze.done-->
+[INIT] --intent:intake--> [INTAKING] --intake.pass--> [EXECUTING] --execute.done-->
 [SPEC_LINT_RUNNING] --spec-lint.pass--> [CHALLENGER_RUNNING] --challenger.pass-->
 [DEV_CROSS_CHECK_RUNNING] --dev-cross-check.pass--> [STAGING_TEST_RUNNING]
   --staging-test.pass--> [PR_CI_RUNNING] --pr-ci.pass--> [ACCEPT_RUNNING]

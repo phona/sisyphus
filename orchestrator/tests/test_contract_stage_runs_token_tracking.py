@@ -138,8 +138,8 @@ def _setup_passthrough(
 
 @pytest.mark.asyncio
 async def test_str_s1_agent_stage_session_completed_stamps_before_step(monkeypatch):
-    """STR-S1: cur_state ANALYZING + session.completed → stamp_bkd_session_id
-    被调用 (req, "analyze", externalSessionId) 且发生在 engine.step 之前。
+    """STR-S1: cur_state EXECUTING + session.completed → stamp_bkd_session_id
+    被调用 (req, "execute", externalSessionId) 且发生在 engine.step 之前。
     stage 来自 cur_state 映射，不嗅探 tags。
     """
     from orchestrator import webhook
@@ -147,12 +147,12 @@ async def test_str_s1_agent_stage_session_completed_stamps_before_step(monkeypat
 
     stamp_calls, step_calls = _setup_passthrough(
         monkeypatch,
-        cur_state=ReqState.ANALYZING,
-        derive_event_val=Event.ANALYZE_DONE,
+        cur_state=ReqState.EXECUTING,
+        derive_event_val=Event.EXECUTE_DONE,
     )
     _mock_bkd_returning(
         monkeypatch, webhook,
-        tags=["analyze", "REQ-x"],
+        tags=["execute", "REQ-x"],
         external_session_id="sess-analyze-uuid",
     )
 
@@ -179,9 +179,9 @@ async def test_str_s1_agent_stage_session_completed_stamps_before_step(monkeypat
     req = _make_request("session.completed", None)
     await webhook.webhook(req)
 
-    assert stamp_calls == [("REQ-x", "analyze", "sess-analyze-uuid")], (
+    assert stamp_calls == [("REQ-x", "execute", "sess-analyze-uuid")], (
         f"STR-S1: stamp_bkd_session_id must be called once with (REQ-x, "
-        f"'analyze', 'sess-analyze-uuid'), got {stamp_calls!r}"
+        f"'execute', 'sess-analyze-uuid'), got {stamp_calls!r}"
     )
     assert order.index("stamp") < order.index("step"), (
         f"STR-S1: stamp must run before engine.step (otherwise close_latest_stage_run "
@@ -232,12 +232,12 @@ async def test_str_s3_no_external_session_id_skips_stamp(monkeypatch):
 
     stamp_calls, _ = _setup_passthrough(
         monkeypatch,
-        cur_state=ReqState.ANALYZING,
-        derive_event_val=Event.ANALYZE_DONE,
+        cur_state=ReqState.EXECUTING,
+        derive_event_val=Event.EXECUTE_DONE,
     )
     _mock_bkd_returning(
         monkeypatch, webhook,
-        tags=["analyze", "REQ-x"],
+        tags=["execute", "REQ-x"],
         external_session_id=None,
     )
 

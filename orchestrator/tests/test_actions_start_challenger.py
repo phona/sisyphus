@@ -81,7 +81,7 @@ async def test_start_challenger_forwards_user_hint_tags(monkeypatch):
     out = await start_challenger.start_challenger(
         body=_make_body(issue_id="analyze-1"),
         req_id="REQ-X",
-        tags=["analyze", "REQ-X", "repo:phona/foo", "ux:fast-track"],
+        tags=["execute", "REQ-X", "repo:phona/foo", "ux:fast-track"],
         ctx={"branch": "feat/REQ-X"},
     )
     assert out["challenger_issue_id"] == "ch-new-1"
@@ -107,8 +107,8 @@ async def test_start_challenger_strips_managed_from_forwarded(monkeypatch):
         body=_make_body(issue_id="analyze-1"),
         req_id="REQ-X",
         tags=[
-            "analyze", "REQ-X", "result:pass", "challenger",
-            "intent:analyze", "decision:eyJ...", "verify:foo",
+            "execute", "REQ-X", "result:pass", "challenger",
+            "intent:execute", "decision:eyJ...", "verify:foo",
             "pr:phona/foo#1", "repo:phona/foo",
         ],
         ctx={},
@@ -123,7 +123,7 @@ async def test_start_challenger_strips_managed_from_forwarded(monkeypatch):
     assert tags.count("challenger") == 1
     assert tags.count("REQ-X") == 1
     assert "result:pass" not in tags
-    assert "intent:analyze" not in tags
+    assert "intent:execute" not in tags
     assert "pr:phona/foo#1" not in tags
 
 
@@ -143,7 +143,7 @@ async def test_start_challenger_keeps_pr_link_then_hints(monkeypatch):
     await start_challenger.start_challenger(
         body=_make_body(issue_id="analyze-1"),
         req_id="REQ-X",
-        tags=["analyze", "REQ-X", "repo:phona/foo", "ux:fast-track"],
+        tags=["execute", "REQ-X", "repo:phona/foo", "ux:fast-track"],
         ctx={},
     )
     _, kwargs = fake.create_issue.await_args
@@ -163,7 +163,7 @@ async def test_start_challenger_no_hint_keeps_base_tags(monkeypatch):
     await start_challenger.start_challenger(
         body=_make_body(issue_id="analyze-1"),
         req_id="REQ-X",
-        tags=["analyze", "REQ-X"],
+        tags=["execute", "REQ-X"],
         ctx={},
     )
     _, kwargs = fake.create_issue.await_args

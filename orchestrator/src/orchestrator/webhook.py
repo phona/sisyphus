@@ -406,7 +406,7 @@ async def webhook(request: Request) -> JSONResponse:
     #   session.completed: 没 REQ tag → 别的工作流的孤儿 session，skip
     #   issue.updated:     没 REQ tag 也没 intent 入口 tag → 跟任何 sisyphus REQ 都没关系
     #                      （唯一合法触发：REQ workflow 内 issue 的 tag/result 变化，或
-    #                       用户在 intent issue 上打 intent:intake/analyze 触发新 REQ）
+    #                       用户在 intent issue 上打 intent:intake/execute 触发新 REQ）
     # 早 skip 避免后续 obs.record_event / derive_event / engine.step 白跑 + 污染 event log。
     has_req_tag = bool(router_lib.extract_req_id(tags))
     if body.event == "session.completed" and not has_req_tag:
@@ -416,7 +416,7 @@ async def webhook(request: Request) -> JSONResponse:
         body.event == "issue.updated"
         and not has_req_tag
         and "intent:intake" not in tags
-        and "intent:analyze" not in tags
+        and "intent:execute" not in tags
     ):
         log.debug("webhook.skip_no_req_or_intent_tag",
                   issue_id=body.issueId, tags=tags)
@@ -644,7 +644,7 @@ async def webhook(request: Request) -> JSONResponse:
 
     # ─── 3.5 把上游 BKD issue 推目标 statusId（webhook 已识别为有效完工信号）──────
     # 默认 "done"。**verifier 判 escalate 例外** → "review"，让 BKD 看板"待审查"列只剩
-    # 用户可 follow-up 续作业的 issue（resume 路径）。其他 (analyze/challenger/fixer/checker
+    # 用户可 follow-up 续作业的 issue（resume 路径）。其他 (execute/challenger/fixer/checker
     # 完成) 全推 done，UI 干净。session.failed 不推（保留人工排查）。
     if body.event == "session.completed":
         is_verifier_escalate = (
@@ -733,7 +733,7 @@ async def webhook(request: Request) -> JSONResponse:
             log.warning("webhook.verifier_decisions.write_failed",
                         req_id=req_id, error=str(e))
 
-    # ─── 5.7 intake finalized intent 落 ctx（start_analyze_with_finalized_intent 读）──
+    # ─── 5.7 intake finalized intent 落 ctx（start_execute_with_finalized_intent 读）──
     if intake_finalized_intent is not None:
         patch = {
             "intake_finalized_intent": intake_finalized_intent,

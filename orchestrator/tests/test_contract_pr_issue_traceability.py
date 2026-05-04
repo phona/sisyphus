@@ -68,7 +68,7 @@ async def test_xlink_s7_webhook_insert_init_context_includes_bkd_intent_url(monk
                         AsyncMock(return_value={"action": "noop"}))
 
     bkd_inner = MagicMock()
-    bkd_inner.get_issue = AsyncMock(return_value=MagicMock(tags=["intent:analyze", "REQ-xy"]))
+    bkd_inner.get_issue = AsyncMock(return_value=MagicMock(tags=["intent:execute", "REQ-xy"]))
     bkd_ctx = AsyncMock()
     bkd_ctx.__aenter__ = AsyncMock(return_value=bkd_inner)
     bkd_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -85,7 +85,7 @@ async def test_xlink_s7_webhook_insert_init_context_includes_bkd_intent_url(monk
             "issueId": "I",
             "projectId": "P",
             "title": "feat: example",
-            "tags": ["intent:analyze", "REQ-xy"],
+            "tags": ["intent:execute", "REQ-xy"],
         },
         headers={"Authorization": "Bearer tok"},
     )
@@ -129,7 +129,7 @@ async def test_xlink_s8_unparseable_base_omits_bkd_intent_url(monkeypatch):
     monkeypatch.setattr(webhook.engine, "step",
                         AsyncMock(return_value={"action": "noop"}))
     bkd_inner = MagicMock()
-    bkd_inner.get_issue = AsyncMock(return_value=MagicMock(tags=["intent:analyze", "REQ-xy"]))
+    bkd_inner.get_issue = AsyncMock(return_value=MagicMock(tags=["intent:execute", "REQ-xy"]))
     bkd_ctx = AsyncMock()
     bkd_ctx.__aenter__ = AsyncMock(return_value=bkd_inner)
     bkd_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -145,7 +145,7 @@ async def test_xlink_s8_unparseable_base_omits_bkd_intent_url(monkeypatch):
             "issueId": "I",
             "projectId": "P",
             "title": "feat: example",
-            "tags": ["intent:analyze", "REQ-xy"],
+            "tags": ["intent:execute", "REQ-xy"],
         },
         headers={"Authorization": "Bearer tok"},
     )
@@ -469,7 +469,7 @@ def _render_analyze(**overrides) -> str:
         "bkd_intent_issue_url": "https://bkd.example/projects/P/issues/I",
     }
     base.update(overrides)
-    return render("analyze.md.j2", **base)
+    return render("execute.md.j2", **base)
 
 
 def test_xlink_s16_analyze_prompt_renders_cross_link_block_with_url():

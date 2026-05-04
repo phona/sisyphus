@@ -97,7 +97,7 @@ def _clear_controller():
 
 async def test_aegc_s1_active_req_keeps_namespace(monkeypatch):
     """
-    AEGC-S1: GIVEN req_state rows REQ-1 accept-running and REQ-2 analyzing,
+    AEGC-S1: GIVEN req_state rows REQ-1 accept-running and REQ-2 executing,
     AND K8s lists namespaces ["accept-req-1", "accept-req-2"],
     WHEN gc_once() is awaited,
     THEN both namespaces MUST be in kept_namespaces,
@@ -110,7 +110,7 @@ async def test_aegc_s1_active_req_keeps_namespace(monkeypatch):
 
     pool = _FakePool(rows=[
         {"req_id": "REQ-1", "state": "accept-running"},
-        {"req_id": "REQ-2", "state": "analyzing"},
+        {"req_id": "REQ-2", "state": "executing"},
     ])
     monkeypatch.setattr("orchestrator.accept_env_gc.db.get_pool", lambda: pool)
 
@@ -216,7 +216,7 @@ async def test_aegc_s3_escalated_req_deletes_with_no_retention(monkeypatch):
 
 async def test_aegc_s4_orphan_namespace_cleaned(monkeypatch):
     """
-    AEGC-S4: GIVEN req_state has only REQ-1 state analyzing,
+    AEGC-S4: GIVEN req_state has only REQ-1 state executing,
     AND K8s lists namespaces ["accept-req-1", "accept-req-orphan"],
     WHEN gc_once() is awaited,
     THEN "accept-req-1" MUST be in kept_namespaces,
@@ -227,7 +227,7 @@ async def test_aegc_s4_orphan_namespace_cleaned(monkeypatch):
 
     _reset_aegc_module(monkeypatch)
 
-    pool = _FakePool(rows=[{"req_id": "REQ-1", "state": "analyzing"}])
+    pool = _FakePool(rows=[{"req_id": "REQ-1", "state": "executing"}])
     monkeypatch.setattr("orchestrator.accept_env_gc.db.get_pool", lambda: pool)
 
     ctrl = _FakeController(namespaces=["accept-req-1", "accept-req-orphan"])
@@ -263,7 +263,7 @@ async def test_aegc_s5_empty_namespace_list_no_op(monkeypatch):
 
     _reset_aegc_module(monkeypatch)
 
-    pool = _FakePool(rows=[{"req_id": "REQ-1", "state": "analyzing"}])
+    pool = _FakePool(rows=[{"req_id": "REQ-1", "state": "executing"}])
     monkeypatch.setattr("orchestrator.accept_env_gc.db.get_pool", lambda: pool)
 
     ctrl = _FakeController(namespaces=[])

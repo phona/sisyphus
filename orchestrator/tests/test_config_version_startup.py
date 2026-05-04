@@ -174,7 +174,7 @@ async def test_kind_prompt_for_only_jinja_changes():
     def _fake_git(*args):
         if args[0] == "rev-parse":
             return current_sha
-        return "orchestrator/src/orchestrator/prompts/analyze.md.j2"
+        return "orchestrator/src/orchestrator/prompts/execute.md.j2"
 
     with patch("orchestrator.config_version._git", side_effect=_fake_git):
         await maybe_record_config_change(pool)

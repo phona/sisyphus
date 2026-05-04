@@ -38,7 +38,7 @@ def test_stage_mcp_requirements_default_covers_three_ssh_dependent_stages() -> N
     会渲不出 preflight 段，回到 7min 卡死的状态。
     """
     req = settings.stage_mcp_requirements
-    assert req["analyze"] == ["ssh_exec"], req
+    assert req["execute"] == ["ssh_exec"], req
     assert req["challenger"] == ["ssh_exec"], req
     assert req["accept"] == ["ssh_exec"], req
     # intake 是 brainstorm chat，不该显式声明 ssh_exec（即便实际用，预检失败也只会
@@ -116,7 +116,7 @@ def _render_kwargs(stage: str) -> dict:
 
 
 @pytest.mark.parametrize("template,stage", [
-    ("analyze.md.j2", "analyze"),
+    ("execute.md.j2", "execute"),
     ("challenger.md.j2", "challenger"),
     ("accept.md.j2", "accept"),
 ])
@@ -159,7 +159,7 @@ def test_intake_prompt_does_not_render_mcp_preflight_section() -> None:
 def test_mcp_capability_providers_substitution_propagates_to_rendered_prompt() -> None:
     """provider 是从 config 读的 —— 这条 assert 间接保证 helm values 覆盖
     `mcp_capability_providers.ssh_exec` 后，渲出来的 prompt 工具前缀会跟着变。"""
-    out = render("analyze.md.j2", **_render_kwargs("analyze"))
+    out = render("execute.md.j2", **_render_kwargs("execute"))
     expected_provider = settings.mcp_capability_providers["ssh_exec"]
     assert f"mcp__{expected_provider}__servers_list" in out
     # 工具白名单段也得跟着变（不能只有 preflight 段同步）
@@ -178,7 +178,7 @@ def test_disabling_mcp_preflight_via_enabled_prompt_hooks_drops_section(
     用 monkeypatch 直接覆盖 jinja global 模拟运行时切换 —— 比改 settings 更直接，
     避开 pydantic-settings 实例缓存 / 单例延迟。"""
     monkeypatch.setitem(_env.globals, "enabled_prompt_hooks", ["self_issue_constraint"])
-    out = render("analyze.md.j2", **_render_kwargs("analyze"))
+    out = render("execute.md.j2", **_render_kwargs("execute"))
     assert "MCP 依赖预检" not in out, (
         "关掉 mcp_preflight 后 preflight 段还在 → for-loop 没读 enabled_prompt_hooks，"
         "或者 stage 模板里有残留的硬 include，pluggable invariant 破了。"
@@ -198,7 +198,7 @@ def test_probe_tool_name_substitution_propagates_to_rendered_prompt(
         "mcp_capability_probe_tools",
         {"ssh_exec": "list_servers"},
     )
-    out = render("analyze.md.j2", **_render_kwargs("analyze"))
+    out = render("execute.md.j2", **_render_kwargs("execute"))
     expected_provider = settings.mcp_capability_providers["ssh_exec"]
     assert f"mcp__{expected_provider}__list_servers" in out, (
         "probe 工具名覆盖没传播到 prompt → hook body 还硬写着 servers_list，"

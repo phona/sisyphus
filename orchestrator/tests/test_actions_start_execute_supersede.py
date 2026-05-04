@@ -1,4 +1,4 @@
-"""Unit tests for same-slug openspec/changes supersede in start_analyze (Fix D).
+"""Unit tests for same-slug openspec/changes supersede in start_execute (Fix D).
 
 REQ-openspec-changes-cleanup-1777343379
 
@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from orchestrator.actions import _clone
-from orchestrator.actions import start_analyze as sa_mod
+from orchestrator.actions import start_execute as sa_mod
 from orchestrator.admission import AdmissionDecision
 
 # ─── shared helpers ───────────────────────────────────────────────────────────
@@ -115,7 +115,7 @@ async def test_s1_vN_redispatch_triggers_supersede(monkeypatch):
         exec_fn=capture_exec,
     )
 
-    result = await sa_mod.start_analyze(
+    result = await sa_mod.start_execute(
         body=_body(),
         req_id="REQ-foo-1234-v2",
         tags=[],
@@ -151,7 +151,7 @@ async def test_s2_no_stale_dirs_no_mv(monkeypatch):
     )
 
     # Non-vN req_id: base_slug == req_id, loop skips current dir
-    result = await sa_mod.start_analyze(
+    result = await sa_mod.start_execute(
         body=_body(),
         req_id="REQ-foo-1234",
         tags=[],
@@ -182,7 +182,7 @@ async def test_s3_supersede_failure_does_not_block_dispatch(monkeypatch):
     )
 
     # Should not raise; dispatch should proceed normally
-    result = await sa_mod.start_analyze(
+    result = await sa_mod.start_execute(
         body=_body(),
         req_id="REQ-foo-1234-v2",
         tags=[],

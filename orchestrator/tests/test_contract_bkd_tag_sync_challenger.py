@@ -179,29 +179,29 @@ async def test_bkd_s2_retry_cap_at_three_attempts():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# BKD-S3..S5: start_analyze admission rejection UX contract
+# BKD-S3..S5: start_execute admission rejection UX contract
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.asyncio
 async def test_bkd_s3_inflight_cap_exceeded_triggers_visible_feedback(monkeypatch):
     """BKD-S3: admission deny inflight-cap → intent issue gets reason:rate-limit tag + follow-up."""
-    from orchestrator.actions import start_analyze
+    from orchestrator.actions import start_execute
     from orchestrator.admission import AdmissionDecision
     from orchestrator.state import Event
 
     monkeypatch.setattr(
-        start_analyze, "check_admission",
+        start_execute, "check_admission",
         AsyncMock(return_value=AdmissionDecision(
             admit=False, reason="inflight-cap-exceeded:10/10",
         )),
     )
-    monkeypatch.setattr(start_analyze.db, "get_pool", lambda: object())
+    monkeypatch.setattr(start_execute.db, "get_pool", lambda: object())
     update_ctx = AsyncMock()
-    monkeypatch.setattr(start_analyze.req_state, "update_context", update_ctx)
+    monkeypatch.setattr(start_execute.req_state, "update_context", update_ctx)
 
     # Patch runner so we can assert it is NOT invoked.
     exec_fn = AsyncMock(return_value=SimpleNamespace(stdout="", stderr="", exit_code=0, duration_sec=0.1))
-    monkeypatch.setattr(start_analyze.k8s_runner, "get_controller", lambda: SimpleNamespace(
+    monkeypatch.setattr(start_execute.k8s_runner, "get_controller", lambda: SimpleNamespace(
         ensure_runner=AsyncMock(), exec_in_runner=exec_fn,
     ))
 
@@ -212,9 +212,9 @@ async def test_bkd_s3_inflight_cap_exceeded_triggers_visible_feedback(monkeypatc
     bkd_instance.follow_up_issue = follow_up
     bkd_instance.__aenter__ = AsyncMock(return_value=bkd_instance)
     bkd_instance.__aexit__ = AsyncMock(return_value=None)
-    monkeypatch.setattr(start_analyze, "BKDClient", lambda *a, **kw: bkd_instance)
+    monkeypatch.setattr(start_execute, "BKDClient", lambda *a, **kw: bkd_instance)
 
-    rv = await start_analyze.start_analyze(
+    rv = await start_execute.start_execute(
         body=_make_body(), req_id="REQ-X", tags=[], ctx={},
     )
 
@@ -232,20 +232,20 @@ async def test_bkd_s3_inflight_cap_exceeded_triggers_visible_feedback(monkeypatc
 @pytest.mark.asyncio
 async def test_bkd_s4_disk_pressure_exceeded_triggers_visible_feedback(monkeypatch):
     """BKD-S4: admission deny disk-pressure → intent issue gets reason:rate-limit tag + follow-up."""
-    from orchestrator.actions import start_analyze
+    from orchestrator.actions import start_execute
     from orchestrator.admission import AdmissionDecision
     from orchestrator.state import Event
 
     monkeypatch.setattr(
-        start_analyze, "check_admission",
+        start_execute, "check_admission",
         AsyncMock(return_value=AdmissionDecision(
             admit=False, reason="disk-pressure:0.85/0.75",
         )),
     )
-    monkeypatch.setattr(start_analyze.db, "get_pool", lambda: object())
+    monkeypatch.setattr(start_execute.db, "get_pool", lambda: object())
     update_ctx = AsyncMock()
-    monkeypatch.setattr(start_analyze.req_state, "update_context", update_ctx)
-    monkeypatch.setattr(start_analyze.k8s_runner, "get_controller", lambda: SimpleNamespace(
+    monkeypatch.setattr(start_execute.req_state, "update_context", update_ctx)
+    monkeypatch.setattr(start_execute.k8s_runner, "get_controller", lambda: SimpleNamespace(
         ensure_runner=AsyncMock(), exec_in_runner=AsyncMock(),
     ))
 
@@ -256,9 +256,9 @@ async def test_bkd_s4_disk_pressure_exceeded_triggers_visible_feedback(monkeypat
     bkd_instance.follow_up_issue = follow_up
     bkd_instance.__aenter__ = AsyncMock(return_value=bkd_instance)
     bkd_instance.__aexit__ = AsyncMock(return_value=None)
-    monkeypatch.setattr(start_analyze, "BKDClient", lambda *a, **kw: bkd_instance)
+    monkeypatch.setattr(start_execute, "BKDClient", lambda *a, **kw: bkd_instance)
 
-    rv = await start_analyze.start_analyze(
+    rv = await start_execute.start_execute(
         body=_make_body(), req_id="REQ-X", tags=[], ctx={},
     )
 
@@ -272,21 +272,21 @@ async def test_bkd_s4_disk_pressure_exceeded_triggers_visible_feedback(monkeypat
 
 @pytest.mark.asyncio
 async def test_bkd_s5_bkd_sync_failure_does_not_block_escalation(monkeypatch):
-    """BKD-S5: if merge_tags_and_update raises, start_analyze MUST still emit VERIFY_ESCALATE."""
-    from orchestrator.actions import start_analyze
+    """BKD-S5: if merge_tags_and_update raises, start_execute MUST still emit VERIFY_ESCALATE."""
+    from orchestrator.actions import start_execute
     from orchestrator.admission import AdmissionDecision
     from orchestrator.state import Event
 
     monkeypatch.setattr(
-        start_analyze, "check_admission",
+        start_execute, "check_admission",
         AsyncMock(return_value=AdmissionDecision(
             admit=False, reason="inflight-cap-exceeded:10/10",
         )),
     )
-    monkeypatch.setattr(start_analyze.db, "get_pool", lambda: object())
+    monkeypatch.setattr(start_execute.db, "get_pool", lambda: object())
     update_ctx = AsyncMock()
-    monkeypatch.setattr(start_analyze.req_state, "update_context", update_ctx)
-    monkeypatch.setattr(start_analyze.k8s_runner, "get_controller", lambda: SimpleNamespace(
+    monkeypatch.setattr(start_execute.req_state, "update_context", update_ctx)
+    monkeypatch.setattr(start_execute.k8s_runner, "get_controller", lambda: SimpleNamespace(
         ensure_runner=AsyncMock(), exec_in_runner=AsyncMock(),
     ))
 
@@ -298,9 +298,9 @@ async def test_bkd_s5_bkd_sync_failure_does_not_block_escalation(monkeypatch):
     bkd_instance.follow_up_issue = follow_up
     bkd_instance.__aenter__ = AsyncMock(return_value=bkd_instance)
     bkd_instance.__aexit__ = AsyncMock(return_value=None)
-    monkeypatch.setattr(start_analyze, "BKDClient", lambda *a, **kw: bkd_instance)
+    monkeypatch.setattr(start_execute, "BKDClient", lambda *a, **kw: bkd_instance)
 
-    rv = await start_analyze.start_analyze(
+    rv = await start_execute.start_execute(
         body=_make_body(), req_id="REQ-X", tags=[], ctx={},
     )
 

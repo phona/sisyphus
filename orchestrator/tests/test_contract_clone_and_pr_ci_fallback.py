@@ -58,8 +58,8 @@ def test_clone_helper_module_exists():
 
 
 def test_start_analyze_actions_invoke_clone_helper():
-    """start_analyze + start_analyze_with_finalized_intent 必须 import + call _clone helper。"""
-    for action_filename in ("start_analyze.py", "start_analyze_with_finalized_intent.py"):
+    """start_execute + start_execute_with_finalized_intent 必须 import + call _clone helper。"""
+    for action_filename in ("start_execute.py", "start_execute_with_finalized_intent.py"):
         path = _PRODUCTION_SOURCE / "actions" / action_filename
         text = path.read_text(encoding="utf-8")
         assert "clone_involved_repos_into_runner" in text, (

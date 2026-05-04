@@ -456,8 +456,8 @@ async def test_invoke_verifier_rejects_unknown_trigger():
 # ─── 5. 所有 12 个 prompt 模板都能渲染 ─────────────────────────────────────
 
 @pytest.mark.parametrize("stage", [
-    "analyze", "spec_lint", "dev_cross_check", "staging_test", "pr_ci", "accept",
-    "challenger", "analyze_artifact_check",
+    "execute", "spec_lint", "dev_cross_check", "staging_test", "pr_ci", "accept",
+    "challenger", "execute_artifact_check",
 ])
 @pytest.mark.parametrize("trigger", ["success", "fail"])
 def test_all_verifier_prompts_render(stage, trigger):

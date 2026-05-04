@@ -9,7 +9,7 @@ from orchestrator.prompts import render
 
 def _render_analyze() -> str:
     return render(
-        "analyze.md.j2",
+        "execute.md.j2",
         req_id="REQ-x",
         project_id="proj-1",
         project_alias="proj-1",
@@ -26,14 +26,14 @@ def test_analyze_prompt_requires_gh_pr_create_with_sisyphus_label() -> None:
     """
     text = _render_analyze()
     assert "gh label create sisyphus" in text, (
-        "analyze.md.j2 must instruct agents to idempotently create the "
+        "execute.md.j2 must instruct agents to idempotently create the "
         "`sisyphus` GitHub label before `gh pr create`. Without `gh label "
         "create --force` the first PR in a repo lacking the label fails "
         "with `pull request create: could not add label: 'sisyphus' not "
         "found` (SAL-S5)."
     )
     assert "--label sisyphus" in text, (
-        "analyze.md.j2 must instruct agents to pass `--label sisyphus` to "
+        "execute.md.j2 must instruct agents to pass `--label sisyphus` to "
         "`gh pr create` so every sisyphus-opened PR is identifiable in "
         "GitHub UI / dashboards (SAL-S5)."
     )
@@ -41,7 +41,7 @@ def test_analyze_prompt_requires_gh_pr_create_with_sisyphus_label() -> None:
 
 def test_tools_whitelist_curl_post_example_includes_sisyphus_tag() -> None:
     """SAL-S6: the curl POST sub-issue example in tools_whitelist.md.j2
-    (included from analyze.md.j2 via Jinja {% include %}) MUST show the
+    (included from execute.md.j2 via Jinja {% include %}) MUST show the
     `sisyphus` tag in its `tags` array, so any sub-agent that copies the
     example automatically inherits the label.
     """

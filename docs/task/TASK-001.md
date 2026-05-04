@@ -2,7 +2,7 @@
 
 **REQ**: REQ-447
 **status**: in_progress
-**owner**: analyze-agent (fld9vdxg)
+**owner**: execute-agent (fld9vdxg)
 
 ## Goal
 

@@ -23,6 +23,9 @@ from collections.abc import Iterable
 SISYPHUS_MANAGED_EXACT: frozenset[str] = frozenset({
     "sisyphus",
     "intake",
+    "execute",
+    # REQ-refactor-analyze-execute-392 read-compat：历史 BKD issue 上仍可能挂
+    # 老 `analyze` tag。保留 1-2 周避免 user-hint 转发误传，独立 follow-up 清理。
     "analyze",
     "challenger",
     "verifier",

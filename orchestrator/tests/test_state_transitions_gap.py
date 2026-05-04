@@ -111,8 +111,8 @@ def test_challenger_running_session_failed_self_loop():
 
 
 def test_init_illegal_events():
-    """INIT 只接受 INTENT_INTAKE 和 INTENT_ANALYZE。"""
-    legal = {Event.INTENT_INTAKE, Event.INTENT_ANALYZE}
+    """INIT 只接受 INTENT_INTAKE 和 INTENT_EXECUTE。"""
+    legal = {Event.INTENT_INTAKE, Event.INTENT_EXECUTE}
     for ev in Event:
         if ev in legal:
             continue
@@ -129,25 +129,25 @@ def test_intaking_illegal_events():
 
 
 def test_analyzing_illegal_events():
-    """ANALYZING 只接受 ANALYZE_DONE / VERIFY_ESCALATE / SESSION_FAILED。"""
-    legal = {Event.ANALYZE_DONE, Event.VERIFY_ESCALATE, Event.SESSION_FAILED}
+    """EXECUTING 只接受 EXECUTE_DONE / VERIFY_ESCALATE / SESSION_FAILED。"""
+    legal = {Event.EXECUTE_DONE, Event.VERIFY_ESCALATE, Event.SESSION_FAILED}
     for ev in Event:
         if ev in legal:
             continue
-        assert decide(ReqState.ANALYZING, ev) is None, f"ANALYZING should not accept {ev.value}"
+        assert decide(ReqState.EXECUTING, ev) is None, f"EXECUTING should not accept {ev.value}"
 
 
 def test_analyze_artifact_checking_illegal_events():
-    """ANALYZE_ARTIFACT_CHECKING 只接受 pass/fail + SESSION_FAILED。"""
+    """EXECUTE_ARTIFACT_CHECKING 只接受 pass/fail + SESSION_FAILED。"""
     legal = {
-        Event.ANALYZE_ARTIFACT_CHECK_PASS, Event.ANALYZE_ARTIFACT_CHECK_FAIL,
+        Event.EXECUTE_ARTIFACT_CHECK_PASS, Event.EXECUTE_ARTIFACT_CHECK_FAIL,
         Event.SESSION_FAILED,
     }
     for ev in Event:
         if ev in legal:
             continue
-        assert decide(ReqState.ANALYZE_ARTIFACT_CHECKING, ev) is None, (
-            f"ANALYZE_ARTIFACT_CHECKING should not accept {ev.value}"
+        assert decide(ReqState.EXECUTE_ARTIFACT_CHECKING, ev) is None, (
+            f"EXECUTE_ARTIFACT_CHECKING should not accept {ev.value}"
         )
 
 
@@ -246,7 +246,7 @@ def test_pending_user_review_illegal_events():
     legal = {
         Event.USER_REVIEW_PASS, Event.USER_REVIEW_FIX, Event.PR_MERGED,
         # #247 Phase 1 main-chain PASS resume from PENDING_USER_REVIEW
-        Event.ANALYZE_DONE, Event.SPEC_LINT_PASS, Event.CHALLENGER_PASS,
+        Event.EXECUTE_DONE, Event.SPEC_LINT_PASS, Event.CHALLENGER_PASS,
         Event.DEV_CROSS_CHECK_PASS, Event.STAGING_TEST_PASS,
         Event.PR_CI_PASS, Event.ACCEPT_PASS,
     }
@@ -261,7 +261,7 @@ def test_pending_user_review_illegal_events():
 def test_review_running_illegal_events():
     """REVIEW_RUNNING 接受 verifier pass（8 条 stage 显式）+ fix/escalate/retry + merged + SESSION_FAILED。"""
     legal = {
-        Event.ANALYZE_DONE, Event.ANALYZE_ARTIFACT_CHECK_PASS,
+        Event.EXECUTE_DONE, Event.EXECUTE_ARTIFACT_CHECK_PASS,
         Event.SPEC_LINT_PASS, Event.CHALLENGER_PASS,
         Event.DEV_CROSS_CHECK_PASS, Event.STAGING_TEST_PASS,
         Event.PR_CI_PASS, Event.ACCEPT_PASS,
@@ -388,8 +388,8 @@ def test_escalated_non_resume_events_all_none():
         Event.VERIFY_FIX_NEEDED, Event.VERIFY_ESCALATE,
         # stage-issue 反激活
         Event.INTAKE_PASS,
-        Event.ANALYZE_DONE,
-        Event.ANALYZE_ARTIFACT_CHECK_PASS, Event.ANALYZE_ARTIFACT_CHECK_FAIL,
+        Event.EXECUTE_DONE,
+        Event.EXECUTE_ARTIFACT_CHECK_PASS, Event.EXECUTE_ARTIFACT_CHECK_FAIL,
         Event.SPEC_LINT_PASS, Event.SPEC_LINT_FAIL,
         Event.CHALLENGER_PASS, Event.CHALLENGER_FAIL,
         Event.DEV_CROSS_CHECK_PASS, Event.DEV_CROSS_CHECK_FAIL,

@@ -24,7 +24,7 @@ def test_source_repo_tag_overrides_helm_default_repro_362():
     """
     repos, src = _clone.resolve_repos(
         {"intent_title": "fix something in ttpos-flutter"},
-        tags=["intent:analyze", "source-repo:ZonEaseTech/ttpos-flutter"],
+        tags=["intent:execute", "source-repo:ZonEaseTech/ttpos-flutter"],
         default_repos=["phona/sisyphus"],
     )
     assert repos == ["ZonEaseTech/ttpos-flutter"]
@@ -51,7 +51,7 @@ def test_multiple_source_repo_tags_merge_dedup_preserve_order():
     occurrence, preserve order, drop invalid slugs.
     """
     out = _clone._extract_source_repo_tags([
-        "intent:analyze",
+        "intent:execute",
         "source-repo:phona/sisyphus",
         "source-repo:ZonEaseTech/ttpos-flutter",
         "source-repo:phona/sisyphus",            # dup -> drop
@@ -96,7 +96,7 @@ def test_source_repo_no_tag_falls_through_to_lower_layers():
     """
     # Falls through to L4 (settings default) when nothing else set
     repos, src = _clone.resolve_repos(
-        {}, tags=["intent:analyze"], default_repos=["phona/sisyphus"],
+        {}, tags=["intent:execute"], default_repos=["phona/sisyphus"],
     )
     assert (repos, src) == (["phona/sisyphus"], "settings.default_involved_repos")
 

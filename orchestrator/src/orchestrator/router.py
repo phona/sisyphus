@@ -20,7 +20,7 @@ from .verifier_parser import extract_decision_robust
 log = __import__("structlog").get_logger(__name__)
 
 REQ_ID_RE = re.compile(r"^REQ-[\w-]+$")
-# M16：砍 spec 双 fanout，单 tag=spec；analyze-agent 想要多 spec 自己再开 issue
+# M16：砍 spec 双 fanout，单 tag=spec；execute-agent 想要多 spec 自己再开 issue
 SPEC_TAGS = {"spec"}
 # v0.2 新增：stage tag 用于区分 agent role
 # staging-test / pr-ci / accept 都走 result:* tag 判 pass/fail
@@ -82,14 +82,18 @@ def validate_audit_soft(audit: dict | None) -> str | None:
 #（REQ-refactor-verify-pass-transition-1777727230：把 apply_verify_pass 自循环拆成
 # 显式 transition，router 负责在 decision 解析层做事件映射）。
 _VERIFY_PASS_ROUTING: dict[str, Event] = {
-    "analyze":                Event.ANALYZE_DONE,
-    "analyze_artifact_check": Event.ANALYZE_ARTIFACT_CHECK_PASS,
-    "spec_lint":              Event.SPEC_LINT_PASS,
-    "challenger":             Event.CHALLENGER_PASS,
-    "dev_cross_check":        Event.DEV_CROSS_CHECK_PASS,
-    "staging_test":           Event.STAGING_TEST_PASS,
-    "pr_ci":                  Event.PR_CI_PASS,
-    "accept":                 Event.ACCEPT_PASS,
+    "execute":                  Event.EXECUTE_DONE,
+    "execute_artifact_check":   Event.EXECUTE_ARTIFACT_CHECK_PASS,
+    # REQ-refactor-analyze-execute-392 read-compat：历史 verifier issue 仍用
+    # 老 stage 名 `analyze` / `analyze_artifact_check`，1-2 周后清理。
+    "analyze":                  Event.EXECUTE_DONE,
+    "analyze_artifact_check":   Event.EXECUTE_ARTIFACT_CHECK_PASS,
+    "spec_lint":                Event.SPEC_LINT_PASS,
+    "challenger":               Event.CHALLENGER_PASS,
+    "dev_cross_check":          Event.DEV_CROSS_CHECK_PASS,
+    "staging_test":             Event.STAGING_TEST_PASS,
+    "pr_ci":                    Event.PR_CI_PASS,
+    "accept":                   Event.ACCEPT_PASS,
 }
 
 
@@ -243,11 +247,18 @@ def derive_event(event_type: str, tags: Iterable[str]) -> Event | None:
     tagset = set(tags)
 
     # ─── L0: intent 入口 ──────────────────────────────────────────────────
+    # REQ-refactor-analyze-execute-392 兼容：intent:analyze / analyze 是历史 tag
+    # 名（stage 改名 execute 之前已存在的 BKD issue 上）。读路径双识别 1-2 周后
+    # 清理；写路径只用新 intent:execute / execute / verify:execute。
     if event_type == "issue.updated":
         if "intent:intake" in tagset and "intake" not in tagset:
             return Event.INTENT_INTAKE
-        if "intent:analyze" in tagset and "analyze" not in tagset:
-            return Event.INTENT_ANALYZE
+        if (
+            ("intent:execute" in tagset or "intent:analyze" in tagset)
+            and "execute" not in tagset
+            and "analyze" not in tagset
+        ):
+            return Event.INTENT_EXECUTE
         # ─── race fallback ────────────────────────────────────────────────
         # BKD 实证：agent 有时在 session.completed 之后才 PATCH result tag，
         # 那次 session.completed 的 tags 不含 result:* → router 漏 fire 主链事件。
@@ -339,8 +350,10 @@ def derive_event(event_type: str, tags: Iterable[str]) -> Event | None:
             return Event.ACCEPT_FAIL
         return None
 
-    if "analyze" in tagset:
-        return Event.ANALYZE_DONE
+    # REQ-refactor-analyze-execute-392 read-compat：历史 BKD issue 上还可能挂
+    # 老 `analyze` tag。新 stage agent issue 由 sisyphus 写 `execute`。
+    if "execute" in tagset or "analyze" in tagset:
+        return Event.EXECUTE_DONE
 
     return None
 

@@ -5,7 +5,7 @@
 2. router 3 路：INTENT_INTAKE / INTAKE_PASS / INTAKE_FAIL / 中間ラウンド None
 3. state machine 3 transition 検証
 4. start_intake action smoke test
-5. start_analyze_with_finalized_intent action smoke test（新 issue 作成 / ctx 欠如→ escalate）
+5. start_execute_with_finalized_intent action smoke test（新 issue 作成 / ctx 欠如→ escalate）
 """
 from __future__ import annotations
 
@@ -103,8 +103,8 @@ def test_state_intake_transitions():
 
     t = decide(ReqState.INTAKING, Event.INTAKE_PASS)
     assert t is not None
-    assert t.next_state == ReqState.ANALYZING
-    assert t.action == "start_analyze_with_finalized_intent"
+    assert t.next_state == ReqState.EXECUTING
+    assert t.action == "start_execute_with_finalized_intent"
 
     t = decide(ReqState.INTAKING, Event.INTAKE_FAIL)
     assert t is not None
@@ -279,34 +279,34 @@ async def test_start_intake_admission_denied_emits_escalate(monkeypatch):
     fake.follow_up_issue.assert_not_awaited()
 
 
-# ─── 5. start_analyze_with_finalized_intent smoke test ───────────────────────
+# ─── 5. start_execute_with_finalized_intent smoke test ───────────────────────
 
 @pytest.mark.asyncio
 async def test_start_analyze_with_finalized_intent_creates_new_issue(monkeypatch):
-    from orchestrator.actions import start_analyze_with_finalized_intent as mod
+    from orchestrator.actions import start_execute_with_finalized_intent as mod
 
     fake = make_fake_bkd()
     fake.create_issue = AsyncMock(return_value=FakeIssue(id="analyze-new-1"))
-    patch_bkd(monkeypatch, "orchestrator.actions.start_analyze_with_finalized_intent.BKDClient", fake)
+    patch_bkd(monkeypatch, "orchestrator.actions.start_execute_with_finalized_intent.BKDClient", fake)
     # REQ-issue-link-pr-quality-base-1777218242: success path stashes
-    # analyze_issue_id via update_context.
+    # execute_issue_id via update_context.
     monkeypatch.setattr(mod.req_state, "update_context", AsyncMock())
     monkeypatch.setattr(mod.db, "get_pool", lambda: object())
     monkeypatch.setattr(mod.dispatch_slugs, "get", AsyncMock(return_value=None))
     monkeypatch.setattr(mod.dispatch_slugs, "put", AsyncMock())
 
     ctx = {"intake_finalized_intent": _VALID_INTENT, "intent_title": "加 INTAKING stage"}
-    out = await mod.start_analyze_with_finalized_intent(
+    out = await mod.start_execute_with_finalized_intent(
         body=make_body(issue_id="intake-1"), req_id="REQ-9", tags=[], ctx=ctx,
     )
-    assert out["analyze_issue_id"] == "analyze-new-1"
+    assert out["execute_issue_id"] == "analyze-new-1"
     # create_issue が呼ばれ（新 issue 作成）、元の intake issue は使わない
     fake.create_issue.assert_awaited_once()
     _, kwargs = fake.create_issue.await_args
-    assert "analyze" in kwargs["tags"]
+    assert "execute" in kwargs["tags"]
     assert "REQ-9" in kwargs["tags"]
     assert kwargs["use_worktree"] is True
-    assert "[ANALYZE]" in kwargs["title"]
+    assert "[EXECUTE]" in kwargs["title"]
 
     # follow-up が呼ばれること
     fake.follow_up_issue.assert_awaited_once()
@@ -315,11 +315,11 @@ async def test_start_analyze_with_finalized_intent_creates_new_issue(monkeypatch
 @pytest.mark.asyncio
 async def test_start_analyze_with_finalized_intent_forwards_hint_tags(monkeypatch):
     """REQ-ux-tags-injection: 创新 analyze issue 时 hint tag 跟着进 tags 数组。"""
-    from orchestrator.actions import start_analyze_with_finalized_intent as mod
+    from orchestrator.actions import start_execute_with_finalized_intent as mod
 
     fake = make_fake_bkd()
     fake.create_issue = AsyncMock(return_value=FakeIssue(id="analyze-new-1"))
-    patch_bkd(monkeypatch, "orchestrator.actions.start_analyze_with_finalized_intent.BKDClient", fake)
+    patch_bkd(monkeypatch, "orchestrator.actions.start_execute_with_finalized_intent.BKDClient", fake)
     monkeypatch.setattr(mod.req_state, "update_context", AsyncMock())
     monkeypatch.setattr(mod.db, "get_pool", lambda: object())
     monkeypatch.setattr(mod.dispatch_slugs, "get", AsyncMock(return_value=None))
@@ -331,7 +331,7 @@ async def test_start_analyze_with_finalized_intent_forwards_hint_tags(monkeypatc
         "sisyphus", "intake", "REQ-9", "result:pass",
         "repo:phona/foo", "ux:fast-track", "spec_home_repo:phona/foo",
     ]
-    await mod.start_analyze_with_finalized_intent(
+    await mod.start_execute_with_finalized_intent(
         body=make_body(issue_id="intake-1"), req_id="REQ-9",
         tags=body_tags, ctx=ctx,
     )
@@ -339,7 +339,7 @@ async def test_start_analyze_with_finalized_intent_forwards_hint_tags(monkeypatc
     tags = kwargs["tags"]
     # 基础 + 转发段
     assert tags == [
-        "analyze", "REQ-9",
+        "execute", "REQ-9",
         "repo:phona/foo", "ux:fast-track", "spec_home_repo:phona/foo",
     ]
     # sisyphus-managed 不重复转发
@@ -351,9 +351,9 @@ async def test_start_analyze_with_finalized_intent_forwards_hint_tags(monkeypatc
 @pytest.mark.asyncio
 async def test_start_analyze_missing_finalized_intent_escalates(monkeypatch):
     """ctx に intake_finalized_intent がない → emit VERIFY_ESCALATE。"""
-    from orchestrator.actions import start_analyze_with_finalized_intent as mod
+    from orchestrator.actions import start_execute_with_finalized_intent as mod
 
-    out = await mod.start_analyze_with_finalized_intent(
+    out = await mod.start_execute_with_finalized_intent(
         body=make_body(), req_id="REQ-9", tags=[], ctx={},
     )
     assert out["emit"] == Event.VERIFY_ESCALATE.value
@@ -363,9 +363,9 @@ async def test_start_analyze_missing_finalized_intent_escalates(monkeypatch):
 @pytest.mark.asyncio
 async def test_start_analyze_none_ctx_escalates(monkeypatch):
     """ctx=None → emit VERIFY_ESCALATE（ctx が None の場合も安全に処理）。"""
-    from orchestrator.actions import start_analyze_with_finalized_intent as mod
+    from orchestrator.actions import start_execute_with_finalized_intent as mod
 
-    out = await mod.start_analyze_with_finalized_intent(
+    out = await mod.start_execute_with_finalized_intent(
         body=make_body(), req_id="REQ-9", tags=[], ctx=None,
     )
     assert out["emit"] == Event.VERIFY_ESCALATE.value

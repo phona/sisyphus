@@ -25,7 +25,7 @@ def _render_partial(status_block) -> str:
 
 def _render_analyze(**extra) -> str:
     return render(
-        "analyze.md.j2",
+        "execute.md.j2",
         req_id="REQ-foo",
         project_id="proj-1",
         project_alias="proj-1",
@@ -55,7 +55,7 @@ def _render_intake(**extra) -> str:
 def test_bisb_s1_partial_renders_7row_table_all_fields_set() -> None:
     ctx = build_status_block_ctx(
         req_id="REQ-foo",
-        stage="analyze",
+        stage="execute",
         bkd_intent_issue_url="https://bkd.example/projects/p/issues/iss-1",
         cloned_repos=["phona/sisyphus", "ZonEaseTech/ttpos-server-go"],
         pr_urls={"phona/sisyphus": "https://github.com/phona/sisyphus/pull/123"},
@@ -70,7 +70,7 @@ def test_bisb_s1_partial_renders_7row_table_all_fields_set() -> None:
         assert field in out, f"BISB-S1: expected row '{field}' missing from partial output"
 
     assert "`REQ-foo`" in out, "BISB-S1: REQ row must contain `REQ-foo`"
-    assert "`analyze`" in out, "BISB-S1: Stage row must contain `analyze`"
+    assert "`execute`" in out, "BISB-S1: Stage row must contain `execute`"
     assert "`feat/REQ-foo`" in out, "BISB-S1: Branch row must contain `feat/REQ-foo`"
     assert "`runner-req-foo`" in out, "BISB-S1: Runner Pod row must contain `runner-req-foo`"
     assert "https://bkd.example/projects/p/issues/iss-1" in out, (
@@ -115,7 +115,7 @@ def test_bisb_s2_partial_omits_optional_rows_when_unset() -> None:
 def test_bisb_s3_analyze_prompt_status_block_above_tools_whitelist() -> None:
     sb = build_status_block_ctx(
         req_id="REQ-foo",
-        stage="analyze",
+        stage="execute",
         bkd_intent_issue_url="https://bkd.example/projects/p/issues/iss-1",
         cloned_repos=["phona/sisyphus"],
     )
@@ -181,7 +181,7 @@ def test_bisb_s4_intake_prompt_status_block_omits_cloned_repos() -> None:
 def test_bisb_s5_pr_urls_formatted_as_inline_links() -> None:
     ctx = build_status_block_ctx(
         req_id="REQ-foo",
-        stage="analyze",
+        stage="execute",
         pr_urls={
             "phona/sisyphus": "https://github.com/phona/sisyphus/pull/42",
             "ZonEaseTech/ttpos-server-go": "https://github.com/ZonEaseTech/ttpos-server-go/pull/7",

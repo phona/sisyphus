@@ -288,8 +288,8 @@ async def test_vfr_s4_non_retryable_stage_emits_verify_escalate() -> None:
         result = await apply_verify_infra_retry(
             body=_make_body_obj(),
             req_id=_REQ_ID,
-            tags=["verifier", _REQ_ID, "verify:analyze"],
-            ctx={"verifier_stage": "analyze", "infra_retry_count": 0},
+            tags=["verifier", _REQ_ID, "verify:execute"],
+            ctx={"verifier_stage": "execute", "infra_retry_count": 0},
         )
 
     assert isinstance(result, dict), (

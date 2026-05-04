@@ -116,7 +116,7 @@ def test_srto_s1_source_repo_overrides_helm_default_resolve():
     MUST resolve to the ttpos slug and never fall through to L4."""
     repos, src = _resolve(
         ctx={"intent_title": "fix something in ttpos-flutter"},
-        tags=["intent:analyze", "source-repo:ZonEaseTech/ttpos-flutter"],
+        tags=["intent:execute", "source-repo:ZonEaseTech/ttpos-flutter"],
         default_repos=["phona/sisyphus"],
     )
     assert repos == ["ZonEaseTech/ttpos-flutter"], (
@@ -191,7 +191,7 @@ def test_srto_s3_multiple_source_repo_tags_dedup_and_drop_invalid():
     list with invalid slugs dropped. Exact spec input/output."""
     out = _clone._extract_source_repo_tags(
         [
-            "intent:analyze",
+            "intent:execute",
             "source-repo:phona/sisyphus",
             "source-repo:ZonEaseTech/ttpos-flutter",
             "source-repo:phona/sisyphus",  # duplicate

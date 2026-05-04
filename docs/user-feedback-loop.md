@@ -25,8 +25,8 @@
 | stage type | 例 state | 特性 | watchdog policy |
 |---|---|---|---|
 | `human-loop-conversation` | `INTAKING`、`PENDING_USER_PR_REVIEW`（新） | 多轮 + 等人 + 不知何时 ready | **不 watchdog**；仅监听 BKD `session.failed` 事件做 crash escalate |
-| `autonomous-bounded` | `ANALYZING`、`CHALLENGER_RUNNING`、`ACCEPT_RUNNING`、`ACCEPT_TEARING_DOWN`、`ARCHIVING`、`FIXER_RUNNING` | 无人参与，agent 跑应在 30min 内出结果 | timer 30min（默认）；超时 escalate |
-| `deterministic-checker` | `SPEC_LINT_RUNNING`、`DEV_CROSS_CHECK_RUNNING`、`STAGING_TEST_RUNNING`、`ANALYZE_ARTIFACT_CHECKING` | shell exec，秒到分级 | timer 5min；超时 escalate |
+| `autonomous-bounded` | `EXECUTING`、`CHALLENGER_RUNNING`、`ACCEPT_RUNNING`、`ACCEPT_TEARING_DOWN`、`ARCHIVING`、`FIXER_RUNNING` | 无人参与，agent 跑应在 30min 内出结果 | timer 30min（默认）；超时 escalate |
+| `deterministic-checker` | `SPEC_LINT_RUNNING`、`DEV_CROSS_CHECK_RUNNING`、`STAGING_TEST_RUNNING`、`EXECUTE_ARTIFACT_CHECKING` | shell exec，秒到分级 | timer 5min；超时 escalate |
 | `external-poll` | `PR_CI_RUNNING` | 轮 GH check-runs，可能 4h+ | timer 4h；超时 escalate |
 
 `REVIEW_RUNNING` / `FIXER_RUNNING` 是 verifier/fixer 子链，watchdog 视为 `autonomous-bounded`。
@@ -120,7 +120,7 @@ REVIEW_RUNNING (verifier 看 fixer 改对没)
 
 ### 3.1 interrupt（用户中途想停）
 
-任何 in-flight state（包括 ANALYZING / CHALLENGER / DEV_CROSS / etc）：
+任何 in-flight state（包括 EXECUTING / CHALLENGER / DEV_CROSS / etc）：
 
 | 用户操作 | sisyphus emit | next state |
 |---|---|---|

@@ -48,7 +48,7 @@ def _reset_disk_check_flag():
 async def test_active_includes_inflight(monkeypatch, mock_controller):
     """in-flight 状态（非 done/escalated）全部算 active，runner 保留（pod + pvc）。"""
     pool = _FakePool([
-        _row("REQ-1", "analyzing"),
+        _row("REQ-1", "executing"),
         _row("REQ-2", "staging-test-running"),
         _row("REQ-3", "accept-running"),
     ])
@@ -67,7 +67,7 @@ async def test_done_state_not_active(monkeypatch, mock_controller):
     """done 的 REQ 立即移出 pod + pvc keep（runner 会被两个 sweep 都清）。"""
     pool = _FakePool([
         _row("REQ-1", "done", updated_at=datetime.now(UTC)),
-        _row("REQ-2", "analyzing"),
+        _row("REQ-2", "executing"),
     ])
     monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
 
@@ -144,7 +144,7 @@ async def test_skips_when_no_controller(monkeypatch):
 @pytest.mark.asyncio
 async def test_disk_check_403_disables_after_first_log(monkeypatch, mock_controller, capsys):
     """ApiException(403) → 进程级 flag 置 True；INFO log 一次，disk_pressure=False。"""
-    pool = _FakePool([_row("REQ-1", "analyzing")])
+    pool = _FakePool([_row("REQ-1", "executing")])
     monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
     mock_controller.node_disk_usage_ratio = AsyncMock(
         side_effect=ApiException(status=403, reason="Forbidden"),
@@ -162,7 +162,7 @@ async def test_disk_check_403_disables_after_first_log(monkeypatch, mock_control
 @pytest.mark.asyncio
 async def test_disk_check_short_circuits_after_disabled(monkeypatch, mock_controller):
     """_DISK_CHECK_DISABLED=True 时不再调 node_disk_usage_ratio。"""
-    pool = _FakePool([_row("REQ-1", "analyzing")])
+    pool = _FakePool([_row("REQ-1", "executing")])
     monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
     mock_controller.node_disk_usage_ratio = AsyncMock(return_value=0.5)
     runner_gc._DISK_CHECK_DISABLED = True
@@ -176,7 +176,7 @@ async def test_disk_check_short_circuits_after_disabled(monkeypatch, mock_contro
 @pytest.mark.asyncio
 async def test_disk_check_non_403_keeps_probe_alive(monkeypatch, mock_controller):
     """ApiException(500) → 不禁用，下一轮还会再尝试。"""
-    pool = _FakePool([_row("REQ-1", "analyzing")])
+    pool = _FakePool([_row("REQ-1", "executing")])
     monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
     mock_controller.node_disk_usage_ratio = AsyncMock(
         side_effect=ApiException(status=500, reason="Internal"),
@@ -191,7 +191,7 @@ async def test_disk_check_non_403_keeps_probe_alive(monkeypatch, mock_controller
 @pytest.mark.asyncio
 async def test_gc_once_returns_split_cleaned_lists(monkeypatch, mock_controller):
     """gc_once 返 dict 必须含 cleaned_pods + cleaned_pvcs（分开记录）。"""
-    pool = _FakePool([_row("REQ-1", "analyzing")])
+    pool = _FakePool([_row("REQ-1", "executing")])
     monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
     mock_controller.gc_orphan_pods = AsyncMock(return_value=["REQ-zombie-pod"])
     mock_controller.gc_orphan_pvcs = AsyncMock(return_value=["REQ-zombie-pvc"])
@@ -224,7 +224,7 @@ def test_get_last_result_returns_none_before_any_gc():
 @pytest.mark.asyncio
 async def test_gc_once_updates_last_result_with_ran_at(monkeypatch, mock_controller):
     """RGA-S5 precondition: gc_once 正常执行后 _last_gc_result 含 ran_at。"""
-    pool = _FakePool([_row("REQ-1", "analyzing")])
+    pool = _FakePool([_row("REQ-1", "executing")])
     monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
 
     await runner_gc.gc_once()
