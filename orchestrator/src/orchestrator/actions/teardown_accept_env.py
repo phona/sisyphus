@@ -20,6 +20,7 @@ from ..state import Event
 from ..store import db, req_state
 from . import register
 from ._integration_resolver import resolve_integration_dir
+from ._runner import ensure_runner_alive
 from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
@@ -78,6 +79,7 @@ async def teardown_accept_env(*, body, req_id, tags, ctx):
 
 async def _run_single_layer_teardown(rc, *, req_id: str) -> bool:
     """既有 single-layer 路径：integration_resolver → cd → make accept-env-down。"""
+    await ensure_runner_alive(req_id)
     resolved = await resolve_integration_dir(rc, req_id)
     if resolved.dir is None:
         log.warning("teardown.no_integration_dir", req_id=req_id, reason=resolved.reason)
@@ -96,6 +98,7 @@ async def _run_multi_layer_teardown(rc, *, req_id: str, layers: list[str]) -> bo
     # spec 写法：topology 列表是 leaves-first（[server-go, flutter] 中 server-go 是叶
     # = 先 up；flutter 是 source = 后 up）。teardown reverse → flutter first, server-go
     # second → 等价于 reversed(layers)。
+    await ensure_runner_alive(req_id)
     layer_dir_map = cross_repo_env.workspace_dir_map(layers)
     all_ok = True
     for repo in reversed(layers):

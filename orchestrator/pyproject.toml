@@ -47,6 +47,7 @@ testpaths = ["tests"]
 addopts = "-p no:randomly"
 markers = [
     "integration: integration tests (selected by `make ci-integration-test`; excluded by `make ci-unit-test`)",
+    "no_stub_self_heal: opt-out conftest autouse stub of `ensure_runner_alive` (REQ-fix-runner-self-heal-394)",
 ]
 
 [tool.ruff]
