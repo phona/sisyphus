@@ -246,7 +246,8 @@ async def start_fixer(*, body, req_id, tags, ctx):
             break
     if not stage:
         stage = ctx.get("verifier_stage")
-    fixer = ctx.get("verifier_fixer") or "dev"
+    raw_fixer = ctx.get("verifier_fixer")
+    fixer = raw_fixer or "dev"  # 用于 tag / log 展示；template 选择按 raw_fixer
     scope = ctx.get("verifier_scope") or ""
     reason = ctx.get("verifier_reason") or ""
     target_repo = ctx.get("verifier_target_repo") or ""
@@ -310,12 +311,13 @@ async def start_fixer(*, body, req_id, tags, ctx):
             use_worktree=True,
             model=settings.agent_model,
         )
-        # 专用 fixer prompt：dev / spec 各走各的模板；无 fixer 字段兜底旧 bugfix。
-        # REQ-base-branch-override-1777480690: forward base branch info so fixer
-        # lint uses the correct merge-base.
-        if fixer == "dev":
+        # 专用 fixer prompt：dev / spec 各走各的模板；ctx 缺 verifier_fixer 时
+        # 按 spec DFP-S3 兜底走 legacy bugfix.md.j2（这里要看 raw_fixer，不能看
+        # 默认填了 "dev" 的 fixer 变量）。base_branch 透传给 dev fixer prompt
+        # 让 lint 用正确的 merge-base（REQ-base-branch-override-1777480690）。
+        if raw_fixer == "dev":
             template_name = "verifier-fix-dev.md.j2"
-        elif fixer == "spec":
+        elif raw_fixer == "spec":
             template_name = "verifier-fix-spec.md.j2"
         else:
             template_name = "bugfix.md.j2"
