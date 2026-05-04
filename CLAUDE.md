@@ -139,6 +139,22 @@ python3 scripts/sisyphus-admin.py admin pr-merged <req_id> --pr-url <url> --merg
 
 环境变量：`SISYPHUS_ADMIN_TOKEN`（Bearer token，留空从 kubectl secret 取）。`--base-url` 留空绕 kubectl port-forward，提供（如 `http://sisyphus.43.239.84.24.nip.io`）则直接走 HTTP。完整子命令：`python3 scripts/sisyphus-admin.py --help`。
 
+### scripts/sisyphus-trace.py —— REQ 卡住怎么 debug
+
+把 sisyphus 主库 4 张表（`req_state.history` + `stage_runs` + `verifier_decisions`
++ `artifact_checks`）按 ts UNION 渲染成时间线。30 min 翻 BKD + grep 源码 → 30 s 看一张表。
+
+```bash
+# ASCII 时间线
+python3 scripts/sisyphus-trace.py REQ-feat-foo-1777xxx
+
+# NDJSON, 给 jq pipe
+python3 scripts/sisyphus-trace.py REQ-foo --json | jq 'select(.kind=="verify")'
+```
+
+Metabase 同款查询：[observability/queries/sisyphus/24-req-trace.sql](observability/queries/sisyphus/24-req-trace.sql)（Q24, 参数 `{{req_id}}`）。
+event_log（n8n / orch tap）住 `sisyphus_obs` 库，跨库 view 不做，不在本工具范围内。
+
 ## 文档索引
 
 | 文档 | 内容 |

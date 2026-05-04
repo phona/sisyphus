@@ -335,6 +335,34 @@ NULL bucket 是"在途或未覆盖"，Q21 单独一行显示。
 └──────────────────────────────┴──────────────────────────────┘
 ```
 
+## REQ 全生命周期 trace（Q24，REQ-feat-req-trace-view-381-v2-1777866643）
+
+debug "REQ 卡住不动" 当前要 `curl` BKD + `grep` 源码 + 手动拼时间线 ~30 min。
+Q24 把数据已落 PG 的 4 张主库表（`req_state.history` / `stage_runs` /
+`verifier_decisions` / `artifact_checks`）按 `ts` UNION 一起，按时间轴看：
+
+> `event_log` 在 `sisyphus_obs` 库不在本 Q（跨库 view 不做，见
+> `migrations/0002_observability_views.sql`）。命令行 `scripts/sisyphus-trace.py`
+> 是同一份 SQL 的薄包装，未来想合 event_log 时改 CLI 一处即可。
+
+### Q24. REQ trace view（单 REQ 全生命周期事件按时间轴）
+
+- **SQL**：[queries/sisyphus/24-req-trace.sql](queries/sisyphus/24-req-trace.sql)
+- **Variables**：`req_id` (Text, Required) — Metabase 模板 `{{req_id}}`
+- **Visualization**：Table（列：`ts, kind, detail`），按 `ts ASC`（SQL 自带 ORDER BY）
+  - 条件格式：`kind = 'verify'` 行底色橙；`detail` 含 `escalated` / `failed` 整行底色红
+- **次选 Visualization**：Bar chart 看事件密度按 5 min bin（X = `ts` truncate to 5min，Y = COUNT，按 `kind` 分组）
+- **CLI 等价物**：`scripts/sisyphus-trace.py REQ-XXXX`（见 [CLAUDE.md "REQ 卡住怎么 debug"](../CLAUDE.md)）
+- **kind 字典**：
+  - `trans` — `req_state.history` 解出的 state 转移
+  - `stage` — `stage_runs` 起 / 止两条事件
+  - `verify` — `verifier_decisions` 单条判决
+  - `check` — `artifact_checks` 通过 / 失败
+- **使用场景**：
+  - 单 REQ 卡死 → 找最后一条非 `trans` 事件，看 detail 里 cmd / reason
+  - verifier 反复 fix 不收敛 → grep `kind = 'verify'` 看 confidence / fixer 历史
+  - dedup 命中疑似 → 对比 `trans` 与 `stage` 的相邻 ts，gap 大 = 路由没派出去
+
 ## 刷新频率
 
 M7 看板：
@@ -359,6 +387,9 @@ PR queue health 看板：
 终态记账看板：
 - Q21：每 1 小时（趋势类，token 分布变化慢）
 - Q22：每 1 小时（leaderboard 变化慢；有新高耗 REQ 完成时才需关注）
+
+REQ trace 看板：
+- Q24：按需查（参数化 `req_id` 没默认值，操作员主动跑；不挂 dashboard tile，挂 Question library）
 
 Metabase Question 设置 `Results cache TTL`：Q5/Q1 设 30s，Q2/Q3/Q4/Q12/Q13/Q17/Q18 设 120s，其余设 1800s。
 
