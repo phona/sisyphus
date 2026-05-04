@@ -78,9 +78,6 @@ async def _fetch_intent_tags(
         log.warning("admin.fetch_intent_tags_failed",
                     req_id=req_id, intent_issue_id=intent_issue_id, error=str(e))
         return []
-        self.title = ""
-        self.tags = []
-        self.issueNumber = None
 
 
 @admin.post("/req/{req_id}/emit")

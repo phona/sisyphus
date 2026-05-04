@@ -64,14 +64,22 @@ REQ={{ req_id }}
 - **Acceptance（怎么算实现完）**：{{ intake_summary.acceptance }}
 - **Do not touch**：{{ intake_summary.do_not_touch }}
 
-> **关键**：spec.md 里的 scenario 不是装饰，是之后 `accept-env-up` 阶段 thanatos MCP 会直接读取并执行的验收用例。每个 scenario 必须有清晰的 GIVEN/WHEN/THEN step，否则 check-scenario-refs.sh 会报空壳 scenario 直接 fail。
+> **关键**：spec.md 里的 scenario 不是装饰，是 accept stage 的验收契约 —— accept-agent
+> **读自然语言** GIVEN/WHEN/THEN，**单步**调 thanatos atomic MCP（observe / tap / type /
+> screenshot ...）驱动 redroid，看截图 + dom 判 pass/fail。**没有 DSL regex parser**，
+> 但每个 scenario 必须有清晰的 GIVEN/WHEN/THEN step（不能空壳），否则 check-scenario-refs.sh
+> 直接 fail。
 {% else %}
 ### 直接 analyze 入口（无 intake 阶段）
 
 本次是**直接 analyze 入口**（无 intake 阶段）。请自行分析 BKD intent issue
 title/description/chat history，推导业务需求，确定验收标准，并写完整 spec。
 
-> **关键**：spec.md 里的 scenario 不是装饰，是之后 `accept-env-up` 阶段 thanatos MCP 会直接读取并执行的验收用例。每个 scenario 必须有清晰的 GIVEN/WHEN/THEN step，否则 check-scenario-refs.sh 会报空壳 scenario 直接 fail。
+> **关键**：spec.md 里的 scenario 不是装饰，是 accept stage 的验收契约 —— accept-agent
+> **读自然语言** GIVEN/WHEN/THEN，**单步**调 thanatos atomic MCP（observe / tap / type /
+> screenshot ...）驱动 redroid，看截图 + dom 判 pass/fail。**没有 DSL regex parser**，
+> 但每个 scenario 必须有清晰的 GIVEN/WHEN/THEN step（不能空壳），否则 check-scenario-refs.sh
+> 直接 fail。
 
 **注意：直跳 analyze 没走 intake，下面"派 REQ 之前先看相关 PR / issue"段你要自己跑一遍**，命中相关 REQ（反向 / 重复 / 重蹈覆辙）时在 BKD intent issue chat 里给用户一条 follow-up message 提示，再继续执行。命中不到正常推进。
 

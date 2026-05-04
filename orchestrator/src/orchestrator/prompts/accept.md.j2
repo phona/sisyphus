@@ -13,7 +13,7 @@
 
 ─────────
 
-## 验收 (ACCEPT / AI-QA) — thanatos M1
+## 验收 (ACCEPT / AI-QA) — atomic-MCP era
 AGENT_ROLE=accept-agent
 REQ={{ req_id }}
 ENDPOINT={{ endpoint }}
@@ -36,18 +36,61 @@ sisyphus 已经：
 - 业务仓 `accept-env-up` 起了 thanatos pod（`$THANATOS_POD`，`$THANATOS_NAMESPACE`）
 {% endif %}
 
-你要做的：跑 spec 里定义的 Acceptance Scenario block（所有 `#### Scenario:`
-开头的 block，scenario id 由 spec 作者自定，sisyphus 不预设前缀）判 pass/fail，
+你要做的：**逐条**跑 spec.md 里 `#### Scenario:` 块定义的验收用例 —— 自己看 GIVEN/WHEN/THEN
+用自然语言推断意图，**单步**调 thanatos atomic MCP（observe / tap / type / screenshot ...）
+驱动 redroid，看截图 + dom 判每条 scenario pass/fail。
+
+> ⚠️ **不再有 thanatos DSL 解析**。spec scenario 是给你（人 / agent）读的验收契约，
+> 不是 thanatos 直接 regex parse 的指令。是否实现了 scenario 描述的行为，**你来判**。
+
 不管环境。跑完不清，sisyphus 会调 `accept-env-down`。
 
 ---
 {% if thanatos_pod %}
-## 步骤（thanatos MCP 路径）
+## 步骤（thanatos atomic MCP 路径）
 
-> 业务仓 accept-env-up 起了 thanatos pod，**走 MCP**。直 curl 路径只在 thanatos
+> 业务仓 accept-env-up 起了 thanatos pod，**走 atomic MCP**。直 curl 路径只在 thanatos
 > 没起的 fallback 模式跑。
 
-### Step 1: 验证 endpoint + thanatos server
+### Step 0: 拉起 thanatos MCP server + 锚定产品知识基线（强制）
+
+thanatos MCP server 在 thanatos pod 中以 stdio 方式运行：
+
+```bash
+kubectl -n {{ thanatos_namespace }} exec -i {{ thanatos_pod }} -- python -m thanatos.server
+```
+
+工具一览：
+
+| 工具 | 用途 |
+|---|---|
+| `preflight(endpoint)` | 一次性绑定 redroid endpoint（host:port），必须最先调 |
+| `recall(skill_path, intent[, tags])` | 检索业务仓 `.thanatos/` 产品知识（anchors / flows / pitfalls / contracts / glossary）|
+| `observe()` | 当前 uiautomator dump tree（含元素 text / content-desc / resource-id / bounds）|
+| `screenshot()` | base64 PNG 截图 |
+| `tap(name)` | 点击文本 / content-desc / resource-id 模糊匹配的首个元素 |
+| `type(name, text)` | 在命名字段输入 text |
+| `wait(ms)` | 直接 sleep |
+| `wait_for_text(text, timeout_ms)` | 轮询直到 text 出现或超时 |
+| `current_page()` | 当前前台 `{package, activity}` |
+| `find(name)` | 单元素快照（debug） |
+
+**第一件事（不可省）**：调 `recall` 至少一次，锚定本仓产品基线。理由：
+不调 recall = 每次重新探索 element 命名 / 业务流程 → 验收风格漂移、设计意图丢失。
+仓里 `.thanatos/anchors.md` / `flows.md` / `pitfalls.md` 维护着 widget 别名 + 流程 + 已知坑，
+**就是用来防漂移的**，必须先看。
+
+```text
+# 推荐 recall 顺序（按当前 REQ 调整 intent）
+recall(skill_path="/workspace/source/{{ thanatos_skill_repo }}/.thanatos/skill.yaml",
+       intent="<feature> screen widgets")
+recall(skill_path=..., intent="<feature> flow steps")
+recall(skill_path=..., intent="known pitfalls", tags=["<feature>"])
+```
+
+跑完拿到 element 别名 / 流程要点 / 历史坑，记下来当下面单步验收的字典。
+
+### Step 1: preflight + 验证 endpoint
 
 ```bash
 POD=runner-{{ req_id | lower }}
@@ -56,92 +99,77 @@ NS=sisyphus-runners
 # lab endpoint reachable
 kubectl -n $NS exec $POD -- curl -sf "{{ endpoint }}/healthz" || {
   echo "FAIL: endpoint {{ endpoint }} unreachable" >&2; exit 1; }
-
-# thanatos server 能启动（在 thanatos pod 内）
-kubectl -n {{ thanatos_namespace }} exec -i {{ thanatos_pod }} -- \
-  python -m thanatos.server --help >/dev/null 2>&1 || {
-  echo "FAIL: thanatos server not runnable" >&2; exit 1; }
 ```
 
-### Step 2: 解析 skill + spec 路径
+通过 thanatos MCP 调一次 `preflight`（绑定 redroid 给后续 atomic 工具用）。endpoint 形式
+取决于业务仓 `.sisyphus/env.yaml` 的 `emits.endpoint` —— 一般是 `<redroid_host>:5554` /
+`<redroid_host>:5555`。
+
+```text
+preflight(endpoint="<redroid host:port>")
+```
+
+返回 `{ok: true, a11y_node_count: N}` 才能进 Step 2。失败先看 lab 是否真起、APK 是否
+真装上（`pm list packages | grep -q <package>`）。
+
+### Step 2: 解析 spec.md 路径 + 抽出 scenario 列表
 
 ```bash
-SKILL_PATH=/workspace/source/{{ thanatos_skill_repo }}/.thanatos/skill.yaml
-
 SPEC_PATH=$(kubectl -n $NS exec $POD -- bash -c \
   "ls /workspace/source/{{ thanatos_skill_repo }}/openspec/changes/{{ req_id }}/specs/*/spec.md 2>/dev/null | head -1")
 [ -n "$SPEC_PATH" ] || { echo "FAIL: no spec.md found" >&2; exit 1; }
+
+kubectl -n $NS exec $POD -- cat "$SPEC_PATH"
 ```
 
-### Step 3: 通过 thanatos MCP 跑 scenario
+读出来后，按 `#### Scenario: <id> <desc>` 切块，每块含 GIVEN/WHEN/THEN 步骤。**逐条验收**。
 
-thanatos MCP server 在 thanatos pod 中以 stdio 方式运行：
+### Step 3: 单步驱动 + 视觉 / 结构判定（每个 scenario 一遍）
 
-```bash
-kubectl -n {{ thanatos_namespace }} exec -i {{ thanatos_pod }} -- python -m thanatos.server
-```
+对每个 scenario 循环：
 
-调用 `run_all` tool：
-- `skill_path`: `$SKILL_PATH`
-- `spec_path`: `$SPEC_PATH`
-- `endpoint`: `{{ endpoint }}`
+1. **回到入口态**（如必要）：用 `current_page` 检查；不在期望 activity 就 `tap` 回首页
+   或重启 app（`adb shell am start -n <pkg>/.MainActivity`，可通过 thanatos pod exec 跑）
+2. **GIVEN**：把每条 GIVEN 翻译成"建立前置态"的 atomic 调用（多数情况 GIVEN 已经满足
+   = 启动后默认在某 page，调 `current_page` / `observe` 确认即可；不满足就 tap/type 凑齐）
+3. **WHEN**：把动作翻译成 atomic 调用（`tap("Forgot password")` / `type("用户名", "...")`）。
+   有异步 UI 变化用 `wait_for_text` 不要硬 `wait`
+4. **THEN**：判结果 ——
+   - 优先 `screenshot()` + LLM 看图判（流程对不对、样式对不对、有没有错误提示）
+   - 或 `observe()` 拿 dom，看目标元素是否存在 / 文本是否含期望串
+   - 或 `current_page()` 确认导航到位
+5. **每步留 evidence**：每个 scenario 至少 1 张关键截图 + 关键 dom 片段
+6. **判 verdict**：`pass` / `fail`，fail 写清楚 reason（"snackbar 没出现" / "样式异常 — 按钮叠在
+   输入框上方" / "tap 后 current_page 没切" 等）
 
-thanatos 会返回每个 scenario 的 pass/fail + evidence + **kb_updates**。你需要：
-1. 确认 thanatos server 能启动
-2. 调用 `run_all` 或逐个调用 `run_scenario`
-3. 收集结果，**合并所有 scenario 的 kb_updates**
-4. 写报告 + commit kb_updates 到 feature 分支
+**单步原则**：每次 1 个 atomic call，看返回再决定下一步。**禁止盲写**一长串
+`tap` 调用不看中间状态 —— 那等于退化回 batch 模式。
 
-### Step 4: 把 kb_updates commit 到 feature 分支
-
-每个 scenario 返回的 `kb_updates` 是 `[{path, action: "patch"|"append", content}]`
-列表，对应 `.thanatos/anchors.md` / `flows.md` / `pitfalls.md` 等 KB 文件的
-增量。**这一步是「漂移自愈 KB」机制的写入路径**——thanatos 算 delta，
-accept-agent 顺手 commit；下次 recall 就能命中，省去重新探索。
-
-**仅当至少一个 scenario 返回非空 kb_updates 时执行**：
-
-1. 在 BKD Coder workspace（你跑 BKD agent 这边）clone source repo（如果还没）：
-   ```bash
-   cd /tmp && rm -rf source-{{ thanatos_skill_repo }} && \
-     git clone -b "{{ branch }}" \
-       "https://x-access-token:$GITHUB_TOKEN@github.com/<org>/{{ thanatos_skill_repo }}.git" \
-       source-{{ thanatos_skill_repo }}
-   cd source-{{ thanatos_skill_repo }}
-   ```
-
-2. 合并 kb_updates 后 apply：
-   - `action=patch`：定位文件中的 marker / 上下文做 in-place 替换
-   - `action=append`：追加到文件末尾
-   - 跨 scenario 同 path 同 action 的 content 去重
-   - 如果文件不存在，按 path 创建（如首次跑出 `.thanatos/pitfalls.md`）
-
-3. commit + push：
-   ```bash
-   git add .thanatos/
-   git -c user.email='accept-agent@sisyphus' -c user.name='sisyphus accept-agent' \
-     commit -m "chore(.thanatos): kb_updates from accept run [{{ req_id }}]"
-   git push origin HEAD
-   ```
-
-> **不要在 runner pod 里跑 git push**——runner GH_TOKEN 是 Read-only PAT。
-> 必须在 BKD Coder workspace（写权限那侧）。
-
-### Step 5: 报告
+### Step 4: 报告
 
 在本 issue follow-up 追加：
 
 ```markdown
-## Accept Result (thanatos MCP)
+## Accept Result (atomic MCP)
 
-- <scenario-id>: PASS
-- <scenario-id>: FAIL — <failure_hint>
+### {{ req_id }}-S1: <短描述>
+- verdict: PASS
+- evidence: <screenshot ref / inline base64 / dom snippet>
+- notes: <可选>
 
-## KB Updates
+### {{ req_id }}-S2: <短描述>
+- verdict: FAIL
+- reason: snackbar "即将上线" 没出现 (wait_for_text timeout 5000ms)
+- evidence: <screenshot 链接>
 
-- 写入 N 条 kb_updates（patches=X append=Y）→ commit `<sha>` 推到 `<branch>`
-- 或：本次无 kb_updates
+## Recall used
+- anchors.md: 命中 N 条（element 命名字典）
+- flows.md: 命中 M 条（业务流程）
+- pitfalls.md: 命中 K 条（已知坑）
 ```
+
+verdict 三态：`PASS` / `FAIL` / `BLOCKED`（前置态都建不起来 / preflight 失败 → BLOCKED，
+区分于 FAIL）。
 
 ### Step 5: 贴 PR 管理 comment（含 BKD 反向控制通道入口）
 
@@ -152,7 +180,7 @@ accept-agent 顺手 commit；下次 recall 就能命中，省去重新探索。
 ### Step 6: 贴 tag + move review
 
 - 全过：tags = `[accept, {{ req_id }}, result:pass]`, statusId=review
-- 任一失败：tags = `[accept, {{ req_id }}, result:fail]`, statusId=review
+- 任一 FAIL / BLOCKED：tags = `[accept, {{ req_id }}, result:fail]`, statusId=review
 
 {% else %}
 ## 步骤（直 curl 路径 — fallback / sisyphus self-accept）
@@ -166,33 +194,28 @@ accept-agent 顺手 commit；下次 recall 就能命中，省去重新探索。
 POD=runner-{{ req_id | lower }}
 NS=sisyphus-runners
 
-# 确认 endpoint 可访问
 kubectl -n $NS exec $POD -- curl -sf "{{ endpoint }}/healthz"
 if [ $? -ne 0 ]; then
-  # endpoint 不通 → fail，不白跑
   exit 1
 fi
 ```
 
 ### Step 2: 读 Acceptance Scenario
 
-从 runner 的 /workspace/source/<repo>/openspec 读各仓 spec（M16 多仓布局）：
+从 runner 的 /workspace/source/<repo>/openspec 读各仓 spec：
 
 ```bash
 kubectl -n $NS exec $POD -- bash -c \
   "cat /workspace/source/*/openspec/changes/{{ req_id }}/specs/*/spec.md"
 ```
 
-找出所有 `#### Scenario: <id> <desc>` block（Given / When / Then）；scenario id
-由 spec 作者自定（如 `UBOX-S1` / `S1` / 任意可定位的 token），匹配 heading 用
-`scripts/check-scenario-refs.sh` 同款的 `^####\s+Scenario:` 模式即可。
+找出所有 `#### Scenario: <id> <desc>` block（GIVEN / WHEN / THEN）。
 
 ### Step 3: 跑每个 scenario
 
-对 `{{ endpoint }}` 做 curl / gRPC / 等，按 Given→When→Then 验证。
+对 `{{ endpoint }}` 做 curl / gRPC 等，按 GIVEN→WHEN→THEN 验证。
 
 ```bash
-# 示例
 kubectl -n $NS exec $POD -- bash -c \
   "curl -sf -X POST '{{ endpoint }}/api/feature' -d '{...}' | jq .status"
 ```
@@ -206,14 +229,13 @@ kubectl -n $NS exec $POD -- bash -c \
 ```markdown
 ## Accept Result
 
-- <scenario-id>:1: PASS — curl 200, response body correct
-- <scenario-id>:2: FAIL — curl 500, error: xxx
+- {{ req_id }}-S1: PASS — curl 200, response body correct
+- {{ req_id }}-S2: FAIL — curl 500, error: xxx
 ```
 
 ### Step 5: 贴 PR 管理 comment（含 BKD 反向控制通道入口）
 
-⚠️ 这一步**必须用 BKD Coder workspace 的 `gh` CLI 执行**（你跑在 Coder 里有现成的
-`gh auth`）—— sisyphus orchestrator / runner pod **不写 GH**（架构契约）。
+⚠️ 这一步**必须用 BKD Coder workspace 的 `gh` CLI 执行**。
 {% include "_shared/pr_acceptance_comment.md.j2" %}
 
 ### Step 6: 贴 tag + move review
@@ -228,6 +250,8 @@ kubectl -n $NS exec $POD -- bash -c \
 
 - **不部署 lab**：sisyphus 搞好的
 - **不清 lab**：sisyphus 会做
-- **不改业务代码**：只读 + (curl | thanatos MCP)
+- **不改业务代码**：只读 + (curl | thanatos atomic MCP)
 - **真实 endpoint**：不 mock
+- **强制 recall**：thanatos 路径下，先 recall 后 act —— 不 recall = 验收基线漂移
+- **单步**：1 个 atomic call → 看结果 → 决定下一步，不要盲写一长串
 - **update-issue** 要指本 accept issue（不是 SOURCE_ISSUE）

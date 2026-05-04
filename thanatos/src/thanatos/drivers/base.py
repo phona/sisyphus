@@ -1,8 +1,13 @@
-"""Driver Protocol — five-method async contract.
+"""Driver Protocol — atomic-MCP shape.
 
-The Protocol shape is the *contract* M0 freezes; the three concrete drivers
-(``playwright``, ``adb``, ``http``) raise ``NotImplementedError`` on every
-method until M1 fills them in.
+Atomic MCP era: drivers expose preflight / observe / capture_evidence as the
+shared contract. All other operations (tap / type / wait / etc.) are
+domain-specific and live on each concrete driver — they are surfaced through
+MCP atomic tools, not through a generic ``act(step: str)`` regex dispatch.
+
+``ActResult`` is kept as the canonical "operation may fail with a hint" return
+type used by the adb atomic methods. There is no ``AssertResult`` anymore —
+verification is done by the accept-agent, not by the driver.
 """
 
 from __future__ import annotations
@@ -36,19 +41,15 @@ class SemanticTree:
 
 @dataclass
 class ActResult:
-    ok: bool
-    failure_hint: str | None = None
+    """Outcome of a driver operation that may fail with a human-readable hint."""
 
-
-@dataclass
-class AssertResult:
     ok: bool
     failure_hint: str | None = None
 
 
 @dataclass
 class Evidence:
-    """Driver-captured evidence attached to a step / scenario result."""
+    """Driver-captured evidence attached to an operation result."""
 
     dom: str | None = None
     network: list[dict[str, Any]] = field(default_factory=list)
@@ -56,14 +57,15 @@ class Evidence:
 
 
 class DriverError(Exception):
-    """Base class for driver-level errors. M0 doesn't subclass this anywhere."""
+    """Base class for driver-level errors."""
 
 
 @runtime_checkable
 class Driver(Protocol):
-    """The five-method async contract every driver implements.
+    """Three-method async contract every driver implements.
 
-    M0 freezes the shape. Real implementations land in M1.
+    Atomic operations (tap / type / wait / ...) are domain-specific and live on
+    each concrete driver, not on the Protocol.
     """
 
     name: str
@@ -72,12 +74,6 @@ class Driver(Protocol):
         ...
 
     async def observe(self) -> SemanticTree:  # pragma: no cover
-        ...
-
-    async def act(self, step: str) -> ActResult:  # pragma: no cover
-        ...
-
-    async def assert_(self, step: str) -> AssertResult:  # pragma: no cover
         ...
 
     async def capture_evidence(self) -> Evidence:  # pragma: no cover
