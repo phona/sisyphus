@@ -86,6 +86,11 @@ env:
   log_json: true
   bkd_base_url: https://bkd-launcher--admin-jbcnet--weifashi.coder.tbc.5ok.co/api
   workdir_root: /var/sisyphus-ci
+
+  # ─── stage agent / verifier / fixer / pr-ci-watch sub-issue 默认 model ───
+  # 设计原则（CLAUDE.md "生产用最强模型"）默认 opus；dev/dogfood 阶段可降 sonnet 省 token。
+  # 留空走 config.py default (claude-opus-4-7[1m])
+  agent_model: claude-sonnet-4-6
   # 不存任何 project_id / repo_url —— project_id 来自 webhook，
   # repo_url 来自 agent 自己 `git remote get-url origin`
   # snapshot loop 排除已知死项目（每 5min 一次的 BKD list_issues 失败 noise）。
