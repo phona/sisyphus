@@ -80,6 +80,7 @@ async def test_inflight_count_under_cap_admits(monkeypatch):
     assert "done" in state_list
     assert "escalated" in state_list
     assert "gh-incident-open" in state_list
+    assert "pending-user-review" in state_list
 
 
 # ─── Scenario S3: count at cap rejects ────────────────────────────────────
@@ -108,6 +109,34 @@ async def test_inflight_count_above_cap_rejects(monkeypatch):
     assert decision.admit is False
     assert "inflight-cap-exceeded" in decision.reason
     assert "15/10" in decision.reason
+
+
+# ─── Scenario S7: pending-user-review excluded from in-flight cap ─────────
+
+
+@pytest.mark.asyncio
+async def test_inflight_excludes_pending_user_review(monkeypatch):
+    """ORCH-RATE-S7 — 8 PUR + 2 running with cap=10 admits a fresh REQ.
+
+    The bug (#384) was that PUR REQs (runner Pod already torn down, parked
+    waiting for human follow-up) were counted against `inflight_req_cap`.
+    `_INFLIGHT_EXCLUDE_STATES` now contains `pending-user-review`, so the
+    SQL count returned to admission only reflects REQs that actually hold
+    runner resources.
+    """
+    monkeypatch.setattr(admission.settings, "inflight_req_cap", 10)
+    monkeypatch.setattr(admission.settings, "admission_disk_pressure_threshold", 0.75)
+    _install_controller(ratio=0.10)
+    # Pool returns 2 — the SQL excluded the 8 PUR rows because PUR is in the
+    # state list. With cap=10 and inflight=2 the fresh REQ admits.
+    pool = _FakePool(count=2)
+
+    decision = await admission.check_admission(pool, req_id="REQ-new")
+
+    assert decision.admit is True
+    assert decision.reason is None
+    state_list, _ = pool.last_args
+    assert "pending-user-review" in state_list
 
 
 # ─── Scenario S4: disk under threshold admits ─────────────────────────────
