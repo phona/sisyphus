@@ -227,12 +227,37 @@ class Settings(BaseSettings):
     # 跟具体 stage 业务无关、跨 stage 复用、operator 想改要做到不动模板源码。每个
     # stage prompt 在 hook slot 处 for-loop 渲所有 enabled 的 hook 文件；hook body
     # 自行靠 `stage` 变量决定要不要落地。
-    # 默认两条：mcp-preflight（issue #270 的 fail-fast）+ self-issue-constraint
-    # （只 PATCH 自己 issue 的硬规矩）。operator 通过 SISYPHUS_ENABLED_PROMPT_HOOKS
-    # 全量覆盖（JSON 数组），增删改某个 hook 一行 helm values 搞定，不用 fork prompt。
+    # 默认三条：mcp_preflight（issue #270 的 fail-fast）+ precheck（issue #373
+    # 的 env / 工具 / ci-precheck fail-fast）+ self_issue_constraint（只 PATCH
+    # 自己 issue 的硬规矩）。顺序锁死：MCP 必须先就位，precheck 才能 exec_run 进 pod；
+    # 两段 fail-fast 必须排在 self_issue_constraint 之前。operator 通过
+    # SISYPHUS_ENABLED_PROMPT_HOOKS 全量覆盖（JSON 数组），不用 fork prompt。
     enabled_prompt_hooks: list[str] = Field(
-        default_factory=lambda: ["mcp_preflight", "self_issue_constraint"],
+        default_factory=lambda: ["mcp_preflight", "precheck", "self_issue_constraint"],
         description="按文件名约定加载的 prompt hook 列表（_shared/hooks/<name>.md.j2）",
+    )
+
+    # ─── REQ-feat-precheck-373-1777864856：stage agent step-0 precheck（#373）
+    # 跟 stage_mcp_requirements 平行，决定 precheck hook 在哪些 stage 渲染段落。
+    # 默认在所有「跑 runner pod」的 stage 都开（analyze / challenger / accept /
+    # staging_test / pr_ci_watch / bugfix），intake / done_archive 关掉
+    # （intake 是 chat brainstorm；done_archive 是 orchestrator 后台动作，不派 agent）。
+    # 关注点分离 = 不复用 stage_mcp_requirements：
+    #   - mcp_requirements 控「需要哪些 MCP capability」
+    #   - precheck_enabled 控「是否做 env/tool/ci-precheck fail-fast」
+    # operator 走 helm values（SISYPHUS_STAGE_PRECHECK_ENABLED=JSON dict）覆盖。
+    stage_precheck_enabled: dict[str, bool] = Field(
+        default_factory=lambda: {
+            "intake": False,
+            "analyze": True,
+            "challenger": True,
+            "accept": True,
+            "staging_test": True,
+            "pr_ci_watch": True,
+            "bugfix": True,
+            "done_archive": False,
+        },
+        description="每个 stage 是否在 prompt 头部渲 precheck fail-fast 段",
     )
 
     # ─── REQ-clone-fallback-direct-analyze-1777119520：multi-layer involved_repos

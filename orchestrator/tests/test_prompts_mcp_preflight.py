@@ -65,11 +65,12 @@ def test_mcp_capability_probe_tools_default_routes_ssh_exec_to_servers_list() ->
 
 
 def test_enabled_prompt_hooks_default_includes_mcp_preflight_and_self_issue_constraint() -> None:
-    """v1 默认开两条 hook：mcp_preflight + self_issue_constraint。
-    顺序也锁住：preflight 先于 self_issue_constraint，因为 fail-fast 段必须先于
-    业务约束段。新加默认 hook 时务必同步本断言（让 operator 升级时看得到 diff）。"""
+    """v2（REQ-feat-precheck-373）默认开三条 hook：mcp_preflight + precheck +
+    self_issue_constraint。顺序锁死：preflight 必须先就位才能让 precheck exec_run
+    进 pod；两段 fail-fast 都必须先于业务约束段。新加默认 hook 时务必同步本断言
+    （让 operator 升级时看得到 diff）。"""
     hooks = settings.enabled_prompt_hooks
-    assert hooks == ["mcp_preflight", "self_issue_constraint"], hooks
+    assert hooks == ["mcp_preflight", "precheck", "self_issue_constraint"], hooks
 
 
 # ── Step 2: prompts source 不再硬编码 ─────────────────────────────────────

@@ -96,6 +96,9 @@ def _render_jinja2(template_name: str, **kwargs: Any) -> str:
     env.globals["mcp_capability_probe_tools"] = _runtime_settings.mcp_capability_probe_tools
     env.globals["stage_mcp_requirements"] = _runtime_settings.stage_mcp_requirements
     env.globals["enabled_prompt_hooks"] = _runtime_settings.enabled_prompt_hooks
+    # REQ-feat-precheck-373-1777864856：precheck hook 也是 globals-driven，否则
+    # `_shared/hooks/precheck.md.j2` 渲到 `stage_precheck_enabled.get(...)` UndefinedError。
+    env.globals["stage_precheck_enabled"] = _runtime_settings.stage_precheck_enabled
     return env.get_template(template_name).render(**kwargs)
 
 

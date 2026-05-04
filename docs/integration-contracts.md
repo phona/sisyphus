@@ -200,6 +200,36 @@ make ci-integration-test
 staging-test checker 只跑 `make ci-unit-test && make ci-integration-test`，
 **不跑 contract tag**。contract test 的 RED 阶段由 challenger 自行验证。
 
+### 2.6 `make ci-precheck`（业务仓**可选**契约 target，REQ-feat-precheck-373）
+
+stage agent 第 0.5 步会跑统一 precheck phase（`_shared/hooks/precheck.md.j2`），
+对每个 `/workspace/source/<repo>/` 调一次 `make ci-precheck`。**业务仓侧可选实现**。
+
+| 行为 | sisyphus 解释 |
+|---|---|
+| 缺 target（`make -n ci-precheck` 输出 `No rule to make target`） | **soft pass** —— 仓还没 opt-in，不阻塞 stage |
+| target 存在，退码 0 | pass |
+| target 存在，退非 0 | **hard fail** → agent emit `result:fail` + `fail-reason:precheck:ci-precheck:<repo>`，结束 session（verifier 直接 escalate，不重试） |
+
+设计意图：把「跑到 dev_cross_check 才发现 fvm symlink / token / KUBECONFIG 缺，
+watchdog 7 min kill」的等待浪费截断在 stage 第 0.5 步。`ci-precheck` 替业务仓做
+环境自检 —— 检什么仓自己拍：
+
+```makefile
+.PHONY: ci-precheck
+ci-precheck: ## stage agent 0.5 步：环境/工具/lock 自检；缺则非 0 退出
+	@command -v fvm >/dev/null || { echo "fvm 缺"; exit 1; }
+	@[ -L .fvm/flutter_sdk ] || { echo ".fvm/flutter_sdk symlink 缺"; exit 1; }
+	@flutter doctor --machine >/dev/null || { echo "flutter doctor 红"; exit 1; }
+	@echo "ci-precheck OK"
+```
+
+最简实现 `@echo OK`（仓承认自己 opt-in 但暂无想检的项），方便逐步加项。
+
+> **operator 侧关掉**：helm values `SISYPHUS_STAGE_PRECHECK_ENABLED='{"analyze":false,...}'`
+> 把对应 stage 设 False，hook 不渲段；或 `SISYPHUS_ENABLED_PROMPT_HOOKS='["mcp_preflight",
+> "self_issue_constraint"]'` 全 stage 关掉 precheck 段（pluggable invariant）。
+
 > **历史命名**：早期契约依次叫过 `accept-up` / `accept-down`（M14 之前）和
 > `ci-accept-env-up` / `ci-accept-env-down`（REQ-accept-contract-docs-1777121224）。
 > 当前唯一支持名为 `accept-env-up` / `accept-env-down`（REQ-rename-accept-targets-1777124774，

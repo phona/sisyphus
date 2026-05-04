@@ -46,6 +46,8 @@ _env.globals["mcp_capability_providers"] = settings.mcp_capability_providers
 _env.globals["mcp_capability_probe_tools"] = settings.mcp_capability_probe_tools
 _env.globals["stage_mcp_requirements"] = settings.stage_mcp_requirements
 _env.globals["enabled_prompt_hooks"] = settings.enabled_prompt_hooks
+# REQ-feat-precheck-373-1777864856：precheck hook 读 stage_precheck_enabled 决定渲不渲段。
+_env.globals["stage_precheck_enabled"] = settings.stage_precheck_enabled
 
 
 def render(template_name: str, **context) -> str:
