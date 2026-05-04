@@ -23,7 +23,9 @@ help: ## 显示帮助信息
 
 # ========== ttpos-ci 标准 target（self-dogfood） ==========
 
-ci-lint: ## ruff lint；BASE_REV 非空 → 仅 lint 变更 *.py
+ci-lint: ## ruff lint + state-machine transition lint；BASE_REV 非空 → 仅 lint 变更 *.py
+	@echo "ci-lint: state-machine transition lint (REQ #376)"
+	@python3 scripts/lint-state-transitions.py
 	@if [ -z "$$BASE_REV" ]; then \
 		echo "ci-lint: full scan (BASE_REV empty)"; \
 		cd orchestrator && uv run ruff check src/ tests/; \

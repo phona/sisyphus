@@ -84,10 +84,20 @@ class Event(StrEnum):
 
 @dataclass(frozen=True)
 class Transition:
-    """从 cur_state 收到 event 后的下一步。"""
+    """从 cur_state 收到 event 后的下一步。
+
+    progress 字段（REQ-feat-silent-lint-376-v2-1777866643 / closes #376）：
+      "yes"           推进 state（next_state != src_state；可省，lint 自动派生）
+      "no"            不推进，候选死锁，需 telemetry / 升级（lint 出报告供 review）
+      "explicit-noop" 不推进但 intentional（如 SESSION_FAILED action 自决，或
+                      ESCALATED 收 VERIFY_ESCALATE 留原地等下一次 follow-up）
+      None            自动派生：仅当 next_state != src_state 时合法
+    详见 scripts/lint-state-transitions.py。
+    """
     next_state: ReqState
     action: str | None = None
     reason: str | None = None
+    progress: str | None = None
 
 
 # (cur_state, event) → Transition
@@ -269,7 +279,8 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
                    "verifier decision=escalate 或 schema invalid"),
     (ReqState.REVIEW_RUNNING, Event.VERIFY_INFRA_RETRY):
         Transition(ReqState.REVIEW_RUNNING, "apply_verify_infra_retry",
-                   "decision=retry → 有界重跑 stage checker（infra flake；超 cap → escalate）"),
+                   "decision=retry → 有界重跑 stage checker（infra flake；超 cap → escalate）",
+                   progress="explicit-noop"),
 
     (ReqState.FIXER_RUNNING, Event.FIXER_DONE):
         Transition(ReqState.REVIEW_RUNNING, "invoke_verifier_after_fix",
@@ -293,7 +304,8 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
                    "用户续 escalate 的 verifier issue → 新 decision=fix → 起 fixer"),
     (ReqState.ESCALATED, Event.VERIFY_ESCALATE):
         Transition(ReqState.ESCALATED, None,
-                   "用户续了但 verifier 还是判 escalate → 留原地等下一次 follow-up"),
+                   "用户续了但 verifier 还是判 escalate → 留原地等下一次 follow-up",
+                   progress="explicit-noop"),
 
     # ─── 通用错误 ───────────────────────────────────────────────────────
     # session crash 在任何 running state 走 escalate action（self-loop, action 内部决定是否真 escalate）
@@ -302,7 +314,9 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
     #   retry 用完 / non-transient → action 内部手 CAS 推到 ESCALATED
     # next_state 写当前 state 是因为"action 自己决定是否真 escalate"，跟 apply_verify_pass 同模式
     **{
-        (st, Event.SESSION_FAILED): Transition(st, "escalate", "session crash → auto-resume or escalate")
+        (st, Event.SESSION_FAILED): Transition(st, "escalate",
+                                               "session crash → auto-resume or escalate",
+                                               progress="explicit-noop")
         for st in [
             ReqState.INTAKING, ReqState.ANALYZING,
             ReqState.ANALYZE_ARTIFACT_CHECKING,
