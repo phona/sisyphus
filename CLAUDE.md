@@ -139,6 +139,27 @@ python3 scripts/sisyphus-admin.py admin pr-merged <req_id> --pr-url <url> --merg
 
 环境变量：`SISYPHUS_ADMIN_TOKEN`（Bearer token，留空从 kubectl secret 取）。`--base-url` 留空绕 kubectl port-forward，提供（如 `http://sisyphus.43.239.84.24.nip.io`）则直接走 HTTP。完整子命令：`python3 scripts/sisyphus-admin.py --help`。
 
+### scripts/sisyphus-trace.py —— 单 REQ 时间线（debug 用）
+
+打印单条 REQ 的全生命周期事件时间线（state 转移 + stage 起止 + verifier 判决 + checker 结果）。
+
+```bash
+# 输出 REQ 完整时间线（kubectl 模式，最常用）
+python3 scripts/sisyphus-trace.py REQ-feat-xxx-381
+
+# 只看 verifier 和 checker 事件
+python3 scripts/sisyphus-trace.py REQ-feat-xxx-381 --types verifier,checker
+
+# 直连 PG（不需要 kubectl）
+DATABASE_URL=postgresql://sisyphus:pass@localhost:5432/sisyphus \
+    python3 scripts/sisyphus-trace.py REQ-feat-xxx-381
+
+# 管道友好输出
+python3 scripts/sisyphus-trace.py REQ-feat-xxx-381 --no-color | grep fail
+```
+
+对应 Metabase Q23（`observability/queries/sisyphus/23-req-trace.sql`）。
+
 ## 文档索引
 
 | 文档 | 内容 |
@@ -148,7 +169,7 @@ python3 scripts/sisyphus-admin.py admin pr-merged <req_id> --pr-url <url> --merg
 | [docs/state-machine.md](docs/state-machine.md) | 状态机权威：state / event / transition 表 + stateDiagram |
 | [docs/integration-contracts.md](docs/integration-contracts.md) | sisyphus ↔ 业务 repo 契约（Makefile target、env、JSON 输出）；§10 接入必配 token / secret / vars 清单 |
 | [docs/observability.md](docs/observability.md) | 观测设计哲学（Postgres + Metabase） |
-| [observability/sisyphus-dashboard.md](observability/sisyphus-dashboard.md) | 22 条 Metabase SQL + 看板布局（Q1–Q22：M7 + M14e + fixer-audit + silent-pass + termination） |
+| [observability/sisyphus-dashboard.md](observability/sisyphus-dashboard.md) | 23 条 Metabase SQL + 看板布局（Q1–Q23：M7 + M14e + fixer-audit + silent-pass + termination + REQ trace） |
 | [docs/prompts.md](docs/prompts.md) | 各阶段 agent prompt 总览（按 role） |
 | [docs/api-tag-management-spec.md](docs/api-tag-management-spec.md) | BKD issue tag 命名规范（router 依赖） |
 | [docs/cookbook/](docs/cookbook/) | 按 lab 形态分给 `accept-env-up/down` 实现样板（mobile lab 见 `ttpos-arch-lab-accept-env.md`） |

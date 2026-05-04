@@ -335,6 +335,24 @@ NULL bucket 是"在途或未覆盖"，Q21 单独一行显示。
 └──────────────────────────────┴──────────────────────────────┘
 ```
 
+## REQ 调试 — 单 REQ 追踪（Q23）
+
+用于排查卡住 REQ、故障复盘，或人工 review escalated REQ 的完整执行链路。
+
+### Q23. REQ Trace（单 REQ 全生命周期事件时间线）
+
+- **SQL**：[queries/sisyphus/23-req-trace.sql](queries/sisyphus/23-req-trace.sql)
+- **Visualization**：Table（列顺序：`ts, event_type, stage, outcome, summary, detail`），按 `ts` 升序
+- **Metabase 参数**：Text Variable `{{req_id}}`（在 Metabase Question 里设为必填 filter）
+- **数据源**：`req_state.history`（状态转移）+ `stage_runs`（stage 起止）+ `verifier_decisions`（verifier 判决）+ `artifact_checks`（机械 checker 结果）
+- **用途**：
+  - 排查 REQ stuck 原因（看最后一条事件是哪个 stage）
+  - 查 verifier 判了什么、checker 挂在哪行
+  - 对比多次 fix 循环的 outcome 变化
+- **CLI 等效**：`python3 scripts/sisyphus-trace.py <req_id>`（见 CLAUDE.md CLI 工具段）
+
+**建议挂在独立 Dashboard（REQ Debug）或作为 Metabase Question 按需查询，不需要定时刷新**。
+
 ## 刷新频率
 
 M7 看板：
