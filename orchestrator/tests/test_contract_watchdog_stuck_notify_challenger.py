@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -148,7 +148,7 @@ def _make_stale_row(req_id="REQ-stuck-1", stale_for_sec=2400, *,
         "req_id": req_id,
         "project_id": "proj-test",
         "state": "escalated",
-        "updated_at": datetime.now(timezone.utc) - timedelta(seconds=stale_for_sec),
+        "updated_at": datetime.now(UTC) - timedelta(seconds=stale_for_sec),
         "stuck_sec": stale_for_sec,
         "context": dict(context or {}),
     }
