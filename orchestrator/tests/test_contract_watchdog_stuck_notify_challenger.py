@@ -135,11 +135,18 @@ def _patch_httpx_to_raise(monkeypatch):
 # ─── Test row factory ───────────────────────────────────────────────────────
 def _make_stale_row(req_id="REQ-stuck-1", stale_for_sec=2400, *,
                     context: dict | None = None):
-    """Mimic an asyncpg Record-like dict for a stale escalated REQ."""
+    """Mimic an asyncpg Record-like dict for a stale escalated REQ.
+
+    Includes both `updated_at` (the canonical column the spec references)
+    and `stuck_sec` (a common pre-computed elapsed-seconds projection)
+    so the test row tolerates either implementation choice for the
+    notification body.
+    """
     return {
         "req_id": req_id,
         "state": "escalated",
         "updated_at": datetime.now(timezone.utc) - timedelta(seconds=stale_for_sec),
+        "stuck_sec": stale_for_sec,
         "context": dict(context or {}),
     }
 
