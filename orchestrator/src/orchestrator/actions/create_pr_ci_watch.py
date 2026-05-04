@@ -33,6 +33,7 @@ from ..prompts import render
 from ..state import Event
 from ..store import artifact_checks, db, dispatch_slugs, req_state
 from . import register, short_title
+from ._runner import ensure_runner_alive
 from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
@@ -99,6 +100,7 @@ async def _discover_repos_from_runner(req_id: str) -> list[str]:
     )
     try:
         rc = k8s_runner.get_controller()
+        await ensure_runner_alive(req_id)
         result = await rc.exec_in_runner(req_id, cmd, timeout_sec=30)
     except Exception as e:
         log.warning("create_pr_ci_watch.runner_discovery_failed",

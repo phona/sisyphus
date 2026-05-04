@@ -29,6 +29,7 @@ import time
 import structlog
 
 from .. import k8s_runner
+from ..actions._runner import ensure_runner_alive
 from ..config import settings
 from ._flake import run_with_flake_retry
 from ._types import CheckResult
@@ -164,6 +165,7 @@ async def run_dev_cross_check(
     DNS / kubectl-channel / go-mod 等 infra 抖动自动重跑，bounded by settings。
     """
     rc = k8s_runner.get_controller()
+    await ensure_runner_alive(req_id)
     cmd = _build_cmd(req_id, repo_base_map=repo_base_map)
     log.info(
         "checker.dev_cross_check.start",

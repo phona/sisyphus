@@ -39,6 +39,7 @@ import re
 import structlog
 
 from .. import k8s_runner
+from ..actions._runner import ensure_runner_alive
 from ..config import settings
 from ..store import baseline_results as _baseline_cache
 from ..store import db as _db
@@ -299,6 +300,7 @@ async def run_staging_test(req_id: str) -> CheckResult:
     baseline 阶段不做 flake retry（失败直接退化，不阻塞）。
     """
     rc = k8s_runner.get_controller()
+    await ensure_runner_alive(req_id)
     obs_pool = _db.get_obs_pool()  # 可能为 None（obs dsn 未配置时）
 
     log.info("checker.staging_test.start", req_id=req_id, timeout=_DEFAULT_TIMEOUT)
