@@ -24,6 +24,8 @@ dict shape).
 """
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -178,12 +180,21 @@ def _any_arg_contains(calls, needle: str) -> bool:
     return False
 
 
+_ISO8601_UTC_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+\-]00:?00)"
+)
+
+
 def _any_execute_arg_is_iso8601_utc(execute_calls) -> bool:
-    """Return True if any captured execute() arg parses as a UTC ISO-8601 datetime."""
+    """Return True if any captured execute() arg contains a UTC ISO-8601 datetime.
+
+    Tolerates dev wrapping the value as JSON (e.g. ``'{"stuck_notified_at":
+    "...+00:00"}'``) by scanning every recursively-extracted string.
+    """
     for _sql, args in execute_calls:
         for a in args:
             for cand in _candidate_strings(a):
-                if _looks_like_utc_iso8601(cand):
+                if _contains_utc_iso8601(cand):
                     return True
     return False
 
@@ -191,6 +202,14 @@ def _any_execute_arg_is_iso8601_utc(execute_calls) -> bool:
 def _candidate_strings(value):
     if isinstance(value, str):
         yield value
+        # If the string is JSON, also recurse into it so wrappers like
+        # `{"stuck_notified_at": "..."}` are inspected as structured data.
+        try:
+            decoded = json.loads(value)
+        except (ValueError, TypeError):
+            return
+        if isinstance(decoded, (dict, list, str)):
+            yield from _candidate_strings(decoded)
         return
     if isinstance(value, dict):
         for v in value.values():
@@ -201,18 +220,18 @@ def _candidate_strings(value):
             yield from _candidate_strings(v)
 
 
-def _looks_like_utc_iso8601(s: str) -> bool:
+def _contains_utc_iso8601(s: str) -> bool:
     if not isinstance(s, str) or len(s) < 19:
         return False
-    try:
-        # Accept '...Z' or explicit UTC offset.
-        normalised = s.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(normalised)
-    except ValueError:
-        return False
-    if dt.tzinfo is None:
-        return False
-    return dt.utcoffset() == timedelta(0)
+    for match in _ISO8601_UTC_RE.finditer(s):
+        candidate = match.group(0).replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(candidate)
+        except ValueError:
+            continue
+        if dt.tzinfo is not None and dt.utcoffset() == timedelta(0):
+            return True
+    return False
 
 
 # ═══════════════════════════════════════════════════════════════════════════
