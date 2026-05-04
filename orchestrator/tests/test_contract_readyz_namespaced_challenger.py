@@ -136,16 +136,15 @@ def _readyz_harness(
     ]
 
     if raise_runtime_on_get_controller:
+        # 单 patch 即可：`orchestrator.main` 通过 `from . import k8s_runner` 共享同一
+        # 模块对象，patch 一次就同时改 main.k8s_runner.get_controller。
+        # 之前同时叠两个 patch.object 会让第二个 patch 在 start() 时把"原值"
+        # 记成第一个 patch 替换后的 MagicMock，stop() 顺序错时把 MagicMock
+        # 还原回去，污染整套件下游所有依赖 k8s_runner.get_controller 的 test。
         patches.append(
             patch.object(
                 k8s_runner,
                 "get_controller",
-                side_effect=RuntimeError("not init"),
-            )
-        )
-        patches.append(
-            patch(
-                "orchestrator.main.k8s_runner.get_controller",
                 side_effect=RuntimeError("not init"),
             )
         )
@@ -155,7 +154,9 @@ def _readyz_harness(
     try:
         yield
     finally:
-        for p in patches:
+        # LIFO 顺序 stop：嵌套 patch 必须按相反顺序还原，否则后启动的
+        # patch 会把"原值"恢复成前一个 patch 替换后的 mock。
+        for p in reversed(patches):
             try:
                 p.stop()
             except RuntimeError:
