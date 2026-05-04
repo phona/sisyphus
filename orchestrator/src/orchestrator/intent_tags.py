@@ -105,3 +105,21 @@ def filter_propagatable_intent_tags(tags: Iterable[object] | None) -> list[str]:
         seen.add(s)
         out.append(s)
     return out
+
+
+# ─── pr: tag parsing（used by intent entry-point actions, closes #400）────────
+
+_PR_TAG_RE = re.compile(
+    r"^pr:([A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*)#(\d+)$"
+)
+
+
+def extract_pr_tag(tags: Iterable[object] | None) -> tuple[str, int] | None:
+    """Parse first ``pr:owner/repo#N`` tag → ``(repo_slug, pr_number)`` or None."""
+    for t in (tags or []):
+        if not isinstance(t, str):
+            continue
+        m = _PR_TAG_RE.match(t.strip())
+        if m:
+            return m.group(1), int(m.group(2))
+    return None

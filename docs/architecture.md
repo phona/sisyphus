@@ -205,6 +205,10 @@ happy path（含 INTAKING）十一段，入口可选 `intent:intake`（推荐）
 **入口选择**：
 - `intent:intake` → INTAKING（不熟悉的仓先澄清，brainstorm 和实现物理隔离）
 - `intent:analyze` → ANALYZING（跳过 intake，直接进 analyze，适合 trivial REQ）
+- `intent:test` + `pr:owner/repo#N` → STAGING_TEST_RUNNING（**closes #400**：跳前 4 段，直接测局部链路）
+- `intent:pr_ci` + `pr:owner/repo#N` → PR_CI_RUNNING（跳前 5 段，直接观测 PR CI 结果）
+- `intent:accept` + `pr:owner/repo#N` → ACCEPT_RUNNING（跳前 6 段，直接跑 acceptance test）
+- `intent:archive` → DONE（直达 DONE，归档副作用后台跑）
 
 ```mermaid
 flowchart TD

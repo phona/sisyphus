@@ -39,6 +39,7 @@ from ..cross_repo_env import (
     PreResolveError,
     TopologyError,
 )
+from ..intent_tags import extract_pr_tag
 from ..prompts import render
 from ..state import Event
 from ..store import db, req_state, stage_runs
@@ -703,6 +704,15 @@ async def create_accept(*, body, req_id, tags, ctx):
         pool = db.get_pool()
         await req_state.update_context(pool, req_id, {"accept_skipped": True})
         return rv
+
+    # intent:accept entry-point（closes #400）: validate pr: tag
+    if "intent:accept" in (tags or []):
+        if extract_pr_tag(tags) is None:
+            log.error("create_accept.intent_accept.missing_pr_tag", req_id=req_id)
+            return {
+                "emit": Event.ACCEPT_ENV_UP_FAIL.value,
+                "reason": "intent:accept requires a pr:owner/repo#N tag to specify the PR",
+            }
 
     source_issue_id = body.issueId
     namespace = f"accept-{req_id.lower()}"

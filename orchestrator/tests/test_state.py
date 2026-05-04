@@ -13,6 +13,11 @@ EXPECTED = [
     (ReqState.INTAKING,             Event.INTAKE_PASS,         ReqState.ANALYZING,           "start_analyze_with_finalized_intent"),
     (ReqState.INTAKING,             Event.INTAKE_FAIL,         ReqState.ESCALATED,           "escalate"),
     (ReqState.INIT,                 Event.INTENT_ANALYZE,      ReqState.ANALYZING,           "start_analyze"),
+    # 直入 stage entry-points（closes #400）
+    (ReqState.INIT,                 Event.INTENT_TEST,         ReqState.STAGING_TEST_RUNNING, "create_staging_test"),
+    (ReqState.INIT,                 Event.INTENT_PR_CI,        ReqState.PR_CI_RUNNING,        "create_pr_ci_watch"),
+    (ReqState.INIT,                 Event.INTENT_ACCEPT,       ReqState.ACCEPT_RUNNING,       "create_accept"),
+    (ReqState.INIT,                 Event.INTENT_ARCHIVE,      ReqState.DONE,                 None),
     # 内部 emit verify.escalate 路径（clone_involved_repos 失败等）
     (ReqState.ANALYZING,            Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),
     (ReqState.INTAKING,             Event.VERIFY_ESCALATE,     ReqState.ESCALATED,           "escalate"),

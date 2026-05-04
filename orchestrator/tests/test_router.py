@@ -23,6 +23,17 @@ CASES: list[tuple[str, list[str], Event | None]] = [
     ("issue.updated",     ["intent:analyze"],                                Event.INTENT_ANALYZE),
     # intent 已被 analyze 接管 → 不再发
     ("issue.updated",     ["intent:analyze", "analyze", "REQ-1"],            None),
+    # 直入 stage entry-points（closes #400）
+    ("issue.updated",     ["intent:test"],                                   Event.INTENT_TEST),
+    # intent:test 已被 staging-test 接管 → 不再发
+    ("issue.updated",     ["intent:test", "staging-test", "REQ-1"],          None),
+    ("issue.updated",     ["intent:pr_ci"],                                  Event.INTENT_PR_CI),
+    # intent:pr_ci 已被 pr-ci 接管 → 不再发
+    ("issue.updated",     ["intent:pr_ci", "pr-ci", "REQ-1"],                None),
+    ("issue.updated",     ["intent:accept"],                                 Event.INTENT_ACCEPT),
+    # intent:accept 已被 accept 接管 → 不再发
+    ("issue.updated",     ["intent:accept", "accept", "REQ-1"],              None),
+    ("issue.updated",     ["intent:archive"],                                Event.INTENT_ARCHIVE),
     # M12：resume:analyze 路径已删（砍 M6 admission），不再映射任何 event
     ("issue.updated",     ["resume:analyze", "analyze", "REQ-1"],            None),
     # 普通 issue.updated 一律忽略（避免自指）

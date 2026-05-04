@@ -248,6 +248,15 @@ def derive_event(event_type: str, tags: Iterable[str]) -> Event | None:
             return Event.INTENT_INTAKE
         if "intent:analyze" in tagset and "analyze" not in tagset:
             return Event.INTENT_ANALYZE
+        # ─── 直入 stage entry-points（closes #400）────────────────────────
+        if "intent:test" in tagset and "staging-test" not in tagset:
+            return Event.INTENT_TEST
+        if "intent:pr_ci" in tagset and "pr-ci" not in tagset:
+            return Event.INTENT_PR_CI
+        if "intent:accept" in tagset and "accept" not in tagset:
+            return Event.INTENT_ACCEPT
+        if "intent:archive" in tagset:
+            return Event.INTENT_ARCHIVE
         # ─── race fallback ────────────────────────────────────────────────
         # BKD 实证：agent 有时在 session.completed 之后才 PATCH result tag，
         # 那次 session.completed 的 tags 不含 result:* → router 漏 fire 主链事件。

@@ -29,6 +29,7 @@ from ..bkd import BKDClient
 from ..checkers import pr_ci_watch as checker
 from ..checkers.pr_ci_watch import _get_pr_info
 from ..config import settings
+from ..intent_tags import extract_pr_tag
 from ..prompts import render
 from ..state import Event
 from ..store import artifact_checks, db, dispatch_slugs, req_state
@@ -45,6 +46,22 @@ _REMOTE_RE = re.compile(r"github\.com[:/]([^/]+/[^/.]+?)(?:\.git)?$")
 async def create_pr_ci_watch(*, body, req_id, tags, ctx):
     if rv := skip_if_enabled("pr-ci", Event.PR_CI_PASS, req_id=req_id):
         return rv
+
+    # intent:pr_ci entry-point（closes #400）: validate pr: tag + inject ctx
+    if "intent:pr_ci" in (tags or []):
+        pr_info = extract_pr_tag(tags)
+        if pr_info is None:
+            log.error("create_pr_ci_watch.intent_pr_ci.missing_pr_tag", req_id=req_id)
+            return {
+                "emit": Event.PR_CI_TIMEOUT.value,
+                "reason": "intent:pr_ci requires a pr:owner/repo#N tag to specify the PR",
+                "exit_code": -1,
+            }
+        repo, _pr_number = pr_info
+        # Inject repo into ctx so _run_checker can discover it without workspace
+        pool = db.get_pool()
+        await req_state.update_context(pool, req_id, {"involved_repos": [repo]})
+        ctx = {**(ctx or {}), "involved_repos": [repo]}
 
     # REQ-pr-issue-traceability-1777218612: capture per-repo PR html_url to
     # ctx.pr_urls before either dispatch path runs, so downstream gh_incident
