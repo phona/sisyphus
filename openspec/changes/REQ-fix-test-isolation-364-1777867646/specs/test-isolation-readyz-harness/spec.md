@@ -2,7 +2,7 @@
 
 ## ADDED Requirements
 
-### Requirement: _readyz_harness SHALL restore get_controller cleanly
+### Requirement: readyz harness SHALL restore get_controller cleanly
 
 The `_readyz_harness` contextmanager in
 `tests/test_contract_readyz_namespaced_challenger.py` SHALL apply at most one
