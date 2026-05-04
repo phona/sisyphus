@@ -301,3 +301,105 @@ kubectl patch <kind> <name> -n sisyphus \
 - **禁止** 用 `kubectl patch` / `kubectl edit` 修改 chart 管的资源字段。
 - 要改配置 → 改 `values/` 下的 yaml + `helm upgrade --reuse-values -f new-values.yaml`。
 - 紧急临时改用 `helm upgrade --set key=value` 而非直接 kubectl 写字段。
+
+## 14. Issue triage discipline（2026-05-04 dogfood 加固）
+
+**触发场景**：跑真链路 dogfood 时，每条 REQ 串过 7 个 surface（业务仓 / runner / orch / BKD / lab / accept-env / GH CI），第一次跑必撞洞。本能反应是"撞一条立 issue 立 PR 修"——这是 §11 死亡螺旋。
+
+### 14.1 撞墙优先进 BACKLOG.md，不立 issue
+
+- 1-2 次 hit → [BACKLOG.md](../BACKLOG.md) 一行 log（"# REQ-x 撞墙记录"区）
+- ≥3 次同类 hit → 才立 issue（playbook §8 hard cap）
+- 立 issue = 隐性承诺修；BACKLOG.md = 只观察
+
+跑完一批（5 条 REQ）回头看 BACKLOG.md，找 ≥3 次同类的 pattern 才动手改 sisyphus。
+
+### 14.2 优先级 label 体系
+
+| label | 含义 | 0.x 处理 |
+|---|---|---|
+| **P0** | 阻塞 80% ttpos 命中率 / Phase A prerequisite | 立刻做 |
+| **P1** | 服务 sisyphus 改进，间接提升命中率（接入面真痛点） | 跟 P0 串行做 |
+| **P3** | meta / self-monitoring | 1.x 之后 |
+| **defer-1.x** | sisyphus 自身 polish / 1-shot fix / devx 加速 / 工程美化 | 0.x 不开 issue 详情，1.x 阶段重审 |
+
+### 14.3 defer-1.x 触发条件（立 issue 时强制自查）
+
+任一即应打 `defer-1.x`：
+
+1. 是 sisyphus 自身 fix/refactor，不是接入面（业务仓 / lab / runner Pod / GH CI）问题
+2. <3 次同类 hit 证据（看 BACKLOG.md，找不到 3 条就 defer）
+3. 是工程美化（重命名、entrypoint 扩展、devx 加速、observability 加深）
+4. 是 1.x 阶段架构重构（preset 化、契约 v2、跨仓抽象）
+
+### 14.4 defer-1.x 解封条件
+
+跑完一个 batch（5 条 REQ）后 review 一次：
+
+- 期间在 BACKLOG.md 撞 ≥3 次同类 → 移除 `defer-1.x`，标 P1
+- 没撞过 → 保持 defer
+- 撞了 1-2 次 → 留 defer，BACKLOG.md log 继续累积
+
+### 14.5 例外
+
+下列即使是 sisyphus 自身 fix 也不 defer：
+
+- 真生产事故（pod 起不来 / runner 全死 / orch crash loop）
+- 影响多 user 的 root cause issue（如 #333 三方契约）
+- P0 / P1 接入面已识别痛点
+
+## 15. Dogfood 全链路推进操作手册（强推模式）
+
+> 0.x 阶段唯一允许的工作模式：**强推 ttpos REQ，撞洞挂 issue，不修 bug 先**。
+> 跟 §14 互补：§14 管"立不立 issue"，§15 管"立完之后做不做"。
+
+### 15.1 操作循环（贴墙上）
+
+```
+1. 派 3-5 条 ttpos REQ（≥200 字 description 各）
+2. 跑全链路
+3. 撞洞 → 挂 issue（或 BACKLOG.md log）→ 跳过这条 REQ → 派下一条
+4. 不开 PR、不派 fixer、不 manual fix（除阻塞类）
+5. 周末看 issue list，≥3 次同类才下周修
+```
+
+### 15.2 撞洞判别表
+
+| 场景 | 处理 |
+|---|---|
+| 第 1 次撞某洞 | 挂 issue / BACKLOG log → 跳过这条 REQ |
+| 同一洞第 2 次（多条 REQ 撞同一洞） | **阻塞类，最 dirty 的 hack 让它过**（不修对） |
+| 多条 REQ 撞不同洞 | 一律 log + skip |
+| ≥3 次同类 hit | 周末 review 时立项修 |
+
+### 15.3 阻塞类 hack 原则
+
+- ssh / kubectl 直接干，**不入 helm chart、不入 sisyphus orch 代码**
+- 30 秒能 dirty 过去 → hack；30 秒不行 → log + skip 这一关
+- hack 不是 fix，1 周后跟 issue 一起 review
+
+### 15.4 死规矩 4 条（dogfood 期间不能违反）
+
+1. **不开 PR review**——本地改本地推 main，没有 review 环节（这周特批，1.x 之后恢复）
+2. **不派 sub-issue / fixer agent**——sisyphus 自己想干啥都按住
+3. **不改 sisyphus prompt / state machine / verifier**——只允许改 raw bug（"clone 路径错了"这种）
+4. **不写新文档**（playbook / 契约 / retrospective 全停手）——全部留到 5 条 REQ 跑过之后
+
+### 15.5 AI 协作红线
+
+详见 [CLAUDE.md "Dogfood 期间 AI 协作红线"](../CLAUDE.md)。AI 老把 user 拐去修 bug——session 开始 3 句话内 user 自己念一遍 §15.1 + §15.4，告诉 AI 哪条违反了立刻打断。
+
+### 15.6 退出条件
+
+- 5 条 REQ 跑过（含 hack）→ 进入 review week，整理 issue pattern → 系统化修
+- 1 周内 0 条 REQ 通过 → 触发 §11 死亡螺旋自检（停 1 天写 retrospective）
+
+### 15.7 真稳定的判据
+
+| 级别 | 标准 |
+|---|---|
+| v0.x stable | 5 条 ttpos REQ 端到端跑过，期间 sisyphus 主链 0 改动 |
+| v1.x stable | 50 条 REQ 跨仓跨场景跑过，期间 sisyphus 月均 1 改动 |
+| v2.x stable | 500 条 REQ 多 user 多场景，sisyphus 季均 1 改动 |
+
+**稳定不是改出来的，是不改改出来的。**

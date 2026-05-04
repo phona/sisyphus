@@ -29,6 +29,7 @@ import time
 import structlog
 
 from .. import k8s_runner
+from ..actions._runner import ensure_runner_alive
 from ..config import settings
 from ._flake import run_with_flake_retry
 from ._types import CheckResult
@@ -124,6 +125,7 @@ async def run_analyze_artifact_check(
     自动重跑（与 spec_lint 同 flake retry 配置）。
     """
     rc = k8s_runner.get_controller()
+    await ensure_runner_alive(req_id)
     cmd = _build_cmd(req_id)
     log.info(
         "checker.analyze_artifact_check.start",
