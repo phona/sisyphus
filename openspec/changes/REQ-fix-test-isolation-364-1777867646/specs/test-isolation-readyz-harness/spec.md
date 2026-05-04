@@ -2,7 +2,7 @@
 
 ## ADDED Requirements
 
-### Requirement: _readyz_harness MUST NOT leak patched get_controller mock to subsequent tests
+### Requirement: _readyz_harness SHALL restore get_controller cleanly so it does not leak a mock to subsequent tests
 
 `tests/test_contract_readyz_namespaced_challenger.py` 里的 `_readyz_harness`
 contextmanager 在 `raise_runtime_on_get_controller=True` 路径下 SHALL 只对
