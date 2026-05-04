@@ -41,6 +41,13 @@ jobs:
       - name: ruff
         run: uv run ruff check src/ tests/
 
+      - name: state-machine transition lint (REQ #376)
+        # Detects silently-dropped (state, event) → no-progress transitions
+        # by requiring explicit progress="no" or "explicit-noop" annotation
+        # on every self-loop in TRANSITIONS. See scripts/lint-state-transitions.py.
+        working-directory: ${{ github.workspace }}
+        run: python3 scripts/lint-state-transitions.py
+
       - name: pytest
         run: uv run pytest -v --tb=short -m "not integration"
 
