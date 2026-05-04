@@ -226,11 +226,75 @@ async def webhook(request: Request) -> JSONResponse:
         eid = "|".join(eid_parts)
     _dedup_status = await dedup.check_and_record(pool, eid)
     if _dedup_status == "skip":
-        log.debug("webhook.dedup.skip", event_id=eid, processed=True)
-        await obs.record_event("dedup.hit", issue_id=body.issueId, extras={"event_id": eid})
-        return {"action": "skip", "reason": "duplicate event already processed", "event_id": eid}
+        # ─── 验证 verifier resume bypass 条件 ───
+        # 仅当 4 项同时成立才 bypass（缺一不可）：
+        #   1) session.completed
+        #   2) 携 executionId（有 dedup 才有意义）
+        #   3) issue 含 "verifier" tag
+        #   4) 当前 REQ state == REVIEW_RUNNING（没消费过决策）
+        # state guard 是关键：VERIFY_PASS / FIX_NEEDED / ESCALATE 三 transition
+        # 都跳出 REVIEW_RUNNING，stale BKD redelivery 到达时 state 已转走，bypass
+        # 不触发——避开候选 C（timestamp 入 dedup key）的 redelivery 反向 escalate
+        # hazard（webhook.py 上方注释提到 REQ-final7 实测）。
+        bypass_resume = False
+        if (
+            body.event == "session.completed"
+            and body.executionId
+            and (body.tags is None or "verifier" in set(body.tags))
+        ):
+            bypass_tags = body.tags or []
+            if not bypass_tags:
+                try:
+                    async with BKDClient(
+                        settings.bkd_base_url, settings.bkd_token,
+                    ) as bkd:
+                        bypass_issue = await bkd.get_issue(
+                            body.projectId, body.issueId,
+                        )
+                        bypass_tags = bypass_issue.tags
+                except Exception as e:
+                    log.warning(
+                        "webhook.dedup.bypass_check_fetch_failed",
+                        event_id=eid, error=str(e),
+                    )
+                    bypass_tags = []
+            if "verifier" in set(bypass_tags):
+                bypass_req_id = router_lib.extract_req_id(
+                    bypass_tags, body.issueNumber,
+                )
+                if bypass_req_id:
+                    bypass_row = await req_state.get(pool, bypass_req_id)
+                    if bypass_row and bypass_row.state == ReqState.REVIEW_RUNNING:
+                        bypass_resume = True
+                        log.warning(
+                            "webhook.dedup.verifier_resume_bypass",
+                            event_id=eid,
+                            executionId=body.executionId,
+                            req_id=bypass_req_id,
+                            issue_id=body.issueId,
+                        )
+                        await obs.record_event(
+                            "dedup.verifier_resume_bypass",
+                            req_id=bypass_req_id,
+                            issue_id=body.issueId,
+                            extras={
+                                "event_id": eid,
+                                "executionId": body.executionId,
+                            },
+                        )
+        if not bypass_resume:
+            log.debug("webhook.dedup.skip", event_id=eid, processed=True,
+                      executionId=body.executionId)
+            await obs.record_event("dedup.hit", issue_id=body.issueId,
+                                   extras={"event_id": eid})
+            return {
+                "action": "skip",
+                "reason": "duplicate event already processed",
+                "event_id": eid,
+            }
     if _dedup_status == "retry":
         log.warning("webhook.dedup.retry", event_id=eid,
+                    executionId=body.executionId,
                     reason="previous attempt crashed mid-flight")
 
     # ─── 2. Resolve tags（session events 可能没带，从 BKD 拉）──────────────
@@ -270,6 +334,18 @@ async def webhook(request: Request) -> JSONResponse:
         "webhook.received",
         issue_id=body.issueId, tags=tags,
         extras={"event_type": body.event, "issue_number": body.issueNumber},
+    )
+    # 事故复盘锚点：noise filter 已过、dedup 状态 + executionId 一并落 obs，
+    # Metabase 能直接翻"verifier session.completed 是哪条 path 被吞 / 放行"。
+    # noise 事件不在此 emit（noise filter 已早 return），跟 RNF-S1 契约一致。
+    await obs.record_event(
+        "webhook.dedup.observed",
+        issue_id=body.issueId,
+        extras={
+            "event_id": eid,
+            "executionId": body.executionId,
+            "status": _dedup_status,
+        },
     )
 
     # ─── 3. derive event ────────────────────────────────────────────────────
@@ -339,7 +415,8 @@ async def webhook(request: Request) -> JSONResponse:
         )
         log.info("webhook.verifier.decision",
                  issue_id=body.issueId, verifier_event=event.value,
-                 decision=decision_payload, reason=why, retry_worthy=retry_worthy)
+                 decision=decision_payload, reason=why, retry_worthy=retry_worthy,
+                 executionId=body.executionId, dedup_status=_dedup_status)
 
         # ─── 解析失败自动 retry（最多 2 次）───────────────────────────────────
         if event == Event.VERIFY_ESCALATE and retry_worthy:
