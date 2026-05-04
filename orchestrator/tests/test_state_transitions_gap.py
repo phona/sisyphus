@@ -111,8 +111,11 @@ def test_challenger_running_session_failed_self_loop():
 
 
 def test_init_illegal_events():
-    """INIT 只接受 INTENT_INTAKE 和 INTENT_ANALYZE。"""
-    legal = {Event.INTENT_INTAKE, Event.INTENT_ANALYZE}
+    """INIT 只接受 INTENT_INTAKE / INTENT_ANALYZE 及 4 个直入 stage entry-points（closes #400）。"""
+    legal = {
+        Event.INTENT_INTAKE, Event.INTENT_ANALYZE,
+        Event.INTENT_TEST, Event.INTENT_PR_CI, Event.INTENT_ACCEPT, Event.INTENT_ARCHIVE,
+    }
     for ev in Event:
         if ev in legal:
             continue
@@ -311,12 +314,13 @@ def test_all_transitions_reason_is_str_or_none():
 def test_transition_count_sanity():
     """transition 总数 sanity check：防止未来重构误删/误增。
 
-    当前总数 = 45 显式 + 12 SESSION_FAILED self-loop + 19 ESCALATED stage-resume 反激活
-    （REQ-escalated-stage-resume）+ 7 PENDING_USER_REVIEW resume（#247 Phase 1）= 83。
+    当前总数 = 49 显式 + 12 SESSION_FAILED self-loop + 19 ESCALATED stage-resume 反激活
+    （REQ-escalated-stage-resume）+ 7 PENDING_USER_REVIEW resume（#247 Phase 1）= 87。
+    +4 vs 83: closes #400 新增 4 个直入 stage entry-point INIT transition。
     如果数字变了，说明有人增删 transition，本测试会 fail 提醒同步测试。
     """
-    assert len(TRANSITIONS) == 83, (
-        f"Expected 83 transitions, got {len(TRANSITIONS)}. "
+    assert len(TRANSITIONS) == 87, (
+        f"Expected 87 transitions, got {len(TRANSITIONS)}. "
         "If this is intentional, update this assertion and add corresponding tests."
     )
 
@@ -324,12 +328,13 @@ def test_transition_count_sanity():
 def test_explicit_transition_count():
     """非 SESSION_FAILED 的显式 + 反激活 transition 数量 sanity check。
 
-    45 主链显式 + 19 ESCALATED 反激活 + 7 PENDING_USER_REVIEW 反激活（#247 Phase 1）
-    = 71 条非 SESSION_FAILED transition。复用主链 Transition 对象但 key 独立计数。
+    49 主链显式 + 19 ESCALATED 反激活 + 7 PENDING_USER_REVIEW 反激活（#247 Phase 1）
+    = 75 条非 SESSION_FAILED transition。
+    +4 vs 71: closes #400 新增 4 个直入 stage entry-point INIT transition。
     """
     explicit = [k for k in TRANSITIONS if k[1] != Event.SESSION_FAILED]
-    assert len(explicit) == 71, (
-        f"Expected 71 explicit transitions, got {len(explicit)}"
+    assert len(explicit) == 75, (
+        f"Expected 75 explicit transitions, got {len(explicit)}"
     )
 
 

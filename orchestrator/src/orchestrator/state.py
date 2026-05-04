@@ -47,6 +47,10 @@ class Event(StrEnum):
     INTAKE_PASS = "intake.pass"                     # intake-agent 完 + finalized intent JSON ok
     INTAKE_FAIL = "intake.fail"                     # intake-agent 异常 / 用户放弃
     INTENT_ANALYZE = "intent.analyze"               # 人在 BKD 打 intent:analyze tag（旧入口，现支持 init:STATE）
+    INTENT_TEST    = "intent.test"                  # intent:test tag → 跳前 4 段直入 STAGING_TEST_RUNNING
+    INTENT_PR_CI   = "intent.pr_ci"                 # intent:pr_ci tag → 跳前 5 段直入 PR_CI_RUNNING
+    INTENT_ACCEPT  = "intent.accept"                # intent:accept tag → 跳前 6 段直入 ACCEPT_RUNNING
+    INTENT_ARCHIVE = "intent.archive"               # intent:archive tag → 直达 DONE
     ANALYZE_DONE = "analyze.done"                   # analyze-agent 完成
     ANALYZE_ARTIFACT_CHECK_PASS = "analyze-artifact-check.pass"   # 机械校 analyze 产物（proposal/tasks/spec.md）通过
     ANALYZE_ARTIFACT_CHECK_FAIL = "analyze-artifact-check.fail"   # 机械校 analyze 产物失败 → verifier
@@ -118,6 +122,25 @@ TRANSITIONS: dict[tuple[ReqState, Event], Transition] = {
 
     (ReqState.INIT, Event.INTENT_ANALYZE):
         Transition(ReqState.ANALYZING, "start_analyze", "kick off"),
+
+    # ─── 直入 stage entry-points（closes #400）────────────────────────────
+    # 用于跳过前置 stage 直接测局部链路。必须带 pr:owner/repo#N tag；
+    # 各 action 内部自行验证并在缺 tag 时 escalate。
+    (ReqState.INIT, Event.INTENT_TEST):
+        Transition(ReqState.STAGING_TEST_RUNNING, "create_staging_test",
+                   "intent:test → 跳前 4 段直入 staging test"),
+
+    (ReqState.INIT, Event.INTENT_PR_CI):
+        Transition(ReqState.PR_CI_RUNNING, "create_pr_ci_watch",
+                   "intent:pr_ci → 跳前 5 段直入 PR CI watch"),
+
+    (ReqState.INIT, Event.INTENT_ACCEPT):
+        Transition(ReqState.ACCEPT_RUNNING, "create_accept",
+                   "intent:accept → 跳前 6 段直入 acceptance test"),
+
+    (ReqState.INIT, Event.INTENT_ARCHIVE):
+        Transition(ReqState.DONE, None,
+                   "intent:archive → 直达 DONE（归档副作用后台跑）"),
 
     # start_analyze 内部判 escalate（如 clone_involved_repos 失败 → emit VERIFY_ESCALATE）
     # 没这条 transition 会被 engine.illegal_transition 吞掉，REQ 卡 ANALYZING 60min

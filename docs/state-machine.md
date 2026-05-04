@@ -42,7 +42,7 @@
 | **`done`** | REQ 完成 | **terminal** |
 | **`escalated`** | 熔断 / session-failed / 人工止损 | **terminal** |
 
-## 3. Event 枚举（32 个）
+## 3. Event 枚举（36 个）
 
 | event | 来源 | 触发什么 |
 |---|---|---|
@@ -50,6 +50,10 @@
 | **`intake.pass`** | intake-agent PATCH `result:pass` + finalized intent JSON 解析成功 | start_analyze_with_finalized_intent |
 | **`intake.fail`** | intake-agent PATCH `result:fail` / 或 finalized intent JSON 解析失败 | escalate |
 | `intent.analyze` | 人在 BKD 打 `intent:analyze` tag（跳过 intake 直接进 analyze） | start_analyze |
+| `intent.test` | **closes #400** 人在 BKD 打 `intent:test` tag（需 `pr:owner/repo#N` tag；跳前 4 段直入 staging test） | create_staging_test |
+| `intent.pr_ci` | **closes #400** 人在 BKD 打 `intent:pr_ci` tag（需 `pr:owner/repo#N` tag；跳前 5 段直入 PR CI watch） | create_pr_ci_watch |
+| `intent.accept` | **closes #400** 人在 BKD 打 `intent:accept` tag（需 `pr:owner/repo#N` tag；跳前 6 段直入 acceptance test） | create_accept |
+| `intent.archive` | **closes #400** 人在 BKD 打 `intent:archive` tag（直达 DONE，归档副作用后台跑） | — |
 | `analyze.done` | analyze-agent session.completed | create_analyze_artifact_check |
 | **`analyze-artifact-check.pass`** | **REQ-analyze-artifact-check-1777254586** 产物校验退码 0 | create_spec_lint |
 | **`analyze-artifact-check.fail`** | **REQ-analyze-artifact-check-1777254586** 产物校验退码非 0 / timeout | invoke_verifier_for_analyze_artifact_check_fail |
@@ -86,6 +90,10 @@ stateDiagram-v2
 
     init --> intaking: intent.intake（物理隔离 brainstorm）
     init --> analyzing: intent.analyze（跳过 intake）
+    init --> staging_test_running: intent.test（跳前 4 段，closes #400）
+    init --> pr_ci_running: intent.pr_ci（跳前 5 段，closes #400）
+    init --> accept_running: intent.accept（跳前 6 段，closes #400）
+    init --> done: intent.archive（直达 DONE，closes #400）
     intaking --> analyzing: intake.pass（新建 analyze issue）
     intaking --> escalated: intake.fail
     intaking --> escalated: verify.escalate\n(start_analyze_with_finalized_intent 内部判 escalate)

@@ -11,27 +11,95 @@ M15：不再读 manifest；checker 硬编码 ttpos-ci 标准 target。
 """
 from __future__ import annotations
 
+import httpx
 import structlog
 
 from .. import pr_links
 from ..bkd import BKDClient
 from ..checkers import staging_test as checker
 from ..config import settings
+from ..intent_tags import extract_pr_tag
 from ..prompts import render
 from ..state import Event
 from ..store import artifact_checks, db, dispatch_slugs, req_state
 from . import register, short_title
+from ._clone import ensure_runner_with_clone
 from ._skip import skip_if_enabled
 
 log = structlog.get_logger(__name__)
 
 _STAGE = "staging-test"
+_GH_API = "https://api.github.com"
+
+
+async def _setup_workspace_for_intent_test(
+    *, req_id: str, ctx: dict, repo: str, pr_number: int,
+) -> dict | None:
+    """Clone repo + checkout PR head branch for intent:test entry-point.
+
+    Returns error-response dict on failure, None on success.
+    """
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if settings.github_token:
+        headers["Authorization"] = f"Bearer {settings.github_token}"
+
+    try:
+        async with httpx.AsyncClient(
+            base_url=_GH_API, headers=headers, timeout=15.0,
+        ) as client:
+            r = await client.get(f"/repos/{repo}/pulls/{pr_number}")
+            r.raise_for_status()
+            branch = r.json()["head"]["ref"]
+    except Exception as e:
+        log.error("create_staging_test.intent_test.get_pr_failed",
+                  req_id=req_id, repo=repo, pr_number=pr_number, error=str(e))
+        return {
+            "emit": Event.STAGING_TEST_FAIL.value,
+            "passed": False,
+            "exit_code": -1,
+            "reason": f"intent:test: failed to get PR #{pr_number} branch: {e}"[:200],
+        }
+
+    _cloned, clone_exit = await ensure_runner_with_clone(
+        req_id, ctx,
+        tags=None,
+        default_repos=[repo],
+        branch=branch,
+    )
+    if clone_exit is not None:
+        log.error("create_staging_test.intent_test.clone_failed",
+                  req_id=req_id, repo=repo, branch=branch, exit_code=clone_exit)
+        return {
+            "emit": Event.STAGING_TEST_FAIL.value,
+            "passed": False,
+            "exit_code": clone_exit,
+            "reason": f"intent:test: clone {repo}@{branch} failed: exit_code={clone_exit}",
+        }
+    return None
 
 
 @register("create_staging_test", idempotent=False)  # 老路创 BKD issue；checker 模式安全但保守 False
 async def create_staging_test(*, body, req_id, tags, ctx):
     if rv := skip_if_enabled("staging-test", Event.STAGING_TEST_PASS, req_id=req_id):
         return rv
+
+    # intent:test entry-point（closes #400）: validate pr: tag + setup workspace
+    if "intent:test" in (tags or []):
+        pr_info = extract_pr_tag(tags)
+        if pr_info is None:
+            log.error("create_staging_test.intent_test.missing_pr_tag", req_id=req_id)
+            return {
+                "emit": Event.VERIFY_ESCALATE.value,
+                "reason": "intent:test requires a pr:owner/repo#N tag to specify the PR",
+            }
+        repo, pr_number = pr_info
+        if err := await _setup_workspace_for_intent_test(
+            req_id=req_id, ctx=ctx or {}, repo=repo, pr_number=pr_number,
+        ):
+            return err
 
     if settings.checker_staging_test_enabled:
         return await _run_checker(req_id=req_id, ctx=ctx or {})
