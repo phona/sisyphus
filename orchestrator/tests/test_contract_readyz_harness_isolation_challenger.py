@@ -26,9 +26,9 @@ from __future__ import annotations
 from unittest.mock import Mock
 
 import pytest
+from test_contract_readyz_namespaced_challenger import _client, _readyz_harness
 
 from orchestrator import k8s_runner
-from test_contract_readyz_namespaced_challenger import _client, _readyz_harness
 
 
 # Snapshot the source's real get_controller at module import time, BEFORE any
