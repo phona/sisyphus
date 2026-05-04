@@ -135,16 +135,17 @@ async def test_rdft_s1_stage_runs_row_inserted_on_decode_fail(monkeypatch):
     sql, args = insert
     flat = list(args)
 
-    # serialize once for cheap substring checks
-    blob = " ".join(repr(a) for a in flat)
+    # serialize once for cheap substring checks. Some columns (stage/outcome) may be
+    # baked as SQL literals rather than bound params, so include the SQL in the blob.
+    blob = sql + " " + " ".join(repr(a) for a in flat)
     assert "router_decode_fail" in blob, (
-        f"RDFT-S1: stage column must be 'router_decode_fail'; args={flat!r}"
+        f"RDFT-S1: stage column must be 'router_decode_fail'; sql={sql!r} args={flat!r}"
     )
     assert "silent_drop" in blob, (
-        f"RDFT-S1: outcome column must be 'silent_drop'; args={flat!r}"
+        f"RDFT-S1: outcome column must be 'silent_drop'; sql={sql!r} args={flat!r}"
     )
     assert reason in blob, (
-        f"RDFT-S1: fail_reason must match router reason {reason!r}; args={flat!r}"
+        f"RDFT-S1: fail_reason must match router reason {reason!r}; sql={sql!r} args={flat!r}"
     )
 
     # Find the context dict (asyncpg may pass dict or JSON-encoded string)
@@ -250,13 +251,32 @@ async def test_rdft_s2a_bkd_update_issue_with_tag_and_warning(monkeypatch):
 # ─── RDFT-S2b: BKD failure is isolated, WARNING surfaced ─────────────────────
 
 
-async def test_rdft_s2b_bkd_failure_isolated(monkeypatch, caplog):
+async def test_rdft_s2b_bkd_failure_isolated(monkeypatch):
     """RDFT-S2 (failure-isolation half): when BKDClient.update_issue raises,
-    _emit_decode_fail_telemetry MUST still return normally and the in-memory
-    log MUST capture a WARNING with key 'router.decode_fail.bkd_patch_failed'.
+    _emit_decode_fail_telemetry MUST still return normally and emit a structlog
+    WARNING with key 'router.decode_fail.bkd_patch_failed'.
     """
     from orchestrator import webhook
 
+    captured: list[dict[str, Any]] = []
+
+    class _StubLogger:
+        def warning(self, event, **kw):
+            captured.append({"level": "warning", "event": event, **kw})
+
+        def info(self, *a, **kw):
+            pass
+
+        def error(self, *a, **kw):
+            pass
+
+        def debug(self, *a, **kw):
+            pass
+
+        def bind(self, **kw):
+            return self
+
+    monkeypatch.setattr(webhook, "log", _StubLogger())
     monkeypatch.setattr(
         webhook,
         "BKDClient",
@@ -265,8 +285,6 @@ async def test_rdft_s2b_bkd_failure_isolated(monkeypatch, caplog):
             update_raises=RuntimeError("bkd-down"),
         ),
     )
-
-    caplog.set_level(logging.WARNING)
 
     # MUST NOT raise — the surrounding webhook flow must keep going.
     await webhook._emit_decode_fail_telemetry(
@@ -279,22 +297,11 @@ async def test_rdft_s2b_bkd_failure_isolated(monkeypatch, caplog):
         raw_tags=["verifier"],
     )
 
-    def _record_blob(rec: logging.LogRecord) -> str:
-        bits = [rec.getMessage()]
-        for k in ("event", "msg"):
-            v = getattr(rec, k, None)
-            if v is not None:
-                bits.append(str(v))
-        return " ".join(bits)
-
-    found = any(
-        "router.decode_fail.bkd_patch_failed" in _record_blob(rec)
-        for rec in caplog.records
-    )
-    assert found, (
+    found = [c for c in captured if c.get("event") == "router.decode_fail.bkd_patch_failed"]
+    assert len(found) >= 1, (
         "RDFT-S2: BKD update_issue raise must NOT propagate; function must log a "
-        "WARNING with key 'router.decode_fail.bkd_patch_failed'. "
-        f"Captured records: {[r.getMessage() for r in caplog.records]!r}"
+        "WARNING with event='router.decode_fail.bkd_patch_failed'. "
+        f"Captured warnings: {captured!r}"
     )
 
 
