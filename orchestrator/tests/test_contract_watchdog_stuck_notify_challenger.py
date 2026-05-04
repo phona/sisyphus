@@ -173,10 +173,15 @@ def _stringify(value) -> str:
 
 
 def _any_arg_contains(calls, needle: str) -> bool:
+    """Search for `needle` in any captured call.
+
+    Works for both obs.record_event-style calls (`(args, kwargs)` tuples)
+    and pool.execute-style calls (`(sql, args)` tuples) by stringifying
+    every nested element.
+    """
     for call in calls:
-        for v in _flatten_call_args(call):
-            if needle in _stringify(v):
-                return True
+        if needle in _stringify(call):
+            return True
     return False
 
 
