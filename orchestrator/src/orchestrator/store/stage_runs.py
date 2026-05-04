@@ -183,6 +183,44 @@ async def stamp_bkd_issue_id(
     return int(row["id"]) if row else None
 
 
+async def insert_decode_fail(
+    pool: asyncpg.Pool,
+    *,
+    req_id: str,
+    issue_id: str,
+    verifier_stage: str,
+    reason: str,
+    raw_tags: list[str],
+) -> int:
+    """Record a terminal verifier decode-fail event as a closed stage_runs row.
+
+    Used by webhook when `derive_verifier_event` returns VERIFY_ESCALATE
+    on a path that will not be auto-retried (either retry_worthy=False or
+    retry budget exhausted). The row is self-closing — started_at == ended_at
+    — because this is a discrete failure event, not an in-flight stage. It
+    surfaces in observability (Q15-style queries) so operators can spot the
+    silent-drop class of failures without grepping orch logs.
+    """
+    now = datetime.now(UTC)
+    context = {
+        "issue_id": issue_id,
+        "raw_tags": list(raw_tags or []),
+        "verifier_stage": verifier_stage,
+    }
+    row = await pool.fetchrow(
+        """
+        INSERT INTO stage_runs
+            (req_id, stage, agent_type, started_at, ended_at,
+             outcome, fail_reason, duration_sec, context)
+        VALUES ($1, 'router_decode_fail', 'router', $2, $2,
+                'silent_drop', $3, 0.0, $4::jsonb)
+        RETURNING id
+        """,
+        req_id, now, reason, json.dumps(context),
+    )
+    return int(row["id"])
+
+
 async def stamp_bkd_session_id(
     pool: asyncpg.Pool,
     req_id: str,

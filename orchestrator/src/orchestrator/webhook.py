@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -145,6 +146,96 @@ async def _maybe_derive_user_review_event(
         status_id=new_status, derived_event=new_event.value,
     )
     return new_event
+
+
+_DECODE_FAIL_TAG = "router-decode-fail"
+
+_DECODE_FAIL_NOTE_TEMPLATE = (
+    "---\n"
+    "⚠️ sisyphus router decode 失败 ({timestamp}):\n"
+    "  reason: {reason}\n"
+    "  期望格式: tag `decision:<urlsafe-base64-json>` / `decision:<action>[-<fixer>]` "
+    "或 logs 含 ```json {{...}} ``` 块\n"
+    "  实际 tags: {raw_tags}\n"
+    "  操作建议: PATCH 加合规 decision tag，或 follow-up agent 重输出标准 JSON 块\n"
+)
+
+
+async def _emit_decode_fail_telemetry(
+    *,
+    pool: Any,
+    project_id: str,
+    issue_id: str,
+    req_id: str | None,
+    verifier_stage: str,
+    reason: str,
+    raw_tags: list[str],
+) -> None:
+    """3 emit signals for a terminal verifier decode-fail (closes #372).
+
+    Order matters: log.warning fires first, *before* any network / DB call,
+    so a hard exception below still leaves a loki-visible breadcrumb. Each
+    downstream emit is wrapped in its own try/except so a single failing
+    sink does not silence the others.
+    """
+    log.warning(
+        "router.decode_fail",
+        issue_id=issue_id, req_id=req_id, stage=verifier_stage,
+        reason=reason, raw_tags=list(raw_tags or []),
+    )
+
+    if req_id:
+        try:
+            await stage_runs.insert_decode_fail(
+                pool,
+                req_id=req_id, issue_id=issue_id,
+                verifier_stage=verifier_stage, reason=reason,
+                raw_tags=list(raw_tags or []),
+            )
+        except Exception as e:
+            log.warning(
+                "router.decode_fail.stage_runs_failed",
+                req_id=req_id, issue_id=issue_id, error=str(e),
+            )
+
+    note = _DECODE_FAIL_NOTE_TEMPLATE.format(
+        timestamp=datetime.now(UTC).isoformat(),
+        reason=reason,
+        raw_tags=list(raw_tags or []),
+    )
+    try:
+        async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
+            issue = await bkd.get_issue(project_id, issue_id)
+            new_tags = list(dict.fromkeys([*(issue.tags or []), _DECODE_FAIL_TAG]))
+            new_desc = (
+                (issue.description or "").rstrip() + "\n" + note
+                if issue.description
+                else note
+            )
+            await bkd.update_issue(
+                project_id=project_id, issue_id=issue_id,
+                tags=new_tags, description=new_desc,
+            )
+    except Exception as e:
+        log.warning(
+            "router.decode_fail.bkd_patch_failed",
+            issue_id=issue_id, error=str(e),
+        )
+
+    try:
+        await obs.record_event(
+            "router.decode_fail",
+            req_id=req_id, issue_id=issue_id,
+            extras={
+                "stage": verifier_stage, "reason": reason,
+                "raw_tags": list(raw_tags or []),
+            },
+        )
+    except Exception as e:
+        log.warning(
+            "router.decode_fail.obs_record_failed",
+            req_id=req_id, issue_id=issue_id, error=str(e),
+        )
 
 
 async def _push_upstream_status(project_id: str, issue_id: str, status_id: str) -> None:
@@ -405,6 +496,25 @@ async def webhook(request: Request) -> JSONResponse:
                 req_id=retry_req_id,
                 issue_id=body.issueId,
                 extras={"reason": why},
+            )
+
+        # ─── 终态 decode-fail telemetry（closes #372）──────────────────────
+        # 走到这里有两条路径：
+        #   (a) retry_worthy=False —— 首轮就找不到 decision JSON，无 retry 机会
+        #   (b) retry_worthy=True 且 retry 次数耗尽
+        # 两条都意味着 agent 不会再被自动唤醒重写 decision，REQ 即将进
+        # ESCALATED。emit 3 路信号让"静默吞掉"现象（issue #372）变成
+        # stage_runs / BKD UI / log.warning 三方都能看见的失败事件。
+        if event == Event.VERIFY_ESCALATE and why:
+            decode_req_id = router_lib.extract_req_id(tags, body.issueNumber)
+            await _emit_decode_fail_telemetry(
+                pool=pool,
+                project_id=body.projectId,
+                issue_id=body.issueId,
+                req_id=decode_req_id,
+                verifier_stage=router_lib._stage_from_tags(tags) or "unknown",
+                reason=why,
+                raw_tags=tags,
             )
 
     # INTAKE_PASS：扫所有 assistant-messages 找 finalized intent JSON
