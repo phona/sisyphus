@@ -602,3 +602,19 @@ patch 方式及验证步骤见 §1c.2。
 □ 如果业务仓用分离 CI 仓模式：BUILD_REPO_PAT（secret）和 BUILD_REPO（var）已在业务仓配好
 □ 如果依赖 integration repo（lab）：lab repo 也在 GH_TOKEN 可访问范围内
 ```
+
+#### 10.3.1 模式切换：`--no-intent` → orch-led（source-repo tag）
+
+业务仓最初常用 `--no-intent` 直 BKD 派单（agent 自己 clone，不走 orch）。**切到 orch-led（用 `--tag source-repo:OWNER/REPO`）时必须主动扩 token scope**——之前只覆盖某些仓的窄 PAT 会撞 403 (#365 实证)。
+
+切换 checklist：
+
+```
+□ 列出所有要走 orch-led 的业务仓
+□ 重新签 fine-grained PAT 覆盖这些仓 + 已有 sisyphus + integration repos
+□ patch sisyphus-runner-secrets：必须用 lowercase key `gh_token`（chart 模板读这个；大写 GH_TOKEN 是死字段，见 #366）
+□ patch 完 kubectl delete pod -n sisyphus-runners --all（否则旧 runner pod 仍用 cached env，见 #367）
+□ 用 §1c.4 dogfood REQ 验证
+```
+
+**误判信号**：clone 报 `Write access not granted` 但你只想读——见 §1c.3，往往是 read 权限缺，不是 write。
