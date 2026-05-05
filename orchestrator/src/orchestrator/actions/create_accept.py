@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import shlex
 import time
+from collections.abc import Iterable
 
 import structlog
 
@@ -44,7 +45,7 @@ from ..prompts import render
 from ..state import Event
 from ..store import db, req_state, stage_runs
 from . import register, short_title
-from ._clone import ensure_runner_with_clone
+from ._clone import _extract_source_repo_tags, ensure_runner_with_clone
 from ._integration_resolver import resolve_integration_dir
 from ._skip import skip_if_enabled
 
@@ -779,7 +780,7 @@ async def create_accept(*, body, req_id, tags, ctx):
     # REQs typically have one entry; multi-repo REQs declare the source first
     # by convention (sisyphus-clone-repos.sh order). Fall back to integration
     # resolver scan when ctx is empty.
-    source_repo, source_basename = _resolve_source_repo(ctx)
+    source_repo, source_basename = _resolve_source_repo(ctx, tags)
 
     # If we can't identify a source repo from ctx, take the legacy single-layer
     # path which uses the integration resolver to pick a directory.
@@ -846,13 +847,27 @@ async def create_accept(*, body, req_id, tags, ctx):
     )
 
 
-def _resolve_source_repo(ctx: dict | None) -> tuple[str, str | None]:
-    """Best-effort identify the source repo full name + basename from ctx.
+def _resolve_source_repo(
+    ctx: dict | None, tags: Iterable[str] | None = None,
+) -> tuple[str, str | None]:
+    """Best-effort identify the source repo full name + basename.
 
-    Returns (full_name, basename); when ctx lacks the info, returns (`unknown`,
-    None) and caller falls through to the legacy resolver.
+    Layer priority（mirror _clone.resolve_repos #362）：
+      1. tags `source-repo:<owner>/<repo>` —— per-REQ explicit override
+      2. ctx.cloned_repos[0]
+      3. ctx.intake_finalized_intent.involved_repos[0] / ctx.involved_repos[0]
+      4. settings.default_involved_repos[0]
+
+    Returns (full_name, basename); when all layers are empty, returns
+    (`unknown`, None) and caller falls through to the legacy resolver.
     """
     ctx = ctx or {}
+    # Layer 1: source-repo tag wins —— admin/resume 时 ctx 可能被清空但 tag 还在
+    src_tags = _extract_source_repo_tags(tags) if tags is not None else []
+    if src_tags:
+        first = src_tags[0]
+        if isinstance(first, str) and "/" in first:
+            return first, first.split("/", 1)[1]
     cloned = ctx.get("cloned_repos") or []
     if cloned:
         first = cloned[0]
