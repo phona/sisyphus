@@ -221,13 +221,26 @@ class AdbDriver:
         return await self._screenshot_b64()
 
     async def _screenshot_b64(self) -> str | None:
-        rc, png_bytes_b64, _stderr = await self._adb(
-            "exec-out", "screencap", "-p", timeout=15.0
-        )
-        if rc != 0:
+        # screencap -p 是 raw PNG 二进制；走 _adb 会被 utf-8 decode("replace") 损坏
+        # （非 UTF-8 字节全变 U+FFFD，几 KB PNG 缩到几十字节）。这里直 subprocess
+        # 拿 stdout bytes，再 base64。
+        if shutil.which("adb") is None:
             return None
         try:
-            return base64.b64encode(png_bytes_b64.encode("latin-1")).decode("ascii")
+            proc = await asyncio.create_subprocess_exec(
+                *self._adb_cmd("exec-out", "screencap", "-p"),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_b, _stderr_b = await asyncio.wait_for(
+                proc.communicate(), timeout=15.0
+            )
+        except (FileNotFoundError, TimeoutError):
+            return None
+        if (proc.returncode or 0) != 0 or not stdout_b:
+            return None
+        try:
+            return base64.b64encode(stdout_b).decode("ascii")
         except Exception:
             return None
 
