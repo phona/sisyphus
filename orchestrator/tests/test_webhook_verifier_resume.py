@@ -174,6 +174,9 @@ async def test_VWR_S1_verifier_resume_bypass_when_review_running(monkeypatch):
     review_row = _Row(state=ReqState.REVIEW_RUNNING, context={
         "verifier_stage": "dev_cross_check",
         "verifier_trigger": "fail",
+        # closes #457: bypass identity check requires the redelivery's issueId
+        # to match the verifier_issue_id stored when this round started.
+        "verifier_issue_id": "verifier-issue-1",
     })
     monkeypatch.setattr(rs_mod, "get", AsyncMock(return_value=review_row))
 
@@ -261,6 +264,71 @@ async def test_VWR_S2_stale_redelivery_after_state_advances_keeps_skip(monkeypat
     ]
     assert len(bypass_obs) == 0, (
         "VWR-S2: state 已转出 REVIEW_RUNNING 时不能 emit verifier_resume_bypass"
+    )
+
+
+# ── VWR-S2b: REVIEW_RUNNING 但 redelivery 来自老 verifier issue → skip 不 bypass ──
+#
+# closes #457：bypass 仅当 redelivery issue id == ctx.verifier_issue_id。
+# 若来 verifier 类型 redelivery 但 issue 是老一轮的（不是当前 review 等的那个），
+# 必须保持 dedup skip。dogfood batch 7/7 全部撞这一条卡死。
+
+
+@pytest.mark.asyncio
+async def test_VWR_S2b_stale_redelivery_from_other_verifier_issue_keeps_skip(monkeypatch):
+    """state==REVIEW_RUNNING 但 redelivery issue 跟 ctx.verifier_issue_id 不一致 → 不 bypass。"""
+    tracking = _common_webhook_mocks(monkeypatch)
+
+    _mock_bkd_for_webhook(
+        monkeypatch,
+        tags=["verifier", "verify:dev_cross_check", "REQ-vwr-2b"],
+        last_message='```json\n{"action":"fix-needed","fixer":"dev","reason":"x","confidence":"high"}\n```',
+    )
+
+    monkeypatch.setattr(dedup, "check_and_record", AsyncMock(return_value="skip"))
+
+    # state=REVIEW_RUNNING, ctx 等的是 verifier-issue-CURRENT (e.g. staging_test
+    # round 的 verifier)；redelivery 来自 verifier-issue-OLD (上一轮 dev_cross_check
+    # verifier 10min 后 redelivery)。
+    review_row = _Row(state=ReqState.REVIEW_RUNNING, context={
+        "verifier_stage": "staging_test",
+        "verifier_trigger": "fail",
+        "verifier_issue_id": "verifier-issue-CURRENT",
+    })
+    monkeypatch.setattr(rs_mod, "get", AsyncMock(return_value=review_row))
+
+    req = _make_request(
+        event="session.completed",
+        tags=None,
+        execution_id="exec-OLD",
+        issue_id="verifier-issue-OLD",  # 老 verifier issue
+    )
+
+    result = await webhook.webhook(req)
+
+    assert result.get("action") == "skip", (
+        "VWR-S2b: 老 verifier issue redelivery 必须保持 dedup skip"
+    )
+    # engine.step 必须不被调用
+    assert len(tracking["step_calls"]) == 0, (
+        f"VWR-S2b: stale issue redelivery 不能放行 engine.step; "
+        f"called {len(tracking['step_calls'])}"
+    )
+    # 不应 emit verifier_resume_bypass obs event
+    bypass_obs = [
+        e for e in tracking["obs_events"]
+        if e[0] and e[0][0] == "dedup.verifier_resume_bypass"
+    ]
+    assert len(bypass_obs) == 0, (
+        "VWR-S2b: 老 verifier issue redelivery 不能 emit verifier_resume_bypass"
+    )
+    # 应 emit bypass_rejected_stale_verifier obs event 留 audit
+    rejected_obs = [
+        e for e in tracking["obs_events"]
+        if e[0] and e[0][0] == "dedup.bypass_rejected_stale_verifier"
+    ]
+    assert len(rejected_obs) == 1, (
+        "VWR-S2b: 必须 emit obs event 'dedup.bypass_rejected_stale_verifier' 留事故复盘锚点"
     )
 
 

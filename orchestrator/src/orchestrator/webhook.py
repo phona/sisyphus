@@ -355,7 +355,22 @@ async def webhook(request: Request) -> JSONResponse:
                 )
                 if bypass_req_id:
                     bypass_row = await req_state.get(pool, bypass_req_id)
-                    if bypass_row and bypass_row.state == ReqState.REVIEW_RUNNING:
+                    # Identity check: bypass 仅当 redelivery 来自当前 REVIEW_RUNNING
+                    # 等的那个 verifier issue。closes #457 — 老 verifier issue 在 10min
+                    # 后 redelivery 会被假定是合法 follow-up resume，把 stale fix-dev
+                    # decision 喂回状态机 → 偏移到 fixer-running → 真当前 verifier
+                    # 的 pass decision 撞 illegal_transition 被丢 → watchdog 12min
+                    # 后兜底 escalate（dogfood batch 7/7 全卡这条）。
+                    expected_issue = (
+                        (bypass_row.context or {}).get("verifier_issue_id")
+                        if bypass_row else None
+                    )
+                    if (
+                        bypass_row
+                        and bypass_row.state == ReqState.REVIEW_RUNNING
+                        and expected_issue
+                        and expected_issue == body.issueId
+                    ):
                         bypass_resume = True
                         log.warning(
                             "webhook.dedup.verifier_resume_bypass",
@@ -371,6 +386,32 @@ async def webhook(request: Request) -> JSONResponse:
                             extras={
                                 "event_id": eid,
                                 "executionId": body.executionId,
+                            },
+                        )
+                    elif (
+                        bypass_row
+                        and bypass_row.state == ReqState.REVIEW_RUNNING
+                        and expected_issue
+                        and expected_issue != body.issueId
+                    ):
+                        # 来 verifier 类型 redelivery 但不是当前 review 等的 issue
+                        # → stale event from prior verifier round；保持 dedup skip。
+                        log.warning(
+                            "webhook.dedup.bypass_rejected_stale_verifier",
+                            event_id=eid,
+                            executionId=body.executionId,
+                            req_id=bypass_req_id,
+                            body_issue=body.issueId,
+                            expected_issue=expected_issue,
+                        )
+                        await obs.record_event(
+                            "dedup.bypass_rejected_stale_verifier",
+                            req_id=bypass_req_id,
+                            issue_id=body.issueId,
+                            extras={
+                                "event_id": eid,
+                                "executionId": body.executionId,
+                                "expected_issue": expected_issue,
                             },
                         )
         if not bypass_resume:
