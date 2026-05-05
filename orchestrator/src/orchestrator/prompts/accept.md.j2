@@ -34,11 +34,18 @@ sisyphus 已经：
 - 拿到 lab endpoint（上面 `$ENDPOINT`）
 {% if thanatos_pod %}
 - 业务仓 `accept-env-up` 起了 thanatos pod（`$THANATOS_POD`，`$THANATOS_NAMESPACE`）
+- **APK 已构建（GH workflow）+ 装到 redroid + `am start` 启动 MainActivity**。app 此刻已经在 redroid 跑，preflight / observe 直接出图。
 {% endif %}
 
 你要做的：**逐条**跑 spec.md 里 `#### Scenario:` 块定义的验收用例 —— 自己看 GIVEN/WHEN/THEN
 用自然语言推断意图，**单步**调 thanatos atomic MCP（observe / tap / type / screenshot ...）
 驱动 redroid，看截图 + dom 判每条 scenario pass/fail。
+
+> 🚫 **不要重新构建 APK**。不要跑 `flutter pub get` / `gradle assembleDebug` / `melos`
+> / 任何源码构建命令。不要重装 APK（不调 `adb install`）。不要重启 app（除非 atomic
+> MCP 流确实卡死，且记录原因）。accept-env-up 已经把"build → install → launch"全做完，
+> agent 只剩"用 atomic MCP 驱动现有 app 跑 spec scenario"这一段。重新构建 = 浪费 10-20min
+> + 跟 sisyphus 已交付的环境基线脱钩，是 anti-pattern。
 
 > ⚠️ **不再有 thanatos DSL 解析**。spec scenario 是给你（人 / agent）读的验收契约，
 > 不是 thanatos 直接 regex parse 的指令。是否实现了 scenario 描述的行为，**你来判**。
@@ -250,6 +257,7 @@ kubectl -n $NS exec $POD -- bash -c \
 
 - **不部署 lab**：sisyphus 搞好的
 - **不清 lab**：sisyphus 会做
+- **不构建 APK / 不重装 / 不重启 app**：accept-env-up 已经把 build (GH workflow) + install (adb) + launch (am start) 都做完。**禁止跑 `flutter pub get` / `gradle` / `adb install` / 任何源码构建**。app 已在 redroid 上跑，直接 preflight + observe + tap/type 验。
 - **不改业务代码**：只读 + (curl | thanatos atomic MCP)
 - **真实 endpoint**：不 mock
 - **强制 recall**：thanatos 路径下，先 recall 后 act —— 不 recall = 验收基线漂移
