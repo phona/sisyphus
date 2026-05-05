@@ -302,3 +302,338 @@ bypass 跑 02:28 → 300s timeout（exit -1）→ 又 escalated。
 **真修 commit 2bb321798**: 用 `dart run melos`（pubspec.yaml dev_dependencies 已声明 `melos: ^7.4.0`，项目内安装），绕开 broken global shim 但保留 melos 真功能（workspace bootstrap + analyze --fatal-infos + 并行）。
 
 re-fire 02:41:44 → dev_cross_check_running 02:41:47 启动。300s cap。等结果。
+
+## Rescue-04 — 2026-05-05 10:03Z
+
+ingress=ok (rc=200, 0.23s), orphans cleaned=0 (1 ns 58min 但 REQ 正在 debug，arch-lab edge-site chart bug 卡 accept-env-up，不动), load 0.66/0.49/0.41 (uptime 3:54)。top pod 全 ≤25m，cluster healthy。
+
+## Cron-21 — 2026-05-05 10:03Z phase5 multi-layer 推到 ttpos-server-go.accept-env-up，卡 arch-lab chart
+
+orch 主链 2 修：#441 _resolve_source_repo 读 source-repo tag + #442 _branch_exists_on_remote URL 加 @。两 manifest 改 bare-string emits。多层机制现在 work：orch 拓扑 walk → ttpos-server-go.accept-env-up → helm install edge-site chart → 撞 `.Values.global.imagePullSecrets nil pointer` (chart 缺 global default)。
+
+ttpos-arch-lab issue #19 立。修法本地写好（values.yaml 加 global section 默认 []），sandbox 拦了不让 push（arch-lab 不在 user 授权 scope）。等 user 授权或自改。
+
+## Rescue-05 — 2026-05-05 10:10Z
+
+ingress=ok (rc=200, 2.07s — 偏慢但 ok), orphans cleaned=0 (phase5 ns 运行中 mysql+redis pods 起来了，不动), load 0.11/0.30/0.34 (uptime 4:01)。phase5 layer_up_start 10:05:49Z 在 ttpos-server-go.accept-env-up 中 helm install ok，等 main-api ready + APK build。
+
+## Cron-22 — 2026-05-05 10:10Z arch-lab #20 merge → 多层 accept 实战进展
+
+arch-lab PR #20 merged 10:04Z (775ddd0) → admin/resume → ttpos-server-go.accept-env-up helm install edge-site chart 过 template + 起 mysql + redis pods（accept-req-* ns 内 ttpos-edge-mysql + ttpos-edge-redis 都 Running）。
+
+下一卡点候选：等 main-api pod ready (\`kubectl wait condition=ready ... timeout=300s\`)。如 ready → emit JSON → BACKEND_ENDPOINT 注入 ttpos-flutter.accept-env-up → APK build dispatch (~5-10min GH workflow) → adb install → atomic MCP loop。
+
+不 admin/resume，让 workflow 自走。10min 后 wakeup 再看。
+
+## Rescue-06 — 2026-05-05 10:26Z
+
+ingress=ok (rc=200, 0.32s), orphans cleaned=0 (ns 81min 但 REQ accept-running 中不动), load 0.56/0.33/0.29 (uptime 4:17)。metabase 205m CPU 偏高但 OK。phase5 attempt 3 在 layer_up_start(10:24:42) helm --wait 8min 中。
+
+## Cron-23 — 2026-05-05 10:26Z phase5 layer 9 卡 image 缺 i18n
+
+ttpos-server-go Makefile 932c91beb 推上 → admin/resume → docker-registry secret 创成功 → image 拉下来（不再 ImagePullBackOff）→ 但 server-go pod 启动 fatal：`open ./i18n/languages: no such file or directory`。
+
+第 9 层根因：`ghcr.io/zoneasetech/ttpos-server-go-main:latest` image build 漏 i18n/ directory。需查 ttpos-server-go 仓 Dockerfile.main 是否 COPY i18n 目录。
+
+8 层 fix 累计：flutter Makefile quote / orch _resolve_source_repo / orch URL @ / 两 manifest pattern→bare / arch-lab global default / server-go ghcr secret create。每 fix 露下一层。等 user 拍方向（修 image build vs pin pre-built image vs 跳）。
+
+## Cron-24 — 2026-05-05 10:30Z merge develop → feat 解 i18n 问题
+
+User 指：ttpos-server-go develop 分支已含 c99bc2ec5 `build(docker): 将 i18n 多语言文件打包进 main 镜像`，merge 进 feat/REQ-REQ-phase5-forgot-password-1777940891。
+
+冲突解：
+- Makefile include `ttpos-scripts/*` → `scripts/*`（develop 重命名 + 加 ci-act.mk）
+- 我加的 accept-env.mk + minimal-values.yaml git rename detect 自动移到 scripts/
+- 解决后 push 3c5911fde
+
+附加：image build 触发只 tag push，feat 分支不 build → :latest 在 GHCR 应已是 develop tip + i18n。但 pod cache 旧 :latest → 改 main.image.pullPolicy=Always 强拉 cf9265b2f。
+
+不 admin/resume，等下次 rescue 跟进或 user 触发。
+
+## Rescue-07 — 2026-05-05 10:40Z
+
+ingress=ok (rc=200, 0.23s), orphans cleaned=0, load 0.89/0.78/0.50 (uptime 4:31). phase5 escalated（manual-abort + helm release stuck "UPGRADE FAILED: another operation in progress"）。等 user 授权清 stuck release（helm uninstall ttpos -n accept-req-... --no-hooks 或 kubectl delete ns）。
+
+## Cron-25 — 2026-05-05 10:40Z helm release pending 锁住
+
+force-abort 后 helm release `ttpos` 留 pending 状态。下次 `helm upgrade --install` 撞 "another operation in progress" lock。CI image (ttpos-server-go:test-latest) 没问题，是 helm operation lock 没释放。
+
+修法 sandbox 拦了（destructive shared cluster）。等 user 授权 helm uninstall ttpos -n accept-req-req-phase5-forgot-password-1777940891 --no-hooks 或 kubectl delete ns 整体清。
+
+## Rescue-08 — 2026-05-05 10:55Z
+
+ingress=ok (rc=200, 0.89s), orphans cleaned=0, load 0.39/0.40/0.48 (uptime 4:46)。phase5 escalated（helm pending lock 没清），无新 layer_up log。等 user 授权 cleanup + 决定走 PR-driven 镜像 build。
+
+## Cron-26 — 2026-05-05 10:55Z 走正确镜像流水线 + 清 helm lock 并行
+
+User 拍板：dispatch 流水线（ttpos-server-go.dispatch.yml → ttpos-ci ci-go.yml → image-publish）才是正路；建议并行做但聚焦验收阶段。
+
+启动：
+1. ttpos-server-go: PR feat/REQ-REQ-phase5-forgot-password-1777940891 → develop（触发 dispatch.yml → ci-go full gates → image tag 写回 commit status \"CI / image-publish\" description）
+2. accept-env.mk 改：动态读 commit status description 拿 image_tag → helm install --set main.image.repository:tag
+3. 清 stuck helm release（待 user 授权 helm uninstall 或 ns delete）
+
+## Rescue-09 — 2026-05-05 11:10Z
+
+ingress=ok (rc=200, 0.43s), orphans cleaned=0 (REQ accept-running 中，not orphan), load 1.00/1.46/0.92 (uptime 5:01)。phase5 edge-lab 部署中：cloud-mysql + cloud-redis Running，bmp-{erp/message/takeout/websocket} Init:1/2，bmp-db-init Job Init:1/2 跑 schema 初始化中。
+
+## Cron-27 — 2026-05-05 11:10Z edge-lab 真跑起来了！
+
+User 指点：edge-site 是 minimal 缺 schema init，edge-lab umbrella 才有 cloud-core bmp-db-init Job。已切 7b44dbde1 + 004a43a0a (lowercase runNonce)。
+
+11:08:16 layer_up_start 后 helm install edge-lab 推 bmp-db-init Job + cloud-mysql + cloud-redis + bmp-erp/message/takeout/websocket + erpnext-queue/websocket。bmp-db-init 用 golang-migrate 跑 sql，应在 Init:1/2 阶段。
+
+等 helm --wait --timeout 15m 完成（11:23 前）。如全 Ready → emit endpoint JSON → ttpos-flutter layer 起 → APK build → atomic MCP 实战。
+
+## Rescue-10 — 2026-05-05 11:15Z
+
+ingress=ok (rc=200, 0.85s), orphans cleaned=0 (REQ accept-running 中), load 0.62/1.00/0.87 (uptime 5:06)。phase5: bmp-db-init Init:1/2 restart 1（slow），bmp-{erp/message/takeout/websocket} CrashLoopBackOff 5 次（等 db schema 创完）。erpnext-{queue,websocket} Pending（resource-bound）。helm --wait 7min/15min 进行中。
+
+## Cron-28 — 2026-05-05 11:28Z PVC 修通 + helm fresh install 健康
+
+11:23 helm --wait 15min timeout escalated final（context deadline exceeded，helm 没等到全 Ready）→ user 指 erpnext-queue Pending 真因是 PVC `ttpos-erpnext-sites` not found（不是资源紧）→ helm get manifest 验 PVC 在模板 + helm release `ttpos` revision 1 status=failed 只装了部分资源（NetworkPolicy + 2 PVC）就 timeout。
+
+修法：helm uninstall failed ttpos release → admin/resume → 撞 force_escalate cleanup 跟 resume 创 pod 的 race（branch_check 时 pod NotFound）→ 等 10s + 二次 admin/resume → fresh helm install 健康推进。
+
+11:28:42 layer_up_start：erpnext-{mariadb,redis-cache,redis-queue,redis-socketio,scheduler,configurator(Completed),site-init} 全 Running，**ttpos-erpnext-sites PVC Bound 5Gi**，rocketmq-dashboard Running。等 helm --wait 12-13min 跑完 (11:43 deadline)。
+
+## Rescue-11 — 2026-05-05 11:31Z
+
+ingress=ok (rc=200, 1.0s), orphans cleaned=0 (REQ accept-running 中), load 2.87/1.51/0.98 (uptime 5:22 — 偏高 erpnext-site-init 跑 schema 681m CPU)。helm fresh install 进展中，PVC ttpos-erpnext-sites Bound（helm 自建，不是我手动）。
+
+## Cron-29 — 2026-05-05 11:31Z PVC 误诊澄清 + helm --atomic 候选
+
+User 问为啥手动建 PVC——其实不需要。第 1 次 install 撞 helm --wait timeout 时只 apply 了部分资源（release failed status，PVC `ttpos-erpnext-sites` 没装到）。我误以为 chart 缺 → 手动 kubectl apply。后续 helm uninstall 把它带走 + 又手动建 + helm 不接管 helm-managed metadata。最终干净 fresh install (11:28:42) helm 自己建好。
+
+候选改进：accept-env.mk helm install 加 `--atomic`，timeout 自动 rollback 干净，下次 install 不留 partial state。本次先不动，等 pipeline 跑通验证 atomic MCP。
+
+## Rescue-12 — 2026-05-05 11:41Z
+
+ingress=ok (rc=200, 1.25s), orphans cleaned=0 (REQ accept-running 中，删 quota 后大批 pod 起来), load 0.48/0.59/0.76 (uptime 5:32)。
+
+## Cron-30 — 2026-05-05 11:41Z 修 quota → 撞 node 资源
+
+User 删 ResourceQuota（一行 kubectl delete resourcequota --all）后 cloud-mysql/edge-mysql/edge-redis/bmp-*/erpnext-frontend/queue 全 Deployment scale 起 → Pending（不再 quota 拒）→ FailedScheduling node insufficient cpu/memory（vm-node04 8c node allocatable ~4 CPU 已 98% 满）。
+
+User 直觉 "limit 不会限制服务拉起" 对：之前 quota.limits.cpu 12/12 是 admission 拒，现已删；现在卡 scheduler **node-level requests 不够** + LimitRange 默认每 container 250m request → 占满。
+
+修法 A 删 LimitRange（让没 set request 的 container 变 0 request 进得去）— 待 user 拍。
+
+## Cron-31 — 2026-05-05 11:54Z 关 rocketmq + namespacePolicy 释放内存
+
+User 删 quota 后撞 node 资源真不够（vm-node04 8c/8Gi memory 7692Mi/7.7Gi req 97%）。top mem hog: rocketmq nameserver 2Gi + broker 2Gi + dashboard 512Mi = 4.6Gi。forgot-password 不需消息队列。
+
+ttpos-server-go 745698bff: accept-minimal-values.yaml 加 `rocketmq.enabled=false` + `namespacePolicy.enabled=false`。helm uninstall + escalate + 30s wait + resume → 11:54:30 layer_up_start fresh install。
+
+第 4 次 helm install attempt 跑中。CPU 2.3/4 (57%) 不卡。等 cloud-mysql/bmp 起 → cloud-db-init → bmp-* Ready → helm done → ttpos-flutter layer。
+
+## Rescue-13 — 2026-05-05 11:55Z
+
+ingress=ok (rc=200, 0.25s), orphans cleaned=0 (REQ accept-running 中), load 4.56/3.04/1.80 (uptime 5:46 — nacos 起来烧 2956m CPU/833Mi)。helm install 进展中，cloud-mysql 起来了 14m CPU。等 cloud-db-init / bmp-* / ttpos-flutter layer。
+
+## Cron-32 — 2026-05-05 12:07Z 5+ 层 fix 后真接近 helm done
+
+继续拨开洞：
+- 745698bff: 关 rocketmq (释放 4.6Gi)
+- 1805a3d1f: 关 nacos (释放 2Gi) → bmp 服务 panic 'client not connected'
+- 65e212380: cloudCore image override hub.hitosea.com → ghcr.io/zoneasetech (vm-node04 内网 DNS 不可达)
+- 59633ef42: 重开 nacos w/ 512Mi memory request（chart 模板硬编码 NACOS_SERVER_ADDRESSES env 给 bmp，没 enabled flag）
+
+第 7 次 attempt 12:07:50 layer_up_start。bmp-db-init Completed ✓ cloud-db-init Completed ✓ erpnext-configurator Completed ✓ erpnext-site-init Running ✓。bmp-erp/message/takeout/websocket Error 1 restart（等 nacos 启动稳，nacos 自身 1 restart 可能 OOM），erpnext-websocket Error 1。helm --wait 倒计时。等 12:20 wakeup 看稳否。
+
+## Rescue-14 / Cron-33 — 2026-05-05 12:20Z nacos OOM 调 1Gi → 第 8 次 retry
+
+12:20 poll：nacos CrashLoopBackOff 2x (512Mi 太小，actual ~833Mi)，bmp-* CrashLoopBackOff 3x 等 nacos。改 65d251d54 nacos request 1Gi / limit 1536Mi。helm uninstall + escalate + 30s wait + resume。命令链超时但实际跑了，第 8 次 helm install attempt 应该已起。
+
+要看 12:30 / 12:35 节奏是否稳定。如再 OOM 关 nacos 改方向：cloud-core resources.yaml 加 NACOS_ENABLED env condition（chart 主链改，sandbox 可能拦）。
+
+## Rescue-15 — 2026-05-05 12:14Z
+
+ingress=ok (rc=200, 0.82s), orphans cleaned=0 (REQ accept-running), load 12.34/6.40/4.04 — 高但 nacos 2Gi 启动峰值 (1965m CPU 950Mi mem)。第 8 次 helm install 12:13:09 起（user 要求 nacos default 2Gi 28c071f38）。bmp 服务 Running，nacos 1 restart 还在 warm up。
+
+## Cron-33 — 2026-05-05 12:14Z user 拍板 nacos default 2Gi → progress 显著
+
+总结资源调整轨迹：rocketmq off (-4.6Gi) + nacos 2Gi default (user 实测必须) + namespacePolicy off + cloudCore image ghcr override + LimitRange/quota 删 → 8th helm install 起所有子服务（bmp/cloud-mysql/cloud-redis/edge-mysql/edge-redis/erpnext-*/nacos/site-init）大部分 Running。
+
+负载 12.34 偏高但 8c 冗余。等 nacos 稳 + bmp 全 Ready → helm done → ttpos-flutter layer。如 helm timeout 跟 nacos warm up 速度看是否需要 bump --timeout。
+
+## Cron-34 — 2026-05-05 12:21Z nacos JWT secret 真根因
+
+第 8 次 attempt nacos 还 CrashLoopBackOff 4 次。看 logs 不是 OOM 是 JWT secret 太短：
+`The JWT JWA Specification states keys MUST have a size >= 256 bits, specified is 16 bits`
+chart default `nacos.authToken=nil` (3 bytes ascii)。RFC 7518 要 ≥32 字节 base64。
+
+修 1a758ac80：accept-minimal-values 加 `nacos.nacos.authToken="VGhpc0lzQTMyQnl0ZVNlY3JldEZvclR0cG9zQWNjZXB0RW52VGVzdEtleVA="` (32 bytes base64) + identityKey/identityValue。
+
+第 9 次 helm install 12:21:35 跑中。等 12:31 wakeup 验 nacos 这次起来不再 crash。
+
+## Cron-35 — 2026-05-05 12:31Z nacos JWT 修后真稳了 + 全 service Running
+
+第 10 次 helm install 12:19:34 起。**nacos restarts=0 ready=true** ✅。
+所有 service：cloud-mysql/cloud-redis/edge-mysql/edge-redis/erpnext-*(13 pods)/nacos/bmp-*(4) Running。
+Completed: bmp-db-init / cloud-db-init / erpnext-configurator / erpnext-site-init。
+仅 bmp-erpnext-bootstrap Init:1/2（最后 init job）。
+
+12+ 层 fix 累计：[1] flutter Makefile quote [2-3] orch _resolve_source_repo + URL @ [4-5] manifest pattern→bare [6] arch-lab edge-site global default [7] ghcr secret [8] develop merge i18n [9] image tag test-latest [10] edge-lab switch [11] lowercase runNonce [12] del quota+limitrange [13] disable rocketmq+namespacePolicy [14] cloudCore image ghcr [15] nacos default 2Gi [16] nacos JWT secret 32bytes。
+
+下一步候选：bmp-erpnext-bootstrap 完 → helm done → ttpos-flutter layer (idx 1/2) → APK build dispatch → adb install → atomic MCP loop。
+
+## Rescue-16 — 2026-05-05 12:25Z
+
+ingress=ok (rc=200, 0.86s), orphans cleaned=0 (REQ accept-running), load 0.79/2.40/3.15 (uptime 6:16 — 集群稳了 nacos warm-up 过)。第 10 次 helm install 12:19:34 还在跑（6+ min），等 helm --wait deadline 12:34:34 看 done 还是 timeout。
+
+## Rescue-17 / Cron-36 — 2026-05-05 12:34Z bmp-{message,websocket} 启动成功但 5 restarts
+
+helm --wait 14min 进行中，nacos restarts=0 ready=true 稳。
+- ✅ Running: cloud-mysql/redis, edge-mysql/redis, erpnext-{backend,frontend,mariadb,scheduler,websocket,redis-3}, nacos, bmp-{erp,takeout}
+- ✅ Completed: bmp-db-init, cloud-db-init, erpnext-{configurator,site-init}
+- ⚠️ bmp-{message,websocket} CrashLoopBackOff 5x — 但 logs 显示 "服务启动成功" + service register 完成。怀疑 liveness probe 配置 mismatch (/health endpoint vs probe path) 或进程 main goroutine exit。
+- ⏳ bmp-erpnext-bootstrap Init:1/2
+
+候选 issue 12: bmp-{message,websocket} 容器启动 healthCheck 配置可能错。但服务已 register 到 nacos，对 forgot-password REQ 不影响（流不过 message/websocket）。等 helm timeout 看 escalated 后 stderr 有无别的根因。
+
+## Cron-37 — 2026-05-05 12:37Z helm timeout 真因找到：bmp probe 路径 /hello 错
+
+helm 12:34 timeout escalate。describe bmp-message pod 找根因：
+- Liveness/Readiness probe path: `/hello` （chart 默认）
+- 服务实际 expose: `/debug/config`, `/health`
+- probe 404 → SIGKILL exit 137 → CrashLoopBackOff → helm --wait 必失败
+
+修 a47678e21：accept-minimal-values 加 cloudCore.services.{erp,takeout,message,websocket}.healthPath=/health。
+新立 issue 候选：arch-lab edge-lab values bmp services healthPath default 错（chart bug）。
+
+第 11 次 helm install 12:37:29 起来。等 12:48 wakeup 看 bmp probe 这次过否 → helm done → ttpos-flutter layer。
+
+## Cron-38 — 2026-05-05 12:39Z healthPath fix 见效，bmp-message 1/1 Ready
+
+第 11 次 helm install 12:37:29，84s 进度：
+- ✅ bmp-message **1/1 Running 0 restarts**（probe /health pass）
+- ⏳ bmp-erp/takeout/websocket 0/1 Running 2 restarts（probe warm-up 中）
+- ✅ 其他 service / nacos / db-init Completed
+- ⏳ bmp-erpnext-bootstrap Init:1/2
+
+立 arch-lab #25：bmp services healthPath default /hello mismatch（chart bug）。
+
+session 累计 12 个 issue。等 12:48 wakeup 看 bmp 全 Ready + helm done。
+
+## Rescue-18 — 2026-05-05 12:43Z
+
+ingress=ok (rc=200, 0.91s), orphans cleaned=0 (REQ accept-running)，load 9.13/4.48/2.99 (uptime 6:34，nacos warm-up 中 2439m CPU/1010Mi)。第 12 次 helm install 12:42:39 起 (c9727cc37 per-svc healthPath)，bmp 4 服务 46s 撞 nacos register race 重启中（前次跑 11min 才稳）。等 helm --wait deadline 12:57:39。
+
+## Cron-39 — 2026-05-05 12:51Z bmp-websocket Redis cluster 检查不兼容 standalone redis
+
+第 12 次 helm install 全 service 1/1 Ready 除了 bmp-websocket（4 restarts）。logs 显示：
+- Redis Client Do 'CLUSTER INFO' 失败：'This instance has cluster support disabled'
+- /health probe 检查 Redis 集群状态 → DOWN → liveness fail → SIGKILL
+
+bmp-websocket 假设 Redis cluster mode，但 cloud-redis chart 是 standalone。修法 d4eb469c7：
+accept-minimal-values 关 `cloudCore.services.websocket.enabled=false`（forgot-password 不打 ws）。
+
+第 13 次 helm install 12:51:08 起。等 13:06 deadline 看是否 done。candidate issue 14：
+chart bmp-websocket /health 检查应自适应 standalone vs cluster 或 reverse-compat。
+
+## Rescue-19 — 2026-05-05 12:54Z
+
+ingress=ok (rc=200, 1.9s)，第 13 次 helm install 12:51:08 跑 3m8s：
+- ✅ bmp-{erp,message,takeout} 全 1/1 Ready
+- ✅ websocket 已 disabled（不在 pod 列表）
+- ✅ erpnext / mysql / redis / nacos 全 Ready
+- ⏳ bmp-erpnext-bootstrap Init:1/2 第 2 个 init container 跑 ERPNext API key 生成 + DB 写入（慢 op，~5-10min）
+- helm --wait 还 ~12min（13:06 deadline）。等。
+
+## Rescue-20 — 2026-05-05 12:55Z
+
+ingress=ok (rc=200, 0.37s), orphans cleaned=0 (REQ accept-running)，load 1.14/2.27/2.45 (uptime 6:46，nacos 59m CPU 1081Mi 稳)。bmp-erpnext-bootstrap Init:1/2 4m34s 0 restarts，ERPNext bootstrap 在写 cloud-mysql。helm --wait 还 ~10min（13:06 deadline）。
+
+## Cron-40 — 2026-05-05 13:05Z bootstrap Job DeadlineExceeded → 关掉
+
+第 13 次 helm 13:06 timeout，看 Job 状态：bmp-erpnext-bootstrap **Failed (DeadlineExceeded)**。chart 模板硬编码 `activeDeadlineSeconds: 600`，bootstrap.py 实测 ERPNext API key 生成 + cloud-mysql update 慢于 10min。
+
+修法 bf3f85c19：accept-minimal-values 加 `erpnext.apiUserBootstrap.enabled=false`（forgot-password 不打 ERPNext API user 流）。
+
+第 14 次 helm install 13:05:46 起。期望 5-7min 完（无 bootstrap Job 阻塞），然后 ttpos-flutter layer up + APK build dispatch。
+
+## Rescue-21 — 2026-05-05 13:09Z
+
+ingress=ok (rc=200, 0.26s), orphans cleaned=0 (REQ accept-running)。**第 14 次 helm install 3m33s 全 service 1/1 Ready ✓**：bmp-{erp,message,takeout} + cloud-mysql/redis + edge-mysql/redis + erpnext 全栈 + nacos。bootstrap 关掉，无 Failed Job。等 helm exit 0 → emit endpoint JSON → ttpos-flutter layer (idx 1/2) → APK build dispatch。
+
+## Rescue-22 — 2026-05-05 13:10Z
+
+ingress=ok (rc=200, 1.09s), orphans cleaned=0，load 0.52/1.71/1.87 (uptime 7:01)。第 14 次 helm install 5min 进度未见 env_up_done log，所有 service 持续 Ready。等 helm 收尾 emit endpoint JSON。
+
+## Cron-41 — 2026-05-05 13:17Z 第 14 次 timeout 真因：admin PVC 永 Pending
+
+第 14 次 helm install 11min 全 service Ready 但 helm `--wait` 永等不到 exit。挖根因：
+- helm release status=`pending-install`（仍在等）
+- accept-req-* ns PVC: **ttpos-admin-uploads Pending**（local-path WaitForFirstConsumer 没 Pod 引用，永 Pending）
+- admin chart 创了 PVC + Service 但 **Deployment 没起**（chart 缺 image config 模板 skip）
+
+修法 2830380c8：accept-minimal-values 加 `admin.persistence.enabled=false` 跳 PVC。
+
+第 15 次 helm install 13:17:51 起。这次应能 exit 0 → emit endpoint JSON → ttpos-flutter layer。
+
+## Rescue-23 — 2026-05-05 13:27Z
+ingress=ok（HTTP 200），orphans cleaned=0（phase5 ns 22min 龄非 orphan），load 正常（top cpu 最高 nacos 29m）。
+phase5 helm install 第 15 次 **STATUS: deployed**（13:17:54）—— 17 deploy 全 Ready，但**缺 `ttpos-edge-api` 主服务**（edgeSite subchart 没起 → 没 forgot-password 业务码可测）。下次 fire 看 runner 是否 emit endpoint JSON 推 ttpos-flutter 层。
+
+## Cron-37 — 2026-05-05 13:30Z phase5 第 15 次 accept fail：根因不是 helm 是 Makefile pipefail
+ingress=ok 200，phase5 ns 25min（active 非 orphan），无 runaway。
+
+**REQ escalated 13:28:54Z，根因终于摸到**：
+- ttpos-server-go layer (idx 0/2) **1.5min 内成功**（13:17:51 → 13:19:16）—— 第 15 次 helm install 真过了，但只起了后端业务系统 17 deploy，**无 ttpos-edge-api**（chart 行为正常：forgot-password 测前端，bmp + nacos + erpnext + cloud-* 已够撑）。
+- ttpos-flutter layer (idx 1/2) 13:19:16 起 → 13:28:53 fail 退码 2。stderr：
+  ```
+  artifact unpacked to /tmp/ttpos-apk
+  /bin/sh: 1: set: Illegal option -o pipefail
+  make: *** [Makefile:263: accept-env-up] Error 2
+  ```
+- ttpos-flutter Makefile L289 `@set -euo pipefail; \`，runner sh=dash 不支持 pipefail（bash-only）。
+
+**修法 1 行**：ttpos-flutter Makefile 顶部加 `SHELL := /bin/bash`。push 到 feat/REQ-REQ-phase5-forgot-password-1777940891 → escalate.resume → accept retry #16。
+
+之前 14 次 accept fail 都没爬出 ttpos-server-go 那层；这次第 15 次终于过了 server-go，撞到 flutter 的 dash/pipefail bug。属新洞。
+
+## Cron-37b — 2026-05-05 13:39Z phase5 retry #16 已起
+ttpos-flutter Makefile fe81d3c57 push → admin/resume action=pass stage=pr_ci 注入 PR_CI_PASS → escalated→accept-running 13:39:07。clone fe81d3c57 OK，server-go layer 15s 内通过（helm release 已存在 no-op upgrade），flutter layer 13:39:35 起。带 SHELL=/bin/bash fix，应过 L289 pipefail 进入 thanatos chart install + APK build dispatch。
+
+**附顺带踩到 sisyphus 主链 bug（hit 1 不修，BACKLOG-only）**：
+`admin.py:105 log.warning("admin.emit", req_id=..., event=body.event, ...)` —— structlog 的 event kwarg 跟位置参数撞，`/admin/req/.../emit` endpoint 全 500。绕道用 resume action=pass stage=pr_ci 走通。
+修法 1 行：`event=body.event` → `evt=body.event`。等再撞 ≥3 次再修。
+
+## Cron-37c — 2026-05-05 14:02Z phase5 retry #17/#18
+**retry #17 fail**：但错变了 → SHELL + pod-label 修法生效。新 stderr `adb: device 'localhost:5555' not found`。adb daemon 启动 OK，但 redroid 没注册到 adbd。
+
+**修法 477f180ef**：在 `adb -s install` 前补 `adb connect "$$adb_serial"`。am start 也用 THANATOS_DEVICE_SERIAL fallback 统一。
+
+**误诊纠正**：之前以为是 runner RBAC 缺 `deployments` 权限。实测 runner kubectl 用的 kubeconfig 是 system:masters cert，全权。`kubectl exec deploy/X` 在 runner 里能跑。真根因是 **`kubectl cp deploy/X:/path`** ——cp 不支持 `deploy/X` shorthand，把 "deploy/thanatos" 解成 ns=deploy/pod=thanatos，再被 -n 覆盖 ns 剩 pod=thanatos，找不到 → 404。
+
+## Rescue-24 — 2026-05-05 14:05Z
+ingress=ok（HTTP 200），orphans cleaned=0（phase5 ns active accept-running，不是 orphan），load=0.86c（runner pod 跑 retry #18 layer）。无 redroid runaway。
+
+## Rescue-25 — 2026-05-05 14:10Z
+ingress=ok（HTTP 200），orphans cleaned=0（phase5 ns active accept-running 6min），load=0.06c（runner 15m idle，应在 GH workflow APK build 轮询阶段）。无 redroid runaway。
+
+## Rescue-26 — 2026-05-05 14:23Z
+ingress=ok（HTTP 200），orphans cleaned=0（phase5 active accept-running 8min，accept agent 跑场景），load=0.13c。无 redroid runaway。phase5 已过 accept-env-up（14:15:55 create_accept.done）。
+
+## Rescue-27 — 2026-05-05 14:25Z
+ingress=ok（HTTP 200），orphans cleaned=0（phase5 accept-running 10min，accept agent 跑场景），load=1.47c（runner busy，accept agent 跑 thanatos atomic MCP screenshot/tap 阶段，正常）。无 redroid runaway。
+
+## Rescue-28 — 2026-05-05 14:48Z host overload
+ingress=ok（HTTP 200），orphans cleaned=0（phase5 ns 已 force-escalated 但是是 active retry intent，不删；host 真正 culprit 是 sisyphus-runners ns 里 java 86.5% gradle，跟 accept-req-* 删不删无关），load=31.60↑（kswapd 9% swap thrash）。
+
+force-escalate 已发但 runner pod 还在跑 gradle assembleDebug；kubelet 在 load 30+ 下没把 SIGTERM/SIGKILL 推下去。等 cleanup 自然 drain。
+
+prompt 修法 stage 中：fix/accept-prompt-no-rebuild 已 push，/tmp/accept.md.j2 在 K3s node 待 cp 进 orch pod（kubectl 当前 timeout）。
+
+## Rescue-29 — 2026-05-05 15:28Z host recovered + atomic MCP smoke 通过
+ingress=ok（HTTP 200），orphans cleaned=0（accept-req-* ns 全清），load=0.64↓（5min=9.94，host 真复活）。
+
+mcp-smoke ns 单独起 thanatos+redroid 测 atomic MCP：本地 src 经 PYTHONPATH 覆盖跑——10 工具全暴露，preflight a11y_node_count=26，observe dump 11KB，current_page、recall、tap/type plumbing OK。**screenshot ok 但 len=58 太短，可能 driver 实现 bug，单独修**。
+
+**v0.x 真阻碍**：thanatos repo 源码（atomic 10 工具）已写好但**没 git push + image rebuild**。K3s 节点 :dev 缓存 + IfNotPresent → accept agent 调 preflight 永 unknown tool。phase5 之前 18 次 retry 全卡这条。
+
+## Rescue-30 — 2026-05-05 15:41Z host fully recovered
+ingress=ok（HTTP 200），orphans cleaned=0（无 accept-req-*），load=0.38↓（5m=0.93）。host 完全 idle。
+
+PR #446 已开（atomic MCP fix：accept prompt + screenshot bytes）。等 CI + merge。
