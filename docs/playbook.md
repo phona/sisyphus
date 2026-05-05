@@ -485,3 +485,27 @@ ttpos 单 REQ 全链路 dogfood **现实 2-4 h**（含手动 hack）。乐观 1 
 - ≥3 次连续撞同一性质坑（系统化问题，不是单点 hack 能解）
 
 **不打扰**：业务码 push 修 / Makefile 修 / 挂 issue / webhook injection（公开路径） / BACKLOG 进度记录。
+
+### 16.8 验证主链 fix 优先 resume，不要重派
+
+修了 sisyphus 主链 bug 后要验是否真解卡，**默认 resume 已 escalated 的 REQ**，不要 dispatch 新 REQ。
+
+**理由**：
+- 老 REQ 状态丰富：撞过 bug 的完整 trace、stage_runs / verifier_decisions 数据齐
+- resume 一条 admin endpoint 走通就能验 fix 是否解卡当时那条
+- 新 REQ 重走 analyze → spec_lint → challenger → ... 多绕 8 stage、烧 token + 跑一次 GH workflow APK build (~10min) + 一次 helm install lab-acceptance (~6min)
+
+**操作**：
+
+```bash
+# 选最远进度的 escalated REQ 当 verification REQ（trace 最完整）
+python3 scripts/sisyphus-admin.py req-status | grep escalated
+# resume 用 action=pass + stage=<stuck-stage> 推下一段
+curl -X POST -H "Authorization: Bearer $TOK" \
+  -d '{"action":"pass","stage":"staging_test","reason":"verify #XYZ fix"}' \
+  http://orch/admin/req/REQ-.../resume
+```
+
+**例外**：fix 触及 analyze / clone 等流程**早期阶段**，老 REQ 已绕过那段无法重走 → 派新 REQ。
+
+实战参考：#457 webhook bypass identity fix 验证就用 resume REQ-kiosk-home-idle-timeout-stub-1778010045（stage 5 stuck → resume staging-test.pass → stage 6/pr_ci 突破），同时并行派新 REQ 验"全新 REQ 走 fixer+verifier 闭环不撞同 bug"。
