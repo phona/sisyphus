@@ -203,11 +203,12 @@ def test_docs_s4_architecture_mentions_challenger():
 # ──────────────────────────────────────────────────────────────────────────
 
 def test_docs_s5_sql_file_count_is_18():
-    """DOCS-S5: observability/queries/sisyphus/ contains exactly 25 SQL files
-    (Q1-Q20 + Q21/Q22/Q23 added by agent_turns observability collector)."""
+    """DOCS-S5: observability/queries/sisyphus/ contains exactly 26 SQL files
+    (Q1-Q20 + Q21/Q22/Q23 agent_turns observability + duplicate-prefix 21/22
+    + Q24 req-trace)."""
     sql_files = list(OBS_QUERIES_DIR.glob("*.sql"))
-    assert len(sql_files) == 25, (
-        f"observability/queries/sisyphus/ has {len(sql_files)} SQL files, expected 25"
+    assert len(sql_files) == 26, (
+        f"observability/queries/sisyphus/ has {len(sql_files)} SQL files, expected 26"
     )
 
 
