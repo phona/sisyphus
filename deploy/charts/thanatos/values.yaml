@@ -20,7 +20,11 @@ resources:
   requests:
     cpu: 200m
     memory: 256Mi
-  limits: {}
+  # 必设 limits 防 orphan pod 拖死 host（phona/sisyphus#433 实证：redroid 烧 CPU
+  # 18+h 把 vm-node04 cluster sshd / ingress / k3s API 全打死）。
+  limits:
+    cpu: "1"
+    memory: 512Mi
 
 service:
   # Debug only: kubectl port-forward + local mcp client. accept-agent reaches
@@ -43,6 +47,12 @@ redroid:
     requests:
       cpu: 500m
       memory: 1Gi
+    # redroid 跑 Android 完整系统（zygote64 / system_server / SystemUI / mediaserver
+    # 等持续 30-50% CPU），不限 = 8c VM 上单 orphan 就拖死 host（phona/sisyphus#433）。
+    # 2 CPU / 2Gi 给 boot 时峰值（~1.5 CPU / 1.5Gi 持续 30s）留余量。
+    limits:
+      cpu: "2"
+      memory: 2Gi
 
 # Pod-level options
 imagePullSecrets: []
