@@ -83,13 +83,27 @@ def _patch_pool(monkeypatch, pool):
 
 def _patch_settings(monkeypatch, *, enabled=True, threshold_sec=1800,
                     telegram_url=""):
-    """Patch the singleton settings attributes — works regardless of import path."""
+    """Patch the singleton settings attributes — works regardless of import path.
+
+    Earlier tests that call `importlib.reload(orchestrator.config)` (e.g. the
+    helm-default-involved-repos contract tests) replace `config.settings` with
+    a brand-new instance, while `watchdog.settings` (bound at `from .config
+    import settings` import time) still points at the original. We therefore
+    patch *both* bindings so the production code path under test reads the
+    overridden values regardless of any earlier reload.
+    """
     from orchestrator import config as orch_config
 
-    s = orch_config.settings
-    monkeypatch.setattr(s, "escalated_stale_notify_enabled", enabled, raising=False)
-    monkeypatch.setattr(s, "escalated_stale_threshold_sec", threshold_sec, raising=False)
-    monkeypatch.setattr(s, "escalated_stale_telegram_url", telegram_url, raising=False)
+    seen: set[int] = set()
+    targets = []
+    for s in (orch_config.settings, watchdog.settings):
+        if id(s) not in seen:
+            seen.add(id(s))
+            targets.append(s)
+    for s in targets:
+        monkeypatch.setattr(s, "escalated_stale_notify_enabled", enabled, raising=False)
+        monkeypatch.setattr(s, "escalated_stale_threshold_sec", threshold_sec, raising=False)
+        monkeypatch.setattr(s, "escalated_stale_telegram_url", telegram_url, raising=False)
 
 
 def _patch_obs_record_event(monkeypatch):
