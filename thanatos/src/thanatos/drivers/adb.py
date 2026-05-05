@@ -221,9 +221,9 @@ class AdbDriver:
         return await self._screenshot_b64()
 
     async def _screenshot_b64(self) -> str | None:
-        # screencap -p 是 raw PNG 二进制；走 _adb 会被 utf-8 decode("replace") 损坏
-        # （非 UTF-8 字节全变 U+FFFD，几 KB PNG 缩到几十字节）。这里直 subprocess
-        # 拿 stdout bytes，再 base64。
+        # screencap -p 是 raw PNG 二进制; 走 _adb 会被 utf-8 decode("replace") 损坏
+        # (非 UTF-8 字节全变 U+FFFD, 几 KB PNG 缩到几十字节). 这里直 subprocess
+        # 拿 stdout bytes, 再 base64.
         if shutil.which("adb") is None:
             return None
         try:
