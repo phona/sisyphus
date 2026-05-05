@@ -349,7 +349,7 @@ async def _branch_exists_on_remote(
     propagates as False (fail-closed; caller will fall back through the R6
     chain).
     """
-    url = f"https://x-access-token:${{GH_TOKEN}}/github.com/{repo_full_name}.git"
+    url = f"https://x-access-token:${{GH_TOKEN}}@github.com/{repo_full_name}.git"
     cmd = f"git ls-remote --heads {url} {shlex.quote(branch)} | head -n1"
     try:
         result = await rc.exec_in_runner(req_id, command=cmd, timeout_sec=_TIMEOUT_BRANCH_CHECK_SEC)
