@@ -403,3 +403,85 @@ kubectl patch <kind> <name> -n sisyphus \
 | v2.x stable | 500 条 REQ 多 user 多场景，sisyphus 季均 1 改动 |
 
 **稳定不是改出来的，是不改改出来的。**
+
+---
+
+## §16 推进节奏（dogfood pipeline 卡住时怎么走）
+
+跑全链路时 sisyphus pipeline 经常半中间卡（业务仓 toolchain / pre-existing test 飘移 / BKD agent 走错方向 / verifier escalate）。这节定下"卡了之后到底什么时候介入、用什么手段"的节奏。
+
+### 16.1 介入时机
+
+- stage running ≤10 min：**不动**，让 BKD agent / checker 自己跑
+- stage running ≥10 min 没可见进度 → 介入查（看 orch logs / BKD agent log）
+- stage failed → verifier 决策：**等 verifier**，不抢
+- verifier escalate → REQ stuck：**介入推**
+
+10 min 是观察阈，不是 SLA。stage 真在干活（push commits / 改文件 / 调试）就让它继续，**只在停滞才介入**。
+
+### 16.2 干预手段（按 audit 风险从低到高）
+
+| 层级 | 手段 | audit 安全 |
+|---|---|---|
+| L1 | 真修业务码：clone feat 分支 → patch → push | ✅ 完全 honest |
+| L2 | 重 trigger 同一 BKD agent：bkd-cli follow-up / trigger-existing | ✅ |
+| L3 | BKD PATCH issue tags（result:pass / decision:fix）via localhost:3000 | ⚠️ 系统会拦 forge |
+| L4 | webhook 注入 via `webhook_token` fire 状态机事件 | ⚠️ 当事件本身有真凭据时 OK；forge 会被拦 |
+| L5 | admin emit endpoint | ❌ 当前 deployment 缺 admin token，无效 |
+
+**优先 L1**。L4 仅用于"业务真修了，要让 sisyphus 看到"的场景。L3/L5 默认禁。
+
+### 16.3 真修 vs 糊弄
+
+撞坑后第一反应**永远是 L1 真修**。糊弄 = 绕开正确语义而不是真解决问题。
+
+例：dev_cross_check `melos bootstrap` 失败时
+- 糊弄：删 melos 调用，用 `flutter pub get` per package 替代（丢 workspace 跨包语义）
+- 真修：发现 pubspec.yaml 已声明 `melos: ^7.4.0` dev_dependency → 改 `dart run melos`（项目内 melos，绕开 broken global shim 但保留 workspace 语义）
+
+判别问句：**"这次修后，下条 REQ 跑同 path 还会撞同坑吗？"**
+- 不会 → 真修
+- 会 → 糊弄
+
+糊弄 commit 自己删掉重写，不留下让下次踩。
+
+### 16.4 forge audit 红线（系统会拦）
+
+写假数据进 sisyphus audit 链一律拦。具体：
+
+- ❌ forge `decision:pass` on verifier issue（伪造 verifier 判决）
+- ❌ forge stage `result:pass` 用一个不存在的 fake REQ id
+- ❌ admin emit `<event>` 没有真实事件凭据
+- ✅ webhook 注入 `session.completed + result:pass` **当且仅当** BKD agent 真完成对应工作 + tag 已 PATCH 到 BKD issue
+
+边界：**如果背后有真 commit / 真完成的工作，OK；如果是凭空写"通过了"，禁**。
+
+### 16.5 stage cap 经验值
+
+| stage | 现实耗时（首次 / 重试）| cap |
+|---|---|---|
+| analyze | 5-25 min | 30 min |
+| spec_lint | <10 sec | / |
+| challenger | 10-90 min（自定，无硬 cap）| 50 min 自评 |
+| dev_cross_check | 10s-300s | 300 sec（orch 硬 cap） |
+| staging_test | 1-5 min | 300 sec |
+| pr_ci_watch | 5-30 min（取决 GH CI）| / |
+| accept | 30-60 min（首跑 redroid 起 + APK 装 + atomic MCP）| / |
+| archive | 2-5 min | / |
+
+每条 fail → verifier 5 min → escalate 30s。一次 stage 失败 → 重 fire = 5-10 min 总开销。
+
+### 16.6 节奏例
+
+ttpos 单 REQ 全链路 dogfood **现实 2-4 h**（含手动 hack）。乐观 1 h（每 stage 一次过）。
+
+5 条 REQ 跑通 v0.x stable = **预算 15 h 真活** + 多个晚上分摊。
+
+### 16.7 何时打扰 user
+
+- 撞需要破红线的事（修 sisyphus 主链 / admin token 操作）
+- 撞 atomic MCP 真问题（PR #427 实证暴露）需要 prompt 修不修决策
+- 走完整 archive 完成（v0.x 第 1 条达成）
+- ≥3 次连续撞同一性质坑（系统化问题，不是单点 hack 能解）
+
+**不打扰**：业务码 push 修 / Makefile 修 / 挂 issue / webhook injection（公开路径） / BACKLOG 进度记录。
