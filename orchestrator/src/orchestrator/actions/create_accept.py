@@ -282,6 +282,16 @@ async def _read_source_manifest(rc, req_id: str, source_basename: str) -> Manife
         "fi"
     )
     result = await rc.exec_in_runner(req_id, command=cmd, timeout_sec=_TIMEOUT_MANIFEST_READ_SEC)
+    log.warning(
+        "create_accept.manifest_probe_debug",
+        req_id=req_id,
+        source=source_basename,
+        path=path,
+        exit_code=result.exit_code,
+        stdout_len=len(result.stdout or ""),
+        stdout_head=(result.stdout or "")[:400],
+        stderr_head=(result.stderr or "")[:200],
+    )
     if result.exit_code != 0:
         # probe failure (kubectl exec hiccup, broken shell, etc.) — fall back
         # to legacy single-layer path rather than escalating: an existing
