@@ -84,6 +84,12 @@ intake 阶段**不起 runner / 不 clone 任何仓** —— 它的产出（inten
 
 ### 2.2 `intent:analyze` 入口（适合 trivial REQ / 用户已知元素）
 
+> ⚠️ **现状：未实现 intent block 提取**（见 §2.4 实现状态）。当下 `intent:analyze`
+> 直入仍走 helm `default_*` 兜底（过渡期），元数据保护**不到位**。
+> 推荐**走 `intent:intake` 入口**直到 follow-up PR 把 §2.2 的提取机制实装。
+
+**目标形态**（schema 已定，提取器待实现）：
+
 ```
 BKD issue
   ├─ intent:analyze tag
@@ -91,19 +97,53 @@ BKD issue
   └─ 描述里夹一段 fenced ```json ... ``` block（schema 同 intake 输出，见 §3）
        │
        ▼
-orch start_analyze 提取 intent JSON → 直接进 ANALYZING
-```
-
-**强制**：analyze 直入的 issue 描述里**必须**含一段合法 intent JSON block。
-缺失 / 解析失败 → escalate，reason：
-
-```
-analyze direct entry requires `intent` JSON block in issue body.
-see docs/dispatch-contract.md §2.2 / §3
+orch start_analyze 提取 intent JSON → pydantic FinalizedIntent.model_validate
+       │
+       ├─ ok → 落 ctx.intake_finalized_intent → 进 ANALYZING
+       └─ 缺失 / schema 不合法 → escalate
+            reason: "analyze direct entry requires `intent` JSON block in issue body.
+                     see docs/dispatch-contract.md §2.2 / §3"
 ```
 
 > 不动现有 `intent:intake` / `intent:analyze` tag 设计，只把"analyze 直入要带 intent JSON"这条
 > 契约固化。两条入口最终汇聚到 §3 同款 schema。
+
+### 2.3 收回路径：A 方案（短期 / 已部分实施）
+
+> 本节关心 **agent → sisyphus** 这一向（intake-agent 输出 finalized intent → sisyphus 解析）。
+> sisyphus → agent 的 prompt 拼接走 Jinja2，不在本节范围。
+
+现状 intake 路径已有提取代码：[router.extract_intake_finalized_intent()](../orchestrator/src/orchestrator/router.py)
+—— 3 层正则 fallback（` ```json``` ` block / `` ``` `` 无 lang block / bare braces）。
+
+**A 方案改造**（本契约纪律，runtime 待补 PR）：
+
+1. 提取仍走正则（LLM markdown 输出无法绕，业界 2024 已用 tool use 替；sisyphus 当下不引）
+2. 提取后 → `FinalizedIntent.model_validate()` 严校验（`extra=forbid` + 字段格式 + base_branches key 引用）
+3. 校验失败 → **强 escalate**，附上 attached intake message log；不再 silent fallback
+4. 校验 pass → 落 `ctx.intake_finalized_intent`，下游 stage 一律按 schema 读
+
+### 2.4 实现状态对照
+
+| 路径 | 提取实现 | schema 严校验 | 失败处理 |
+|---|---|---|---|
+| `intent:intake` → analyze | ✅ `extract_intake_finalized_intent`（router.py） | ⏳ pydantic FinalizedIntent 已定，未接入消费方 | 🟡 当下 silent None；按 §2.3 应改强 escalate |
+| `intent:analyze` 直入 | ❌ 无（不读 issue body） | — | 🔴 当下走 helm `default_*` 兜底 |
+
+**Follow-up PR 计划**（不在 PR #471 范围）：
+
+1. webhook.py / start_analyze_with_finalized_intent.py 改用 `FinalizedIntent.model_validate()`
+   替代裸 dict（intake → analyze 接力路径，A 方案落地）
+2. start_analyze.py 加 issue body intent block 提取 + `FinalizedIntent.model_validate()`
+   （analyze 直入路径，§2.2 实装）
+3. 移除 helm `default_involved_repos` / `default_base_branch*` 读取（§4.2 deprecated 转 removal）
+
+### 2.5 中期演进：B 方案 HTTP endpoint（不在本契约 / 仅记锚点）
+
+正则提 markdown JSON 是 LLM 输出的固有脆弱点。中期方向 = sisyphus 暴露
+`POST /intent/{req_id}` HTTP endpoint，agent prompt 改成显式 curl POST，
+pydantic 在入口处 enforce schema，失败回 422 让 agent 重试。
+**dogfood 阶段不做**，等 5 条 ttpos REQ 跑通后评估。
 
 ---
 
@@ -185,7 +225,11 @@ see docs/dispatch-contract.md §2.2 / §3
 | `default_base_branch` | 全局 fallback base | `intent.base_branches` 或 `base:*` tag |
 | `default_base_branches` | per-repo fallback base | 同上 |
 
-启动时若发现这些字段非空 → orch warn log；读取它们的代码路径全部走 fail-fast（缺 `intent` 字段直接 escalate，不再 fallback）。
+**目标行为**（待 §2.4 follow-up PR 实装）：启动时若发现这些字段非空 → orch warn log；
+读取它们的代码路径全部走 fail-fast（缺 `intent` 字段直接 escalate，不再 fallback）。
+
+**当前行为**：仍被读取作为 fallback。`intent:analyze` 直入 + 不打 `base:*` tag 的
+REQ 仍依赖 `default_base_branches` 等 helm 字段，**这是已知过渡状态**。
 
 ### 4.3 BKD project 元数据
 
@@ -228,7 +272,9 @@ intake-agent 跟用户聊 → 输出 finalized intent JSON（含 `repos` / `base
 
 ### 6.2 analyze 直入（要素已就位）
 
-`prompt.md` 里描述需求 + **末尾贴 intent JSON block**：
+> ⚠️ **目标形态示例**——提取代码尚未实装（见 §2.4）。当下推荐走 6.1 intake 入口。
+
+`prompt.md` 里描述需求 + **末尾贴 intent JSON block**（schema 同 §3）：
 
 ````markdown
 # 需求描述
@@ -255,7 +301,8 @@ python3 scripts/bkd-cli.py inline \
   --intent analyze
 ```
 
-orch 解析 issue 描述里的 ` ```intent ``` ` block → 进 ANALYZING。
+**计划**：follow-up PR 让 `start_analyze` 解析 issue 描述里的 ` ```intent ``` ` block，
+缺失 / 解析失败 → escalate；当下走旧 helm `default_*` 兜底。
 
 ### 6.3 单 REQ 基线 override（hotfix 场景）
 
@@ -275,7 +322,9 @@ intent JSON 里 base_branches 写 `feat/develop-hwt`，但本条 hotfix 要从 `
 
 - BKD project 元数据接入（"这 project 涉及哪些仓"自动来源）—— 等需求池 ↔ BKD 方案定了再设计
 - 多 BKD project 监听 —— orch 仍单 project，跨 project 不在本契约范围
-- intent JSON schema 引入 langgraph / 其它 workflow 框架 —— 自家 pydantic + state.py 够用，详见与用户讨论
+- intent JSON schema 引入 langgraph / 其它 workflow 框架 —— 自家 pydantic + state.py 够用
+- B 方案 HTTP endpoint 替正则提（§2.5）—— 等 5 条 ttpos REQ 跑通后评估
+- agent → sisyphus 走 tool use / MCP 强 schema —— 业界 2024 已成熟，sisyphus 中期评估，**不在本契约**
 
 **目标是先把 sisyphus pipeline 落地，不是把它设计完美**。
 撞到的痛点先在本文档加一行说明 + 让 orch fail-fast，**不要静默兜底**。
