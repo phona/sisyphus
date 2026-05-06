@@ -45,6 +45,30 @@ BKD issue                                          finalized intent JSON
 - sisyphus 不"管"元数据 —— 只**读** intent JSON，**校验**必填字段在不在
 - 缺字段 / 解析失败 → fail-fast 转 ESCALATED，reason 引用本文档对应小节
 
+### 0.1 tag vs intent JSON 的边界（设计哲学）
+
+> **tag 是 envelope，intent JSON 是 letter。**
+
+| | tag | intent JSON |
+|---|---|---|
+| 本质 | webhook 触达瞬间的**路由信号** | 跨 stage 流转的**业务 payload** |
+| 谁看 | router (决定 fire 什么 event) | stage agent / runner / verifier |
+| 生命周期 | 短促，触发即用完 | 跟 REQ 同寿命，每 stage 都读 |
+| schema | 字符串集合，扁平无结构 | typed pydantic (FinalizedIntent) |
+
+**tag 只装**（不可替代的）：
+- `intent:*` —— 用户/agent 主动表达"起这个流程"
+- `result:*` / `decision:*` —— agent 主动表达"干完了，结果是 X"
+- `REQ-*` / `parent-id:*` —— 关联 key（webhook 推过来时要找 parent）
+
+**intent JSON 只装**（结构化业务数据）：
+- `repos` / `base_branches` —— 环境初始化要素
+- `business_behavior` / `acceptance` / 等业务字段
+
+**加新东西时套尺子**：
+1. 这条信息**只在 webhook 触达瞬间**起作用，还是**贯穿整个 REQ 寿命**？触达瞬间 → tag；贯穿寿命 → intent JSON。
+2. 这条信息 **agent 写不到 ctx 必须主动表达**，还是 **sisyphus 自己已经知道**？agent 主动 → tag；sisyphus 已知 → ctx / intent JSON，**不要又写一份 tag**。
+
 ---
 
 ## 1. dispatch 必填 tag
@@ -54,12 +78,18 @@ BKD issue                                          finalized intent JSON
 | tag | 例 | 必填 | 语义 |
 |---|---|---|---|
 | `intent:intake` 或 `intent:analyze` | `intent:analyze` | ✅ | 入口选择（详见 §2） |
-| `base:<branch>` 或 `base:<repo>=<branch>` | `base:feat/develop-hwt` | 选填 | 单 REQ 基线分支 override（覆盖 intent 里的 `base_branches`） |
 
 > `REQ-<slug>` tag 不在此列 —— router 找不到时自动用 `REQ-<issueNumber>` 兜，不是用户契约的一部分。
 
-**没了**。`source-repo:` / `involved-repos:` 这两个 tag 从契约**删除** —— 它们的语义全部移进
-`intent` JSON（见 §3 schema），不再让用户/agent 在 tag 层重复写。
+**没了，只有一条**。下列 tag 从契约**删除** —— 语义全部移进 `intent` JSON（见 §3 schema），
+不再让用户/agent 在 tag 层重复写：
+
+- `source-repo:<owner>/<repo>` —— 由 agent 自判，不进契约（§3.2）
+- `involved-repos:<csv>` —— 走 `intent.repos`
+- `base:<branch>` / `base:<repo>=<branch>` —— 走 `intent.base_branches`
+
+理由参考 §0.1 边界尺子：base / repos 是"贯穿 REQ 寿命的业务数据"，应该在 intent JSON 里
+显式承载，不该当作"webhook 触达瞬间的路由信号"放 tag。两份载体做同一件事 = 优先级冲突 / footgun。
 
 ---
 
@@ -306,15 +336,13 @@ python3 scripts/bkd-cli.py inline \
 
 ### 6.3 单 REQ 基线 override（hotfix 场景）
 
-intent JSON 里 base_branches 写 `feat/develop-hwt`，但本条 hotfix 要从 `release` 切：
+不走 tag，**在 intent JSON 里改 base_branches**：
 
-```bash
-... --tag base:release
-# 或 per-repo
-... --tag base:ttpos-flutter=release
-```
+- intake 入口：跟 intake-agent 说"这条 REQ 走 release"，agent 输出 intent JSON 时把
+  `base_branches` 设成 release
+- analyze 直入：直接在 prompt.md 的 ```intent``` block 里写 `"base_branches": {"ttpos-flutter": "release"}`
 
-`base:*` tag 优先级 > `intent.base_branches`。
+**不存在 tag 层的 override 通路**——base 是业务数据归 intent JSON 唯一承载（§0.1 边界）。
 
 ---
 
@@ -340,6 +368,9 @@ intent JSON 里 base_branches 写 `feat/develop-hwt`，但本条 hotfix 要从 `
 | #464 / #466 | `default_involved_repos: [phona/sisyphus]` 全局 default 跨场景污染 | §4.2 helm 业务元数据撤出；改读 `intent.repos`，fail-fast |
 | #467 | 元数据散 4 层无 source of truth | 本文档 = 唯一 source of truth；helm / ctx / env.yaml 各归各位（§4） |
 
+另外本契约**主动退役** `base:*` tag —— 跟 intent JSON 重复（§0.1 边界）。
+现状 router `extract_base_branches` 仍读 tag 当 override；follow-up PR 砍。
+
 ---
 
 ## 9. 修订纪律
@@ -348,3 +379,4 @@ intent JSON 里 base_branches 写 `feat/develop-hwt`，但本条 hotfix 要从 `
 - 加新 fallback 默认值前 → 先想清楚是不是又在偷塞"项目元数据" —— 99% 答案是 fail-fast 转 escalate
 - 不在本文档列出的 tag → orch 不识别，用户也别用
 - helm values 加新业务/项目相关字段 → 拒绝。helm 只放基础设施配置
+- **加新 tag 默认拒**：先套 §0.1 尺子问"这能不能从 ctx / intent JSON 推 / 是不是 agent 必须主动表达"。99% 答案是不需要新 tag。
