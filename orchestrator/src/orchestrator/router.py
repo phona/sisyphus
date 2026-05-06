@@ -14,6 +14,9 @@ import json
 import re
 from collections.abc import Iterable
 
+from pydantic import ValidationError
+
+from .schemas.intent import FinalizedIntent
 from .state import Event
 from .verifier_parser import extract_decision_robust
 
@@ -183,53 +186,75 @@ def extract_decision_from_issue(
     return result.decision
 
 
-_REQUIRED_INTAKE_FIELDS = frozenset({
-    "involved_repos", "business_behavior", "data_constraints",
-    "edge_cases", "do_not_touch", "acceptance",
-})
+def _validate_intent_dict(data: object) -> dict | None:
+    """跑 FinalizedIntent.model_validate；通过返 by_alias dict（兼容下游
+    `involved_repos` 字段访问），失败 log debug 后返 None。
+
+    PR #471 §2.3 A 方案：A 方案在调用方（webhook）把 None 翻成 INTAKE_FAIL
+    强 escalate；本函数只负责"提取 + 严校验"，不直接 escalate。
+    """
+    if not isinstance(data, dict):
+        return None
+    try:
+        intent = FinalizedIntent.model_validate(data)
+    except ValidationError as e:
+        log.debug(
+            "extract_intake_finalized_intent.schema_invalid",
+            errors=e.errors(include_url=False),
+            keys=sorted(data.keys()),
+        )
+        return None
+    # by_alias=True → 输出 `involved_repos` 而不是 `repos`，兼容
+    # _clone.py / start_analyze_with_finalized_intent.py 现有字段访问。
+    # exclude_defaults=True → 没声明的 base_branches 不输出空 dict，
+    # 跟原 dict 形状保持向后兼容（避免下游消费方撞到意外字段）。
+    return intent.model_dump(by_alias=True, exclude_defaults=True)
 
 
 def extract_intake_finalized_intent(text: str | None) -> dict | None:
     """从 intake-agent 最后一条 message 提取 finalized intent JSON。
 
     3 层 fallback：json codeblock / plain codeblock / bare braces with key field。
-    必须含 6 个 required 字段，否则返 None。
+    提取到的 dict 走 FinalizedIntent.model_validate 严校验，schema 不合法返 None。
+
+    Schema：参见 `orchestrator.schemas.intent.FinalizedIntent` /
+    `docs/dispatch-contract.md` §3。
     """
     if not text:
         return None
-
-    def _valid(data: object) -> bool:
-        return isinstance(data, dict) and _REQUIRED_INTAKE_FIELDS.issubset(data.keys())
 
     # 1. ```json ... ``` 代码块（推荐，最稳）
     blocks = re.findall(r"```json\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
     for blk in reversed(blocks):
         try:
             data = json.loads(blk)
-            if _valid(data):
-                return data
         except Exception:
             continue
+        validated = _validate_intent_dict(data)
+        if validated is not None:
+            return validated
 
     # 2. ``` ... ``` 无 lang 标代码块
     blocks = re.findall(r"```\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
     for blk in reversed(blocks):
         try:
             data = json.loads(blk)
-            if _valid(data):
-                return data
         except Exception:
             continue
+        validated = _validate_intent_dict(data)
+        if validated is not None:
+            return validated
 
     # 3. bare braces 含 "involved_repos" 关键字
     candidates = re.findall(r"\{[^{}]*\"involved_repos\"[^{}]*\}", text, flags=re.DOTALL)
     for blk in reversed(candidates):
         try:
             data = json.loads(blk)
-            if _valid(data):
-                return data
         except Exception:
             continue
+        validated = _validate_intent_dict(data)
+        if validated is not None:
+            return validated
 
     return None
 

@@ -77,6 +77,40 @@ def test_extract_none_on_empty():
     assert extract_intake_finalized_intent("no json here") is None
 
 
+# ─── 1b. FinalizedIntent 严校验（PR #471 §2.3 A 方案接通）──────────────────────
+
+def test_extract_rejects_extra_field():
+    """FinalizedIntent.extra=forbid → 6 字段以外的字段 = schema 漂移 → None"""
+    bad = {**_VALID_INTENT, "unexpected_field": "oops"}
+    text = f"```json\n{json.dumps(bad)}\n```"
+    assert extract_intake_finalized_intent(text) is None
+
+
+def test_extract_rejects_bad_repo_format():
+    """repos 必须 'owner/repo' 格式"""
+    bad = {**_VALID_INTENT, "involved_repos": ["just-name-no-slash"]}
+    text = f"```json\n{json.dumps(bad)}\n```"
+    assert extract_intake_finalized_intent(text) is None
+
+
+def test_extract_rejects_unknown_base_branch_key():
+    """base_branches 的 key 必须是 repos 里某一项的 basename"""
+    bad = {**_VALID_INTENT, "base_branches": {"unknown-repo": "main"}}
+    text = f"```json\n{json.dumps(bad)}\n```"
+    assert extract_intake_finalized_intent(text) is None
+
+
+def test_extract_accepts_base_branches():
+    """新字段 base_branches 选填，合法时透传"""
+    good = {**_VALID_INTENT, "base_branches": {"repo-a": "feat/develop"}}
+    text = f"```json\n{json.dumps(good)}\n```"
+    got = extract_intake_finalized_intent(text)
+    assert got is not None
+    assert got["base_branches"] == {"repo-a": "feat/develop"}
+    # 兼容 alias：下游读 involved_repos
+    assert got["involved_repos"] == ["owner/repo-a"]
+
+
 # ─── 2. router routing ───────────────────────────────────────────────────────
 
 
