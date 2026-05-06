@@ -637,3 +637,51 @@ mcp-smoke ns 单独起 thanatos+redroid 测 atomic MCP：本地 src 经 PYTHONPA
 ingress=ok（HTTP 200），orphans cleaned=0（无 accept-req-*），load=0.38↓（5m=0.93）。host 完全 idle。
 
 PR #446 已开（atomic MCP fix：accept prompt + screenshot bytes）。等 CI + merge。
+
+## Round-3 验证 — 2026-05-06 00:08Z
+- PR #458 (#457 fix) merged → orch sha-65ca300 → REQ #6 resume → 跑过 pr_ci 进 accept ✓ (验证 #457 fix work)
+- accept stage 撞 #462 (cloned_repos[0] guess 错 source) → 修法 PR #463 merged → orch sha-ad34714
+- REQ #6 二次 resume 撞 **第三个 bug**: clone 阶段验 `feat/REQ-...` base branch 在 phona/sisyphus 不存在（fixer 没在 sisyphus commit）→ clone fail 早早 escalate，触不到 #462 fix 的 manifest detection path
+- REQ #8 (fresh dispatch) 正常推进：analyze ✓ → analyze_artifact_check ✓ → spec_lint ✓ → dev_cross_check 跑中；预计能跑到 accept 验 #462
+
+第三个 bug 单独挂 issue，不阻塞验证（REQ #8 fresh dispatch 路径不撞它）。
+
+## Round-4 — 2026-05-06 00:26Z REQ #9 派出 with source-repo tag
+issue qpwjaj4q (#1006) slug `kiosk-login-help-link-1778027184` —— **第一条带 `source-repo:ZonEaseTech/ttpos-flutter` tag 的 REQ**，验证 clone resolver Layer 1 命中（避 #464 footgun）+ 走到 accept 验 #462 manifest detection。
+
+issues filed: #462 (manifest source detection) merged ✓ / #464 (clone default_involved_repos footgun) open / #466 (default_involved_repos stale legacy 整体修法) open。
+
+## Round-4 — 2026-05-06 00:48Z 全链 fix 后 REQ #10 派出
+issue #469 (manual hack via kubectl patch) — SISYPHUS_DEFAULT_BASE_BRANCHES 设 ttpos-flutter+server-go=feat/develop-hwt → orch rollout 完成 ✓。
+
+REQ #10 (issue t4qliwp7 #1009) `kiosk-login-v2-marker-1778028539` with source-repo tag。期望验：
+- #441 source-repo tag Layer 1 命中 ✓
+- #469 base branch lookup → feat/develop-hwt ✓
+- analyze pass → fixer/verifier (#457 fix) ✓
+- accept stage (#462 manifest detection) ✓
+- full archive → DONE
+
+如还撞别的 footgun → 继续按 §15.2 阻塞类挂 issue + minimal hack。
+
+## STOP — 2026-05-06 00:55Z user 喊停
+所有派进错项目（nnvxh8wj sisyphus）的 ttpos REQ 全终态 escalated。runner pod 已 cleanup。
+- force-escalate v2-marker-1778028539 / -1778028610（auto-resume dup）
+- rescue loop 不再 schedule wakeup（让 session 自然停）
+- 没 close BKD issue（保留 trace 给后续 review）
+
+待恢复方向：换正确 BKD project（ttpos-arch-lab / ttpos-workflow-lab 待 user 定）。
+
+## 2026-05-06 ~02:30Z tag 层职责再划分 (PR #471 衍生)
+dispatch-contract 落定后浮出：BKD tag 跟 sisyphus 工作节点本来就 1:1 匹配，**大部分 tag 是冗余的**。
+
+- A 类 (agent → sisyphus 主动信号): `intent:` / `result:` / `decision:` —— 不可替代
+- B 类 (跨 issue 关联 key): `REQ-` / `parent-id:` —— 不可替代
+- C 类 (sisyphus 自己写的元数据装饰): stage role / `verify:` / `trigger:` / `pr:` / `escalated` / `reason:` —— **冗余**，sisyphus 自己起的 issue 自己 ctx 里全有
+- D 类 (业务/项目元数据): `source-repo:` / `involved-repos:` / `base:` —— **本次契约删除**，全进 intent JSON
+- E 类 (Hint tags): 透明转发不入决策
+
+C 类清算 = 一个独立设计任务，要动 router.py / 14 个 verifier prompt / fixer prompt /
+api-tag-management-spec.md。**不立 issue**——等 5 条 ttpos REQ 跑通 + dispatch-contract
+全套落地后启动。心智依据：dispatch-contract.md §0.1 (envelope vs letter)。
+
+撞够 3 次 C 类 tag 引发的故障再考虑立 issue。

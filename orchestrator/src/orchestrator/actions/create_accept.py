@@ -863,7 +863,7 @@ async def create_accept(*, body, req_id, tags, ctx):
 
 async def _detect_source_via_manifest(
     rc, req_id: str, ctx: dict | None,
-) -> tuple[str, str | None, "Manifest | None"]:
+) -> tuple[str, str | None, Manifest | None]:
     """Manifest-driven source detection (issue #462).
 
     Iterate ctx.cloned_repos, probe each for .sisyphus/env.yaml. If exactly
@@ -882,7 +882,7 @@ async def _detect_source_via_manifest(
     re-probe.
     """
     cloned = (ctx or {}).get("cloned_repos") or []
-    candidates: list[tuple[str, str, "Manifest"]] = []
+    candidates: list[tuple[str, str, Manifest]] = []
     for repo in cloned:
         if not isinstance(repo, str) or "/" not in repo:
             continue

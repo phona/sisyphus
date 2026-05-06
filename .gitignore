@@ -24,6 +24,13 @@ build/
 dist/
 *.tar.gz
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+
 # Claude Code local worktrees / cache
 .claude/
 .mcp.json
+.cache/
