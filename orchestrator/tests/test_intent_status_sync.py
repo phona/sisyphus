@@ -307,6 +307,99 @@ async def test_hitl_s3_escalate_session_failed_self_loop_patches_intent_review(
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# HITL-S3b (issue #473): SESSION_FAILED self-loop MUST NOT cleanup runner pod
+#
+# 防 watchdog stuck 误判删 pod → BKD agent late result:pass 推下一 stage 时
+# pod 已 404 race。runner_gc 兜底（state=ESCALATED 留着自然清，state 离开
+# ESCALATED 进 non-terminal 留 pod 给下一 stage exec）。
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_hitl_s3b_session_failed_self_loop_does_not_cleanup_runner(
+    monkeypatch, _isolated_actions, _mock_runner_controller,
+):
+    """issue #473：SESSION_FAILED 路径 escalate action 内**不再**主动 cleanup_runner.
+
+    BKD agent late result:pass 进来时 pod 还在，下一 stage exec 不撞 404。
+    真死的 REQ 由 runner_gc 兜底（state=ESCALATED → terminal → 下一 tick 清）。
+    """
+    from orchestrator.actions import escalate as escalate_mod
+
+    inst, _update_issue = _make_bkd_mock()
+
+    pool = _FakePool({
+        "REQ-1": _FakeReq(
+            state=ReqState.STAGING_TEST_RUNNING.value,
+            context={
+                "intent_issue_id": "abc123",
+                "auto_retry_count": 2,  # 真 escalate 分支（跳 retry 路径）
+            },
+        ),
+    })
+
+    monkeypatch.setattr(escalate_mod, "BKDClient", lambda *a, **kw: inst)
+    inst.merge_tags_and_update = AsyncMock(return_value=None)
+    monkeypatch.setattr(escalate_mod, "db", MagicMock())
+    monkeypatch.setattr(
+        escalate_mod, "_all_prs_merged_for_req",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        escalate_mod.gh_incident, "open_incident",
+        AsyncMock(return_value=None),
+    )
+
+    import orchestrator.store.req_state as rs_mod
+    saved = (rs_mod.cas_transition, rs_mod.update_context, rs_mod.get)
+
+    async def _fake_cas(_p, rid, expected, target, evt, action, context_patch=None):
+        r = pool.rows.get(rid)
+        if r is None or r.state != expected.value:
+            return False
+        r.state = target.value
+        return True
+
+    async def _fake_update_ctx(_p, rid, patch_d):
+        r = pool.rows.get(rid)
+        if r:
+            r.context.update(patch_d)
+
+    @dataclass
+    class _Row:
+        state: ReqState
+        context: dict
+
+    async def _fake_get(_p, rid):
+        r = pool.rows.get(rid)
+        if r is None:
+            return None
+        return _Row(state=ReqState(r.state), context=dict(r.context))
+
+    rs_mod.cas_transition = _fake_cas
+    rs_mod.update_context = _fake_update_ctx
+    rs_mod.get = _fake_get
+
+    body = type("B", (), {
+        "issueId": "abc123", "projectId": "proj-x",
+        "event": "watchdog.stuck",
+    })()
+
+    try:
+        await escalate_mod.escalate(
+            body=body, req_id="REQ-1",
+            tags=[], ctx=dict(pool.rows["REQ-1"].context),
+        )
+    finally:
+        rs_mod.cas_transition, rs_mod.update_context, rs_mod.get = saved
+
+    # state advanced to ESCALATED via manual CAS
+    assert pool.rows["REQ-1"].state == ReqState.ESCALATED.value
+    # ─── #473 contract：runner pod MUST NOT be cleaned up by escalate action ───
+    _mock_runner_controller.cleanup_runner.assert_not_awaited()
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # HITL-S4: BKD PATCH failure → log warning, state machine continues
 # ═══════════════════════════════════════════════════════════════════════
 

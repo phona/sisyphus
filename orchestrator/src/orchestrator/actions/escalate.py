@@ -462,11 +462,19 @@ async def escalate(*, body, req_id, tags, ctx):
     await req_state.update_context(pool, req_id, ctx_patch)
 
     # SESSION_FAILED 类路径下 transition 是 self-loop（state 没动），需手动 CAS 推到
-    # ESCALATED 并清 runner。
+    # ESCALATED。
     # 触发源：BKD 真发的 session.failed webhook，或 watchdog 内部 emit Event.SESSION_FAILED
     # （body.event="watchdog.stuck"）。
     # 其他事件路径（如 INTAKE_FAIL / PR_CI_TIMEOUT / VERIFY_ESCALATE）的 transition
     # 已在 state.py 写死 next_state=ESCALATED，engine 已经做过 CAS + cleanup，这里跳过。
+    #
+    # 不主动清 runner pod（issue #473）：watchdog 5min 阈值跟 BKD agent 真挂没握手，
+    # 经常误判 stuck；我们这边一删 pod 就跟 late result:pass 撞 race（state 进 next
+    # stage 时 pod 已 404，下游 stage exec 失败再 escalate）。改由 runner_gc 兜底：
+    #   - state 留在 ESCALATED → runner_gc 下一 tick 看到 terminal 清 pod
+    #   - BKD agent late result:pass 推下一 stage → state 离开 ESCALATED 进 non-terminal
+    #     → runner_gc 永远不动它，pod 留给下一 stage exec
+    #   - PVC 默认 retain N 天，stage 入口 ensure_runner_alive 幂等 lazy recreate
     is_session_failed_path = body.event in _SESSION_END_SIGNALS
     if is_session_failed_path:
         row = await req_state.get(pool, req_id)
@@ -476,19 +484,10 @@ async def escalate(*, body, req_id, tags, ctx):
                 Event.SESSION_FAILED, "escalate",
             )
             if advanced:
-                # 手动清 runner（engine 没自动清，因为 transition 是 self-loop 看不出 terminal）
-                try:
-                    rc = k8s_runner.get_controller()
-                    await rc.cleanup_runner(req_id, retain_pvc=True)
-                    log.info("escalate.runner_cleaned", req_id=req_id)
-                except Exception as e:
-                    log.warning("escalate.runner_cleanup_failed",
-                                req_id=req_id, error=str(e))
                 # REQ-bkd-hitl-end-to-end-loop-1777273753：engine.step 看本次
                 # transition 是 self-loop（cur=cur），不会触发它的终态 sync
                 # block；所以这条 self-loop 路径要 escalate 自己 PATCH BKD
-                # intent issue 的 statusId="review"。同模式 await（escalate
-                # 已 await cleanup_runner，多一行简单清晰）。
+                # intent issue 的 statusId="review"。
                 try:
                     async with BKDClient(
                         settings.bkd_base_url, settings.bkd_token,
