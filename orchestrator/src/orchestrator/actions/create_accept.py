@@ -52,6 +52,23 @@ from ._skip import skip_if_enabled
 log = structlog.get_logger(__name__)
 
 _TIMEOUT_ENV_UP_SEC = 1800  # 30 min: helm install + wait ready + APK GHA build poll (5-10min) + download + adb install
+
+
+def _image_tags_env(ctx: dict | None) -> dict[str, str]:
+    """closes #474: 把 ctx.image_tags（pr_ci_watch 从 commit status
+    `CI / image-publish` 抠出来的 per-repo image_tag）拼成 JSON env，让业务仓
+    accept-env-up Makefile target 转 `helm --set <repo>.image.tag=...`
+    （契约 `SISYPHUS_IMAGE_TAGS`，docs/sisyphus-integration.md §4 +
+    docs/integration-contracts.md §11）。
+
+    空 dict / 缺字段 → 返 {}，不注入 env，业务仓 chart 落 default tag（兼容期，
+    业务仓还没接 image-publish job 时也别炸）。
+    """
+    image_tags = (ctx or {}).get("image_tags")
+    if not isinstance(image_tags, dict) or not image_tags:
+        return {}
+    # owner/repo key 形式跟 pr_ci_watch 输出对齐；业务仓自己 jq 抽 basename
+    return {"SISYPHUS_IMAGE_TAGS": json.dumps(image_tags, sort_keys=True)}
 _TIMEOUT_LITE_SEC = 1800   # 30 min for up × N + sleep + smoke × N + down × N
 _TIMEOUT_MANIFEST_READ_SEC = 30  # cat .sisyphus/env.yaml on runner
 _TIMEOUT_BRANCH_CHECK_SEC = 60   # git ls-remote per needs repo
@@ -650,6 +667,7 @@ async def _run_legacy_single_layer(*, req_id: str, ctx, body, tags, rc, namespac
         "SISYPHUS_REQ_ID": req_id,
         "SISYPHUS_STAGE": "accept-env-up",
         "SISYPHUS_NAMESPACE": namespace,
+        **_image_tags_env(ctx),
     }
     try:
         result = await rc.exec_in_runner(
@@ -965,6 +983,7 @@ async def _run_multi_layer_with_cache(
         "SISYPHUS_REQ_ID": req_id,
         "SISYPHUS_STAGE": "accept-env-up",
         "SISYPHUS_NAMESPACE": namespace,
+        **_image_tags_env(ctx),
     }
     source_branch = (ctx or {}).get("branch") or f"feat/{req_id}"
     dir_map = cross_repo_env.workspace_dir_map(topo)

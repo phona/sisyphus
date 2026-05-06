@@ -630,3 +630,195 @@ async def test_watch_pr_ci_review_only_check_runs_treated_as_fail(
     assert "no-gha-checks-ran" in result.stdout_tail
     # 露出实际跑了啥（review-only bot 真身），便于人工 / verifier 一眼判
     assert "claude-review" in result.stdout_tail
+
+
+# ── #474: commit statuses 路径 + image_tag extras ─────────────────────────────
+
+def _status(context: str, state: str = "success", description: str = "") -> dict:
+    """模拟 GitHub commit statuses API 单条返回。"""
+    return {"context": context, "state": state, "description": description}
+
+
+def test_statuses_to_runs_maps_states_correctly():
+    """status state 映射到 check-run 形态：success/failure/pending 各一条。"""
+    runs = pr_ci_watch._statuses_to_runs([
+        _status("CI / lint", "success"),
+        _status("CI / unit-test", "failure", "boom"),
+        _status("CI / integration-test", "pending"),
+        _status("CI / sonarqube", "error", "config bad"),
+    ])
+    by_name = {r["name"]: r for r in runs}
+    assert by_name["CI / lint"]["status"] == "completed"
+    assert by_name["CI / lint"]["conclusion"] == "success"
+    assert by_name["CI / unit-test"]["conclusion"] == "failure"
+    assert by_name["CI / integration-test"]["status"] == "in_progress"
+    assert by_name["CI / integration-test"]["conclusion"] is None
+    # error 也走 failure（避免落到 review-only bot 误判）
+    assert by_name["CI / sonarqube"]["conclusion"] == "failure"
+    # 全部强标 GHA-equivalent，不会被 no-gha 假阳性误伤
+    assert all(r["app"]["slug"] == "github-actions" for r in runs)
+
+
+def test_extract_image_tag_picks_image_publish_description():
+    """description 字段就是 image_tag；其它 status 跳过。"""
+    runs = pr_ci_watch._statuses_to_runs([
+        _status("CI / lint", "success"),
+        _status("CI / image-publish", "success",
+                "ghcr.io/phona/ttpos-server-go:REQ-1-sha-deadbee1"),
+    ])
+    assert pr_ci_watch._extract_image_tag(runs) == \
+        "ghcr.io/phona/ttpos-server-go:REQ-1-sha-deadbee1"
+
+
+def test_extract_image_tag_returns_none_when_image_publish_pending():
+    """image-publish 还 pending → 不抠（会撞旧 description）。"""
+    runs = pr_ci_watch._statuses_to_runs([
+        _status("CI / image-publish", "pending"),
+    ])
+    assert pr_ci_watch._extract_image_tag(runs) is None
+
+
+def test_extract_image_tag_returns_none_when_image_publish_failed():
+    """image-publish failure 时 description 是 'Image publish failure' 之类，跳过。"""
+    runs = pr_ci_watch._statuses_to_runs([
+        _status("CI / image-publish", "failure", "Image publish failure"),
+    ])
+    assert pr_ci_watch._extract_image_tag(runs) is None
+
+
+def test_extract_image_tag_returns_none_when_image_publish_absent():
+    """业务仓没接 image-publish job → 安全返 None。"""
+    runs = pr_ci_watch._statuses_to_runs([
+        _status("CI / lint", "success"),
+        _status("CI / unit-test", "success"),
+    ])
+    assert pr_ci_watch._extract_image_tag(runs) is None
+
+
+@pytest.mark.no_stub_commit_statuses
+@pytest.mark.asyncio
+async def test_watch_pr_ci_pending_status_holds_back_pass(httpx_mock, monkeypatch):
+    """check-runs 全绿但 statuses 里 image-publish 还 pending → verdict=pending 不应判 pass。"""
+    monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
+    repo = patch_pr_lookup(monkeypatch)
+
+    async def fast_sleep(_):
+        return None
+    monkeypatch.setattr(pr_ci_watch.asyncio, "sleep", fast_sleep)
+
+    httpx_mock.add_response(
+        url="https://api.github.com/repos/phona/ubox-crosser/commits/"
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/check-runs?per_page=100",
+        json=_runs_payload(_run("Dispatch CI")),
+        is_reusable=True,
+    )
+    httpx_mock.add_response(
+        url="https://api.github.com/repos/phona/ubox-crosser/commits/"
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/statuses?per_page=100",
+        json=[
+            _status("CI / lint", "success"),
+            _status("CI / image-publish", "pending"),
+        ],
+        is_reusable=True,
+    )
+
+    result = await pr_ci_watch.watch_pr_ci(
+        "REQ-9", "feat/REQ-9", poll_interval_sec=0, timeout_sec=0, repos=[repo],
+    )
+
+    # statuses pending → 整体 pending → 超时 124（不会过早判 PR_CI_PASS）
+    assert result.passed is False
+    assert result.exit_code == 124
+
+
+@pytest.mark.no_stub_commit_statuses
+@pytest.mark.asyncio
+async def test_watch_pr_ci_passes_with_image_tag_extras(httpx_mock, monkeypatch):
+    """check-runs + statuses 全绿，image-publish description 抠出 image_tag 进 extras。"""
+    monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
+    repo = patch_pr_lookup(monkeypatch)
+
+    httpx_mock.add_response(
+        url="https://api.github.com/repos/phona/ubox-crosser/commits/"
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/check-runs?per_page=100",
+        json=_runs_payload(_run("Dispatch CI")),
+    )
+    httpx_mock.add_response(
+        url="https://api.github.com/repos/phona/ubox-crosser/commits/"
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/statuses?per_page=100",
+        json=[
+            _status("CI / lint", "success"),
+            _status("CI / unit-test", "success"),
+            _status("CI / integration-test", "success"),
+            _status("CI / sonarqube", "success"),
+            _status("CI / image-publish", "success",
+                    "ghcr.io/phona/ubox-crosser:REQ-9-sha-deadbeef"),
+        ],
+    )
+
+    result = await pr_ci_watch.watch_pr_ci(
+        "REQ-9", "feat/REQ-9", poll_interval_sec=1, timeout_sec=60, repos=[repo],
+    )
+
+    assert result.passed is True
+    assert result.exit_code == 0
+    assert result.extras == {
+        "image_tags": {
+            "phona/ubox-crosser": "ghcr.io/phona/ubox-crosser:REQ-9-sha-deadbeef",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_watch_pr_ci_passes_without_image_tag_when_status_absent(
+    httpx_mock, monkeypatch,
+):
+    """业务仓还没接 image-publish job → pass 但 extras 缺 image_tags（accept fall back chart default）。"""
+    monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
+    repo = patch_pr_lookup(monkeypatch)
+
+    httpx_mock.add_response(
+        url="https://api.github.com/repos/phona/ubox-crosser/commits/"
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/check-runs?per_page=100",
+        json=_runs_payload(_run("lint")),
+    )
+    # statuses 由 conftest 默认 fixture 兜底空数组；这里不再 add_response
+
+    result = await pr_ci_watch.watch_pr_ci(
+        "REQ-9", "feat/REQ-9", poll_interval_sec=1, timeout_sec=60, repos=[repo],
+    )
+
+    assert result.passed is True
+    assert result.exit_code == 0
+    # extras 是 None：image_tags 为空 dict 时不构造 extras
+    assert result.extras is None
+
+
+@pytest.mark.no_stub_commit_statuses
+@pytest.mark.asyncio
+async def test_watch_pr_ci_status_failure_breaks_pass(httpx_mock, monkeypatch):
+    """check-runs 全绿但 statuses 有 failure（如 ttpos-ci 的 sonarqube 红） → 整体 fail。"""
+    monkeypatch.setattr(pr_ci_watch.settings, "github_token", "ghp_xxx")
+    repo = patch_pr_lookup(monkeypatch)
+
+    httpx_mock.add_response(
+        url="https://api.github.com/repos/phona/ubox-crosser/commits/"
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/check-runs?per_page=100",
+        json=_runs_payload(_run("Dispatch CI")),
+    )
+    httpx_mock.add_response(
+        url="https://api.github.com/repos/phona/ubox-crosser/commits/"
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/statuses?per_page=100",
+        json=[
+            _status("CI / lint", "success"),
+            _status("CI / sonarqube", "failure", "Coverage below threshold"),
+        ],
+    )
+
+    result = await pr_ci_watch.watch_pr_ci(
+        "REQ-9", "feat/REQ-9", poll_interval_sec=1, timeout_sec=60, repos=[repo],
+    )
+
+    assert result.passed is False
+    assert result.exit_code == 1
+    assert "CI / sonarqube=failure" in result.stdout_tail

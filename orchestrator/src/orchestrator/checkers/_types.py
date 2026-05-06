@@ -31,3 +31,9 @@ class CheckResult:
     cmd: str
     reason: str | None = None
     attempts: int = 1
+    # 给 checker 透出额外的结构化信号，让上游 action 把数据写 ctx；engine /
+    # artifact_checks / verifier 不读这字段。pr_ci_watch 用它带回每仓
+    # `image_tags`（commit status `CI / image-publish` 的 description 字段
+    # 解析得来，accept stage 通过 SISYPHUS_IMAGE_TAGS env 喂给业务仓 chart，
+    # 见 docs/integration-contracts.md §11、closes #474）。
+    extras: dict | None = None
