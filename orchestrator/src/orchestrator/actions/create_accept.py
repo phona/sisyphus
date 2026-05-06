@@ -780,7 +780,18 @@ async def create_accept(*, body, req_id, tags, ctx):
     # REQs typically have one entry; multi-repo REQs declare the source first
     # by convention (sisyphus-clone-repos.sh order). Fall back to integration
     # resolver scan when ctx is empty.
-    source_repo, source_basename = _resolve_source_repo(ctx, tags)
+    #
+    # Layer 0 (issue #462): manifest-driven detection. If exactly one cloned
+    # repo carries .sisyphus/env.yaml, that's authoritative — env.yaml 的
+    # 存在就是 "I am the integration target" 的契约。比 cloned_repos[0]
+    # 顺序猜更可靠，特别是 fixer 在 sisyphus 仓 commit 后 cloned_repos
+    # 列里 sisyphus 排第一会把 source_basename 错猜成 sisyphus
+    # （dogfood Round-3 实证 REQ-kiosk-home-idle-timeout-stub-1778010045）。
+    detected = await _detect_source_via_manifest(rc, req_id, ctx)
+    source_repo, source_basename, source_manifest = detected
+    if source_basename is None:
+        # No single-manifest match; fall back to ctx/tags-based resolution.
+        source_repo, source_basename = _resolve_source_repo(ctx, tags)
 
     # If we can't identify a source repo from ctx, take the legacy single-layer
     # path which uses the integration resolver to pick a directory.
@@ -791,9 +802,12 @@ async def create_accept(*, body, req_id, tags, ctx):
             namespace=namespace, source_issue_id=source_issue_id,
         )
 
-    # Read source manifest (R8 backward-compat trigger when absent)
+    # Read source manifest (R8 backward-compat trigger when absent). Skip when
+    # manifest-driven detection already resolved it (avoids redundant probe +
+    # mock-script drift in tests).
     try:
-        source_manifest = await _read_source_manifest(rc, req_id, source_basename)
+        if source_manifest is None:
+            source_manifest = await _read_source_manifest(rc, req_id, source_basename)
     except ManifestError as e:
         log.warning("create_accept.source_manifest_invalid", req_id=req_id, error=str(e))
         await _record_accept_attribution(
@@ -845,6 +859,59 @@ async def create_accept(*, body, req_id, tags, ctx):
         source_repo=source_repo, source_basename=source_basename,
         source_manifest=source_manifest, topo=topo, manifests=manifests,
     )
+
+
+async def _detect_source_via_manifest(
+    rc, req_id: str, ctx: dict | None,
+) -> tuple[str, str | None, "Manifest | None"]:
+    """Manifest-driven source detection (issue #462).
+
+    Iterate ctx.cloned_repos, probe each for .sisyphus/env.yaml. If exactly
+    one repo has the manifest, return (repo, basename, manifest) as the
+    authoritative source. Multiple manifests = real ambiguity, fall through
+    to caller's tag-based arbitration. Zero manifests = no manifest-style
+    REQ, also fall through.
+
+    The manifest's existence is the contract for "I am the integration target"
+    (see docs/integration-contracts.md), so this beats cloned_repos[0] guessing
+    which can pick sisyphus over the real source when fixer commits land on
+    the sisyphus branch (dogfood Round-3 实证).
+
+    Returns (full_name, basename, manifest) or ("unknown/unknown", None, None)
+    when can't decide. The manifest is returned so caller can skip a redundant
+    re-probe.
+    """
+    cloned = (ctx or {}).get("cloned_repos") or []
+    candidates: list[tuple[str, str, "Manifest"]] = []
+    for repo in cloned:
+        if not isinstance(repo, str) or "/" not in repo:
+            continue
+        basename = repo.split("/", 1)[1]
+        try:
+            manifest = await _read_source_manifest(rc, req_id, basename)
+        except ManifestError as e:
+            # Schema-invalid manifest — count as "no manifest" for detection
+            # purposes; the real read in create_accept will surface the error.
+            log.warning(
+                "create_accept.detect_via_manifest.invalid",
+                req_id=req_id, repo=repo, error=str(e),
+            )
+            continue
+        if manifest is not None:
+            candidates.append((repo, basename, manifest))
+    if len(candidates) == 1:
+        log.info(
+            "create_accept.source_detected_via_manifest",
+            req_id=req_id, source_repo=candidates[0][0],
+        )
+        return candidates[0]
+    if len(candidates) >= 2:
+        log.info(
+            "create_accept.detect_via_manifest.multiple",
+            req_id=req_id,
+            candidates=[c[0] for c in candidates],
+        )
+    return "unknown/unknown", None, None
 
 
 def _resolve_source_repo(
