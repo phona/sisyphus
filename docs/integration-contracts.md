@@ -403,6 +403,7 @@ orchestrator 在 `kubectl exec` 进 runner pod 跑命令时注入：
 | `SISYPHUS_REQ_ID` | 所有 stage | 形如 `REQ-29`，业务 Makefile 拼 namespace / 标签 |
 | `SISYPHUS_STAGE` | accept-env-up / accept-env-down | `accept-env-up` / `accept-teardown`，给 Makefile 区分阶段 |
 | `SISYPHUS_NAMESPACE` | accept 阶段 | `accept-<req-id-lowercase>`，专给 helm `-n` 用 |
+| `SISYPHUS_IMAGE_TAGS` | accept 阶段（pr-ci 全绿且 ttpos-ci `CI / image-publish` 写过 tag 时）| JSON dict `{"<owner>/<repo>": "<image_tag>", ...}`；业务仓 `accept-env-up` 转 helm `--set <chart>.image.tag=...`。空 → fallback chart default。详见 §11 |
 | `SISYPHUS_RUNNER=1` | runner 镜像内置 | 让脚本能判"我在 sisyphus runner 里" |
 
 **约定**：业务 Makefile 应只依赖上面这些 env；不要假设额外的 `KUBECONFIG` / 凭据 —— 那些是 runner 镜像 / aissh 提供的 ambient context。
@@ -648,3 +649,81 @@ patch 方式及验证步骤见 §1c.2。
 ```
 
 **误判信号**：clone 报 `Write access not granted` 但你只想读——见 §1c.3，往往是 read 权限缺，不是 write。
+
+## 11. lab chart image tag 契约（closes #474）
+
+### 11.1 问题域
+
+accept stage 起 lab 时，每个涉及仓应该用**该仓 PR-CI 跑出的镜像**（含 PR head SHA）；没涉及的仓用基线分支镜像。业务仓 `accept-minimal-values.yaml` 不应 hardcode ad-hoc tag —— 那种 hardcode 让某仓 fix 后镜像 stale，dogfood 撞旧 bug。
+
+### 11.2 契约位置（信号源 → 注入）
+
+```
+ttpos-ci/.github/workflows/ci-go.yml （image-publish job, ttpos-ci@db24441）
+  ↓ docker buildx push ghcr.io/<repo>:<REQ-id>-sha-<8>
+  ↓ createCommitStatus → 业务仓 PR head SHA 上写
+       context     = "CI / image-publish"
+       state       = "success"
+       description = "ghcr.io/<repo>:<REQ-id>-sha-<8>"   ← 这就是 image_tag
+
+sisyphus pr_ci_watch checker
+  ↓ GET /repos/<repo>/commits/<sha>/statuses          ← #474 新加的轮询路径
+  ↓ 找 context == "CI / image-publish" && state == "success"，抠 description
+  ↓ CheckResult.extras = {"image_tags": {"<owner>/<repo>": "<tag>", ...}}
+
+create_pr_ci_watch action
+  ↓ result.passed && result.extras → ctx.image_tags 持久化
+
+create_accept action（env-up 入口）
+  ↓ ctx.image_tags → SISYPHUS_IMAGE_TAGS env (JSON dict)
+  ↓ kubectl exec runner: `make accept-env-up` with env
+
+业务仓 accept-env.mk
+  ↓ jq 从 SISYPHUS_IMAGE_TAGS 抽自己关心的 key
+  ↓ helm upgrade --install ... --set <chart>.image.tag=<image_tag>
+```
+
+### 11.3 业务仓 `accept-env-up` 接 env 的最小样板
+
+```makefile
+# accept-env.mk
+.PHONY: accept-env-up
+
+# 从 SISYPHUS_IMAGE_TAGS（JSON dict）抽本仓 image_tag；缺则空（落 chart default）
+THIS_REPO_FULL := $(shell git -C $(CURDIR) remote get-url origin | sed -E 's|.*github\.com[:/]([^/]+/[^/.]+)(\.git)?$$|\1|')
+THIS_IMAGE_TAG := $(shell echo '$(SISYPHUS_IMAGE_TAGS)' | jq -r --arg k '$(THIS_REPO_FULL)' '.[$$k] // empty' 2>/dev/null)
+
+accept-env-up:
+	@echo "🚀 accept-env-up: $(SISYPHUS_NAMESPACE) (image_tag=$(THIS_IMAGE_TAG))"
+	@cd $(ARCH_LAB_DIR) && \
+	  IMAGE_TAG_ARGS=""; \
+	  if [ -n "$(THIS_IMAGE_TAG)" ]; then \
+	    # tag 含 registry/repo:tag —— 拆成 image + tag 两段给 helm（chart 决定 key）
+	    image_part="$${THIS_IMAGE_TAG%:*}"; tag_part="$${THIS_IMAGE_TAG##*:}"; \
+	    IMAGE_TAG_ARGS="--set ttposServerGo.image.repository=$$image_part --set ttposServerGo.image.tag=$$tag_part"; \
+	  fi; \
+	  helm upgrade --install $(SISYPHUS_NAMESPACE) charts/edge-lab \
+	    --namespace $(SISYPHUS_NAMESPACE) \
+	    -f $(CURDIR)/ttpos-scripts/accept-minimal-values.yaml \
+	    $$IMAGE_TAG_ARGS \
+	    --wait --timeout 15m
+	@printf '{"endpoint":"http://%s.svc.cluster.local:8080","namespace":"%s"}\n' \
+	  "$(SISYPHUS_NAMESPACE)" "$(SISYPHUS_NAMESPACE)"
+```
+
+**说明**：
+- `THIS_REPO_FULL` 用 `git remote get-url` 抽 `<owner>/<repo>`，跟 sisyphus 注入的 JSON key 对齐
+- `SISYPHUS_IMAGE_TAGS` 空 / jq 抽不到 → `THIS_IMAGE_TAG` 为空 → 不传 `--set`，chart default 兜底
+- chart `values.yaml` 应 **不写** `image.tag` 默认值，或写一个安全的基线分支 immutable digest（不写 `latest` / ad-hoc 分支 tag）—— 让 sisyphus 错位时 fail-fast 而不是 silent 撞 stale image
+
+### 11.4 兼容性
+
+- pr_ci_watch 兼容业务仓**还没接** ttpos-ci 路（无 `CI / image-publish` status）：image_tag 抽不到 → ctx.image_tags 缺 → SISYPHUS_IMAGE_TAGS env 不注入 → `accept-env-up` 走 chart default
+- 业务仓**还没接** image_tag override 的 accept-env-up：env 注入了但 Makefile 不读，等于 noop
+- 双向都 graceful，**不强制原子升级**
+
+### 11.5 涉/未涉仓的覆盖说明
+
+当前实现**只覆盖涉及仓**（intent.repos 列里那些）：pr_ci_watch 拿到的是该 REQ 涉及仓的 PR head SHA 上写的 image_tag。**未涉及仓的基线分支 image_tag 不在本契约范围**，由业务仓 chart 的 default 值兜底（recommendation：写基线分支 immutable digest，不要 floating tag）。
+
+如果未来要 sisyphus 主动为未涉及仓解析基线 SHA + 探测对应 image_tag，开新 issue 议；现在 dogfood 用涉及仓覆盖已经修了 #474 的核心痛点。

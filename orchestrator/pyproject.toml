@@ -48,6 +48,7 @@ addopts = "-p no:randomly"
 markers = [
     "integration: integration tests (selected by `make ci-integration-test`; excluded by `make ci-unit-test`)",
     "no_stub_self_heal: opt-out conftest autouse stub of `ensure_runner_alive` (REQ-fix-runner-self-heal-394)",
+    "no_stub_commit_statuses: opt-out conftest autouse stub of `/commits/{sha}/statuses` API (closes #474; tests that supply their own statuses mock)",
 ]
 
 [tool.ruff]

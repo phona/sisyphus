@@ -207,7 +207,7 @@ pydantic 在入口处 enforce schema，失败回 422 让 agent 重试。
 
 | 字段 | 谁读 | 用来做啥 |
 |---|---|---|
-| `repos` | runner pod entrypoint / `_clone.py` | clone 这些仓 |
+| `repos` | runner pod entrypoint / `_clone.py` / pr_ci_watch / accept image-tag 解析 | clone 这些仓；轮 PR-CI；accept 阶段按这个 list 拼 `SISYPHUS_IMAGE_TAGS` (见 [integration-contracts.md §11](integration-contracts.md)) |
 | `base_branches` | runner pod entrypoint / `_clone.py` | per-repo `git checkout` |
 | `business_behavior` / `data_constraints` / `edge_cases` / `do_not_touch` | analyze / challenger / verifier prompts | 业务理解 + 写 spec + 写 test |
 | `acceptance` | accept stage agent / verifier | 验收命令 + pass 判定 |

@@ -224,6 +224,22 @@ async def _run_checker(*, req_id: str, ctx: dict) -> dict:
     pool = db.get_pool()
     await artifact_checks.insert_check(pool, req_id, "pr-ci-watch", result)
 
+    # closes #474: pr_ci_watch 把每仓 image_tag（从 commit status
+    # `CI / image-publish` 的 description 抠出来）通过 result.extras 透出，
+    # 这里写 ctx.image_tags 让 create_accept 拼 SISYPHUS_IMAGE_TAGS env 喂
+    # 业务仓 chart。空 / None 不写 —— 业务仓还没接 image-publish job 的
+    # 兼容期沉默跳过，accept-env-up 会落到 chart default tag。
+    if result.passed and result.extras:
+        image_tags = result.extras.get("image_tags") if isinstance(result.extras, dict) else None
+        if isinstance(image_tags, dict) and image_tags:
+            try:
+                await req_state.update_context(pool, req_id, {"image_tags": image_tags})
+                log.info("create_pr_ci_watch.image_tags_persisted",
+                         req_id=req_id, repos=list(image_tags.keys()))
+            except Exception as e:
+                log.warning("create_pr_ci_watch.image_tags_persist_failed",
+                            req_id=req_id, error=str(e))
+
     if result.exit_code == 124:
         emit = Event.PR_CI_TIMEOUT
     elif result.passed:

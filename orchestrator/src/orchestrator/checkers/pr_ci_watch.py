@@ -27,9 +27,15 @@ GH API:
 - GET /repos/{owner}/{repo}/pulls?head={owner}:{branch}&state=open  → open PR（含 head.sha）
 - GET /repos/{owner}/{repo}/pulls?head={owner}:{branch}&state=closed → closed/merged PR
 - GET /repos/{owner}/{repo}/commits/{sha}/check-runs                 → check_runs[]
+- GET /repos/{owner}/{repo}/commits/{sha}/statuses                   → statuses[]
+  （commit statuses，给 PAT-only ci 系统用——ttpos-ci 用 createCommitStatus 写
+  `CI / lint`, `CI / unit-test`, `CI / integration-test`, `CI / sonarqube`,
+  `CI / image-publish`，详见 commit ttpos-ci@db24441；statuses 跟 check-runs
+  合并判绿，image-publish 的 description 字段是 image_tag，extras 透出供 accept
+  注入 SISYPHUS_IMAGE_TAGS env。closes #474）
 
 退出码：
-- 0   = 全绿（所有 repo 的 check-run completed 且 conclusion 友好）
+- 0   = 全绿（所有 repo 的 check-run/status 都 completed 且 conclusion 友好）
 - 1   = 至少一个失败
 - 124 = 超时
 """
@@ -59,6 +65,13 @@ _FAIL_CONCLUSIONS = {"failure", "cancelled", "timed_out", "action_required", "st
 # 别的 slug（如 "anthropic-claude" / 第三方 review bot）属于 review-only signal。
 # 用于检测假阳性 pass：全绿但全是 review-only check-run（GHA 一次没跑）。
 _GHA_APP_SLUG = "github-actions"
+
+# ttpos-ci/.github/workflows/ci-go.yml 的 image-publish job 用 createCommitStatus
+# 写入业务仓 PR 的 commit status；description 字段直接放 image_tag 字符串
+# （`ghcr.io/<repo>:<REQ-id>-sha-<8>`）。pr_ci_watch 全绿时拿这个值塞进
+# extras['image_tags'] 给 create_accept 写 ctx → SISYPHUS_IMAGE_TAGS env。
+# 见 ttpos-ci@db24441 + docs/integration-contracts.md §11。
+_IMAGE_PUBLISH_STATUS_CONTEXT = "CI / image-publish"
 
 
 @dataclass
@@ -196,17 +209,35 @@ async def watch_pr_ci(
                     stderr_tail="", duration_sec=time.monotonic() - start, cmd=_cmd_label(),
                 )
 
-            # Fetch check-runs for non-terminal repos
+            # Fetch check-runs + commit statuses for non-terminal repos.
+            # 两路信号合并：check-runs（GHA workflow 自己写的）+ statuses
+            # （PAT-only 系统如 ttpos-ci 写的）—— ttpos-ci 的
+            # `CI / lint`, `CI / unit-test`, `CI / integration-test`,
+            # `CI / sonarqube`, `CI / image-publish` 都在 statuses 一侧，必须
+            # 一并轮才不会过早判绿（closes #474 隐藏 bug：以前只看
+            # check-runs，"Dispatch CI" 一发出 dispatch event 就 success，
+            # ttpos-ci 还没跑完就 PR_CI_PASS）。
             api_error = None
             for state in states:
                 if state.terminal_verdict is not None:
                     continue
                 try:
-                    per_repo_runs[state.repo] = await _get_check_runs(client, state.repo, state.sha)
+                    runs = await _get_check_runs(client, state.repo, state.sha)
                 except httpx.HTTPError as e:
                     api_error = (state.repo, e)
                     log.warning("checker.pr_ci_watch.api_error",
                                 repo=state.repo, sha=state.sha[:8], error=str(e))
+                    continue
+                # statuses 是辅路：仓没接 statuses-based CI（如 ttpos-ci）时
+                # API 也合法地返空数组；偶发 HTTP 抖动不应阻塞 check-runs 主路。
+                # → 失败静默降级为空 list，verdict 仍以 check-runs 为准。
+                statuses: list[dict] = []
+                try:
+                    statuses = await _get_commit_statuses(client, state.repo, state.sha)
+                except httpx.HTTPError as e:
+                    log.warning("checker.pr_ci_watch.statuses_api_error",
+                                repo=state.repo, sha=state.sha[:8], error=str(e))
+                per_repo_runs[state.repo] = runs + _statuses_to_runs(statuses)
 
             if api_error and time.monotonic() >= deadline:
                 repo, e = api_error
@@ -264,10 +295,31 @@ async def watch_pr_ci(
                     else f"{state.repo}: {_summarize(per_repo_runs.get(state.repo, []))}"
                     for state in states
                 ]
+                # 抽 ttpos-ci image-publish 的 image_tag。pass 时 PR-CI 全绿，每个非
+                # merged 的 repo 应该都有 success 的 `CI / image-publish` status；
+                # 没有 → log warning 但不阻塞 pass（业务仓还没接 image-publish job 的
+                # 兼容期）。merged repo 走的是 PR 已合并的早期 terminal 路径，没轮
+                # statuses，跳过。
+                image_tags: dict[str, str] = {}
+                for state in states:
+                    if state.terminal_verdict == "pass":
+                        continue  # merged，没 statuses 可读
+                    tag = _extract_image_tag(per_repo_runs.get(state.repo, []))
+                    if tag:
+                        image_tags[state.repo] = tag
+                    else:
+                        log.warning(
+                            "checker.pr_ci_watch.image_tag_missing",
+                            repo=state.repo, sha=state.sha[:8],
+                            note="PR all-green but `CI / image-publish` status absent or empty description "
+                                 "— accept stage will fall back to chart default tag",
+                        )
+                extras = {"image_tags": image_tags} if image_tags else None
                 return CheckResult(
                     passed=True, exit_code=0,
                     stdout_tail=" | ".join(parts)[:_TAIL],
                     stderr_tail="", duration_sec=time.monotonic() - start, cmd=_cmd_label(),
+                    extras=extras,
                 )
 
             if time.monotonic() + poll_interval_sec >= deadline:
@@ -322,6 +374,72 @@ async def _get_check_runs(client: httpx.AsyncClient, repo: str, sha: str) -> lis
     r = await client.get(f"/repos/{repo}/commits/{sha}/check-runs", params={"per_page": 100})
     r.raise_for_status()
     return r.json().get("check_runs", [])
+
+
+async def _get_commit_statuses(client: httpx.AsyncClient, repo: str, sha: str) -> list[dict]:
+    """GET /repos/{repo}/commits/{sha}/statuses。
+
+    GitHub commit-statuses API（legacy）跟 check-runs 是两套独立信号；ttpos-ci
+    用 PAT 写 statuses（PAT 不能写 check-runs），所以 sisyphus 必须两路都拉
+    才看得到 ttpos-ci 的 lint / unit / integration / sonarqube / image-publish
+    五个 status。
+    """
+    r = await client.get(f"/repos/{repo}/commits/{sha}/statuses", params={"per_page": 100})
+    r.raise_for_status()
+    return r.json() if isinstance(r.json(), list) else []
+
+
+def _statuses_to_runs(statuses: list[dict]) -> list[dict]:
+    """commit status → check-run shape，让 _classify 一并处理。
+
+    每个 status 视作一条 GHA check-run：
+      state=success  → status=completed, conclusion=success
+      state=failure / error → status=completed, conclusion=failure
+      state=pending  → status=in_progress, conclusion=None
+    `app.slug` 强制设 github-actions —— ttpos-ci 走 PAT 写的 statuses 在语义上
+    就是 PR-CI 信号，不算 review-only bot；no-gha 假阳性判定不应误伤。
+    `_status_description` 是私字段，留给 _extract_image_tag 提 image-publish 的 image_tag。
+    """
+    out: list[dict] = []
+    for s in statuses or []:
+        state = s.get("state", "pending")
+        if state in ("failure", "error"):
+            status_field = "completed"
+            conclusion = "failure"
+        elif state == "success":
+            status_field = "completed"
+            conclusion = "success"
+        else:  # pending / unknown
+            status_field = "in_progress"
+            conclusion = None
+        out.append({
+            "name": s.get("context", "?"),
+            "status": status_field,
+            "conclusion": conclusion,
+            "app": {"slug": _GHA_APP_SLUG},
+            "_status_description": s.get("description"),
+        })
+    return out
+
+
+def _extract_image_tag(runs: list[dict]) -> str | None:
+    """从 runs（含 status_to_runs 注入的条目）里抓 CI / image-publish 的 description。
+
+    description 是 ttpos-ci/.github/workflows/ci-go.yml image-publish job 写
+    回去的 image_tag 字符串。只在 status=completed && conclusion=success
+    时认；否则跳过。
+    """
+    for r in runs:
+        if r.get("name") != _IMAGE_PUBLISH_STATUS_CONTEXT:
+            continue
+        if r.get("status") != "completed":
+            continue
+        if r.get("conclusion") != "success":
+            continue
+        desc = r.get("_status_description")
+        if isinstance(desc, str) and desc.strip():
+            return desc.strip()
+    return None
 
 
 # ── verdict 计算 ─────────────────────────────────────────────────────────

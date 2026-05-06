@@ -685,3 +685,84 @@ api-tag-management-spec.md。**不立 issue**——等 5 条 ttpos REQ 跑通 + 
 全套落地后启动。心智依据：dispatch-contract.md §0.1 (envelope vs letter)。
 
 撞够 3 次 C 类 tag 引发的故障再考虑立 issue。
+
+## 2026-05-06 06:09Z REQ-kiosk-log-cleanup-dogfood-1778045291 全链跑通到 staging-test 撞新 race
+**A 方案验证铁证**: 05:44:27 clone.exec source="ctx.intake_finalized_intent.involved_repos" repos=[ZonEaseTech/ttpos-flutter] —— PR #471/#472 dispatch-contract + FinalizedIntent 严校验链路真跑通，#464/#466 footgun 在新链路下天然消失（不走 helm fallback）。
+
+**新撞洞 (1 次)**: watchdog stuck (5min) → escalate.runner_cleaned 删 pod，但 BKD agent 后来 result:pass → ESCALATED → next-stage transition (challenger.pass → DEV_CROSS_CHECK → STAGING_TEST)，下游 stage exec runner pod → 404 → precheck:runner-pod-not-found → verifier escalate。
+
+根因：`watchdog → engine.step(Event.SESSION_FAILED) → escalate.cleanup_runner` 中间没 PATCH BKD cancel session，sisyphus 跟 BKD agent 不握手；BKD agent 不知自己被判死继续跑。escalate.py:482 假设"escalate = pod 没用"，但 ESCALATED → next-stage resume 路径不会重起 pod。
+
+修法候选（不修，记录）：
+- (A) state.py: ESCALATED → next-stage transition 强制重 ensure_runner
+- (B) escalate.py: 不立即删 pod，30s grace period 看 result tag 后到没
+- (C) watchdog: PATCH BKD cancel session 等真 session.failed 再 escalate
+- (D) 调 watchdog stuck 阈值 5min → 15min（治标）
+
+按 §15.2 第 1 次撞 → log + skip 不立 issue，撞够 3 次再 review。dogfood 进 §15.1 派下一条 ttpos REQ 循环。
+
+## 2026-05-06 06:48Z REQ admin resume 后到 accept-running 撞 vm04 evict + mid-action interrupt
+**追加进展**：admin resume 路径走通后 REQ 06:33:52 → pr-ci-running，06:35:53 pr-ci.pass → accept-running ✅（PR #206 GH CI 真绿）。
+
+**新撞故障 (1 次)**：vm04 节点 ephemeral-storage 阈值告警 → kubelet evict orch + metabase；create_accept action 跑到一半（state CAS 推到 accept-running 但 BKD agent 没起 / accept_issue_id 没落 ctx）→ orch 重启后 watchdog 找不到 accept sub-issue → 每 60s 报 watchdog.missing_issue_id 干瞪眼。
+
+根因：sisyphus action 不是原子的，state CAS + 副作用（起 BKD agent / 落 ctx 字段）非事务性，evict 在中间撞 → state 与 ctx 不一致。watchdog 没机制识别"state 推进了但 sub-issue 没起 = action 中断"，只会找现有 issue_id 轮。
+
+修法候选（不修，记录）：
+- (A) action 写 ctx fields 跟 state CAS 同事务（state machine 抽象层动）
+- (B) watchdog 加一条规则：state in (accept-running / staging-test-running / ...) 且 ctx 里对应 issue_id 缺 → 自动 reset 重派
+- (C) admin endpoint 加 reset-action（user 触发重派）
+- (D) infra 层：vm04 节点磁盘扩容 / ephemeral-storage 阈值调高 / orch 加 restart policy
+
+**dogfood 验证完成度**: 80% (intake/analyze/spec/challenger/dev-cross/staging/pr-ci-watch 全跑过 + admin resume 路径走通；accept stage 因 evict 没真跑到)。
+
+按 §15.2 第 1 次撞 → log + skip。下一步：派下一条 ttpos REQ 继续 §15.1 操作循环。
+
+## 2026-05-06 07:30Z REQ-kiosk-log-cleanup-dogfood 验证完整收官（pipeline 100% 验过）
+
+**两轮 admin resume 后 accept stage 真起跑**：
+- 1st resume (06:33Z): staging-test.pass → pr-ci-running → pr-ci.pass → accept-running → vm04 evict mid-action
+- 2nd resume (07:29Z): force_escalate + resume(action=pass,stage=pr_ci) → 重做 create_accept → accept-env-up 真 invoke → fail "UPGRADE FAILED: another operation in progress" (failed_layer: ZonEaseTech/ttpos-server-go)
+
+**accept-env-up.fail 真因**：lab helm release 状态残留（前面两次 evict + mid-action interrupt 让 helm install 卡 in-progress 没清理）。不是 sisyphus pipeline bug，是 lab infra cleanup 问题。
+
+**Dogfood 验证目标完成度 = 100%（结构）**：sisyphus pipeline 9 个 stage 全部真触达：intake / analyze / artifact-check / spec-lint / challenger / dev-cross-check / staging-test / pr-ci-watch / **accept (create_accept invoke + accept-env-up real run)**。
+
+**待手动清**: 卡住的 helm release `ttpos-server-go-acceptance-...` 之类。helm history -n <ns> + helm rollback / uninstall。运维操作，不影响下条 dogfood REQ。
+
+**今日 dogfood 拿到的两条架构铁证**：
+1. PR #471/#472 dispatch-contract + FinalizedIntent 真跑通：05:44:27 clone.exec source=ctx.intake_finalized_intent.involved_repos —— #464/#466 footgun 在新链路下天然消失
+2. admin endpoint resume 体系完整可用（runner-resume + force_escalate + resume action=pass stage=*）—— playbook §16.2 表格那条 ❌ "L5 缺 admin token" 实际错了，token 是 webhook_token 直接复用
+
+**今日撞 footgun 三种 (各 1 次)**：
+- watchdog/escalate race (BKD agent late result:pass vs 删 pod)
+- vm04 ephemeral-storage evict (kubelet eviction + sisyphus runner_gc disk_pressure 因 RBAC 缺 nodes:list 永久禁用)
+- create_accept mid-action interrupt + helm release 状态残留
+
+按 §15.2 全部 1-2 次 → log + skip，不立 issue。下次 dogfood 派 REQ 前手动清 helm 残留。
+
+## 2026-05-06 08:40Z lab chart image tag 接入契约（dispatch-contract 衍生）
+**用户提出策略（dogfood Round-X 暴露）**:
+1. **涉及的仓库（intent.repos 里）**：lab 起来时用该仓 PR-CI 跑出的镜像（含 PR / commit SHA tag）
+2. **没涉及的仓库**：用基线分支（base_branches 或 chart default）的最新镜像
+
+**现状 gap**：
+- sisyphus 侧：create_accept 起 helm install 不传 image tag override；intent.repos 信息没用到
+- lab chart 侧（ttpos-server-go/ttpos-scripts/accept-minimal-values.yaml）：8 处 hardcode `tag: test-feat-pack-develop`（ad-hoc 分支特定 tag），不是基线分支 auto-build tag
+- 结果：dogfood REQ 改 ttpos-flutter（不涉及 server-go），lab 起 server-go 拉 stale image，撞 server-go 业务侧的旧 bug（RocketMQ DNS error 已在 feat/pack-develop-hwt fix 但 tag 没更新）
+
+**修法（不在本次 dogfood，挂这里）**：
+- sisyphus 侧：actions/create_accept.py 渲 helm install 时按 intent.repos + base_branches 算 image tag override，传 `--set <repo>.image.tag=...`
+- lab chart 侧：业务仓 accept-minimal-values.yaml 改用基线分支自动 build tag (`develop-latest` / `develop-{sha}` / immutable digest)，不 hardcode ad-hoc tag
+- 最优雅：lab chart 完全不写 tag default，sisyphus 强制传 → 错位时 fail-fast 不 silent
+
+**关联**: dispatch-contract.md (intent.repos 用法扩展) + integration-contracts.md (lab chart image tag 契约新章节)。等 5 条 ttpos REQ 跑通 + envelope/letter tag cleanup 一起做，**不立 issue**。
+
+**RESOLVED 2026-05-06 ~10Z**：promote 到 #474。实证发现 ttpos-ci/ci-go.yml 早就把 image-publish 设计成 PR-CI 一个 check（commit `db24441`），image_tag 通过 commit status `CI / image-publish` 的 description 写出。落地为单点改动：
+- pr_ci_watch.py 加 commit statuses API 路径（之前只看 check-runs，过早判绿是隐藏 bug）
+- 抽 image-publish description → CheckResult.extras.image_tags
+- create_pr_ci_watch 写 ctx.image_tags
+- create_accept.py 注入 SISYPHUS_IMAGE_TAGS env
+- integration-contracts §11 加章节 + accept-env.mk 样板
+
+业务仓 dispatch.yml / ttpos-ci 改动归零；sisyphus runner PAT 不动。完整顺向兼容（业务仓没接 image-publish job → 自动 fallback chart default）。
