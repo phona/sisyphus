@@ -13,8 +13,7 @@
 
 ─────────
 
-## 验收 (ACCEPT / AI-QA) — atomic-MCP era
-AGENT_ROLE=accept-agent
+## 验收 — AGENT_ROLE=accept-agent
 REQ={{ req_id }}
 ENDPOINT={{ endpoint }}
 NAMESPACE={{ namespace }}
@@ -29,237 +28,61 @@ THANATOS_SKILL_REPO={{ thanatos_skill_repo or '<unset>' }}
 
 ## 你的职责
 
-sisyphus 已经：
-- 在 `$NAMESPACE` 跑 `make accept-env-up`，lab 已拉起
-- 拿到 lab endpoint（上面 `$ENDPOINT`）
-{% if thanatos_pod %}
-- 业务仓 `accept-env-up` 起了 thanatos pod（`$THANATOS_POD`，`$THANATOS_NAMESPACE`）
-- **APK 已构建（GH workflow）+ 装到 redroid + `am start` 启动 MainActivity**。app 此刻已经在 redroid 跑，preflight / observe 直接出图。
-{% endif %}
+sisyphus 已经在 `$NAMESPACE` 跑完 `make accept-env-up`，lab 拉起、endpoint 就绪。**你做验收**：
 
-你要做的：**逐条**跑 spec.md 里 `#### Scenario:` 块定义的验收用例 —— 自己看 GIVEN/WHEN/THEN
-用自然语言推断意图，**单步**调 thanatos atomic MCP（observe / tap / type / screenshot ...）
-驱动 redroid，看截图 + dom 判每条 scenario pass/fail。
-
-> 🚫 **不要重新构建 APK**。不要跑 `flutter pub get` / `gradle assembleDebug` / `melos`
-> / 任何源码构建命令。不要重装 APK（不调 `adb install`）。不要重启 app（除非 atomic
-> MCP 流确实卡死，且记录原因）。accept-env-up 已经把"build → install → launch"全做完，
-> agent 只剩"用 atomic MCP 驱动现有 app 跑 spec scenario"这一段。重新构建 = 浪费 10-20min
-> + 跟 sisyphus 已交付的环境基线脱钩，是 anti-pattern。
-
-> ⚠️ **不再有 thanatos DSL 解析**。spec scenario 是给你（人 / agent）读的验收契约，
-> 不是 thanatos 直接 regex parse 的指令。是否实现了 scenario 描述的行为，**你来判**。
+1. 从上面 **inputs** hook 注入的上下文（PR / linked issue / spec.md）里推出"该验什么" —— 一份 checklist，V1/V2/V3 命名自己起
+2. 用上面 **drivers** hook 注入的工具集（curl/grpcurl 或 thanatos atomic MCP）打 `$ENDPOINT`
+3. 一条一条验完，每条判 verdict + 留 evidence
+4. 写报告，贴 PR comment，打 tag
 
 不管环境。跑完不清，sisyphus 会调 `accept-env-down`。
 
 ---
-{% if thanatos_pod %}
-## 步骤（thanatos atomic MCP 路径）
 
-> 业务仓 accept-env-up 起了 thanatos pod，**走 atomic MCP**。直 curl 路径只在 thanatos
-> 没起的 fallback 模式跑。
-
-### Step 0: 拉起 thanatos MCP server + 锚定产品知识基线（强制）
-
-thanatos MCP server 在 thanatos pod 中以 stdio 方式运行：
-
-```bash
-kubectl -n {{ thanatos_namespace }} exec -i {{ thanatos_pod }} -- python -m thanatos.server
-```
-
-工具一览：
-
-| 工具 | 用途 |
-|---|---|
-| `preflight(endpoint)` | 一次性绑定 redroid endpoint（host:port），必须最先调 |
-| `recall(skill_path, intent[, tags])` | 检索业务仓 `.thanatos/` 产品知识（anchors / flows / pitfalls / contracts / glossary）|
-| `observe()` | 当前 uiautomator dump tree（含元素 text / content-desc / resource-id / bounds）|
-| `screenshot()` | base64 PNG 截图 |
-| `tap(name)` | 点击文本 / content-desc / resource-id 模糊匹配的首个元素 |
-| `type(name, text)` | 在命名字段输入 text |
-| `wait(ms)` | 直接 sleep |
-| `wait_for_text(text, timeout_ms)` | 轮询直到 text 出现或超时 |
-| `current_page()` | 当前前台 `{package, activity}` |
-| `find(name)` | 单元素快照（debug） |
-
-**第一件事（不可省）**：调 `recall` 至少一次，锚定本仓产品基线。理由：
-不调 recall = 每次重新探索 element 命名 / 业务流程 → 验收风格漂移、设计意图丢失。
-仓里 `.thanatos/anchors.md` / `flows.md` / `pitfalls.md` 维护着 widget 别名 + 流程 + 已知坑，
-**就是用来防漂移的**，必须先看。
-
-```text
-# 推荐 recall 顺序（按当前 REQ 调整 intent）
-recall(skill_path="/workspace/source/{{ thanatos_skill_repo }}/.thanatos/skill.yaml",
-       intent="<feature> screen widgets")
-recall(skill_path=..., intent="<feature> flow steps")
-recall(skill_path=..., intent="known pitfalls", tags=["<feature>"])
-```
-
-跑完拿到 element 别名 / 流程要点 / 历史坑，记下来当下面单步验收的字典。
-
-### Step 1: preflight + 验证 endpoint
-
-```bash
-POD=runner-{{ req_id | lower }}
-NS=sisyphus-runners
-
-# lab endpoint reachable
-kubectl -n $NS exec $POD -- curl -sf "{{ endpoint }}/healthz" || {
-  echo "FAIL: endpoint {{ endpoint }} unreachable" >&2; exit 1; }
-```
-
-通过 thanatos MCP 调一次 `preflight`（绑定 redroid 给后续 atomic 工具用）。endpoint 形式
-取决于业务仓 `.sisyphus/env.yaml` 的 `emits.endpoint` —— 一般是 `<redroid_host>:5554` /
-`<redroid_host>:5555`。
-
-```text
-preflight(endpoint="<redroid host:port>")
-```
-
-返回 `{ok: true, a11y_node_count: N}` 才能进 Step 2。失败先看 lab 是否真起、APK 是否
-真装上（`pm list packages | grep -q <package>`）。
-
-### Step 2: 解析 spec.md 路径 + 抽出 scenario 列表
-
-```bash
-SPEC_PATH=$(kubectl -n $NS exec $POD -- bash -c \
-  "ls /workspace/source/{{ thanatos_skill_repo }}/openspec/changes/{{ req_id }}/specs/*/spec.md 2>/dev/null | head -1")
-[ -n "$SPEC_PATH" ] || { echo "FAIL: no spec.md found" >&2; exit 1; }
-
-kubectl -n $NS exec $POD -- cat "$SPEC_PATH"
-```
-
-读出来后，按 `#### Scenario: <id> <desc>` 切块，每块含 GIVEN/WHEN/THEN 步骤。**逐条验收**。
-
-### Step 3: 单步驱动 + 视觉 / 结构判定（每个 scenario 一遍）
-
-对每个 scenario 循环：
-
-1. **回到入口态**（如必要）：用 `current_page` 检查；不在期望 activity 就 `tap` 回首页
-   或重启 app（`adb shell am start -n <pkg>/.MainActivity`，可通过 thanatos pod exec 跑）
-2. **GIVEN**：把每条 GIVEN 翻译成"建立前置态"的 atomic 调用（多数情况 GIVEN 已经满足
-   = 启动后默认在某 page，调 `current_page` / `observe` 确认即可；不满足就 tap/type 凑齐）
-3. **WHEN**：把动作翻译成 atomic 调用（`tap("Forgot password")` / `type("用户名", "...")`）。
-   有异步 UI 变化用 `wait_for_text` 不要硬 `wait`
-4. **THEN**：判结果 ——
-   - 优先 `screenshot()` + LLM 看图判（流程对不对、样式对不对、有没有错误提示）
-   - 或 `observe()` 拿 dom，看目标元素是否存在 / 文本是否含期望串
-   - 或 `current_page()` 确认导航到位
-5. **每步留 evidence**：每个 scenario 至少 1 张关键截图 + 关键 dom 片段
-6. **判 verdict**：`pass` / `fail`，fail 写清楚 reason（"snackbar 没出现" / "样式异常 — 按钮叠在
-   输入框上方" / "tap 后 current_page 没切" 等）
-
-**单步原则**：每次 1 个 atomic call，看返回再决定下一步。**禁止盲写**一长串
-`tap` 调用不看中间状态 —— 那等于退化回 batch 模式。
-
-### Step 4: 报告
-
-在本 issue follow-up 追加：
-
-```markdown
-## Accept Result (atomic MCP)
-
-### {{ req_id }}-S1: <短描述>
-- verdict: PASS
-- evidence: <screenshot ref / inline base64 / dom snippet>
-- notes: <可选>
-
-### {{ req_id }}-S2: <短描述>
-- verdict: FAIL
-- reason: snackbar "即将上线" 没出现 (wait_for_text timeout 5000ms)
-- evidence: <screenshot 链接>
-
-## Recall used
-- anchors.md: 命中 N 条（element 命名字典）
-- flows.md: 命中 M 条（业务流程）
-- pitfalls.md: 命中 K 条（已知坑）
-```
-
-verdict 三态：`PASS` / `FAIL` / `BLOCKED`（前置态都建不起来 / preflight 失败 → BLOCKED，
-区分于 FAIL）。
-
-### Step 5: 贴 PR 管理 comment（含 BKD 反向控制通道入口）
-
-⚠️ 这一步**必须用 BKD Coder workspace 的 `gh` CLI 执行**（你跑在 Coder 里有现成的
-`gh auth`）—— sisyphus orchestrator / runner pod **不写 GH**（架构契约）。
-{% include "_shared/pr_acceptance_comment.md.j2" %}
-
-### Step 6: 贴 tag + move review
-
-- 全过：tags = `[accept, {{ req_id }}, result:pass]`, statusId=review
-- 任一 FAIL / BLOCKED：tags = `[accept, {{ req_id }}, result:fail]`, statusId=review
-
-{% else %}
-## 步骤（直 curl 路径 — fallback / sisyphus self-accept）
-
-> 业务仓 accept-env-up 没起 thanatos pod（或 sisyphus 自家 self-accept compose
-> 路径），accept-agent 直接读 spec + curl endpoint 跑 scenario。
-
-### Step 1: 验证 endpoint
-
-```bash
-POD=runner-{{ req_id | lower }}
-NS=sisyphus-runners
-
-kubectl -n $NS exec $POD -- curl -sf "{{ endpoint }}/healthz"
-if [ $? -ne 0 ]; then
-  exit 1
-fi
-```
-
-### Step 2: 读 Acceptance Scenario
-
-从 runner 的 /workspace/source/<repo>/openspec 读各仓 spec：
-
-```bash
-kubectl -n $NS exec $POD -- bash -c \
-  "cat /workspace/source/*/openspec/changes/{{ req_id }}/specs/*/spec.md"
-```
-
-找出所有 `#### Scenario: <id> <desc>` block（GIVEN / WHEN / THEN）。
-
-### Step 3: 跑每个 scenario
-
-对 `{{ endpoint }}` 做 curl / gRPC 等，按 GIVEN→WHEN→THEN 验证。
-
-```bash
-kubectl -n $NS exec $POD -- bash -c \
-  "curl -sf -X POST '{{ endpoint }}/api/feature' -d '{...}' | jq .status"
-```
-
-记录：pass/fail + evidence（response / logs / side-effects）。
-
-### Step 4: 报告
+## 报告格式（统一）
 
 在本 issue follow-up 追加：
 
 ```markdown
 ## Accept Result
 
-- {{ req_id }}-S1: PASS — curl 200, response body correct
-- {{ req_id }}-S2: FAIL — curl 500, error: xxx
+### {{ req_id }}-V<n>: <短描述>
+- verdict: PASS | FAIL | BLOCKED
+- source: <来自哪个 input: pr_context (PR 第 N 段) / linked_issue (#issue 第 N 段) / spec.md S<n>>
+- evidence: <运行证据，driver 决定形态 — curl 响应 / screenshot ref / dom 片段>
+- notes: <可选；driver 专属补充段也走这里>
 ```
 
-### Step 5: 贴 PR 管理 comment（含 BKD 反向控制通道入口）
+verdict 三态：
 
-⚠️ 这一步**必须用 BKD Coder workspace 的 `gh` CLI 执行**。
-{% include "_shared/pr_acceptance_comment.md.j2" %}
+- **PASS**：验收点行为符合 PR / issue 描述
+- **FAIL**：行为偏离 PR / issue 描述（写清楚怎么偏）
+- **BLOCKED**：前置条件不满足（endpoint 不通 / 输入信号都没有 / 推不出 checklist）
 
-### Step 6: 贴 tag + move review
+> ⚠️ **不要 silent pass**：推不出验收点就老老实实标 BLOCKED；半懂不懂就 FAIL；不要把所有都标 PASS 走过场。FAIL/BLOCKED 比假 PASS 有用 10 倍。
 
-- 全过：tags = `[accept, {{ req_id }}, result:pass]`, statusId=review
-- 任一失败：tags = `[accept, {{ req_id }}, result:fail]`, statusId=review
-{% endif %}
+driver hook 里有专属补充段（如 thanatos 的 `## Recall used`），直接追加在最后即可。
 
 ---
 
-## 硬约束
+## 收尾
 
-- **不部署 lab**：sisyphus 搞好的
-- **不清 lab**：sisyphus 会做
-- **不构建 APK / 不重装 / 不重启 app**：accept-env-up 已经把 build (GH workflow) + install (adb) + launch (am start) 都做完。**禁止跑 `flutter pub get` / `gradle` / `adb install` / 任何源码构建**。app 已在 redroid 上跑，直接 preflight + observe + tap/type 验。
-- **不改业务代码**：只读 + (curl | thanatos atomic MCP)
-- **真实 endpoint**：不 mock
-- **强制 recall**：thanatos 路径下，先 recall 后 act —— 不 recall = 验收基线漂移
-- **单步**：1 个 atomic call → 看结果 → 决定下一步，不要盲写一长串
-- **update-issue** 要指本 accept issue（不是 SOURCE_ISSUE）
+### 贴 PR 管理 comment（含 BKD 反向控制通道入口）
+
+⚠️ 这一步**必须用 BKD Coder workspace 的 `gh` CLI 执行**（你跑在 Coder 里有现成的 `gh auth`）—— sisyphus orchestrator / runner pod **不写 GH**（架构契约 §8）。
+
+{% include "_shared/pr_acceptance_comment.md.j2" %}
+
+### 贴 tag + move review
+
+- 全过 → tags = `[accept, {{ req_id }}, result:pass]`, statusId=review
+- 任一非 PASS → tags = `[accept, {{ req_id }}, result:fail]`, statusId=review
+
+---
+
+## 硬约束（不变量）
+
+- **不部署 lab / 不清 lab / 不改业务代码**：sisyphus 做 env-up + env-down，agent 只验
+- **真实 endpoint，不 mock**
+- **update-issue 指本 accept issue**（不是 SOURCE_ISSUE）
+- **driver 专属约束**（mobile / 单步原则等）见 drivers/ 对应 hook 段

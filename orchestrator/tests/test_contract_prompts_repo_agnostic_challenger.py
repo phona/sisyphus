@@ -171,14 +171,20 @@ def test_pra_s5_no_feature_a_prefix_in_prompts() -> None:
 # ---------------------------------------------------------------------------
 
 def test_pra_s6_accept_instructs_scenario_heading_match() -> None:
-    """PRA-S6: accept.md.j2 must instruct the agent to find acceptance scenarios
-    via `#### Scenario:` heading match (the same pattern as check-scenario-refs.sh),
-    not via a hardcoded `FEATURE-A` prefix."""
-    text = _read("accept.md.j2")
-    assert "#### Scenario:" in text, (
-        "PRA-S6 FAILED: accept.md.j2 does not reference `#### Scenario:` as the\n"
-        "discriminator for finding acceptance scenario blocks. The instruction in\n"
-        "Step 2 must direct the agent to enumerate every block whose heading matches\n"
+    """PRA-S6: accept-stage prompt material must instruct the agent to find
+    acceptance scenarios via `#### Scenario:` heading match (the same pattern as
+    check-scenario-refs.sh), not via a hardcoded `FEATURE-A` prefix.
+
+    Material = accept.md.j2 itself + the spec.md input hook it composes when
+    spec.md is present (post hook-refactor in feat/accept-dispatch-endpoint, the
+    heading-match instruction lives in `_shared/hooks/inputs/spec_md.md.j2`;
+    main prompt stays driver/input agnostic by design)."""
+    bundle = _read("accept.md.j2") + "\n" + _read("_shared/hooks/inputs/spec_md.md.j2")
+    assert "#### Scenario:" in bundle, (
+        "PRA-S6 FAILED: neither accept.md.j2 nor its spec_md input hook\n"
+        "(_shared/hooks/inputs/spec_md.md.j2) references `#### Scenario:` as the\n"
+        "discriminator for finding acceptance scenario blocks. At least one of them\n"
+        "must direct the agent to enumerate every block whose heading matches\n"
         "`#### Scenario:` (neutral, per spec requirement PRA-S6)."
     )
 

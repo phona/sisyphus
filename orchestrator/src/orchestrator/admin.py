@@ -931,3 +931,117 @@ async def accept_env_gc_status() -> dict:
     orchestrator 重启前为 {last: null}。
     """
     return {"last": accept_env_gc.get_last_result()}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Accept-only dispatch（dogfood 期 PR-driven 入口）
+#
+# 业务侧 CI（ttpos-ci 之类）build 完镜像后，直接 POST 这里：跳前面 6 段
+# (intake/analyze/spec/dev/staging/pr-ci-watch) 直入 ACCEPT_RUNNING，
+# 复用 state.py:137 的 (INIT, INTENT_ACCEPT) → ACCEPT_RUNNING transition。
+# 不新增 event 不新增 state，纯把现有 intent.accept 通路串到 HTTP。
+#
+# accept-agent 拿到的 ctx 已经带 pr_url / linked_issue_url / image_tags /
+# pr_urls，prompt hook（_shared/hooks/inputs/{pr_context,linked_issue}）直接消费。
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class AcceptDispatchReq(BaseModel):
+    """ttpos-ci → sisyphus PR-driven 验收触发 payload。
+
+    image_tag 是 ttpos-ci `scripts/ci-build.sh` 算出来的最终 tag（pr-N-sha 类）；
+    runner pod 里 ttpos-server-go 的 `make accept-env-up` 读 SISYPHUS_IMAGE_TAGS
+    env 做 helm --set image.tag override。
+    """
+
+    pr_url: str
+    pr_number: int
+    image_tag: str
+    source_repo: str
+    branch: str
+    linked_issue_url: str = ""
+    project_id: str = "nnvxh8wj"
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "pr_url": "https://github.com/ZonEaseTech/ttpos-server-go/pull/892",
+                "pr_number": 892,
+                "image_tag": "pr-892-abc1234",
+                "source_repo": "ttpos-server-go",
+                "branch": "feat/shop-auto-settle",
+                "linked_issue_url": "",
+                "project_id": "nnvxh8wj",
+            },
+        },
+    }
+
+
+@admin.post(
+    "/req/dispatch-accept",
+    tags=["accept-dispatch"],
+    summary="PR-driven accept dispatch (业务仓 CI 全绿后触发)",
+)
+async def dispatch_accept(
+    req: AcceptDispatchReq,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """业务仓 CI 全绿后派一条 accept-only REQ。
+
+    不走前置 intake/analyze/dev/...，直接 INIT --INTENT_ACCEPT--> ACCEPT_RUNNING，
+    复用 create_accept 全套机械流（env-up / agent / teardown / report）。
+
+    同步返回 req_id（验收异步跑），调用方靠 BKD issue 或 Metabase 看进度。
+    """
+    _verify_token(authorization)
+
+    req_id = f"REQ-pr{req.pr_number}-{int(datetime.now(UTC).timestamp())}"
+    ctx: dict = {
+        "pr_url": req.pr_url,
+        "linked_issue_url": req.linked_issue_url,
+        "image_tags": {req.source_repo: req.image_tag},
+        "branch": req.branch,
+        "source_repo": req.source_repo,
+        # pr_acceptance_comment.md.j2 走 ctx.pr_urls dict 贴 PR 管理 comment
+        "pr_urls": {req.source_repo: req.pr_url},
+        # 给 inputs/* hook 标识本次 REQ 由 GHA 直派（没 BKD intent issue）
+        "intent_source": "gha-dispatch",
+    }
+
+    pool = db.get_pool()
+    await req_state.insert_init(pool, req_id, req.project_id, context=ctx)
+
+    fake = _FakeBody(req_id, req.project_id)
+    # GHA dispatch 没真 BKD intent issue，给 create_accept._dispatch_accept_agent
+    # 的 parent-id: tag 一个占位（功能上只是装饰，不影响 accept-agent 跑）。
+    fake.issueId = f"gha-dispatch-{req_id}"
+
+    log.warning(
+        "admin.dispatch_accept",
+        req_id=req_id,
+        pr_url=req.pr_url,
+        image_tag=req.image_tag,
+        source_repo=req.source_repo,
+    )
+
+    result = await engine.step(
+        pool,
+        body=fake,
+        req_id=req_id,
+        project_id=req.project_id,
+        tags=[
+            "intent:accept",
+            f"pr:{req.source_repo}#{req.pr_number}",
+            "source:gha-dispatch",
+        ],
+        cur_state=ReqState.INIT,
+        ctx=ctx,
+        event=Event.INTENT_ACCEPT,
+    )
+
+    return {
+        "req_id": req_id,
+        "pr_url": req.pr_url,
+        "state": "ACCEPT_RUNNING",
+        "engine_result": result,
+    }

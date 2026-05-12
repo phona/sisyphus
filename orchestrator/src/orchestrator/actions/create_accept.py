@@ -524,6 +524,33 @@ async def _dispatch_accept_agent(
             project_id=proj, ctx=ctx, accept_issue_id=issue.id,
         )
         pr_urls_dict = (ctx or {}).get("pr_urls") or {}
+
+        # 装 prompt hook list（参考 memory:feedback_prompt_pluggable_via_filename_convention）。
+        # 主 prompt 的 {% for _hook in enabled_prompt_hooks %} loop 按 list 顺序 include
+        # _shared/hooks/<hook>.md.j2。inputs/ 提供"喂什么"，drivers/ 提供"怎么打"。
+        # 文件按目录分类是给人看的，list 是扁平字符串路径（不上 PromptHook 抽象）。
+        #
+        # ⚠️ 全局 settings.enabled_prompt_hooks（mcp_preflight / precheck /
+        # self_issue_constraint 三条 fail-fast）必须前置，stage-local 追加 inputs +
+        # driver。直接传 enabled_prompt_hooks kwarg 会覆盖 Jinja2 globals 那份默认值
+        # (prompts/__init__.py:46)，导致 fail-fast 全丢。
+        pr_url = (ctx or {}).get("pr_url") or ""
+        linked_issue_url = (ctx or {}).get("linked_issue_url") or ""
+        hooks: list[str] = list(settings.enabled_prompt_hooks)
+        if pr_url:
+            # PR-driven 路径（GHA dispatch / 全链路均适用）：PR 在就一并装 linked_issue，
+            # linked_issue hook 内部处理 linked_issue_url 空的场景（从 PR body 抠 Closes #N）。
+            hooks.append("inputs/pr_context")
+            hooks.append("inputs/linked_issue")
+        else:
+            # 没 PR ctx → 走全链路 spec.md（analyze 阶段产物）兜底。
+            hooks.append("inputs/spec_md")
+        # driver: thanatos pod 在 → mobile/redroid 路径；否则黑盒 curl/grpcurl。
+        if thanatos_pod:
+            hooks.append("drivers/thanatos_mcp")
+        else:
+            hooks.append("drivers/direct_curl")
+
         prompt = render(
             "accept.md.j2",
             req_id=req_id,
@@ -539,6 +566,10 @@ async def _dispatch_accept_agent(
             thanatos_skill_repo=thanatos_skill_repo,
             bkd_entry_links=bkd_entry_links,
             pr_urls=pr_urls_dict,
+            # 新增：prompt hook 机制 + PR-driven 输入
+            enabled_prompt_hooks=hooks,
+            pr_url=pr_url,
+            linked_issue_url=linked_issue_url,
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")
