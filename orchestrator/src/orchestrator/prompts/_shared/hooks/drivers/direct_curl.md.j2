@@ -1,0 +1,65 @@
+## 驱动：直 curl / grpcurl（黑盒打 endpoint）
+
+工具集：`curl` / `grpcurl` / `jq` —— sisyphus runner pod 内全有。
+
+### Step D0: 健康检查
+
+```bash
+POD=runner-{{ req_id | lower }}
+NS=sisyphus-runners
+
+if ! kubectl -n $NS exec $POD -- curl -sf "{{ endpoint }}/healthz" > /dev/null; then
+  echo "BLOCKED: endpoint {{ endpoint }}/healthz unreachable"
+  exit 1
+fi
+echo "endpoint healthy: {{ endpoint }}"
+```
+
+`/healthz` 不存在时换 `/`、`/ready`、`/version` 探一遍；都不响应 → BLOCKED。
+
+### Step D1: 跑每个验收点（来自 inputs 推出来的 checklist）
+
+模板（HTTP API）：
+
+```bash
+kubectl -n $NS exec $POD -- curl -sfi -X <METHOD> \
+  '{{ endpoint }}<path>' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <test-jwt-if-needed>' \
+  -d '<body>' \
+  | head -c 1024   # body 截 1KB 防爆 evidence
+```
+
+模板（gRPC）：
+
+```bash
+# 先列服务（要 server reflection 开着）
+kubectl -n $NS exec $POD -- grpcurl -plaintext <host>:<port> list
+
+# 调方法
+kubectl -n $NS exec $POD -- grpcurl -plaintext \
+  -d '<json>' <host>:<port> <pkg>.<Service>/<Method>
+```
+
+### Step D2: evidence 记录
+
+每个验收点至少存：
+
+- 请求 cmd（脱敏 token）
+- 响应 body（≤1KB）
+- HTTP code / gRPC code
+- 判定依据（一句话："返回 200 且 body.status=ok"）
+
+### Step D3: 跨点串联
+
+如果验收点 V2 依赖 V1 副作用（V1 创建资源 → V2 查询同一资源），把 V1 响应里的 id 存本地变量给 V2 用。**不要每次重新造数据**，那样测不到幂等 / 状态变更。
+
+### Step D4: 镜像核对（防 SISYPHUS_IMAGE_TAGS 注入失败）
+
+```bash
+# /version 不存在就跳过；存在则核对 tag = ctx 里发来的 image_tag
+kubectl -n $NS exec $POD -- curl -sf "{{ endpoint }}/version" 2>/dev/null \
+  | jq -r '.image_tag // .version // empty' || echo "(no /version endpoint)"
+```
+
+如果 endpoint 暴露版本信息且 tag 跟本次 dispatch 的 image_tag 不匹配 → 大概率是 helm install 没正确注入 image override，**报 BLOCKED**，避免 silent pass（用旧码跑了一遍）。

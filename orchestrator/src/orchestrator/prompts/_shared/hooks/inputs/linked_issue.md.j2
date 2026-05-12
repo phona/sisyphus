@@ -1,0 +1,32 @@
+## 输入源：关联 Issue
+
+{% if linked_issue_url %}
+显式传入：**{{ linked_issue_url }}**
+
+```bash
+gh issue view {{ linked_issue_url }} --json title,body,labels \
+  | jq -r '"## Issue Title:\n\(.title)\n\n## Issue Body:\n\(.body)"'
+```
+{% else %}
+未显式传入，从 PR body 自己抠（已在 pr_context hook 跑过 `gh pr view` 留下 /tmp/pr_context.json）：
+
+```bash
+ISSUE_NUM=$(jq -r '.body' /tmp/pr_context.json 2>/dev/null \
+  | grep -oE '(Closes|Refs|Fixes|closes|refs|fixes) #[0-9]+' \
+  | head -1 | grep -oE '[0-9]+')
+
+if [ -n "$ISSUE_NUM" ]; then
+  # PR repo 推断（pr_url 形如 https://github.com/<owner>/<repo>/pull/N）
+  PR_REPO=$(echo "{{ pr_url }}" | sed -E 's|https://github.com/([^/]+/[^/]+)/pull/.*|\1|')
+  gh issue view --repo "$PR_REPO" "$ISSUE_NUM" --json title,body \
+    | jq -r '"## Issue Title:\n\(.title)\n\n## Issue Body:\n\(.body)"'
+else
+  echo "(PR body 没引用 Closes/Refs/Fixes #N，跳过 issue 上下文)"
+fi
+```
+{% endif %}
+
+对比 PR 是否真的实现了 issue 描述的需求。**特别注意**：
+
+- issue 提到、但 PR diff 里没体现的需求点 → 大概率漏实现，**加进 checklist 单独验**
+- PR 实现了、但 issue 没要的额外行为 → 可能是 over-spec，标 notes 提示 reviewer

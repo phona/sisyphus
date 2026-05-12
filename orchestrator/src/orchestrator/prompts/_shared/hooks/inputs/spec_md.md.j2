@@ -1,0 +1,19 @@
+## 输入源：spec.md (legacy / 全链路场景)
+
+```bash
+POD=runner-{{ req_id | lower }}
+NS=sisyphus-runners
+
+SPEC_PATH=$(kubectl -n $NS exec $POD -- bash -c \
+  "ls /workspace/source/*/openspec/changes/{{ req_id }}/specs/*/spec.md 2>/dev/null | head -1")
+if [ -z "$SPEC_PATH" ]; then
+  echo "(no spec.md found, skipping spec input)"
+else
+  echo "## spec.md: $SPEC_PATH"
+  kubectl -n $NS exec $POD -- cat "$SPEC_PATH"
+fi
+```
+
+按 `#### Scenario: <id> <desc>` 切块，每块含 GIVEN / WHEN / THEN。**每个 scenario 当一个独立验收点**。
+
+> 跟 `inputs/pr_context` 共存时：spec.md 是 analyze 阶段产物，**最权威**；PR 描述是落地后视角，二者一致 → checklist 二选一即可；不一致 → 标 notes 提示。

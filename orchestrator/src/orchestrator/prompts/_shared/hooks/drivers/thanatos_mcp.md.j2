@@ -1,0 +1,101 @@
+## 驱动：thanatos atomic MCP（mobile / redroid 路径）
+
+> 业务仓 `accept-env-up` 起了 thanatos pod，**走 atomic MCP**。直 curl 路径见 `drivers/direct_curl` hook。
+
+### Step T0: 拉起 thanatos MCP server + 锚定产品知识基线（强制）
+
+thanatos MCP server 在 thanatos pod 中以 stdio 方式运行：
+
+```bash
+kubectl -n {{ thanatos_namespace }} exec -i {{ thanatos_pod }} -- python -m thanatos.server
+```
+
+工具一览：
+
+| 工具 | 用途 |
+|---|---|
+| `preflight(endpoint)` | 一次性绑定 redroid endpoint（host:port），必须最先调 |
+| `recall(skill_path, intent[, tags])` | 检索业务仓 `.thanatos/` 产品知识（anchors / flows / pitfalls / contracts / glossary）|
+| `observe()` | 当前 uiautomator dump tree（含元素 text / content-desc / resource-id / bounds）|
+| `screenshot()` | base64 PNG 截图 |
+| `tap(name)` | 点击文本 / content-desc / resource-id 模糊匹配的首个元素 |
+| `type(name, text)` | 在命名字段输入 text |
+| `wait(ms)` | 直接 sleep |
+| `wait_for_text(text, timeout_ms)` | 轮询直到 text 出现或超时 |
+| `current_page()` | 当前前台 `{package, activity}` |
+| `find(name)` | 单元素快照（debug） |
+
+**第一件事（不可省）**：调 `recall` 至少一次，锚定本仓产品基线。理由：
+不调 recall = 每次重新探索 element 命名 / 业务流程 → 验收风格漂移、设计意图丢失。
+仓里 `.thanatos/anchors.md` / `flows.md` / `pitfalls.md` 维护着 widget 别名 + 流程 + 已知坑，
+**就是用来防漂移的**，必须先看。
+
+```text
+# 推荐 recall 顺序（按当前 REQ 调整 intent）
+recall(skill_path="/workspace/source/{{ thanatos_skill_repo }}/.thanatos/skill.yaml",
+       intent="<feature> screen widgets")
+recall(skill_path=..., intent="<feature> flow steps")
+recall(skill_path=..., intent="known pitfalls", tags=["<feature>"])
+```
+
+跑完拿到 element 别名 / 流程要点 / 历史坑，记下来当下面单步验收的字典。
+
+### Step T1: preflight + 验证 endpoint
+
+```bash
+POD=runner-{{ req_id | lower }}
+NS=sisyphus-runners
+
+# lab endpoint reachable
+kubectl -n $NS exec $POD -- curl -sf "{{ endpoint }}/healthz" || {
+  echo "BLOCKED: endpoint {{ endpoint }} unreachable" >&2; exit 1; }
+```
+
+通过 thanatos MCP 调一次 `preflight`（绑定 redroid 给后续 atomic 工具用）。endpoint 形式
+取决于业务仓 `.sisyphus/env.yaml` 的 `emits.endpoint` —— 一般是 `<redroid_host>:5554` /
+`<redroid_host>:5555`。
+
+```text
+preflight(endpoint="<redroid host:port>")
+```
+
+返回 `{ok: true, a11y_node_count: N}` 才能进下一步。失败先看 lab 是否真起、APK 是否
+真装上（`pm list packages | grep -q <package>`）。
+
+### Step T2: 单步驱动 + 视觉 / 结构判定（每个验收点一遍）
+
+对每个验收点循环：
+
+1. **回到入口态**（如必要）：用 `current_page` 检查；不在期望 activity 就 `tap` 回首页
+   或重启 app（`adb shell am start -n <pkg>/.MainActivity`，可通过 thanatos pod exec 跑）
+2. **GIVEN**：把每条 GIVEN 翻译成"建立前置态"的 atomic 调用（多数情况 GIVEN 已经满足
+   = 启动后默认在某 page，调 `current_page` / `observe` 确认即可；不满足就 tap/type 凑齐）
+3. **WHEN**：把动作翻译成 atomic 调用（`tap("Forgot password")` / `type("用户名", "...")`）。
+   有异步 UI 变化用 `wait_for_text` 不要硬 `wait`
+4. **THEN**：判结果 ——
+   - 优先 `screenshot()` + LLM 看图判（流程对不对、样式对不对、有没有错误提示）
+   - 或 `observe()` 拿 dom，看目标元素是否存在 / 文本是否含期望串
+   - 或 `current_page()` 确认导航到位
+5. **每步留 evidence**：每个验收点至少 1 张关键截图 + 关键 dom 片段
+6. **判 verdict**：`pass` / `fail`，fail 写清楚 reason（"snackbar 没出现" / "样式异常 — 按钮叠在
+   输入框上方" / "tap 后 current_page 没切" 等）
+
+**单步原则**：每次 1 个 atomic call，看返回再决定下一步。**禁止盲写**一长串
+`tap` 调用不看中间状态 —— 那等于退化回 batch 模式。
+
+### Step T3: 报告补充段（thanatos 专属，主 prompt 不变量之外）
+
+主 prompt 的 verdict / source / evidence / notes 之外，追加：
+
+```markdown
+## Recall used
+- anchors.md: 命中 N 条（element 命名字典）
+- flows.md: 命中 M 条（业务流程）
+- pitfalls.md: 命中 K 条（已知坑）
+```
+
+### Step T4: 硬约束（thanatos 路径专属）
+
+- **不构建 APK / 不重装 / 不重启 app**：accept-env-up 已经把 build (GH workflow) + install (adb) + launch (am start) 都做完。**禁止跑 `flutter pub get` / `gradle` / `adb install` / 任何源码构建**
+- **强制 recall**：先 recall 后 act —— 不 recall = 验收基线漂移
+- **单步**：1 个 atomic call → 看结果 → 决定下一步，不要盲写一长串

@@ -1,0 +1,29 @@
+## 输入源：PR
+
+本次验收基于 PR：**{{ pr_url }}**
+
+**先跑（必跑）**：
+
+```bash
+# PR 元数据 + body（含验收点描述）
+gh pr view {{ pr_url }} --json title,body,labels,files,additions,deletions \
+  | tee /tmp/pr_context.json \
+  | jq -r '"## PR Title:\n\(.title)\n\n## PR Body:\n\(.body)\n\n## Files changed:\n\(.files | map("- \(.path) (+\(.additions)/-\(.deletions))") | join("\n"))"'
+
+# diff 头 500 行（看核心 endpoint / handler / schema 变化）
+gh pr diff {{ pr_url }} | head -500 > /tmp/pr_diff.txt
+echo "(diff 已存 /tmp/pr_diff.txt)"
+```
+
+从 PR 标题 / 描述 / diff / 改动文件列表里推断：
+
+- 这次改了什么功能（核心动词 + 名词）
+- 影响哪些 endpoint（diff 里 route / handler 路径）
+- 有没有数据库 schema / 配置变更
+- PR 描述里有没有显式的「验收点」清单（# 验收 / # Acceptance / 中文「验收点」段落）
+- PR body 里 `Closes #N` / `Refs #N` / `Fixes #N` 关联了哪些 issue（下面 linked_issue hook 会用）
+
+把推断结果写下来当下面 driver 阶段的 checklist —— V1/V2/V3 命名你自己起，每条要能追溯到 PR 哪一段。
+
+> ⚠️ **PR body 信息不足时怎么办**：不要瞎编验收点。如果 PR body / diff / files 加起来推不出能验的东西，
+> 直接报 BLOCKED，verdict=BLOCKED，notes 说明"PR 描述不充分，无法推出验收 checklist"。这比硬编 verdict=PASS 强 10 倍。
