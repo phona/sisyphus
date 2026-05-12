@@ -995,6 +995,19 @@ async def dispatch_accept(
     """
     _verify_token(authorization)
 
+    # 从 pr_url 抠 owner/repo slug（intent_tags._PR_TAG_RE 期望 pr:owner/repo#N
+    # 格式，create_accept.py 入口处 extract_pr_tag 校验，缺 owner 直接 fail-fast，
+    # closes #400）。payload 的 source_repo 字段可能只是 repo basename
+    # (ttpos-server-go) 也可能已经是 owner/repo，统一从 pr_url 抠最稳。
+    try:
+        owner_repo = req.pr_url.split("github.com/", 1)[1].rsplit("/pull/", 1)[0]
+        assert "/" in owner_repo, "owner_repo missing slash"
+    except (IndexError, AssertionError) as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"pr_url malformed (expect https://github.com/<owner>/<repo>/pull/N): {req.pr_url}",
+        ) from e
+
     req_id = f"REQ-pr{req.pr_number}-{int(datetime.now(UTC).timestamp())}"
     ctx: dict = {
         "pr_url": req.pr_url,
@@ -1031,7 +1044,7 @@ async def dispatch_accept(
         project_id=req.project_id,
         tags=[
             "intent:accept",
-            f"pr:{req.source_repo}#{req.pr_number}",
+            f"pr:{owner_repo}#{req.pr_number}",
             "source:gha-dispatch",
         ],
         cur_state=ReqState.INIT,

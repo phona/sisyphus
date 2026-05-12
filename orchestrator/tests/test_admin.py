@@ -1138,3 +1138,74 @@ def test_admin_route_table_runner_resume_renamed():
     # bare /resume 绑 state-level resume_req（不是 resume_runner）
     assert paths_to_endpoint.get("/admin/req/{req_id}/resume") is resume_req
     assert paths_to_endpoint.get("/admin/req/{req_id}/resume") is not resume_runner
+
+
+# ─── dispatch-accept smoke ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_dispatch_accept_tag_includes_owner_repo_from_pr_url(monkeypatch):
+    """dispatch-accept 必须把 pr_url 抠成 owner/repo 拼 `pr:owner/repo#N` tag，
+    否则 create_accept.py 入口的 extract_pr_tag fail-fast 把 REQ 直接 escalate
+    （smoke test live cluster 实证）。"""
+    from orchestrator import admin as admin_mod
+    from orchestrator.admin import AcceptDispatchReq, dispatch_accept
+
+    monkeypatch.setattr(admin_mod, "_verify_token", lambda x: None)
+
+    class FakePool:
+        async def execute(self, *a, **kw): return None
+    monkeypatch.setattr("orchestrator.admin.db.get_pool", lambda: FakePool())
+
+    async def fake_insert_init(*a, **kw): return None
+    monkeypatch.setattr("orchestrator.admin.req_state.insert_init", fake_insert_init)
+
+    captured: dict = {}
+
+    async def fake_step(pool, *, body, req_id, project_id, tags, cur_state, ctx, event, depth=0):
+        captured["tags"] = tags
+        captured["ctx"] = ctx
+        captured["event"] = event
+        return {"action": "noop"}
+
+    monkeypatch.setattr("orchestrator.admin.engine.step", fake_step)
+
+    req = AcceptDispatchReq(
+        pr_url="https://github.com/ZonEaseTech/ttpos-server-go/pull/892",
+        pr_number=892,
+        image_tag="pr-892-abc",
+        source_repo="ttpos-server-go",     # basename 形式（payload 常态）
+        branch="feat/x",
+    )
+    result = await dispatch_accept(req, authorization="Bearer x")
+
+    assert result["state"] == "ACCEPT_RUNNING"
+    # 关键断言：tag 含 owner/repo 形式，不能漏 owner
+    pr_tags = [t for t in captured["tags"] if t.startswith("pr:")]
+    assert pr_tags == ["pr:ZonEaseTech/ttpos-server-go#892"], (
+        f"expected `pr:ZonEaseTech/ttpos-server-go#892`, got {pr_tags}; "
+        "create_accept.py extract_pr_tag 会因为缺 owner 直接 fail-fast escalate"
+    )
+    assert captured["event"].value == "intent.accept"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_accept_rejects_malformed_pr_url(monkeypatch):
+    """pr_url 不符合 github.com/<owner>/<repo>/pull/N 形式 → 400，
+    不要静默落 REQ 让它跑到 create_accept 才 fail。"""
+    from orchestrator import admin as admin_mod
+    from orchestrator.admin import AcceptDispatchReq, dispatch_accept
+
+    monkeypatch.setattr(admin_mod, "_verify_token", lambda x: None)
+
+    req = AcceptDispatchReq(
+        pr_url="https://example.com/not-a-pr",
+        pr_number=1,
+        image_tag="t",
+        source_repo="r",
+        branch="b",
+    )
+    with pytest.raises(HTTPException) as ei:
+        await dispatch_accept(req, authorization="Bearer x")
+    assert ei.value.status_code == 400
+    assert "pr_url malformed" in ei.value.detail
