@@ -47,10 +47,11 @@ class _FakeSettings:
     """Minimal settings stub for snapshot/runner_gc contract tests."""
 
     def __init__(self, exclude=(), runner_gc_disk_pressure_threshold=0.8,
-                 pvc_retain_on_escalate_days=1, **kw):
+                 pvc_retain_on_escalate_days=1, runner_gc_pod_max_age_hours=4, **kw):
         self.snapshot_exclude_project_ids = list(exclude)
         self.runner_gc_disk_pressure_threshold = runner_gc_disk_pressure_threshold
         self.pvc_retain_on_escalate_days = pvc_retain_on_escalate_days
+        self.runner_gc_pod_max_age_hours = runner_gc_pod_max_age_hours
         self.bkd_base_url = "https://bkd.example.test/api"
         self.bkd_token = "test-token"
         self.snapshot_interval_sec = 300
@@ -197,7 +198,7 @@ async def test_orchn_s4_first_403_logs_info_and_disables(monkeypatch):
     class _FakeController:
         async def node_disk_usage_ratio(self):
             raise ApiException(status=403)
-        async def gc_orphan_pods(self, keep):
+        async def gc_orphan_pods(self, keep, *, max_age_sec=None):
             return []
         async def gc_orphan_pvcs(self, keep):
             return []
@@ -263,7 +264,7 @@ async def test_orchn_s5_disabled_skips_node_api(monkeypatch):
         async def node_disk_usage_ratio(self):
             ratio_calls.append(True)
             return 0.0
-        async def gc_orphan_pods(self, keep):
+        async def gc_orphan_pods(self, keep, *, max_age_sec=None):
             return []
         async def gc_orphan_pvcs(self, keep):
             return []
@@ -313,7 +314,7 @@ async def test_orchn_s6_non_403_debug_no_disable(monkeypatch):
     class _FakeController:
         async def node_disk_usage_ratio(self):
             raise ApiException(status=500)
-        async def gc_orphan_pods(self, keep):
+        async def gc_orphan_pods(self, keep, *, max_age_sec=None):
             return []
         async def gc_orphan_pvcs(self, keep):
             return []
@@ -360,7 +361,7 @@ async def test_orchn_s7_high_ratio_triggers_disk_pressure(monkeypatch):
     class _FakeController:
         async def node_disk_usage_ratio(self):
             return 0.9
-        async def gc_orphan_pods(self, keep):
+        async def gc_orphan_pods(self, keep, *, max_age_sec=None):
             return []
         async def gc_orphan_pvcs(self, keep):
             return []
@@ -406,7 +407,7 @@ async def test_orchn_s8_warning_filter_excludes_rbac_denied(monkeypatch):
     class _FakeController:
         async def node_disk_usage_ratio(self):
             raise ApiException(status=403)
-        async def gc_orphan_pods(self, keep):
+        async def gc_orphan_pods(self, keep, *, max_age_sec=None):
             return []
         async def gc_orphan_pvcs(self, keep):
             return []

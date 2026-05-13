@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     runner_gc_interval_sec: int = 900    # 15min
     # 磁盘压力阈值：超过此比例 GC 强清所有非 active PVC（不论 retention）
     runner_gc_disk_pressure_threshold: float = 0.8
+    # Runner Pod max age 兜底：超过此时长的 runner Pod 不论 req_state state 强清。
+    # 防 cleanup_on_terminal fire-and-forget task 在 K8s API blip / orch restart
+    # 下漏跑、admin/escalate 422 拒绝导致 state 没真转 terminal、或 stuck pod —
+    # 累积 zombie pod 占 CPU/mem requests 把 scheduler 顶满（实证 vm-node04 单节点
+    # 4 cores，3 个 zombie runner × 250m = 750m 直接堵新 lab schedule）。
+    # 默认 4h：合理 in-flight REQ（含 accept-env-up helm wait 15min）完全在内，
+    # 4h 以上一定异常，强清安全。
+    runner_gc_pod_max_age_hours: int = 4
     # accept env GC 扫描周期；0 = 不跑（dev / 没接 accept-env-up 的部署可关）
     accept_env_gc_interval_sec: int = 900    # 15min
 

@@ -130,7 +130,10 @@ async def gc_once() -> dict:
 
     pod_keep = await _pod_keep_req_ids()
     pvc_keep = await _pvc_keep_req_ids(ignore_retention=disk_pressure)
-    cleaned_pods = await rc.gc_orphan_pods(pod_keep)
+    # max_age 兜底：runner pod 超过 N 小时强清，无视 db state（防 admin/escalate
+    # 拒绝 + cleanup_on_terminal 漏跑 + stuck pod 累积顶死 scheduler）。
+    pod_max_age_sec = settings.runner_gc_pod_max_age_hours * 3600
+    cleaned_pods = await rc.gc_orphan_pods(pod_keep, max_age_sec=pod_max_age_sec)
     cleaned_pvcs = await rc.gc_orphan_pvcs(pvc_keep)
     result = {
         "cleaned_pods": cleaned_pods,
