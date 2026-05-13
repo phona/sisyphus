@@ -538,7 +538,9 @@ class RunnerController:
                     return max(0.0, min(1.0, used_ratio))
         raise RuntimeError("no node with ephemeral-storage info")
 
-    async def gc_orphan_pods(self, keep_req_ids: set[str]) -> list[str]:
+    async def gc_orphan_pods(
+        self, keep_req_ids: set[str], *, max_age_sec: int | None = None,
+    ) -> list[str]:
         """按 sisyphus/role=runner label 列 Pod，删 keep_req_ids 之外的 Pod。
 
         **不动 PVC** —— PVC 由 gc_orphan_pvcs 单独管。Pod 占内存/调度容量，
@@ -548,10 +550,24 @@ class RunnerController:
         覆盖 _cleanup_runner_on_terminal 漏网的 zombie Pod —— 那条 fire-and-
         forget 任务在 K8s API blip / orchestrator restart 下可能没跑完。
 
+        max_age_sec（兜底）：Pod age 超此值时**无视 keep_req_ids 强清**。
+        实证 vm-node04 4 cores 单节点 3 个 zombie runner pod × 250m = 750m，
+        把新 lab dispatch 顶到 "Insufficient cpu"。原因有几种：
+          - admin/escalate 422 拒绝（state machine 不允许该 state 转 escalated），
+            DB state 没真转 terminal，runner_gc 看 state non-terminal 不清；
+          - cleanup_on_terminal fire-and-forget 在 orch restart 时被掐断；
+          - REQ 卡在 ACCEPT_RUNNING 等 helm `--wait` 超时（15min）而 dispatcher
+            client side 早超时认为 fail。
+        max_age_sec 兜底覆盖以上所有。None = 不启用兜底（向后兼容）。
+
         404 视为 no-op（Pod 已被别处删）。返已尝试删除的 req_id 列表。
         """
         keep_lower = {r.lower() for r in keep_req_ids}
         cleaned: list[str] = []
+        cleaned_aged: list[str] = []
+
+        from datetime import UTC, datetime
+        now = datetime.now(UTC)
 
         pods = await self._k8s(
             self.core_v1.list_namespaced_pod,
@@ -559,9 +575,35 @@ class RunnerController:
         )
         for pod in pods.items:
             req_label = (pod.metadata.labels or {}).get("sisyphus/req-id", "")
-            if not req_label or req_label in keep_lower:
+            if not req_label:
                 continue
             req_id = req_label.upper() if req_label.lower().startswith("req-") else req_label
+
+            # 兜底：pod age 超 max_age_sec 强清（无视 keep set）。
+            if max_age_sec is not None and pod.metadata.creation_timestamp:
+                age_sec = (now - pod.metadata.creation_timestamp).total_seconds()
+                if age_sec > max_age_sec:
+                    try:
+                        await self._k8s(
+                            self.core_v1.delete_namespaced_pod,
+                            self.pod_name(req_id), self.namespace,
+                        )
+                    except ApiException as e:
+                        if e.status != 404:
+                            raise
+                    cleaned.append(req_id)
+                    cleaned_aged.append(req_id)
+                    log.warning(
+                        "runner.gc.pod_aged_out",
+                        req_id=req_id, age_sec=int(age_sec),
+                        max_age_sec=max_age_sec,
+                        hint="zombie runner pod cleaned by age fallback "
+                             "(req_state may still show non-terminal)",
+                    )
+                    continue
+
+            if req_label in keep_lower:
+                continue
             try:
                 await self._k8s(
                     self.core_v1.delete_namespaced_pod,
@@ -573,7 +615,8 @@ class RunnerController:
             cleaned.append(req_id)
 
         if cleaned:
-            log.info("runner.gc.pods_cleaned", count=len(cleaned), reqs=cleaned)
+            log.info("runner.gc.pods_cleaned",
+                     count=len(cleaned), reqs=cleaned, aged=cleaned_aged)
         return cleaned
 
     async def gc_orphan_pvcs(self, keep_req_ids: set[str]) -> list[str]:

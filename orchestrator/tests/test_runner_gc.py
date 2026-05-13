@@ -247,3 +247,94 @@ async def test_gc_once_skipped_also_updates_last_result():
     assert last is not None
     assert "skipped" in last
     assert "ran_at" in last
+
+
+# ─── max_age fallback：runner pod 超期强清（防 admin/escalate 拒绝 + cleanup_on_terminal 漏跑） ───
+
+
+@pytest.mark.asyncio
+async def test_gc_passes_max_age_sec_to_pods_sweep(monkeypatch, mock_controller):
+    """gc_once 必须把 settings.runner_gc_pod_max_age_hours 翻成秒数透传给 gc_orphan_pods。
+
+    实证 dogfood：3 个 zombie runner pod 250m × 3 = 750m，把 vm-node04 4 cores
+    单节点 scheduler 顶到 "Insufficient cpu"。runner_gc 当时不清（DB state 还 in-flight
+    因 admin/escalate 422 拒绝转 terminal），靠 max_age 兜底才能清。"""
+    pool = _FakePool([_row("REQ-1", "accept-running")])
+    monkeypatch.setattr("orchestrator.runner_gc.db.get_pool", lambda: pool)
+    # 显式 override settings 验证透传
+    monkeypatch.setattr("orchestrator.runner_gc.settings.runner_gc_pod_max_age_hours", 4)
+
+    await runner_gc.gc_once()
+
+    # gc_orphan_pods 必须被调用且带 max_age_sec=4*3600=14400
+    call = mock_controller.gc_orphan_pods.await_args
+    assert call.kwargs.get("max_age_sec") == 14400, (
+        f"expected max_age_sec=14400 (4h * 3600); got kwargs={call.kwargs}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_gc_orphan_pods_age_fallback_force_cleans(monkeypatch):
+    """k8s_runner.gc_orphan_pods: pod age > max_age_sec 时强清，无视 keep_req_ids。
+
+    复刻 dogfood 实证场景：REQ-pr353-1778635991 老 pod（67min 老）的 req_id 仍在
+    keep set 里（DB state 'accept-running'），但 max_age=4h 触发强清。
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from orchestrator.k8s_runner import RunnerController
+
+    # Mock K8s API：列出 1 个 5h 老的 runner pod
+    old_pod = MagicMock()
+    old_pod.metadata.labels = {"sisyphus/role": "runner", "sisyphus/req-id": "req-stale-1"}
+    old_pod.metadata.creation_timestamp = datetime.now(UTC) - timedelta(hours=5)
+    old_pod.metadata.name = "runner-req-stale-1"
+    pods_list = MagicMock(items=[old_pod])
+
+    rc = RunnerController.__new__(RunnerController)
+    rc.namespace = "sisyphus-runners"
+    rc.core_v1 = MagicMock()
+    rc.pod_name = lambda req_id: f"runner-{req_id.lower()}"
+
+    async def _fake_k8s(fn, *args, **kw):
+        if fn is rc.core_v1.list_namespaced_pod:
+            return pods_list
+        return None
+    rc._k8s = _fake_k8s
+
+    # keep set 包含该 REQ id（模拟 DB state 还 in-flight），但 max_age 应触发强清
+    cleaned = await rc.gc_orphan_pods({"REQ-STALE-1"}, max_age_sec=4 * 3600)
+    assert cleaned == ["REQ-STALE-1"], (
+        f"expected age fallback to clean REQ-STALE-1 despite keep set; got {cleaned}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_gc_orphan_pods_age_fallback_disabled_by_default(monkeypatch):
+    """k8s_runner.gc_orphan_pods: max_age_sec=None 时不启用兜底（向后兼容）。"""
+    from datetime import UTC, datetime, timedelta
+
+    from orchestrator.k8s_runner import RunnerController
+
+    old_pod = MagicMock()
+    old_pod.metadata.labels = {"sisyphus/role": "runner", "sisyphus/req-id": "req-stale-2"}
+    old_pod.metadata.creation_timestamp = datetime.now(UTC) - timedelta(hours=10)
+    old_pod.metadata.name = "runner-req-stale-2"
+    pods_list = MagicMock(items=[old_pod])
+
+    rc = RunnerController.__new__(RunnerController)
+    rc.namespace = "sisyphus-runners"
+    rc.core_v1 = MagicMock()
+    rc.pod_name = lambda req_id: f"runner-{req_id.lower()}"
+
+    async def _fake_k8s(fn, *args, **kw):
+        if fn is rc.core_v1.list_namespaced_pod:
+            return pods_list
+        return None
+    rc._k8s = _fake_k8s
+
+    # keep set 包含该 REQ + max_age_sec=None → 不清（pod age 10h 也不动）
+    cleaned = await rc.gc_orphan_pods({"REQ-STALE-2"}, max_age_sec=None)
+    assert cleaned == [], (
+        f"expected no cleanup when max_age_sec=None and pod in keep set; got {cleaned}"
+    )
