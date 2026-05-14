@@ -536,6 +536,9 @@ async def _dispatch_accept_agent(
         # (prompts/__init__.py:46)，导致 fail-fast 全丢。
         pr_url = (ctx or {}).get("pr_url") or ""
         linked_issue_url = (ctx or {}).get("linked_issue_url") or ""
+        # head_sha: GHA dispatch 时 _accept.yml 设了 commit status pending，
+        # accept-agent 收尾据此回写 success/failure（空 = 不回写）。
+        head_sha = (ctx or {}).get("head_sha") or ""
         hooks: list[str] = list(settings.enabled_prompt_hooks)
         if pr_url:
             # PR-driven 路径（GHA dispatch / 全链路均适用）：PR 在就一并装 linked_issue，
@@ -570,6 +573,7 @@ async def _dispatch_accept_agent(
             enabled_prompt_hooks=hooks,
             pr_url=pr_url,
             linked_issue_url=linked_issue_url,
+            head_sha=head_sha,
         )
         await bkd.follow_up_issue(project_id=proj, issue_id=issue.id, prompt=prompt)
         await bkd.update_issue(project_id=proj, issue_id=issue.id, status_id="working")

@@ -961,6 +961,10 @@ class AcceptDispatchReq(BaseModel):
     branch: str
     linked_issue_url: str = ""
     project_id: str = "nnvxh8wj"
+    # head_sha：PR head commit SHA。accept-agent 收尾用它定位 commit 回写
+    # commit status（context=sisyphus/accept），让 _accept.yml 设的 pending
+    # 推成 success/failure。空 = 不回写 status（向后兼容老调用方 / 手动 dispatch）。
+    head_sha: str = ""
 
     model_config = {
         "json_schema_extra": {
@@ -972,6 +976,7 @@ class AcceptDispatchReq(BaseModel):
                 "branch": "feat/shop-auto-settle",
                 "linked_issue_url": "",
                 "project_id": "nnvxh8wj",
+                "head_sha": "abc1234def5678",
             },
         },
     }
@@ -1019,6 +1024,8 @@ async def dispatch_accept(
         "pr_urls": {req.source_repo: req.pr_url},
         # 给 inputs/* hook 标识本次 REQ 由 GHA 直派（没 BKD intent issue）
         "intent_source": "gha-dispatch",
+        # accept-agent 收尾回写 commit status sisyphus/accept 用（空 = 不回写）
+        "head_sha": req.head_sha,
     }
 
     pool = db.get_pool()
