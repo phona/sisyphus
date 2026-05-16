@@ -698,12 +698,30 @@ async def _run_legacy_single_layer(*, req_id: str, ctx, body, tags, rc, namespac
         }
     integration_dir = resolved.dir
 
+    # ── golden CoW ambient context 注入（spec 文件不在或 enabled=false → 跳过）──
+    # IoC 模式：orch 在 accept ns 装 cross-ns VS + Service+EndpointSlice + 复制
+    # secret，业务 chart 用默认短名连。详见 docs/golden-cow.md。
+    helm_extra_sets: list[str] = []
+    try:
+        from .. import golden_cow
+        spec = golden_cow.load_spec()
+        if spec.enabled:
+            helm_extra_sets = await golden_cow.setup_ephemeral_ns(namespace, spec)
+            log.info("create_accept.golden_cow_setup",
+                     req_id=req_id, ns=namespace, extra_sets=len(helm_extra_sets))
+    except Exception as e:
+        log.exception("create_accept.golden_cow_failed", req_id=req_id, error=str(e))
+        return {"emit": Event.ACCEPT_ENV_UP_FAIL.value, "error": f"golden_cow: {str(e)[:200]}"}
+
     exec_env = {
         "SISYPHUS_REQ_ID": req_id,
         "SISYPHUS_STAGE": "accept-env-up",
         "SISYPHUS_NAMESPACE": namespace,
         **_image_tags_env(ctx),
     }
+    if helm_extra_sets:
+        # newline-separated; accept-env.sh 拼成 --set ... 透传 helm
+        exec_env["SISYPHUS_HELM_EXTRA_SETS"] = "\n".join(helm_extra_sets)
     try:
         result = await rc.exec_in_runner(
             req_id,
