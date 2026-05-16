@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     # accept env GC 扫描周期；0 = 不跑（dev / 没接 accept-env-up 的部署可关）
     accept_env_gc_interval_sec: int = 900    # 15min
 
+    # ─── Golden CoW per-REQ ephemeral 拉起（详见 golden_cow.py）────────────
+    # 业务 chart 不感知 baseline / Longhorn / 跨 ns；orch 在 accept ns 注
+    # ambient Service + EndpointSlice + cross-ns import VS + 复制 secret。
+    # spec yaml 路径，文件不存在 → 自动 disabled，不影响现有 dispatch 流程。
+    golden_cow_spec_path: str = "/etc/sisyphus/golden-cow.yaml"
+
     # ─── Admission gate（fresh REQ entry rate-limit）────────────────────────
     # 同时跑的 REQ 上限：start_intake / start_analyze 进门时数 req_state 里非
     # 终态行（exclude init/done/escalated/gh-incident-open + 自身），>= cap 直接
