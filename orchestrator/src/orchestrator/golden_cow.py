@@ -281,7 +281,12 @@ async def _inject_ambient_service(req_ns: str, svc: AmbientService) -> None:
         ),
         address_type="IPv4",
         ports=[client.DiscoveryV1EndpointPort(name=svc.port_name, port=svc.port, protocol="TCP")],
-        endpoints=[client.V1Endpoint(addresses=[baseline_ip])],
+        endpoints=[client.V1Endpoint(
+            addresses=[baseline_ip],
+            # ★ 必须显式 conditions.ready=True;空 conditions kube-proxy
+            # 默认当 not-ready, 不转发流量 (实测 R4 撞过的坑)。
+            conditions=client.V1EndpointConditions(ready=True),
+        )],
     )
     try:
         await _k8s(_discovery_v1.create_namespaced_endpoint_slice, namespace=req_ns, body=eps_body)
