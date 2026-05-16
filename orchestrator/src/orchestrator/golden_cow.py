@@ -378,6 +378,18 @@ async def _copy_secret(req_ns: str, sc: SecretCopy) -> dict[str, bytes]:
             raise
     logger.info("golden_cow: copied secret %s to %s (from %s, helm_release=%s)",
                 sc.name, req_ns, sc.from_ns, sc.helm_release_name or "<none>")
+
+    # docker-registry secret 必须挂进 default SA imagePullSecrets, 否则
+    # pod kubelet 拉私有 image 时报 401 (实测 R9 撞)。strategic merge 保留 SA
+    # 既有 imagePullSecrets, 同名重复 patch 不会重加 (k8s 内置去重)。
+    if src.type == "kubernetes.io/dockerconfigjson":
+        await _k8s(
+            _core_v1.patch_namespaced_service_account,
+            name="default", namespace=req_ns,
+            body={"imagePullSecrets": [{"name": sc.name}]},
+        )
+        logger.info("golden_cow: patched default SA imagePullSecrets += %s", sc.name)
+
     return {k: base64.b64decode(v) for k, v in (src.data or {}).items()}
 
 
