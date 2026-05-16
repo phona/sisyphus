@@ -74,9 +74,17 @@ class AmbientService:
 
 @dataclass
 class SecretCopy:
-    """复制 secret 到 ephemeral ns。"""
+    """复制 secret 到 ephemeral ns。
+
+    `helm_release_name` 不空时给复制的 Secret 打上 helm ownership labels +
+    annotations，让随后 helm install 把这个已存在 secret 当作 "已 adopted"
+    的 release 资源 (不然 helm install 报 "cannot be imported into the
+    current release"，因 chart 渲染同名 Secret 跟我们复制的冲突)。
+    """
     name: str
     from_ns: str
+    helm_release_name: str = ""      # 业务侧 helm install 用的 release 名
+    helm_release_namespace: str = ""  # = ephemeral ns 本身 (空则用 req_ns)
 
 
 @dataclass
@@ -348,20 +356,28 @@ async def _inject_ambient_service(req_ns: str, svc: AmbientService) -> None:
 # ──────────────────────────────────────────────────────────────────────────
 
 async def _copy_secret(req_ns: str, sc: SecretCopy) -> dict[str, bytes]:
-    """复制 secret 到 req_ns。返回 base64-decoded data（用于 helm --set 取值）。"""
+    """复制 secret 到 req_ns。返回 base64-decoded data（用于 helm --set 取值）。
+
+    可选打上 helm ownership 让随后 helm install 把它当 "release-owned" 资源
+    (chart 模板渲染同名 Secret 时不会冲突 — helm 走 3-way merge 而非 reject)。
+    """
     src = await _k8s(_core_v1.read_namespaced_secret, name=sc.name, namespace=sc.from_ns)
-    body = client.V1Secret(
-        metadata=client.V1ObjectMeta(name=sc.name),
-        type=src.type,
-        data=src.data,
-    )
+    meta = client.V1ObjectMeta(name=sc.name)
+    if sc.helm_release_name:
+        # helm 看到这俩 ann + 1 label = 当 release 已 own 此资源, 不报 import 冲突
+        meta.labels = {"app.kubernetes.io/managed-by": "Helm"}
+        meta.annotations = {
+            "meta.helm.sh/release-name": sc.helm_release_name,
+            "meta.helm.sh/release-namespace": sc.helm_release_namespace or req_ns,
+        }
+    body = client.V1Secret(metadata=meta, type=src.type, data=src.data)
     try:
         await _k8s(_core_v1.create_namespaced_secret, namespace=req_ns, body=body)
     except ApiException as e:
         if e.status != 409:
             raise
-    logger.info("golden_cow: copied secret %s to %s (from %s)", sc.name, req_ns, sc.from_ns)
-    # decode for helm --set use
+    logger.info("golden_cow: copied secret %s to %s (from %s, helm_release=%s)",
+                sc.name, req_ns, sc.from_ns, sc.helm_release_name or "<none>")
     return {k: base64.b64decode(v) for k, v in (src.data or {}).items()}
 
 
