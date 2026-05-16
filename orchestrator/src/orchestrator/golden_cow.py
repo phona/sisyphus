@@ -251,19 +251,63 @@ async def _import_snapshot_to_ns(req_ns: str, snap_ref: GoldenSnapshotRef) -> No
 # ──────────────────────────────────────────────────────────────────────────
 
 async def _inject_ambient_service(req_ns: str, svc: AmbientService) -> None:
-    """在 req_ns 创跟 baseline 同名 Service (无 selector) + EndpointSlice 指 baseline IP。"""
+    """在 req_ns 创跟 baseline 同名 Service (无 selector) + EndpointSlice 指 baseline
+    真 endpoint pod IPs。
+
+    ★ 关键设计点 (实测撞坑后定稿)：EndpointSlice 的 endpoints **必须是真实 pod IP**,
+    不能是另一个 Service 的 ClusterIP —— kube-proxy 不做 "Service→Service" 二次转
+    发。所以这里 lookup baseline ns 内 svc.name 对应的 EndpointSlice，把里面的真
+    endpoint pod IPs + targetPort 抄进本 ns 新 EndpointSlice。
+
+    边界：baseline pod 重启后 pod IP 变,本 ns ambient Service 仍指旧 IP → 失效。
+    每次 REQ dispatch 取最新快照;长寿命 ephemeral ns 不重新 reconcile (短期 OK,
+    后续 Phase B 可加监听 baseline EndpointSlice 变化 patch)。
+    """
+    # 1. 读 baseline Service 拿 port 配置 (我们的 Service ports 跟 baseline 对齐)
     baseline_svc = await _k8s(
         _core_v1.read_namespaced_service, name=svc.name, namespace=svc.baseline_ns,
     )
-    baseline_ip = baseline_svc.spec.cluster_ip
-    if not baseline_ip or baseline_ip == "None":
-        raise RuntimeError(f"golden_cow: baseline svc {svc.baseline_ns}/{svc.name} has no ClusterIP")
 
+    # 2. 找 baseline ns 内 svc.name 对应的 EndpointSlice (label kubernetes.io/service-name)
+    eps_list = await _k8s(
+        _discovery_v1.list_namespaced_endpoint_slice,
+        namespace=svc.baseline_ns,
+        label_selector=f"kubernetes.io/service-name={svc.name}",
+    )
+    if not eps_list.items:
+        raise RuntimeError(f"golden_cow: no EndpointSlice for {svc.baseline_ns}/{svc.name}")
+    src_eps = eps_list.items[0]
+    pod_ips: list[str] = []
+    for ep in src_eps.endpoints or []:
+        if ep.conditions and ep.conditions.ready is False:
+            continue
+        pod_ips.extend(ep.addresses or [])
+    if not pod_ips:
+        raise RuntimeError(f"golden_cow: no ready endpoints for {svc.baseline_ns}/{svc.name}")
+
+    # 3. 找 baseline Service 里 svc.port 对应的那条 port spec, 取 targetPort
+    # (baseline 可能定义多个 port; 我们只暴露 svc.port 一条)
+    target_port: int | None = None
+    for p in baseline_svc.spec.ports:
+        if p.port == svc.port:
+            tp = p.target_port
+            # targetPort 可能是 int 或 name string (例 "http"); 转 int 时 fallback port
+            if isinstance(tp, int):
+                target_port = tp
+            else:
+                target_port = svc.port  # named target 简化: 让 kube-proxy 按 service port 自己 resolve
+            break
+    if target_port is None:
+        raise RuntimeError(f"golden_cow: baseline svc {svc.name} no port matching {svc.port}")
+
+    # 4. 在 req_ns 创同名 Service (无 selector, 让 kube-proxy 走 EndpointSlice)
     svc_body = client.V1Service(
         metadata=client.V1ObjectMeta(name=svc.name),
         spec=client.V1ServiceSpec(
-            ports=[client.V1ServicePort(name=svc.port_name, port=svc.port,
-                                         target_port=svc.port, protocol="TCP")],
+            ports=[client.V1ServicePort(
+                name=svc.port_name, port=svc.port,
+                target_port=target_port, protocol="TCP",
+            )],
         ),
     )
     try:
@@ -272,6 +316,7 @@ async def _inject_ambient_service(req_ns: str, svc: AmbientService) -> None:
         if e.status != 409:
             raise
 
+    # 5. 创 EndpointSlice 指真 pod IPs, 端口用 baseline 的 targetPort
     eps_body = client.V1EndpointSlice(
         api_version="discovery.k8s.io/v1",
         kind="EndpointSlice",
@@ -280,11 +325,12 @@ async def _inject_ambient_service(req_ns: str, svc: AmbientService) -> None:
             labels={"kubernetes.io/service-name": svc.name},
         ),
         address_type="IPv4",
-        ports=[client.DiscoveryV1EndpointPort(name=svc.port_name, port=svc.port, protocol="TCP")],
+        ports=[client.DiscoveryV1EndpointPort(
+            name=svc.port_name, port=target_port, protocol="TCP",
+        )],
         endpoints=[client.V1Endpoint(
-            addresses=[baseline_ip],
-            # ★ 必须显式 conditions.ready=True;空 conditions kube-proxy
-            # 默认当 not-ready, 不转发流量 (实测 R4 撞过的坑)。
+            addresses=pod_ips,
+            # 必须显式 conditions.ready=True; 空 conditions kube-proxy 默认 not-ready
             conditions=client.V1EndpointConditions(ready=True),
         )],
     )
@@ -293,7 +339,8 @@ async def _inject_ambient_service(req_ns: str, svc: AmbientService) -> None:
     except ApiException as e:
         if e.status != 409:
             raise
-    logger.info("golden_cow: ambient svc %s/%s -> %s:%d", req_ns, svc.name, baseline_ip, svc.port)
+    logger.info("golden_cow: ambient svc %s/%s :%d → pod_ips=%s :%d",
+                req_ns, svc.name, svc.port, pod_ips, target_port)
 
 
 # ──────────────────────────────────────────────────────────────────────────
