@@ -1,0 +1,60 @@
+# sisyphus golden CoW spec (示例：ttpos)
+#
+# 路径由 SISYPHUS_GOLDEN_COW_SPEC_PATH env 控制（默认 /etc/sisyphus/golden-cow.yaml）。
+# 文件不存在或 enabled=false → orch 跳过 golden_cow setup（向后兼容老 accept 流程）。
+#
+# 触发：sisyphus orch 在 create_accept stage、runner 跑 make accept-env-up 之前
+# 自动调 setup_ephemeral_ns(req_ns, spec)。在 req_ns 里 apply:
+#   1. cross-ns import VolumeSnapshot（pre-provisioned VSC + VS）
+#   2. ambient Service + EndpointSlice（指向 baseline 真 ClusterIP）
+#   3. 复制 secret 到 req_ns
+#   4. 把 secret 里的值翻译成 helm --set 透传给 accept-env.sh
+#
+# 详细设计：ttpos-arch-lab/docs/golden-cow-acceptance-env.md §12
+
+enabled: true
+
+# ── golden VolumeSnapshot 导入 ──────────────────────────────────────────
+# orch 从 source_ns 按 source_label_selector 取最新 VS, 抽 snapshotHandle,
+# 在 req_ns 重建 pre-provisioned VSC + VS。lab-ephemeral.yaml 用 local_name
+# 引用 PVC dataSource。
+snapshots:
+  - local_name: golden-cloud-mysql
+    source_ns: golden-volumes
+    source_label_selector: "golden=true,source=ttpos-arch-lab-cloud-mysql"
+  - local_name: golden-erpnext-mariadb
+    source_ns: golden-volumes
+    source_label_selector: "golden=true,source=ttpos-arch-lab-erpnext-mariadb"
+
+# ── 同名 ambient Service + EndpointSlice ────────────────────────────────
+# 业务 chart 用默认短名 `{{ .Release.Name }}-<svc>` 渲染 env，k8s DNS 优先
+# 本 ns 解析 → 拿到本 ns 新分配的 ClusterIP（是 IP 不是 FQDN，绕 rocketmq
+# client v2.1.3 限制），kube-proxy 看 EndpointSlice 转 baseline 真 IP。
+ambient_services:
+  - name: ttpos-arch-lab-nacos
+    baseline_ns: ttpos-arch-lab
+    port: 8848
+    port_name: nacos
+  - name: ttpos-arch-lab-rocketmq-nameserver
+    baseline_ns: ttpos-arch-lab
+    port: 9876
+    port_name: nameserver
+
+# ── 复制 secret 到 ephemeral ns ─────────────────────────────────────────
+# baseline 的 mariadb auth secret（含 root password）必须复制到 ephemeral ns
+# 否则 chart 重新生成的 password 跟 golden snapshot mariadb.user 表不匹配
+# → frappe 连不上。ghcr-pull 是给 image pull 用的。
+copy_secrets:
+  - name: ghcr-pull
+    from_ns: default
+  - name: ttpos-arch-lab-erpnext-auth
+    from_ns: ttpos-arch-lab
+
+# ── 从复制进来的 secret 读 key, 翻译成 helm --set ───────────────────────
+# chart 默认 erpnext.mariadb.rootPassword 是 "testroot"，但 golden snapshot
+# 里 mariadb.user 表用的是 baseline 真密码。chart 模板渲染 Secret 时用
+# Values.mariadb.rootPassword，必须覆盖成 baseline 真密码才匹配。
+helm_extra_sets_from_secret:
+  - helm_path: erpnext.mariadb.rootPassword
+    secret_name: ttpos-arch-lab-erpnext-auth
+    secret_key: mariadbRootPassword
