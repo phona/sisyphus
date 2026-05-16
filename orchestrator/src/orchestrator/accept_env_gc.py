@@ -98,11 +98,22 @@ async def gc_once() -> dict:
         except Exception as e:
             log.warning("accept_env_gc.delete_failed", namespace=ns_name, error=str(e))
 
+    # golden CoW: 顺手清孤儿 cluster-scope VolumeSnapshotContent
+    # (DeletionPolicy: Retain 后不会随 ns 删自动清，详 docs/golden-cow.md §6)
+    cleaned_vsc: list[str] = []
+    try:
+        from . import golden_cow
+        cleaned_vsc = await golden_cow.gc_orphan_vsc()
+    except Exception as e:
+        # 没 golden CoW / 没 snapshot CRD / RBAC 缺 → 不阻塞 ns GC
+        log.debug("accept_env_gc.golden_vsc_skipped", error=str(e))
+
     result = {
         "cleaned_namespaces": cleaned,
         "kept_namespaces": kept,
         "cleaned_count": len(cleaned),
         "kept_count": len(kept),
+        "cleaned_vsc": cleaned_vsc,
         "ran_at": datetime.now(UTC).isoformat(),
     }
     _last_gc_result = result

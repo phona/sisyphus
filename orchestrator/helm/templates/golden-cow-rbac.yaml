@@ -1,0 +1,45 @@
+{{- if .Values.goldenCow.rbac.create -}}
+# Golden CoW orch 需要的 cluster-scope 权限。
+# 详见 docs/golden-cow.md §8。
+# 只有 spec yaml enabled 时才用得到；安全起见用单独的 ClusterRole 默认开（除非
+# helm install 显式 --set goldenCow.rbac.create=false）。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "orchestrator.fullname" . }}-golden-cow
+  labels:
+    {{- include "orchestrator.labels" . | nindent 4 }}
+rules:
+  # cross-ns import：cluster-scope VSC create/delete + ns-scope VolumeSnapshot
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list", "create"]
+  # ambient services + secret 复制（per-REQ ns 是动态的，必须 cluster-scope）
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "create"]
+  - apiGroups: [""]
+    resources: ["services", "secrets"]
+    verbs: ["get", "list", "create"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "orchestrator.fullname" . }}-golden-cow
+  labels:
+    {{- include "orchestrator.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "orchestrator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "orchestrator.fullname" . }}-golden-cow
+{{- end -}}

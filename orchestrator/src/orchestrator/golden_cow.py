@@ -318,6 +318,19 @@ async def _copy_secret(req_ns: str, sc: SecretCopy) -> dict[str, bytes]:
 # 顶层 entrypoint
 # ──────────────────────────────────────────────────────────────────────────
 
+async def _ensure_namespace(req_ns: str) -> None:
+    """idempotent 创 ns（接 ttpos accept-env.sh 之前先要 ns 存在）。"""
+    try:
+        await _k8s(
+            _core_v1.create_namespace,
+            body=client.V1Namespace(metadata=client.V1ObjectMeta(name=req_ns)),
+        )
+        logger.info("golden_cow: created ns %s", req_ns)
+    except ApiException as e:
+        if e.status != 409:
+            raise
+
+
 async def setup_ephemeral_ns(req_ns: str, spec: GoldenCowSpec | None = None) -> list[str]:
     """Setup per-REQ ephemeral ns 的 golden CoW ambient context。
 
@@ -329,6 +342,9 @@ async def setup_ephemeral_ns(req_ns: str, spec: GoldenCowSpec | None = None) -> 
     spec = spec or load_spec()
     if not spec.enabled:
         return []
+
+    # 0. 确保 ns 存在（ttpos accept-env.sh 跑 helm install 之前要的）
+    await _ensure_namespace(req_ns)
 
     # 1. cross-ns import golden snapshots
     for snap in spec.snapshots:

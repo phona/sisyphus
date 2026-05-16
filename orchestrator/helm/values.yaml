@@ -293,3 +293,10 @@ probes:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# Golden CoW per-REQ ephemeral 拉起的 cluster-scope RBAC（docs/golden-cow.md §8）。
+# spec yaml 不存在或 enabled=false 时这些权限是空操作；默认开。在禁用 longhorn /
+# snapshot CRD 的集群可 --set goldenCow.rbac.create=false 关掉避免 RBAC noise。
+goldenCow:
+  rbac:
+    create: true
