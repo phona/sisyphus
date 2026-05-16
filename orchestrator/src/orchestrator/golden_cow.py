@@ -342,6 +342,11 @@ async def setup_ephemeral_ns(req_ns: str, spec: GoldenCowSpec | None = None) -> 
     if not spec.enabled:
         return []
 
+    # ★ 必须先 init clients：sub-helpers 把 _core_v1.xxx 作为参数传给 _k8s()，
+    # Python 在 _k8s 调用前就 eager-eval method ref，那时 _core_v1 还是 None
+    # → AttributeError。在公共入口同步触发 lazy init 解决。
+    _ensure_clients()
+
     # 0. 确保 ns 存在（ttpos accept-env.sh 跑 helm install 之前要的）
     await _ensure_namespace(req_ns)
 
