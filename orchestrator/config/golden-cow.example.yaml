@@ -47,8 +47,12 @@ ambient_services:
 copy_secrets:
   - name: ghcr-pull
     from_ns: default
+    # 不设 helm_release_name → 默认 chart 不渲染同名 Secret，无冲突
   - name: ttpos-arch-lab-erpnext-auth
     from_ns: ttpos-arch-lab
+    # erpnext chart 渲染同名 Secret，必须打 helm ownership 让 helm install
+    # 走 adopt 不报冲突
+    helm_release_name: ttpos-arch-lab
 
 # ── 从复制进来的 secret 读 key, 翻译成 helm --set ───────────────────────
 # chart 默认 erpnext.mariadb.rootPassword 是 "testroot"，但 golden snapshot
