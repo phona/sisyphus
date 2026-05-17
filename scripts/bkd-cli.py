@@ -65,7 +65,6 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 from typing import Any
 
 DEFAULT_BASE_URL = "http://localhost:3000/api"
@@ -188,6 +187,17 @@ def get_logs(base_url: str, project_id: str, issue_id: str) -> list[dict[str, An
 # ─── subcommands ───────────────────────────────────────────────────────────
 
 
+# orch-owned intent: orchestrator 完整 own，BKD 不该再自派 entry agent（PATCH
+# statusId=working 触发的）抢戏。这些 intent 入口 dispatch 默认 activation=False。
+# 跟 intake/analyze 区别: 后两者 BKD 入口 agent 就是干活的 agent，必须 activate。
+_ORCH_OWNED_INTENT_TAGS: frozenset[str] = frozenset({
+    "intent:accept",
+    "intent:test",
+    "intent:pr_ci",
+    "intent:archive",
+})
+
+
 def cmd_inline(args: argparse.Namespace) -> int:
     """单条派 REQ：POST → follow-up → PATCH 转 working + intent tag。"""
     ts = int(time.time())
@@ -200,12 +210,19 @@ def cmd_inline(args: argparse.Namespace) -> int:
     base_tags = [f"REQ-{slug}", *args.tag]
     final_tags = base_tags if args.no_intent else [intent_tag, *base_tags]
 
-    if args.noop:
-        # 入口 noop: orch 接管路径 (intent:accept / intent:test / intent:pr_ci)，
-        # BKD 入口 agent 不该写代码 / 推 PR；统一喂这条让它 PATCH tag 立刻退。
-        noop_path = Path(__file__).parent / "prompts" / "accept_entry_noop.md"
-        prompt = noop_path.read_text(encoding="utf-8")
-    elif args.prompt_file:
+    # orch-owned intent 自动禁 activation：BKD 不该派 entry agent 抢戏（实测 entry
+    # agent 拿 user prompt 当 dev 任务跑去写代码 / 推 PR，触发 orch session.failed
+    # 主链 escalate）。用户显式 --activate / --no-activate 留尊重；只在未显式时
+    # 按 tag 推默认。
+    activate_was_explicit = "--activate" in sys.argv or "--no-activate" in sys.argv
+    if not activate_was_explicit and args.activate:
+        orch_owned = any(t in _ORCH_OWNED_INTENT_TAGS for t in final_tags)
+        if orch_owned:
+            args.activate = False
+            print("  [auto] disabling activation (orch-owned intent detected; BKD entry agent suppressed)",
+                  file=sys.stderr)
+
+    if args.prompt_file:
         with open(args.prompt_file, "r", encoding="utf-8") as f:
             prompt = f.read()
     elif args.prompt:
@@ -419,9 +436,6 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--description", help="BKD UI 看板上的描述（可选；缺省=title）")
     sp.add_argument("--prompt-file", help="详细 prompt markdown 文件（推荐）")
     sp.add_argument("--prompt", help="详细 prompt 字面字符串（短场景；与 --prompt-file 互斥）")
-    sp.add_argument("--noop", action="store_true",
-                    help="入口 agent 不干活（自动喂 prompts/accept_entry_noop.md）；"
-                         "intent:accept / intent:test / intent:pr_ci 等纯 orch 接管路径专用")
     sp.add_argument("--intent", choices=["intake", "analyze"], default="analyze")
     sp.add_argument("--tag", action="append", default=[], help="额外 tag（可多次）")
     sp.add_argument("--engine-type", default=DEFAULT_ENGINE_TYPE)
