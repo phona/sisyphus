@@ -11,14 +11,14 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.skip(
-    reason="v0.3-lite fallback removed (PR #547); rewrite tests for child-agent dispatch path"
-)
-
 from orchestrator.actions import create_accept as mod
 from orchestrator.actions._integration_resolver import ResolveResult
 from orchestrator.k8s_runner import ExecResult
 from orchestrator.state import Event
+
+pytestmark = pytest.mark.skip(
+    reason="v0.3-lite fallback removed (PR #547); rewrite tests for child-agent dispatch path"
+)
 
 # ─── Fakes ────────────────────────────────────────────────────────────────
 

@@ -80,11 +80,16 @@ class SecretCopy:
     annotations，让随后 helm install 把这个已存在 secret 当作 "已 adopted"
     的 release 资源 (不然 helm install 报 "cannot be imported into the
     current release"，因 chart 渲染同名 Secret 跟我们复制的冲突)。
+
+    `optional=true` 时源 secret 不存在 (404) 只 log warn 跳过, 不阻断 setup。
+    用于按需 secret (如 golden-credentials 凭证目录, 业务仓里不存在时也允许
+    跑 noAuth 端点的验收 scenario)。
     """
     name: str
     from_ns: str
     helm_release_name: str = ""      # 业务侧 helm install 用的 release 名
     helm_release_namespace: str = ""  # = ephemeral ns 本身 (空则用 req_ns)
+    optional: bool = False           # 源 secret 不存在时是否容忍跳过
 
 
 @dataclass
@@ -367,8 +372,17 @@ async def _copy_secret(req_ns: str, sc: SecretCopy) -> dict[str, bytes]:
 
     可选打上 helm ownership 让随后 helm install 把它当 "release-owned" 资源
     (chart 模板渲染同名 Secret 时不会冲突 — helm 走 3-way merge 而非 reject)。
+
+    `sc.optional=True` 时源 secret 不存在 (404) 只 log warn 返空 dict, 不抛。
     """
-    src = await _k8s(_core_v1.read_namespaced_secret, name=sc.name, namespace=sc.from_ns)
+    try:
+        src = await _k8s(_core_v1.read_namespaced_secret, name=sc.name, namespace=sc.from_ns)
+    except ApiException as e:
+        if e.status == 404 and sc.optional:
+            logger.warning("golden_cow: optional secret %s missing in %s, skipped",
+                           sc.name, sc.from_ns)
+            return {}
+        raise
     meta = client.V1ObjectMeta(name=sc.name)
     if sc.helm_release_name:
         # helm 看到这俩 ann + 1 label = 当 release 已 own 此资源, 不报 import 冲突
