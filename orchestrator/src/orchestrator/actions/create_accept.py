@@ -728,6 +728,12 @@ async def _run_legacy_single_layer(*, req_id: str, ctx, body, tags, rc, namespac
     #    就让 accept-env.sh 自己 fail (silent-pass 风险高)。
     if spec.enabled:
         exec_env["SISYPHUS_ACCEPT_MODE"] = "ephemeral"
+        # arch-lab Makefile up target depends on `erpnext-domain` target which
+        # interactively asks for ERPNEXT_DOMAIN on remote cluster (FAIL: 请设
+        # 置 ERPNEXT_DOMAIN 环境变量或在交互式终端运行). ephemeral 模式不创
+        # frappe site (golden mariadb 已含), set placeholder 让 script 走非
+        # 交互分支 + ConfigMap 写一个 dummy 域名 (chart 不读, 无副作用)。
+        exec_env.setdefault("ERPNEXT_DOMAIN", "ephemeral-skip.local")
     if "SISYPHUS_IMAGE_TAGS" not in exec_env:
         tag_image_tags = extract_image_tags_from_tags(tags)
         if tag_image_tags:
