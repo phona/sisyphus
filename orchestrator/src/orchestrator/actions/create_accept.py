@@ -40,7 +40,7 @@ from ..cross_repo_env import (
     PreResolveError,
     TopologyError,
 )
-from ..intent_tags import extract_pr_tag
+from ..intent_tags import extract_image_tags_from_tags, extract_pr_tag
 from ..prompts import render
 from ..state import Event
 from ..store import db, req_state, stage_runs
@@ -719,6 +719,21 @@ async def _run_legacy_single_layer(*, req_id: str, ctx, body, tags, rc, namespac
         "SISYPHUS_NAMESPACE": namespace,
         **_image_tags_env(ctx),
     }
+    # ── intent:accept 路径辅助 env (golden_cow PoC 实测撞过) ─────────────
+    # 1) SISYPHUS_ACCEPT_MODE=ephemeral: golden_cow spec enabled 时强制 ephemeral 模式
+    #    intent:accept 跳过 dev/staging/pr-ci, 不应该重新 helm install 整个 baseline
+    #    全栈;走 ttpos accept-env.sh cmd_up_ephemeral 配 lab-ephemeral.yaml 即可。
+    # 2) SISYPHUS_IMAGE_TAGS: ctx.image_tags 缺时 (intent:accept 没经 pr_ci_watch),
+    #    从 BKD tag image-tag:<repo>:<tag> extract 兜底。dispatcher 显式提供, 没有
+    #    就让 accept-env.sh 自己 fail (silent-pass 风险高)。
+    if spec.enabled:
+        exec_env["SISYPHUS_ACCEPT_MODE"] = "ephemeral"
+    if "SISYPHUS_IMAGE_TAGS" not in exec_env:
+        tag_image_tags = extract_image_tags_from_tags(tags)
+        if tag_image_tags:
+            exec_env["SISYPHUS_IMAGE_TAGS"] = json.dumps(tag_image_tags, sort_keys=True)
+            log.info("create_accept.image_tags_from_bkd_tags",
+                     req_id=req_id, image_tags=tag_image_tags)
     if helm_extra_sets:
         # newline-separated; accept-env.sh 拼成 --set ... 透传 helm
         exec_env["SISYPHUS_HELM_EXTRA_SETS"] = "\n".join(helm_extra_sets)
