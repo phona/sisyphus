@@ -719,6 +719,12 @@ async def _run_legacy_single_layer(*, req_id: str, ctx, body, tags, rc, namespac
         "SISYPHUS_NAMESPACE": namespace,
         **_image_tags_env(ctx),
     }
+    # accept-mode:<val> tag → SISYPHUS_ACCEPT_MODE；业务侧 accept-env.sh 读取
+    # 决定走 full（默认 23 pod）还是 ephemeral（薄层 + 跨 ns 连 baseline）路径
+    for _t in (tags or []):
+        if _t.startswith("accept-mode:"):
+            exec_env["SISYPHUS_ACCEPT_MODE"] = _t.split(":", 1)[1]
+            break
     if helm_extra_sets:
         # newline-separated; accept-env.sh 拼成 --set ... 透传 helm
         exec_env["SISYPHUS_HELM_EXTRA_SETS"] = "\n".join(helm_extra_sets)
