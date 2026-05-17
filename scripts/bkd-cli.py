@@ -65,6 +65,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 DEFAULT_BASE_URL = "http://localhost:3000/api"
@@ -199,7 +200,12 @@ def cmd_inline(args: argparse.Namespace) -> int:
     base_tags = [f"REQ-{slug}", *args.tag]
     final_tags = base_tags if args.no_intent else [intent_tag, *base_tags]
 
-    if args.prompt_file:
+    if args.noop:
+        # 入口 noop: orch 接管路径 (intent:accept / intent:test / intent:pr_ci)，
+        # BKD 入口 agent 不该写代码 / 推 PR；统一喂这条让它 PATCH tag 立刻退。
+        noop_path = Path(__file__).parent / "prompts" / "accept_entry_noop.md"
+        prompt = noop_path.read_text(encoding="utf-8")
+    elif args.prompt_file:
         with open(args.prompt_file, "r", encoding="utf-8") as f:
             prompt = f.read()
     elif args.prompt:
@@ -413,6 +419,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--description", help="BKD UI 看板上的描述（可选；缺省=title）")
     sp.add_argument("--prompt-file", help="详细 prompt markdown 文件（推荐）")
     sp.add_argument("--prompt", help="详细 prompt 字面字符串（短场景；与 --prompt-file 互斥）")
+    sp.add_argument("--noop", action="store_true",
+                    help="入口 agent 不干活（自动喂 prompts/accept_entry_noop.md）；"
+                         "intent:accept / intent:test / intent:pr_ci 等纯 orch 接管路径专用")
     sp.add_argument("--intent", choices=["intake", "analyze"], default="analyze")
     sp.add_argument("--tag", action="append", default=[], help="额外 tag（可多次）")
     sp.add_argument("--engine-type", default=DEFAULT_ENGINE_TYPE)
