@@ -506,24 +506,18 @@ async def _dispatch_accept_agent(
     thanatos_namespace = thanatos_block.get("namespace") or namespace_for_pr
     thanatos_skill_repo = thanatos_block.get("skill_repo") or None
 
-    # 2026-05-17 修：thanatos_pod 不在不该直接跳 v0.3-lite (后者 vacuous PASS, 没真
-    # curl evidence)。spec.md 在就走 dispatch_accept_agent + drivers/direct_curl;
-    # 真没 spec / 没 PR / 没 scenarios 才落 lite fallback (truly smoke only)。
-    # 旧逻辑 (if not thanatos_pod → lite) gate 把 drivers/direct_curl 整个代码路径
-    # 卡死, 今天所有 demo 都 silent pass。
-    spec_md_present = bool(
-        (ctx or {}).get("pr_url")
-        or (ctx or {}).get("linked_issue_url")
-        # spec.md 也算驱动信号 — analyze 阶段会写到 /workspace/source/*/openspec/changes/<REQ>/
-        # 这里没 fs check (避免越界), 让 inputs/spec_md hook 自检; pr_url/linked_issue 兜底。
-    )
-    if not thanatos_pod and not spec_md_present:
-        log.info("create_accept.lite_fallback", req_id=req_id,
-                 endpoint=endpoint, reason="no thanatos_pod + no PR/issue driver signal")
-        return await _run_lite_fallback(req_id=req_id, ctx=ctx)
-    if not thanatos_pod:
-        log.info("create_accept.dispatch_with_direct_curl", req_id=req_id,
-                 endpoint=endpoint, driver="direct_curl")
+    # 2026-05-17 修：旧 'if not thanatos_pod → return _run_lite_fallback' gate 把
+    # drivers/direct_curl 整个代码路径卡死, 所有非 thanatos REQ 都走 v0.3-lite shell
+    # vacuous PASS, accept stage 真正的 "黑盒打 endpoint 验数据流" 路径从来没触发。
+    #
+    # 修后:
+    # - thanatos_pod 在 → 派 child + drivers/thanatos_mcp (mobile/redroid 路径)
+    # - thanatos_pod 不在 → 派 child + drivers/direct_curl (黑盒 HTTP/gRPC)
+    # 都走下方 dispatch_accept_agent 主流程; 没 spec / 没 scenario 时 agent 自己
+    # 按 accept.md.j2 硬约束标 BLOCKED, 不再 silent pass。
+    # _run_lite_fallback 留作 legacy export, 当前无调用 (后续 PR 评估是否删)。
+    log.info("create_accept.dispatch_child_agent", req_id=req_id, endpoint=endpoint,
+             driver="thanatos_mcp" if thanatos_pod else "direct_curl")
 
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
