@@ -740,6 +740,19 @@ async def _run_legacy_single_layer(*, req_id: str, ctx, body, tags, rc, namespac
             exec_env["SISYPHUS_IMAGE_TAGS"] = json.dumps(tag_image_tags, sort_keys=True)
             log.info("create_accept.image_tags_from_bkd_tags",
                      req_id=req_id, image_tags=tag_image_tags)
+    # ── lab-profile:<name> 标签 → SISYPHUS_LAB_PROFILE env ─────────────
+    # accept-env.sh cmd_up_ephemeral 按本 env 切换 values/lab-ephemeral-${name}.yaml
+    # (default "ephemeral" → lab-ephemeral.yaml 全栈; "minimal" → lab-ephemeral-minimal.yaml
+    # 3 pod 子集)。dispatcher 显式选; 没标签留默认值, 跟全栈行为不变。
+    lab_profile_tag = next(
+        (t.split(":", 1)[1].strip() for t in (tags or [])
+         if isinstance(t, str) and t.startswith("lab-profile:")),
+        None,
+    )
+    if lab_profile_tag:
+        exec_env["SISYPHUS_LAB_PROFILE"] = lab_profile_tag
+        log.info("create_accept.lab_profile_from_bkd_tags",
+                 req_id=req_id, lab_profile=lab_profile_tag)
     if helm_extra_sets:
         # newline-separated; accept-env.sh 拼成 --set ... 透传 helm
         exec_env["SISYPHUS_HELM_EXTRA_SETS"] = "\n".join(helm_extra_sets)
