@@ -55,7 +55,7 @@ token=$(kubectl -n $RUNNER_NS exec $POD -- curl -sS -X POST "$login_url" \
         -H 'Content-Type: application/json' -d "$body" \
         | jq -r '.data.token // .data.access_token // empty')
 [ -z "$token" ] && { echo "BLOCKED: login failed for role=$role"; exit 1; }
-echo "got token for role=$role (len=${#token})"
+echo "got token for role=$role first8=${token:0:8}..."
 ```
 
 ### Step D1: 跑每个验收点（来自 inputs 推出来的 checklist）
