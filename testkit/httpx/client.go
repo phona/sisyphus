@@ -100,6 +100,38 @@ func (c *HTTPClient) Delete(tb testing.TB, path string, body any, headers ...map
 	return c.doRequest(tb, req, headers...)
 }
 
+// PostNoWait sends a POST request and returns the HTTP status code without
+// reading the response body. Use for async trigger endpoints that return
+// immediately (fire-and-forget semantics); the server receives the full
+// request but the client does not block on a potentially large response.
+func (c *HTTPClient) PostNoWait(tb testing.TB, path string, body any, headers ...map[string]string) int {
+	tb.Helper()
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+path, jsonReader(tb, body))
+	if err != nil {
+		tb.Fatalf("failed to create PostNoWait request: %v", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.token))
+	}
+	for key, value := range c.headers {
+		req.Header.Set(key, value)
+	}
+	for _, h := range headers {
+		for key, value := range h {
+			req.Header.Set(key, value)
+		}
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		tb.Fatalf("PostNoWait request failed: %v", err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
 // DoRequest performs a request with explicit method, path, optional JSON body, and extra headers.
 func (c *HTTPClient) DoRequest(tb testing.TB, method, path string, body any, headers map[string]string) *HTTPResponse {
 	tb.Helper()

@@ -13,3 +13,4 @@ from __future__ import annotations
 PIPELINE_VALIDATION_REQ: str = "REQ-validate-fresh-pipeline-1777123726"
 PIPELINE_VALIDATION_REQ_V3: str = "REQ-validate-fresh-3-1777132879"
 SMOKE_PIPELINE_V3_REQ: str = "REQ-smoke-pipeline-v3-1777806694"
+NP_DEMO4_REQ: str = "REQ-np-demo4-1779013770"
