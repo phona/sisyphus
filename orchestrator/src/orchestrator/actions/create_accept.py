@@ -1,5 +1,12 @@
 """create_accept: env-up → 派 child accept-agent (driver = thanatos_mcp 或 direct_curl)。
 
+⚠️ accept 契约 Makefile target 只有 2 个 (docs/integration-contracts.md §2.3):
+   make accept-env-up   make accept-env-down
+不要发明 accept-smoke / accept-test / accept-verify 等新 target — 见 §2.3.1
+"曾经出现过但不契约化"清单。真业务断言走 spec.md + drivers/direct_curl,
+不是新 Makefile target。
+
+
 Two top-level paths, chosen by the source repo's `.sisyphus/env.yaml`:
 
 1. Multi-layer cross-repo (feat-cross-repo-env-orchestration spec): when source
