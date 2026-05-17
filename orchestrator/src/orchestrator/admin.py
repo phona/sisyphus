@@ -102,7 +102,7 @@ async def emit_event(
     if row is None:
         raise HTTPException(status_code=404, detail=f"req {req_id} not found")
 
-    log.warning("admin.emit", req_id=req_id, event=body.event, from_state=row.state.value)
+    log.warning("admin.emit", req_id=req_id, bkd_event=body.event, from_state=row.state.value)
     fake = _FakeBody(req_id, row.project_id)
     tags = await _fetch_intent_tags(req_id, row.project_id, row.context)
     return await engine.step(
