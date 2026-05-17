@@ -123,3 +123,30 @@ def extract_pr_tag(tags: Iterable[object] | None) -> tuple[str, int] | None:
         if m:
             return m.group(1), int(m.group(2))
     return None
+
+
+# ─── image-tag:<repo-basename>:<image-tag> 解析（intent:accept 路径用）──
+# pr_ci_watch 成功时通过 ctx.image_tags 注入 SISYPHUS_IMAGE_TAGS env。但 intent:accept
+# 入口跳 dev/staging/pr-ci，ctx.image_tags 是空的;让 dispatcher 通过 BKD tag 显式传:
+#   image-tag:ttpos-server-go:test-feat-pack-develop
+# orch 翻成 {repo: tag} dict, 注 SISYPHUS_IMAGE_TAGS env 给 accept-env.sh。
+# 不 fallback 到 settings 默认: silent-pass 风险 (用错 image 不报)。
+_IMAGE_TAG_TAG_PREFIX = "image-tag:"
+_IMAGE_TAG_RE = re.compile(
+    r"^image-tag:([A-Za-z0-9][A-Za-z0-9._-]*):(.+)$"
+)
+
+
+def extract_image_tags_from_tags(tags: Iterable[object] | None) -> dict[str, str]:
+    """Parse `image-tag:<repo-basename>:<tag>` tags → {repo: tag}。
+
+    重复 repo 后写覆盖先写。无 match 返回空 dict (caller 区分 fallback)。
+    """
+    out: dict[str, str] = {}
+    for t in (tags or []):
+        if not isinstance(t, str):
+            continue
+        m = _IMAGE_TAG_RE.match(t.strip())
+        if m:
+            out[m.group(1)] = m.group(2).strip()
+    return out
