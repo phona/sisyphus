@@ -1,4 +1,4 @@
-"""create_accept: env-up → thanatos MCP dispatch (with v0.3-lite fallback).
+"""create_accept: env-up → 派 child accept-agent (driver = thanatos_mcp 或 direct_curl)。
 
 Two top-level paths, chosen by the source repo's `.sisyphus/env.yaml`:
 
@@ -9,14 +9,19 @@ Two top-level paths, chosen by the source repo's `.sisyphus/env.yaml`:
    bundle.
 2. Legacy single-layer (preserved for repos without manifest, R8 backward
    compat): the original behavior — single `make accept-env-up`, parse JSON,
-   either dispatch thanatos accept-agent or fall through to v0.3-lite.
+   then dispatch accept-agent.
 
-Within each path the accept-agent dispatch / lite fallback split is identical:
+不论哪条 path, env-up 跑完都派 child accept-agent (`_dispatch_accept_agent`)。
+driver 选择按 endpoint JSON 里的 `thanatos` block:
 
-- thanatos MCP (preferred): the `endpoint` JSON contains a `thanatos` block,
-  agent runs scenarios via thanatos MCP.
-- v0.3-lite fallback: per-repo shell script env-up → sleep → accept-smoke →
-  env-down (used when `thanatos` block is absent).
+- thanatos block 在 → drivers/thanatos_mcp (mobile / Android redroid 走 MCP)
+- thanatos block 不在 → drivers/direct_curl (后端黑盒 HTTP/gRPC)
+
+历史上还有过 v0.3-lite shell fallback (`_build_lite_script` + `_run_lite_fallback`),
+跑业务仓 `accept-smoke` Makefile target 决定 PASS/FAIL。2026-05-17 删:
+- `accept-smoke` 没文档契约 (integration-contracts.md §2.3 只契约 env-up/env-down)
+- 业务仓没人接,实际 100% 走 'target missing → skip' 分支 → 全 skip → vacuous PASS
+- thanatos_pod 不在时被 gate 引到 lite fallback → silent pass 灾难 (#545 修)
 
 R10 attribution: any accept-env-up failure during the multi-layer path writes
 `failed_layer` / `failed_field` / `layers[]` to stage_runs.context before
@@ -69,7 +74,6 @@ def _image_tags_env(ctx: dict | None) -> dict[str, str]:
         return {}
     # owner/repo key 形式跟 pr_ci_watch 输出对齐；业务仓自己 jq 抽 basename
     return {"SISYPHUS_IMAGE_TAGS": json.dumps(image_tags, sort_keys=True)}
-_TIMEOUT_LITE_SEC = 1800   # 30 min for up × N + sleep + smoke × N + down × N
 _TIMEOUT_MANIFEST_READ_SEC = 30  # cat .sisyphus/env.yaml on runner
 _TIMEOUT_BRANCH_CHECK_SEC = 60   # git ls-remote per needs repo
 
@@ -122,143 +126,13 @@ def _build_bkd_entry_links(*, project_id: str, ctx: dict | None,
     return entries
 
 
-def _build_lite_script(req_id: str, delay_sec: int) -> str:
-    """Shell script: per-repo env-up → sleep → accept-smoke → env-down (v0.3-lite).
-
-    最后一行输出 PASS 或 FAIL:<repo1>,<repo2>；exit code 0/1 对应。
-    target 缺失时 fail-open skip（不爆整体）。env-down 失败 || true 不计入 fail。
-    """
-    return (
-        "set -o pipefail; "
-        "fail=0; "
-        'fail_list=""; '
-
-        # ── Phase 1: env-up ──────────────────────────────────────────────
-        "for repo in /workspace/source/*/; do "
-        '  [ -d "$repo" ] || continue; '
-        '  name=$(basename "$repo"); '
-        '  if ! make -C "$repo" -n accept-env-up >/dev/null 2>&1; then '
-        '    echo "[warn] accept-env-up target missing in $name, skipping" >&2; '
-        "    continue; "
-        "  fi; "
-        '  echo "=== accept-env-up: $name ===" >&2; '
-        '  if ! make -C "$repo" accept-env-up '
-        '       SISYPHUS_REQ_ID="${SISYPHUS_REQ_ID}" '
-        '       SISYPHUS_STAGE="accept-env-up" '
-        '       SISYPHUS_NAMESPACE="accept-${SISYPHUS_REQ_ID}"; then '
-        '    echo "=== FAIL accept-env-up: $name ===" >&2; '
-        "    fail=1; "
-        '    fail_list="${fail_list:+$fail_list,}$name"; '
-        "  fi; "
-        "done; "
-
-        # ── Phase 2: smoke delay ─────────────────────────────────────────
-        f"sleep {delay_sec}; "
-
-        # ── Phase 3: accept-smoke ────────────────────────────────────────
-        "for repo in /workspace/source/*/; do "
-        '  [ -d "$repo" ] || continue; '
-        '  name=$(basename "$repo"); '
-        '  if ! make -C "$repo" -n accept-smoke >/dev/null 2>&1; then '
-        '    echo "[warn] accept-smoke target missing in $name, skipping" >&2; '
-        "    continue; "
-        "  fi; "
-        '  echo "=== accept-smoke: $name ===" >&2; '
-        '  if ! make -C "$repo" accept-smoke '
-        '       SISYPHUS_REQ_ID="${SISYPHUS_REQ_ID}" '
-        '       SISYPHUS_STAGE="accept-smoke"; then '
-        '    echo "=== FAIL accept-smoke: $name ===" >&2; '
-        "    fail=1; "
-        '    fail_list="${fail_list:+$fail_list,}$name"; '
-        "  fi; "
-        "done; "
-
-        # ── Phase 4: env-down best-effort ───────────────────────────────
-        "for repo in /workspace/source/*/; do "
-        '  [ -d "$repo" ] || continue; '
-        '  name=$(basename "$repo"); '
-        '  if make -C "$repo" -n accept-env-down >/dev/null 2>&1; then '
-        '    echo "=== accept-env-down: $name ===" >&2; '
-        '    make -C "$repo" accept-env-down '
-        '         SISYPHUS_REQ_ID="${SISYPHUS_REQ_ID}" '
-        '         SISYPHUS_STAGE="accept-env-down" || true; '
-        "  fi; "
-        "done; "
-
-        # ── Final status ────────────────────────────────────────────────
-        'if [ "$fail" -ne 0 ]; then '
-        '  echo "FAIL:${fail_list}"; '
-        "  exit 1; "
-        "fi; "
-        'echo "PASS"; '
-    )
-
-
+# DEPRECATED stub: _run_lite_fallback v0.3-lite shell path 已删 (2026-05-17)。
+# 留空函数仅为兼容老 test 的 monkeypatch.setattr; 0 调用方; 任何新代码用它就是 bug。
 async def _run_lite_fallback(*, req_id: str, ctx: dict | None) -> dict:
-    """v0.3-lite fallback: shell script per-repo accept env-up/smoke/down."""
-    cloned_repos = list((ctx or {}).get("cloned_repos") or [])
-    if not cloned_repos:
-        log.info("create_accept.lite_no_repos", req_id=req_id)
-        return {"emit": Event.ACCEPT_PASS.value, "note": "no cloned repos (vacuous pass)"}
-
-    try:
-        rc = k8s_runner.get_controller()
-    except RuntimeError as e:
-        log.warning("create_accept.lite_no_runner", req_id=req_id, error=str(e))
-        return {"emit": Event.ACCEPT_PASS.value, "note": "no runner controller, skipped env-up"}
-
-    delay = settings.accept_smoke_delay_sec
-    script = _build_lite_script(req_id, delay)
-
-    try:
-        result = await rc.exec_in_runner(
-            req_id,
-            command=script,
-            env={"SISYPHUS_REQ_ID": req_id, "SISYPHUS_STAGE": "accept"},
-            timeout_sec=_TIMEOUT_LITE_SEC,
-        )
-    except Exception as e:
-        log.exception("create_accept.lite_crashed", req_id=req_id, error=str(e))
-        pool = db.get_pool()
-        await req_state.update_context(pool, req_id, {
-            "accept_result": "fail",
-            "accept_error": str(e)[:200],
-        })
-        return {"emit": Event.ACCEPT_FAIL.value, "error": str(e)[:200]}
-
-    fail_repos: list[str] = []
-    last_line = ""
-    for line in reversed((result.stdout or "").splitlines()):
-        stripped = line.strip()
-        if stripped:
-            last_line = stripped
-            break
-
-    pool = db.get_pool()
-    if result.exit_code != 0:
-        if last_line.startswith("FAIL:"):
-            raw = last_line[5:].strip()
-            fail_repos = [r.strip() for r in raw.split(",") if r.strip()]
-        log.warning(
-            "create_accept.lite_failed",
-            req_id=req_id,
-            exit_code=result.exit_code,
-            fail_repos=fail_repos,
-            stderr_tail=(result.stderr or "")[-500:],
-        )
-        await req_state.update_context(pool, req_id, {
-            "accept_result": "fail",
-            "accept_fail_repos": fail_repos,
-        })
-        return {
-            "emit": Event.ACCEPT_FAIL.value,
-            "fail_repos": fail_repos,
-            "exit_code": result.exit_code,
-        }
-
-    log.info("create_accept.lite_passed", req_id=req_id, duration_sec=result.duration_sec)
-    await req_state.update_context(pool, req_id, {"accept_result": "pass"})
-    return {"emit": Event.ACCEPT_PASS.value}
+    raise RuntimeError(
+        "_run_lite_fallback removed 2026-05-17 (accept-smoke 没契约 + silent pass); "
+        "child accept-agent + drivers/direct_curl 接管。任何 intent:accept 都走 dispatch path。"
+    )
 
 
 def _parse_json_tail(stdout: str) -> tuple[dict | None, str]:
