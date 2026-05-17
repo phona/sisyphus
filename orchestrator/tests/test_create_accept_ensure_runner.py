@@ -111,6 +111,7 @@ def _patch(monkeypatch, rc: _FakeRC, pool: _FakePool,
 # ─── ERS-S1: pod NotFound → ensure called → proceeds ─────────────────────
 
 
+@pytest.mark.skip(reason="v0.3-lite fallback removed (PR #547); rewrite for child-agent dispatch")
 @pytest.mark.asyncio
 async def test_ers_s1_pod_missing_ensures_and_proceeds(monkeypatch):
     """Pod NotFound → ensure_runner_with_clone → continues to env-up → ACCEPT_PASS."""
@@ -153,6 +154,7 @@ async def test_ers_s1_clone_fail_emits_env_up_fail(monkeypatch):
 # ─── ERS-S2: pod already Running → ensure skipped → proceeds ─────────────
 
 
+@pytest.mark.skip(reason="v0.3-lite fallback removed (PR #547); rewrite for child-agent dispatch")
 @pytest.mark.asyncio
 async def test_ers_s2_pod_running_skips_ensure(monkeypatch):
     """Pod already Running → ensure_runner_with_clone NOT called → proceeds normally."""
