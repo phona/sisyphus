@@ -44,15 +44,21 @@ if ! kubectl -n $NS get secret golden-credentials >/dev/null 2>&1; then
 fi
 
 # 2. 抠某 role creds 换 token
-role=cashier   # 按 scenario 需要换 admin/kiosk/tablet/kitchen 等
+role=shop   # 按 scenario 需要换 shop/cashier/kiosk/tablet/kitchen 等
 creds=$(kubectl -n $NS get secret golden-credentials -o jsonpath="{.data.$role}" | base64 -d)
-login_url=$(jq -r .login_url <<<"$creds")
-body=$(jq -c '{username,password}' <<<"$creds")
+# NS 占位符 sed 替换 (secret 模板里写 'main-api.NS.svc.cluster.local')
+login_url=$(jq -r .login_url <<<"$creds" | sed "s/\.NS\./.${NS}./")
+# login body: 业务 spec 决定字段集; ttpos shop 要 username/password/code/device_id
+body=$(jq -c '{username,password,code,device_id}' <<<"$creds")
+
+# extra_headers (业务约定 header, 如 ttpos shop login 需要 CLIENT-VERSION 走 SaasLogin 路径)
+extra_headers=$(jq -r '.extra_headers // {} | to_entries | map("-H \"\(.key): \(.value)\"") | join(" ")' <<<"$creds")
 
 POD=runner-{{ req_id | lower }}
 RUNNER_NS=sisyphus-runners
-token=$(kubectl -n $RUNNER_NS exec $POD -- curl -sS -X POST "$login_url" \
-        -H 'Content-Type: application/json' -d "$body" \
+# eval 让 extra_headers 里的 -H 字符串展开 (静态 secret 内容, 非注入面)
+token=$(eval "kubectl -n $RUNNER_NS exec $POD -- curl -sS -X POST '$login_url' \
+        -H 'Content-Type: application/json' $extra_headers -d '$body'" \
         | jq -r '.data.token // .data.access_token // empty')
 [ -z "$token" ] && { echo "BLOCKED: login failed for role=$role"; exit 1; }
 echo "got token for role=$role first8=${token:0:8}..."
