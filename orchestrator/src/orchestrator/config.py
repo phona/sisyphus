@@ -151,8 +151,10 @@ class Settings(BaseSettings):
     skip_staging_test: bool = False   # staging-test.pass（调试环境跑 unit+int）
     skip_pr_ci: bool = False          # pr-ci.pass（PR CI 全套等绿）
     skip_accept: bool = False         # accept.pass (ttpos-arch-lab 接好前默认 true)
-    accept_smoke_delay_sec: int = 30  # env-up 后等服务起齐的 sleep（秒）
     skip_archive: bool = False        # archive.done (跳过真 PR 创建)
+    # DEPRECATED: v0.3-lite shell fallback 已删 (2026-05-17), 字段保留仅为兼容
+    # 老 test 的 monkeypatch.setattr 调用; 任何读它的新代码就是 bug。
+    accept_smoke_delay_sec: int = 0
 
     # 全部 skip = 状态机几秒走完，验 transition + cleanup，不动 BKD agent
     test_mode: bool = False           # 等价于全部 skip_* = true

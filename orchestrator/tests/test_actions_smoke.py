@@ -376,6 +376,7 @@ def test_is_transient_treats_fixer_round_cap_as_hard():
 
 
 # ─── create_accept ────────────────────────────────────────────────────────
+@pytest.mark.skip(reason="v0.3-lite fallback removed (PR #547); rewrite for child-agent dispatch")
 @pytest.mark.asyncio
 async def test_create_accept(monkeypatch):
     """v0.3-lite fallback: per-repo shell script exits 0 → emit accept.pass (no BKD agent)."""
@@ -430,6 +431,7 @@ async def test_create_accept(monkeypatch):
     assert any(u.get("accept_result") == "pass" for u in ctx_updates)
 
 
+@pytest.mark.skip(reason="v0.3-lite fallback removed (PR #547); rewrite for child-agent dispatch")
 @pytest.mark.asyncio
 async def test_create_accept_env_up_fail(monkeypatch):
     """Shell script exits 1, stdout ends FAIL:repo → emit accept.fail."""

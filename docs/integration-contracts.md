@@ -159,12 +159,51 @@ shell 不展开 flag，等价全量。
 
 ### 2.3 integration repo 必须有（accept 阶段需要时）
 
+> **accept 契约只有这两个 target。完整列表见下。** sisyphus orch / agent / 任何
+> LLM 不得发明新 target 名（accept-smoke / accept-test / accept-verify / ...
+> 都不在契约里 — 见下方 §2.3.1）。
+
 | target | 谁调 | 在哪跑 | 期望 |
 |---|---|---|---|
 | `make accept-env-up` | sisyphus pre-accept（`actions/create_accept.py`） | runner pod，`cd /workspace/integration/<repo-name> && make accept-env-up` | 1) 退码 0 = lab 起来；2) **stdout 最后一行**是 endpoint JSON（见 §3） |
 | `make accept-env-down` | `actions/teardown_accept_env.py` | 同上 | best-effort，幂等；失败只 warning 不阻塞状态机 |
 
 **幂等性硬要求**：accept-env-up / accept-env-down 必须可重复调（重试或 watchdog 路径会再 cleanup 一次）。
+
+#### 2.3.1 **不在契约内的"曾经出现过"target 名（重要：别再发明）**
+
+历史上 sisyphus orch 代码里存在过 `accept-smoke` target 调用（v0.3-lite
+shell fallback 路径，2026-05-17 PR #547 删除）。**`accept-smoke` 从未列进本
+契约**，业务仓没人接，100% 触发 silent vacuous pass。事故复盘见 [`BACKLOG.md`]
+2026-05-17 条目。
+
+| 历史 target | 状态 | 处置 |
+|---|---|---|
+| `accept-smoke` | ❌ 从未契约化 | 2026-05-17 删除调用方代码（PR #547），别再加 |
+| `accept-test` | ❌ 未契约化 | 业务真要业务断言，写 spec.md + 让 child accept-agent 用 drivers/direct_curl curl endpoint，不要新 target |
+| `accept-verify` | ❌ 未契约化 | 同上 |
+| `ci-accept-env-up` / `ci-accept-env-down` | ❌ 早期实验，已废 | REQ-rename-accept-targets-1777124774，当前只支持 `accept-env-up` / `accept-env-down` |
+
+**真业务断言走 spec.md + driver hook（drivers/direct_curl 黑盒 curl /
+drivers/thanatos_mcp mobile MCP）**，不是新 Makefile target。任何"业务仓里
+加 accept-xxx Makefile target 让 sisyphus 调"的方案 = 反契约，拒绝。
+
+### 2.3.2 accept 验收**怎么真发生**（信息流，不是契约 — 防 LLM 编新东西）
+
+```
+sisyphus orch:
+  1. kubectl exec runner -- make accept-env-up    ← §2.3 契约
+  2. 解析 stdout 末行 endpoint JSON               ← §3 契约
+  3. 派 child accept-agent (BKD issue) 跑 accept.md.j2 prompt
+     ├── inputs hook 喂上下文 (spec.md / PR diff / linked issue)
+     ├── drivers/direct_curl hook 教 agent 怎么打 $ENDPOINT
+     └── agent 跑 scenario, 写 Accept Result follow-up + result:pass/fail tag
+  4. webhook 收 result tag → 推状态机
+  5. kubectl exec runner -- make accept-env-down  ← §2.3 契约
+```
+
+业务仓**仅提供 env-up / env-down 两 target**。spec.md + scenario + curl 全在
+sisyphus 侧编排, 业务仓不感知。
 
 ### 2.4 analyze-agent 推 PR 前 guard
 

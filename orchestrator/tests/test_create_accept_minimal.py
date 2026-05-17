@@ -1,14 +1,19 @@
-"""REQ-accept-m1-lite: unit tests for create_accept (thanatos MCP + v0.3-lite fallback).
+"""REQ-accept-m1-lite: unit tests for create_accept v0.3-lite fallback.
 
-4 scenarios specified in the REQ:
-  AML-S1: cloned_repos 全 OK + 每仓 make 都返 0 → ACCEPT_PASS, ctx accept_result=pass
-  AML-S2: 任一仓 accept-env-up 返非 0 → ACCEPT_FAIL, ctx accept_fail_repos=[repo-a]
-  AML-S3: 仓里没 accept-env-up target（bash script 内部 skip）→ ACCEPT_PASS（不污染整体）
-  AML-S4: cloned_repos 空 → ACCEPT_PASS（vacuous true），不调 exec_in_runner
+⚠️ 整个文件 2026-05-17 OBSOLETE: v0.3-lite shell fallback 删除 (PR #547),
+任何 intent:accept 现在都走 dispatch_accept_agent 派 child accept-agent (#545)。
+4 个测试用例假设的 "lite 路径不调 BKD + 看 stdout 字符串判 PASS/FAIL" 全失效。
+
+留文件做历史 reference; pytest skip 全部测试。重写为 child-agent dispatch 路径的
+单测见 followup task (BACKLOG)。
 """
 from __future__ import annotations
 
 import pytest
+
+pytestmark = pytest.mark.skip(
+    reason="v0.3-lite fallback removed (PR #547); rewrite tests for child-agent dispatch path"
+)
 
 from orchestrator.actions import create_accept as mod
 from orchestrator.actions._integration_resolver import ResolveResult

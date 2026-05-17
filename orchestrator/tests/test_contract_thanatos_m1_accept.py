@@ -164,38 +164,9 @@ async def test_than_m1_s7_thanatos_block_dispatches_agent(monkeypatch):
     assert out.get("namespace") == "accept-req-thanatos-m1-test"
 
 
-# ─── THAN-M1-S8: create_accept without thanatos block falls back to lite ─────
-
-
-@pytest.mark.asyncio
-async def test_than_m1_s8_no_thanatos_block_falls_back_to_lite(monkeypatch):
-    """THAN-M1-S8: endpoint JSON without thanatos block → v0.3-lite shell script path executed."""
-    from orchestrator.actions import create_accept as mod
-
-    endpoint_json = json.dumps({
-        "endpoint": "http://lab.local:8080",
-    })
-    rc = _FakeRC(results=[
-        _FakeExecResult(exit_code=0, stdout=f"=== env-up ===\n{endpoint_json}\n"),
-    ])
-
-    mock_bkd = _MockBKDClient()
-    monkeypatch.setattr(mod, "BKDClient", lambda *a, **k: mock_bkd)
-
-    _patch_common(
-        monkeypatch,
-        rc,
-        lite_fallback_return={"emit": Event.ACCEPT_PASS.value, "note": "lite fallback"},
-    )
-
-    out = await mod.create_accept(
-        body=_body(), req_id="REQ-thanatos-m1-test", tags=[], ctx={},
-    )
-
-    assert mod._lite_fallback_called, (
-        "v0.3-lite fallback MUST be called when thanatos block is absent"
-    )
-    assert len(mock_bkd.create_issue_calls) == 0, (
-        "BKD create_issue must NOT be called in lite fallback path"
-    )
-    assert out.get("emit") == Event.ACCEPT_PASS.value
+# ─── THAN-M1-S8: 2026-05-17 invalidated ──────────────────────────────────────
+# 老契约: thanatos block 缺 → 走 v0.3-lite shell fallback
+# 新契约: thanatos block 缺 → 仍派 child accept-agent (driver=direct_curl)
+# 见 PR #545 + lite_fallback 删除 PR。v0.3-lite shell + accept-smoke target
+# 没文档契约 + 100% silent pass, 删干净。
+# 本 test case 已无意义, 主张已被 THAN-M1-S7 覆盖 (验 thanatos 路径派 child)。

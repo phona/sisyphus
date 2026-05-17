@@ -628,43 +628,9 @@ async def test_mrepo_art_s3_insert_check_persists_attempts():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def test_mrepo_acc_s1_create_accept_script_traverses_all_repos():
-    """MREPO-ACC-S1: _build_accept_script iterates over /workspace/source/*/ for env-up + smoke."""
-    from orchestrator.actions import create_accept as ca
-
-    script = ca._build_lite_script("REQ-x", delay_sec=5)
-    # Must have three phases: env-up, sleep, accept-smoke, env-down
-    assert "for repo in /workspace/source/*/; do" in script
-    assert "accept-env-up" in script
-    assert "accept-smoke" in script
-    assert "accept-env-down" in script
-    assert "sleep 5" in script
-
-
-def test_mrepo_acc_s2_create_accept_script_isolates_per_repo_failures():
-    """MREPO-ACC-S2: per-repo failure sets fail=1 but script continues to next repo."""
-    from orchestrator.actions import create_accept as ca
-
-    script = ca._build_lite_script("REQ-x", delay_sec=5)
-    # fail flag accumulates across repos
-    assert "fail=1" in script
-    # env-down is in a separate loop with || true (best-effort)
-    assert "accept-env-down" in script
-    assert "|| true" in script
-
-
-def test_mrepo_acc_s3_create_accept_missing_target_skips_repo():
-    """MREPO-ACC-S3: make -n target missing -> skip that repo (fail-open)."""
-    from orchestrator.actions import create_accept as ca
-
-    script = ca._build_lite_script("REQ-x", delay_sec=5)
-    # Check for make -n before running
-    assert "make -C" in script
-    assert "-n accept-env-up" in script
-    assert "-n accept-smoke" in script
-    assert "accept-env-up target missing" in script
-    assert "accept-smoke target missing" in script
-
+# MREPO-ACC-S1..S3 (v0.3-lite shell script tests) 已删 — 整段 _build_lite_script
+# + _run_lite_fallback 在 2026-05-17 PR (本) 删: accept-smoke target 没文档契约,
+# 100% silent pass; 任何 intent:accept 现在都派 child accept-agent (#545)。
 
 def test_mrepo_acc_s4_create_accept_no_repos_vacuous_pass():
     """MREPO-ACC-S4: no integration dir -> create_accept returns vacuous pass."""

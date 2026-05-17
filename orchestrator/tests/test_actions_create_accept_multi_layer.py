@@ -154,7 +154,12 @@ def _patch_resolve_integration_dir(monkeypatch, dir_path: str | None, reason: st
 
 @pytest.mark.asyncio
 async def test_single_layer_no_manifest_legacy_path(monkeypatch):
-    """R8 / OCRE-S13 / CREO-S29: no .sisyphus/env.yaml -> legacy single-layer path."""
+    """R8 / OCRE-S13 / CREO-S29: no .sisyphus/env.yaml -> legacy single-layer path.
+
+    PR #547 (2026-05-17): v0.3-lite fallback 删. 旧 assert 'bkd 不被调' 反过来:
+    现在任何 intent:accept 都派 child accept-agent (driver=thanatos_mcp 或
+    direct_curl), bkd.create_issue 必被调 1 次。
+    """
     rc = FakeRunnerController()
     rc.script("__MANIFEST_MISSING__", FakeExec(stdout="__MANIFEST_MISSING__"))
     # legacy path runs the integration resolver then `cd <dir> && make accept-env-up`
@@ -178,19 +183,15 @@ async def test_single_layer_no_manifest_legacy_path(monkeypatch):
         tags=[],
         ctx={"cloned_repos": ["phona/sisyphus"]},
     )
-    # No thanatos block + no `endpoint` consumer -> falls through to lite, but
-    # cloned_repos ensures lite ran. Expect ACCEPT_PASS since make accept-env-up
-    # succeeded and endpoint is in JSON. Without `thanatos` block we go to lite
-    # fallback, which scripts no command — so we expect a lite_no_repos vacuous
-    # pass when nothing matches. The default FakeExec (zero) is a script-less
-    # branch; assert at least no crash and correct shape.
-    assert "emit" in result
+    # 新行为: 返 dispatch 结果 (accept_issue_id / endpoint / namespace), 不带 'emit'
+    assert "accept_issue_id" in result
+    assert result["endpoint"] == "http://lab:8080"
     # legacy path read the manifest sentinel + accept-env-up command
     seen = " ".join(c for c, _ in rc.calls)
     assert "__MANIFEST_MISSING__" in seen
     assert "make accept-env-up" in seen
-    # bkd was NOT called for accept-agent (no thanatos block -> lite fallback)
-    assert bkd.create_issue.await_count == 0
+    # bkd WAS called: PR #547 之后 thanatos_pod 不在仍派 child accept-agent
+    assert bkd.create_issue.await_count == 1
 
 
 # ─── R4 multi-layer success path ─────────────────────────────────────────
