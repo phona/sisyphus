@@ -17,6 +17,47 @@ echo "endpoint healthy: {{ endpoint }}"
 
 `/healthz` 不存在时换 `/`、`/ready`、`/version` 探一遍；都不响应 → BLOCKED。
 
+### Step DA: 拿 token（只在 scenario 需要 auth 时跑）
+
+per-REQ ns 里 sisyphus `golden_cow.setup_ephemeral_ns` 会**可选**复制
+`golden-credentials` Secret 进来，含 golden snapshot 同源的测试账号。结构：
+
+```json
+{
+  "<role>": {
+    "login_url": "http://main-api.<ns>.svc.cluster.local:8080/api/v1/<role>/login",
+    "username": "test_<role>@example.com",
+    "password": "<test-pw>"
+  },
+  "...": {...}
+}
+```
+
+获取 token 模板（同一 secret 多 role 各换各的）：
+
+```bash
+NS=accept-req-{{ req_id | lower }}
+# 1. 先看 secret 在不在 (optional, 不在就只能跑 noAuth 端点)
+if ! kubectl -n $NS get secret golden-credentials >/dev/null 2>&1; then
+  echo "BLOCKED: golden-credentials secret missing, can't run auth-required scenarios"
+  # 仅 noAuth scenario 时不算 BLOCKED, 跳过 Step DA 直接 D1
+fi
+
+# 2. 抠某 role creds 换 token
+role=cashier   # 按 scenario 需要换 admin/kiosk/tablet/kitchen 等
+creds=$(kubectl -n $NS get secret golden-credentials -o jsonpath="{.data.$role}" | base64 -d)
+login_url=$(jq -r .login_url <<<"$creds")
+body=$(jq -c '{username,password}' <<<"$creds")
+
+POD=runner-{{ req_id | lower }}
+RUNNER_NS=sisyphus-runners
+token=$(kubectl -n $RUNNER_NS exec $POD -- curl -sS -X POST "$login_url" \
+        -H 'Content-Type: application/json' -d "$body" \
+        | jq -r '.data.token // .data.access_token // empty')
+[ -z "$token" ] && { echo "BLOCKED: login failed for role=$role"; exit 1; }
+echo "got token for role=$role (len=${#token})"
+```
+
 ### Step D1: 跑每个验收点（来自 inputs 推出来的 checklist）
 
 模板（HTTP API）：
@@ -25,10 +66,12 @@ echo "endpoint healthy: {{ endpoint }}"
 kubectl -n $NS exec $POD -- curl -sfi -X <METHOD> \
   '{{ endpoint }}<path>' \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <test-jwt-if-needed>' \
+  -H "Authorization: Bearer $token" \
   -d '<body>' \
   | head -c 1024   # body 截 1KB 防爆 evidence
 ```
+
+> `$token` 来自 Step DA。noAuth 端点忽略 `-H Authorization` 整行。
 
 模板（gRPC）：
 

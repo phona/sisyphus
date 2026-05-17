@@ -54,6 +54,25 @@ copy_secrets:
     # 走 adopt 不报冲突
     helm_release_name: ttpos-arch-lab
 
+  # golden 数据快照同源的"测试账号目录" — 跟 mysql/mariadb snapshot 一起属于
+  # snapshot owner (sisyphus golden_cow) 管理面。结构 (per role):
+  #   { username: ..., password: ..., login_url: ... }
+  # accept-agent 在 per-REQ ns 里 `kubectl get secret golden-credentials` 自取,
+  # drivers/direct_curl.md.j2 Step DA 模板按 role 换 token。
+  #
+  # optional=true: secret 不存在 (404) 时只 log warn 不阻断 setup —
+  # noAuth scenario REQ 仍可跑; auth scenario 在 driver hook 里自动 BLOCKED。
+  #
+  # 创建方式 (snapshot owner 手动一次):
+  #   kubectl -n sisyphus create secret generic golden-credentials \
+  #     --from-literal=cashier='{"login_url":"http://main-api.NS.svc:8080/api/v1/cashier/login","username":"test_cashier@example.com","password":"<pw>"}' \
+  #     --from-literal=kiosk='{"login_url":"...","username":"...","password":"..."}'
+  #
+  # 备注: NS 是占位符, agent 拿到 secret 后 sed 替换成本 REQ 的 namespace 再 curl。
+  - name: golden-credentials
+    from_ns: sisyphus
+    optional: true
+
 # ── 从复制进来的 secret 读 key, 翻译成 helm --set ───────────────────────
 # chart 默认 erpnext.mariadb.rootPassword 是 "testroot"，但 golden snapshot
 # 里 mariadb.user 表用的是 baseline 真密码。chart 模板渲染 Secret 时用

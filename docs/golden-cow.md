@@ -61,6 +61,59 @@ helm_extra_sets_from_secret: [...]
 
 **文件不存在或 `enabled: false`** → orch 跳过 setup，旧 accept 流程不受影响（向后兼容）。
 
+### 4.1 测试账号目录 (`golden-credentials` secret)
+
+凭证跟 snapshot **同源**：golden VolumeSnapshot 物化了一组 seed 测试用户 (mysql.user 表)。
+谁创 snapshot 就 know 用了哪些账号 → catalog 自然归 snapshot owner (sisyphus golden_cow) 管。
+设计哲学：跟"snapshot 数据走 VolumeSnapshot 跨 ns import" 完全对齐 — "snapshot 凭证目录"
+走 K8s Secret 跨 ns copy。
+
+#### 4.1.1 secret 结构
+
+namespace: `sisyphus` (或 spec.copy_secrets 的 from_ns)
+name: `golden-credentials`
+data (per role 一个 key):
+
+```json
+{
+  "cashier": {
+    "login_url": "http://main-api.NS.svc.cluster.local:8080/api/v1/cashier/login",
+    "username": "test_cashier@example.com",
+    "password": "<plain>"
+  },
+  "kiosk":  {...},
+  "tablet": {...},
+  "admin":  {...}
+}
+```
+
+`NS` 是字面占位符 — accept-agent 拿到 secret 后 sed 替换成 per-REQ ns 名再 curl。
+
+#### 4.1.2 创建命令 (snapshot owner 一次性)
+
+```bash
+kubectl -n sisyphus create secret generic golden-credentials \
+  --from-literal=cashier='{"login_url":"http://main-api.NS.svc.cluster.local:8080/api/v1/cashier/login","username":"test_cashier@example.com","password":"<pw>"}' \
+  --from-literal=kiosk='{"login_url":"http://main-api.NS.svc.cluster.local:8080/api/v1/kiosk/login","username":"test_kiosk@example.com","password":"<pw>"}'
+```
+
+更新方式: `kubectl -n sisyphus edit secret golden-credentials` (base64 decode 改 key value)。
+建议跟 golden snapshot 同时更新 (新 snapshot 用了不同 seed user 时配套换 creds)。
+
+#### 4.1.3 secret 缺失时行为
+
+`copy_secrets[*].optional=true` (本 secret 默认): 源 secret 不存在 → log warn 跳过, **不阻断 setup**。
+- noAuth scenario REQ: 不受影响, 正常跑
+- auth scenario REQ: drivers/direct_curl.md.j2 Step DA 检测到本 ns 没 `golden-credentials` →
+  agent 自动标 BLOCKED 不 silent pass
+
+#### 4.1.4 跟 driver hook 配套
+
+`prompts/_shared/hooks/drivers/direct_curl.md.j2` Step DA 给 agent 模板:
+- `kubectl -n $NS get secret golden-credentials -o jsonpath='{.data.<role>}' | base64 -d`
+- 抠 `login_url` / `username` / `password` curl 换 `Bearer token`
+- 后续 Step D1 scenario 模板用 `-H "Authorization: Bearer $token"`
+
 ## 5. 集成点
 
 `actions/create_accept.py` 在 runner exec `make accept-env-up` 之前调一次：
