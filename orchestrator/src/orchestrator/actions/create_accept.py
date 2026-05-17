@@ -406,6 +406,7 @@ async def _dispatch_accept_agent(
             title=f"[{req_id}] [ACCEPT] AI-QA{short_title(ctx)}",
             tags=["accept", req_id, f"parent-id:{source_issue_id}", *extra_tags],
             status_id="todo",
+            engine_type="claude-code",  # BKD server default 是 gemini (无 API key 装), 显式 pin
             model=settings.agent_model,
         )
         bkd_entry_links = _build_bkd_entry_links(
