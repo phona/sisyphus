@@ -288,10 +288,14 @@ class RunnerController:
             security_context=client.V1SecurityContext(privileged=True),
             resources=client.V1ResourceRequirements(
                 # 2026-04 实证：vm-node04 5991Mi 总内存，1Gi request 只能塞 1 个 runner，
-                # 多 REQ 并发时撞 FailedScheduling: Insufficient memory。
-                # 降到 512Mi/250m，能塞 2-3 个并发 runner。
-                # limit 保持 8Gi（runner 跑 docker build 高峰时需要）。
-                requests={"cpu": "250m", "memory": "512Mi"},
+                # 多 REQ 并发时撞 FailedScheduling: Insufficient memory。降到 512Mi/250m。
+                # 2026-05 复测：vm04 4 core + longhorn 480m + lab-baseline 300m +
+                # ephemeral 业务 ~600m，250m × runner 让 3 并发撞 Insufficient cpu。
+                # runner 平时只是 sleep infinity + dockerd 兜底（实测 idle 用 ~10m）；
+                # docker build / kubectl exec 高峰允许 burst 到 limit 4c。降 50m 后
+                # vm04 single-node 实测稳放 4 个并发 runner + ephemeral env。
+                # limit 保持 4c/8Gi（runner 跑 docker build 高峰时需要）。
+                requests={"cpu": "50m", "memory": "512Mi"},
                 limits={"cpu": "4", "memory": "8Gi"},
             ),
             env=env_vars,
