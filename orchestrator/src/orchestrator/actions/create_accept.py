@@ -506,11 +506,24 @@ async def _dispatch_accept_agent(
     thanatos_namespace = thanatos_block.get("namespace") or namespace_for_pr
     thanatos_skill_repo = thanatos_block.get("skill_repo") or None
 
-    # No thanatos block → fall back to v0.3-lite (existing behavior, both paths)
-    if not thanatos_pod:
-        log.info("create_accept.thanatos_block_missing", req_id=req_id,
-                 endpoint=endpoint, fallback="v0.3-lite")
+    # 2026-05-17 修：thanatos_pod 不在不该直接跳 v0.3-lite (后者 vacuous PASS, 没真
+    # curl evidence)。spec.md 在就走 dispatch_accept_agent + drivers/direct_curl;
+    # 真没 spec / 没 PR / 没 scenarios 才落 lite fallback (truly smoke only)。
+    # 旧逻辑 (if not thanatos_pod → lite) gate 把 drivers/direct_curl 整个代码路径
+    # 卡死, 今天所有 demo 都 silent pass。
+    spec_md_present = bool(
+        (ctx or {}).get("pr_url")
+        or (ctx or {}).get("linked_issue_url")
+        # spec.md 也算驱动信号 — analyze 阶段会写到 /workspace/source/*/openspec/changes/<REQ>/
+        # 这里没 fs check (避免越界), 让 inputs/spec_md hook 自检; pr_url/linked_issue 兜底。
+    )
+    if not thanatos_pod and not spec_md_present:
+        log.info("create_accept.lite_fallback", req_id=req_id,
+                 endpoint=endpoint, reason="no thanatos_pod + no PR/issue driver signal")
         return await _run_lite_fallback(req_id=req_id, ctx=ctx)
+    if not thanatos_pod:
+        log.info("create_accept.dispatch_with_direct_curl", req_id=req_id,
+                 endpoint=endpoint, driver="direct_curl")
 
     async with BKDClient(settings.bkd_base_url, settings.bkd_token) as bkd:
         issue = await bkd.create_issue(
