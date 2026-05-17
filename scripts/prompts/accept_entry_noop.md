@@ -10,13 +10,15 @@
 - helm / kubectl / docker / mcp tool 调用
 - thinking 长链；不需要"推理任务"
 
-✅ 唯一动作（立刻执行后退出）：
+✅ 唯一动作：**什么都不做，立刻 exit**。
 
-```bash
-curl -s -X PATCH "http://localhost:3000/api/projects/$BKD_PROJECT/issues/$BKD_ISSUE_ID" \
-  -H 'Content-Type: application/json' \
-  -d '{"tags":["intent-noop:accepted"]}'
-```
+⚠️ 不要 PATCH issue 任何字段（tags / statusId / 其他）。
+PATCH tags 会**覆盖**当前 tag 列表（不是 merge），把 sisyphus 派单时打的
+`REQ-xxx` / `intent:accept` / `lab-profile:*` / `pr:*` 等 tag 全擦掉，
+后续 BKD webhook 给 orch 时这条 REQ 就变孤儿，orch 状态机推不动。
+
+BKD 自己会在 agent session 结束时记录 session.completed，sisyphus orch
+另有 child accept-agent 路径继续推进，不需要你 signal 任何东西。
 
 ---
 
