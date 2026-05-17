@@ -281,14 +281,23 @@ prompts:
     enabled: false
 
 probes:
+  # 2026-05-17 stability test: 3 并发 webhook 同时打进来，asyncio event loop
+  # 处理 (extract_req_id + state CAS + k8s exec spawn runner clone) 阶段性
+  # 顶住，/healthz 1s 默认 timeout 撞 "context deadline exceeded" → kubelet
+  # 杀 orch (实测 8min 内 RESTARTS=2)，所有 in-flight create_accept 全孤儿。
+  # 加 timeoutSeconds=5 + failureThreshold=5 给 async 服务足够余量。
   liveness:
     path: /livez
     initialDelaySeconds: 10
     periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 5
   readiness:
     path: /readyz
     initialDelaySeconds: 5
     periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 5
 
 nodeSelector: {}
 tolerations: []
