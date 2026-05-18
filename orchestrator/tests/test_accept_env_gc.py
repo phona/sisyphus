@@ -1,6 +1,7 @@
 """accept_env_gc.gc_once 单测：mock PG pool + k8s_runner controller。"""
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -16,8 +17,10 @@ class _FakePool:
         return self._rows
 
 
-def _row(req_id, state):
-    return {"req_id": req_id, "state": state}
+def _row(req_id, state, updated_at=None):
+    if updated_at is None:
+        updated_at = datetime.now(UTC)
+    return {"req_id": req_id, "state": state, "updated_at": updated_at}
 
 
 @pytest.fixture(autouse=True)
@@ -77,11 +80,30 @@ async def test_done_req_cleans_namespace(monkeypatch, mock_controller):
 
 
 @pytest.mark.asyncio
-async def test_escalated_req_cleans_namespace(monkeypatch, mock_controller):
-    """escalated REQ 的 accept namespace 被删（跟 runner PVC retention 不同，
-    accept env 没有 retention 概念——namespace 只占用 cluster 资源，不给人 debug）。"""
+async def test_escalated_req_within_retention_kept(monkeypatch, mock_controller):
+    """escalated REQ 在 retention 窗内：accept ns 保留给排障（issue #572）。"""
     pool = _FakePool([
-        _row("REQ-1", "escalated"),
+        _row("REQ-1", "escalated", updated_at=datetime.now(UTC)),
+    ])
+    monkeypatch.setattr("orchestrator.accept_env_gc.db.get_pool", lambda: pool)
+    mock_controller.list_accept_env_namespaces = AsyncMock(
+        return_value=["accept-req-1"],
+    )
+
+    result = await accept_env_gc.gc_once()
+
+    assert result["kept_namespaces"] == ["accept-req-1"]
+    assert result["cleaned_namespaces"] == []
+    mock_controller.delete_namespace.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_escalated_req_past_retention_cleaned(monkeypatch, mock_controller):
+    """escalated REQ 超过 retention：accept ns 被 GC 清。"""
+    from orchestrator.config import settings
+    old = datetime.now(UTC) - timedelta(days=settings.pvc_retain_on_escalate_days + 1)
+    pool = _FakePool([
+        _row("REQ-1", "escalated", updated_at=old),
     ])
     monkeypatch.setattr("orchestrator.accept_env_gc.db.get_pool", lambda: pool)
     mock_controller.list_accept_env_namespaces = AsyncMock(

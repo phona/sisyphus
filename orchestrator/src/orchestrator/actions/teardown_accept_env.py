@@ -16,6 +16,7 @@ import shlex
 import structlog
 
 from .. import cross_repo_env, k8s_runner
+from ..config import settings
 from ..state import Event
 from ..store import db, req_state
 from . import register
@@ -56,6 +57,7 @@ async def teardown_accept_env(*, body, req_id, tags, ctx):
     except RuntimeError as e:
         # runner controller 没初始化（本地 dev / kubeconfig 缺）—— 跳过清理
         log.warning("teardown.no_controller", req_id=req_id, error=str(e))
+        rc = None
     else:
         accept_layers = list((ctx or {}).get("accept_layers") or [])
         if len(accept_layers) > 1:
@@ -64,6 +66,25 @@ async def teardown_accept_env(*, body, req_id, tags, ctx):
             )
         else:
             env_down_ok = await _run_single_layer_teardown(rc, req_id=req_id)
+
+    # 3b. happy path（accept pass）立删 namespace —— helm uninstall 只清 release，
+    # ns 留下是 issue #572 的根。accept fail 留着给人排障，由 accept_env_gc 走
+    # retention 过期再清（跟 PVC 同窗口）。
+    if rc is not None and accept_result == "pass":
+        ns_name = f"accept-{req_id.lower()}"
+        try:
+            await rc.delete_namespace(ns_name)
+        except Exception as e:
+            log.warning("teardown.ns_delete_failed", req_id=req_id,
+                        namespace=ns_name, error=str(e))
+    elif accept_result == "fail":
+        log.info(
+            "teardown.ns_kept_for_debug",
+            req_id=req_id,
+            namespace=f"accept-{req_id.lower()}",
+            retention_days=settings.pvc_retain_on_escalate_days,
+            hint="accept_env_gc will reap after retention window",
+        )
 
     # 4. emit 下一步 event（不管 teardown 成不成，都按原 accept_result 分流）
     next_event = (
