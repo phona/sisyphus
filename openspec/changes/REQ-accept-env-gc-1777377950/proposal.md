@@ -26,13 +26,14 @@ accept 阶段通过 `make accept-env-up` 在 K8s cluster 上创建临时 namespa
 | 维度 | runner_gc | accept_env_gc |
 |---|---|---|
 | 扫描对象 | Pod + PVC（`sisyphus-runners` ns） | Namespace（`accept-req-*`，cluster-wide） |
-| 保留依据 | req_state 非终态 / escalated retention | req_state 非终态 |
+| 保留依据 | req_state 非终态 / escalated retention | req_state 非终态 / escalated retention |
 | 清理动作 | delete pod / delete pvc | delete namespace（级联删内部全部资源） |
 | 周期 | 15 min | 15 min（独立配置） |
-| 终态 | done / escalated | done / escalated（无 retention） |
+| 终态 | done 立即清 / escalated 留 retention | done 立即清 / escalated 留 retention |
 
-accept env namespace 不给人 debug 用（debug 用 runner pod + PVC），所以终态（done 和
-escalated）一律立即清，不留 retention 窗口。
+happy path（done）立即清，无 debug 价值；escalated 路径留
+`pvc_retain_on_escalate_days` 窗口供操作员 `kubectl describe/logs` 失败的 accept
+lab 现场（issue #572）。
 
 ### 实现要点
 
@@ -96,9 +97,10 @@ GC 在周期性 tick 中兜底任何漏网之鱼（K8s API 失败、orchestrator
   `sisyphus-runners` namespace 内的 Pod/PVC，accept env namespace 是 cluster-wide
   的，扫描维度不同。合进去让 runner_gc 职责不纯（同时要管 ns-level 资源）。独立模块
   可独立开关（`accept_env_gc_interval_sec=0` 关闭）。
-- **为什么 accept env 没有 retention** —— accept env 是临时 lab 部署，不给人 debug
-  用（runner pod 和 PVC 才是 debug 现场）。done 和 escalated 的 namespace 立即清不
-  丢任何有价值的状态。
+- **为什么 escalated 留 retention** —— 跟 runner_gc PVC 同窗口。escalated 多半是
+  accept 失败导致的，namespace 里的 pod logs / events / configmap 是第一手现场，
+  没了就只能事后猜。done 路径仍立即清，无 debug 价值。issue #572 的根因之一就是
+  之前 escalated 也立即清，操作员来不及看现场。
 - **为什么不通过 label 严格过滤** —— `list_accept_env_namespaces` 优先按
   `sisyphus/role=accept-env` label 过滤，fallback 到 `accept-req-*` prefix，兼容早期
   没打 label 的 namespace。

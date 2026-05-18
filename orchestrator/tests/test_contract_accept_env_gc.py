@@ -9,7 +9,8 @@ If a test is wrong, escalate to spec_fixer to correct the spec, not the test.
 Scenarios covered:
   AEGC-S1   active REQ keeps its accept namespace
   AEGC-S2   done REQ causes namespace deletion
-  AEGC-S3   escalated REQ causes namespace deletion with no retention
+  AEGC-S3   escalated REQ keeps namespace within retention window
+  AEGC-S3b  escalated REQ past retention is cleaned
   AEGC-S4   orphan namespace (no req_state row) is cleaned
   AEGC-S5   empty namespace list is a no-op
   AEGC-S6   delete_namespace 404 counts as cleaned
@@ -28,7 +29,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 from kubernetes.client.exceptions import ApiException
@@ -172,15 +173,15 @@ async def test_aegc_s2_done_req_causes_deletion(monkeypatch):
 # ── AEGC-S3 ────────────────────────────────────────────────────────────────
 
 
-async def test_aegc_s3_escalated_req_deletes_with_no_retention(monkeypatch):
+async def test_aegc_s3_escalated_req_kept_within_retention(monkeypatch):
     """
     AEGC-S3: GIVEN req_state row REQ-1 state escalated with updated_at within
-    the default runner PVC retention window,
+    the last `pvc_retain_on_escalate_days` days,
     AND K8s lists namespace ["accept-req-1"],
     WHEN gc_once() is awaited,
-    THEN delete_namespace("accept-req-1") MUST be invoked exactly once,
-    AND the namespace MUST be in cleaned_namespaces (NOT kept_namespaces),
-    AND the behavior MUST differ from runner_gc PVC retention.
+    THEN delete_namespace MUST NOT be invoked for "accept-req-1",
+    AND the namespace MUST be in kept_namespaces (mirrors runner_gc PVC
+    retention so failed accept labs remain available for operator debug).
     """
     from orchestrator import accept_env_gc as aegc_mod
 
@@ -198,14 +199,51 @@ async def test_aegc_s3_escalated_req_deletes_with_no_retention(monkeypatch):
 
     result = await aegc_mod.gc_once()
 
+    assert ctrl.delete_calls == [], (
+        f"AEGC-S3: delete_namespace MUST NOT be invoked within retention; got {ctrl.delete_calls}"
+    )
+    assert "accept-req-1" in result["kept_namespaces"], (
+        f"AEGC-S3: 'accept-req-1' MUST be in kept_namespaces; got {result['kept_namespaces']!r}"
+    )
+    assert "accept-req-1" not in result["cleaned_namespaces"], (
+        f"AEGC-S3: 'accept-req-1' MUST NOT be in cleaned_namespaces; got {result['cleaned_namespaces']!r}"
+    )
+
+    _clear_controller()
+
+
+async def test_aegc_s3b_escalated_req_past_retention_cleaned(monkeypatch):
+    """
+    AEGC-S3b: GIVEN req_state row REQ-1 state escalated with updated_at older
+    than `pvc_retain_on_escalate_days` days,
+    AND K8s lists namespace ["accept-req-1"],
+    WHEN gc_once() is awaited,
+    THEN delete_namespace("accept-req-1") MUST be invoked exactly once,
+    AND the namespace MUST be in cleaned_namespaces.
+    """
+    from orchestrator import accept_env_gc as aegc_mod
+    from orchestrator.config import settings
+
+    _reset_aegc_module(monkeypatch)
+
+    expired = datetime.now(UTC) - timedelta(days=settings.pvc_retain_on_escalate_days + 1)
+    pool = _FakePool(rows=[{
+        "req_id": "REQ-1",
+        "state": "escalated",
+        "updated_at": expired,
+    }])
+    monkeypatch.setattr("orchestrator.accept_env_gc.db.get_pool", lambda: pool)
+
+    ctrl = _FakeController(namespaces=["accept-req-1"])
+    _set_controller(ctrl)
+
+    result = await aegc_mod.gc_once()
+
     assert ctrl.delete_calls == ["accept-req-1"], (
-        f"AEGC-S3: delete_namespace MUST be called for escalated REQ; got {ctrl.delete_calls}"
+        f"AEGC-S3b: delete_namespace MUST be called for expired escalated REQ; got {ctrl.delete_calls}"
     )
     assert "accept-req-1" in result["cleaned_namespaces"], (
-        f"AEGC-S3: 'accept-req-1' MUST be in cleaned_namespaces; got {result['cleaned_namespaces']!r}"
-    )
-    assert "accept-req-1" not in result["kept_namespaces"], (
-        f"AEGC-S3: 'accept-req-1' MUST NOT be in kept_namespaces (no retention); got {result['kept_namespaces']!r}"
+        f"AEGC-S3b: 'accept-req-1' MUST be in cleaned_namespaces; got {result['cleaned_namespaces']!r}"
     )
 
     _clear_controller()

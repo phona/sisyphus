@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from kubernetes.client import ApiException
@@ -50,10 +50,27 @@ def _parse_req_id_from_namespace(ns_name: str) -> str | None:
 
 
 async def _active_req_ids() -> set[str]:
-    """保留集 = 非终态 REQ（accept env 还在用）。"""
+    """保留集 = 非终态 + escalated 在 retention 内（给人排障）。
+
+    跟 runner_gc PVC keep set 同模型：done 立删（happy path 无 debug 价值），
+    escalated 保留 `pvc_retain_on_escalate_days` 天 —— accept 失败导致的 escalate
+    最需要 namespace + pod 现场，这窗口让人 kubectl describe/logs。过期由 GC 扫掉。
+    """
     pool = db.get_pool()
-    rows = await pool.fetch("SELECT req_id, state FROM req_state")
-    return {r["req_id"] for r in rows if r["state"] not in _TERMINAL_STATES}
+    rows = await pool.fetch("SELECT req_id, state, updated_at FROM req_state")
+    keep: set[str] = set()
+    now = datetime.now(UTC)
+    retention = timedelta(days=settings.pvc_retain_on_escalate_days)
+    for r in rows:
+        state = r["state"]
+        if state not in _TERMINAL_STATES:
+            keep.add(r["req_id"])
+            continue
+        if state == "escalated":
+            updated_at = r["updated_at"]
+            if updated_at and (now - updated_at) < retention:
+                keep.add(r["req_id"])
+    return keep
 
 
 async def gc_once() -> dict:

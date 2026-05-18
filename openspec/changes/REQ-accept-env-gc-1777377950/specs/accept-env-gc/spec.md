@@ -5,11 +5,15 @@
 ### Requirement: accept_env_gc.gc_once SHALL scan all `accept-req-*` namespaces and delete those whose REQ is in a terminal state or absent from req_state
 
 The orchestrator SHALL expose `accept_env_gc.gc_once()` that reads all rows from
-`req_state`, computes a keep set of REQ ids whose `state` is NOT in
-`{done, escalated}` (non-terminal), lists all K8s namespaces matching
-`accept-req-*` via `RunnerController.list_accept_env_namespaces()`, and deletes
-(via `RunnerController.delete_namespace()`) every namespace whose extracted REQ id
-is NOT in the keep set. A namespace whose REQ id cannot be found in `req_state`
+`req_state`, computes a keep set comprising (a) every REQ whose `state` is NOT in
+`{done, escalated}` (non-terminal), AND (b) every `escalated` REQ whose
+`updated_at` is within the last `pvc_retain_on_escalate_days` days. It then lists
+all K8s namespaces matching `accept-req-*` via
+`RunnerController.list_accept_env_namespaces()`, and deletes (via
+`RunnerController.delete_namespace()`) every namespace whose extracted REQ id is
+NOT in the keep set. `done` REQs are deleted immediately (no retention — happy
+path has no debug value); `escalated` REQs retain their accept namespace for the
+retention window so operators can `kubectl describe/logs` the failed lab. A namespace whose REQ id cannot be found in `req_state`
 (orphan) SHALL also be deleted. The function MUST handle `ApiException(status=404)`
 from the delete call as a success (namespace already gone). The function MUST
 return a dict containing `cleaned_namespaces` (list of deleted ns names),
@@ -36,16 +40,26 @@ return a dict containing `cleaned_namespaces` (list of deleted ns names),
 - **AND** `cleaned_namespaces` MUST equal `["accept-req-1"]`
 - **AND** `kept_namespaces` MUST be empty
 
-#### Scenario: AEGC-S3 escalated REQ causes namespace deletion with no retention
+#### Scenario: AEGC-S3 escalated REQ keeps namespace within retention window
 
 - **GIVEN** a `req_state` row `REQ-1` state `escalated` with `updated_at` within
-  the default runner PVC retention window, AND the K8s controller lists namespace
+  the last `pvc_retain_on_escalate_days` days, AND the K8s controller lists
+  namespace `["accept-req-1"]`
+- **WHEN** `accept_env_gc.gc_once()` is awaited
+- **THEN** the namespace MUST be in `kept_namespaces` (NOT `cleaned_namespaces`)
+- **AND** `delete_namespace` MUST NOT be invoked for `accept-req-1`
+- **AND** the retention behavior MUST mirror `runner_gc` PVC retention so that
+  failed accept labs remain available for operator debug until the same window
+  expires (issue #572)
+
+#### Scenario: AEGC-S3b escalated REQ past retention is cleaned
+
+- **GIVEN** a `req_state` row `REQ-1` state `escalated` with `updated_at` older
+  than `pvc_retain_on_escalate_days` days, AND the K8s controller lists namespace
   `["accept-req-1"]`
 - **WHEN** `accept_env_gc.gc_once()` is awaited
 - **THEN** `delete_namespace("accept-req-1")` MUST be invoked exactly once
-- **AND** the namespace MUST be in `cleaned_namespaces` (NOT `kept_namespaces`)
-- **AND** the behavior MUST differ from runner_gc PVC retention, which would keep
-  the PVC for human debug; accept env namespace has no retention concept
+- **AND** the namespace MUST be in `cleaned_namespaces`
 
 #### Scenario: AEGC-S4 orphan namespace (no req_state row) is cleaned
 
