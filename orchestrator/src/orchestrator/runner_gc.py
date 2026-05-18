@@ -53,10 +53,13 @@ async def _pod_keep_req_ids() -> set[str]:
 
 
 async def _pvc_keep_req_ids(*, ignore_retention: bool = False) -> set[str]:
-    """PVC 保留集 = non-terminal + escalated 在 retention 内（除非磁盘压力）。
+    """PVC 保留集 = non-terminal + escalated/pending-user-review 在 retention 内。
 
     done 立即销 PVC（无 debug 价值，磁盘释放优先）。
-    ignore_retention=True：磁盘压力下，escalated 也不留 retention，全清。
+    escalated retention = pvc_retain_on_escalate_days（默认 1 天，给 resume 时间窗）。
+    pending-user-review retention = pvc_retain_on_pending_review_days（默认 3 天，
+    给人 review 时间；实证大量 REQ 永远没人拍板会无限囤盘，issue #572）。
+    ignore_retention=True：磁盘压力下，两类都不留 retention，全清。
     """
     pool = db.get_pool()
     rows = await pool.fetch(
@@ -64,18 +67,24 @@ async def _pvc_keep_req_ids(*, ignore_retention: bool = False) -> set[str]:
     )
     keep: set[str] = set()
     now = datetime.now(UTC)
-    retention = timedelta(days=settings.pvc_retain_on_escalate_days)
+    escalate_retention = timedelta(days=settings.pvc_retain_on_escalate_days)
+    pending_review_retention = timedelta(
+        days=settings.pvc_retain_on_pending_review_days
+    )
     for r in rows:
         state = r["state"]
-        if state not in _TERMINAL_STATES:
-            keep.add(r["req_id"])
-            continue
+        updated_at = r["updated_at"]
         if state == "done":
             continue
-        if state == "escalated" and not ignore_retention:
-            updated_at = r["updated_at"]
-            if updated_at and (now - updated_at) < retention:
+        if state == "escalated":
+            if not ignore_retention and updated_at and (now - updated_at) < escalate_retention:
                 keep.add(r["req_id"])
+            continue
+        if state == "pending-user-review":
+            if not ignore_retention and updated_at and (now - updated_at) < pending_review_retention:
+                keep.add(r["req_id"])
+            continue
+        keep.add(r["req_id"])
     return keep
 
 
