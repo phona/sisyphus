@@ -79,6 +79,17 @@ async def post_acceptance_report(*, body, req_id, tags, ctx):
     """
     proj = body.projectId
     ctx = ctx or {}
+
+    # #577：accept-only dispatch（GHA 直派 / 无 BKD intent issue）opt-in 跳 user gate，
+    # teardown 完直推 DONE，避免 REQ 永卡 PENDING_USER_REVIEW、PVC / ns 不清理。
+    if ctx.get("auto_complete"):
+        log.info("post_acceptance_report.auto_complete", req_id=req_id)
+        return {
+            "acceptance_reported": False,
+            "auto_complete": True,
+            "emit": "user-review.pass",
+        }
+
     intent_issue_id = ctx.get("intent_issue_id")
     if not intent_issue_id:
         log.warning(

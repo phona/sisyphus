@@ -172,3 +172,29 @@ async def test_post_acceptance_report_bkd_failure_logged_not_raised(monkeypatch)
     # action returns normally (doesn't raise); bkd_ok=False signals failure
     assert out["acceptance_reported"] is True
     assert out["bkd_ok"] is False
+
+
+# ── #577: auto_complete short-circuits → emit user-review.pass to push DONE ──
+
+
+@pytest.mark.asyncio
+async def test_auto_complete_emits_user_review_pass_no_bkd_calls(monkeypatch):
+    """ctx.auto_complete=True (accept-only dispatch, no BKD intent issue) →
+    skip description PATCH 直接 emit user-review.pass，让 engine 链式推 DONE，
+    避免 PENDING_USER_REVIEW 永卡导致 PVC / ns 不清（#577）。"""
+    from orchestrator.actions import post_acceptance_report as mod
+
+    bkd = _make_fake_bkd()
+    _patch_bkd(monkeypatch, bkd)
+    _patch_db(monkeypatch)
+
+    body = _make_body()
+    out = await mod.post_acceptance_report(
+        body=body, req_id="REQ-x", tags=["REQ-x"],
+        ctx={"auto_complete": True, "intent_issue_id": "intent-7"},
+    )
+
+    assert out["auto_complete"] is True
+    assert out["emit"] == "user-review.pass"
+    bkd.get_issue.assert_not_called()
+    bkd.update_issue.assert_not_called()
