@@ -97,8 +97,29 @@ gh api -X POST "repos/<owner>/<repo>/statuses/{{ head_sha }}" \
 
 ### 贴 tag + move review
 
-- 全过 → tags = `[accept, {{ req_id }}, result:pass]`, statusId=review
-- 任一非 PASS → tags = `[accept, {{ req_id }}, result:fail]`, statusId=review
+⚠️ **BKD PATCH tags 是 replace 不是 append** — 必须先 GET 现有 tags merge 再 PATCH，
+否则会覆盖掉 sisyphus orch 注入的 `sisyphus` / `parent-id:...` / `pr:...` 等关键 tag,
+orch 找不到 REQ 对应关系会触发 watchdog escalate (实测撞过 issue 93qvxv11)。
+
+正确做法 (bash 示例):
+```bash
+PROJECT=nnvxh8wj
+MY=$(basename $PWD)
+RESULT=pass   # 或 fail
+# 1. GET 现有 tags
+current=$(curl -sS "http://localhost:3000/api/projects/$PROJECT/issues/$MY" | jq -r '.tags // [] | @json')
+# 2. 删旧 result:* (防累加), 加新 result, accept, REQ 兜底
+new=$(jq -nc --argjson cur "$current" --arg req '{{ req_id }}' --arg res "result:$RESULT" \
+  '$cur | map(select(startswith("result:")|not)) | . + ["accept", $req, $res] | unique')
+# 3. PATCH 写回
+curl -sS -X PATCH "http://localhost:3000/api/projects/$PROJECT/issues/$MY" \
+  -H 'content-type: application/json' \
+  -d "$(jq -nc --argjson tags "$new" '{tags: $tags, statusId: "review"}')"
+```
+
+- 全过 → 加 `result:pass`
+- 任一非 PASS → 加 `result:fail`
+- statusId 始终 `review`(orch watchdog 看 tag 决定 ack/fix/escalate, 不看 status)
 
 ---
 
