@@ -965,6 +965,10 @@ class AcceptDispatchReq(BaseModel):
     # commit status（context=sisyphus/accept），让 _accept.yml 设的 pending
     # 推成 success/failure。空 = 不回写 status（向后兼容老调用方 / 手动 dispatch）。
     head_sha: str = ""
+    # accept-only 用法（无 BKD intent issue / 无 user gate）让 teardown 完直接到 DONE，
+    # 跳过 PENDING_USER_REVIEW（否则 REQ 永远卡 gate，PVC / ns 不清，#577）。
+    # 主链调用方不传 → 保留原 gate 行为。
+    auto_complete: bool = False
 
     model_config = {
         "json_schema_extra": {
@@ -1026,6 +1030,8 @@ async def dispatch_accept(
         "intent_source": "gha-dispatch",
         # accept-agent 收尾回写 commit status sisyphus/accept 用（空 = 不回写）
         "head_sha": req.head_sha,
+        # post_acceptance_report 读取：true → 跳过 user-review gate 直推 DONE（#577）
+        "auto_complete": req.auto_complete,
     }
 
     pool = db.get_pool()
