@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     # 默认 1 天：足够人当天 follow-up 续；超 1 天没人理就清掉
     # （之前 7 天太宽，一次实证时 30 个 PVC 堆满磁盘；2026-04-24）
     pvc_retain_on_escalate_days: int = 1
+    # PENDING_USER_REVIEW PVC 保留时长（issue #572）：accept 全过等用户拍板，
+    # 实证大量 REQ 永远没人 PASS/FIX → PVC 永久占盘。给人 3 天 review 窗口后强清；
+    # 用户后续要 follow-up resume 时再重建 workspace 成本远低于囤盘。
+    pvc_retain_on_pending_review_days: int = 3
     # GC 扫描周期 15 min（之前 1h 太松，REQ 频繁时 PVC 堆得快）
     runner_gc_interval_sec: int = 900    # 15min
     # 磁盘压力阈值：超过此比例 GC 强清所有非 active PVC（不论 retention）

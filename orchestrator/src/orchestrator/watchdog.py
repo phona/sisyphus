@@ -153,7 +153,11 @@ _STAGE_POLICY: dict[ReqState, _StagePolicy | None] = {
     # autonomous-bounded
     ReqState.ANALYZING: _StagePolicy(ended_sec=300, stuck_sec=None),
     ReqState.CHALLENGER_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
-    ReqState.ACCEPT_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
+    # ACCEPT_RUNNING 6h hard cap（issue #572）：实证 22h+ 卡在 ACCEPT_RUNNING
+    # 没人 escalate，PVC + helm release 全留累死磁盘。autonomous-bounded 默认
+    # stuck=None 留长尾给 sonnet，但 accept 不该跑 6h —— BKD session 已结束
+    # 就走 ended_sec=300 escalate；这条只兜 BKD 还报 running 但事实上死透的场景。
+    ReqState.ACCEPT_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=21600),
     ReqState.ACCEPT_TEARING_DOWN: _StagePolicy(ended_sec=300, stuck_sec=None),
     ReqState.FIXER_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
     ReqState.REVIEW_RUNNING: _StagePolicy(ended_sec=300, stuck_sec=None),
